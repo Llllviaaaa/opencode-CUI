@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.yourapp.gateway.repository.AgentConnectionRepository">
+
+    <resultMap id="AgentConnectionResultMap" type="AgentConnection">
+        <id     property="id"          column="id"/>
+        <result property="userId"      column="user_id"/>
+        <result property="akId"        column="ak_id"/>
+        <result property="deviceName"  column="device_name"/>
+        <result property="os"          column="os"/>
+        <result property="toolType"    column="tool_type"/>
+        <result property="toolVersion" column="tool_version"/>
+        <result property="status"      column="status"
+                typeHandler="org.apache.ibatis.type.EnumTypeHandler"/>
+        <result property="lastSeenAt"  column="last_seen_at"/>
+        <result property="createdAt"   column="created_at"/>
+    </resultMap>
+
+    <select id="findByStatus" resultMap="AgentConnectionResultMap">
+        SELECT * FROM agent_connection WHERE status = #{status}
+    </select>
+
+    <select id="findByUserId" resultMap="AgentConnectionResultMap">
+        SELECT * FROM agent_connection WHERE user_id = #{userId}
+    </select>
+
+    <select id="findByAkIdAndToolTypeAndStatus" resultMap="AgentConnectionResultMap">
+        SELECT * FROM agent_connection
+        WHERE ak_id = #{akId}
+          AND tool_type = #{toolType}
+          AND status = #{status}
+        LIMIT 1
+    </select>
+
+    <select id="findStaleAgents" resultMap="AgentConnectionResultMap">
+        SELECT * FROM agent_connection
+        WHERE status = 'ONLINE'
+          AND last_seen_at &lt; #{threshold}
+    </select>
+
+    <update id="markStaleAgentsOffline">
+        UPDATE agent_connection
+        SET status = 'OFFLINE'
+        WHERE status = 'ONLINE'
+          AND last_seen_at &lt; #{threshold}
+    </update>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO agent_connection
+            (user_id, ak_id, device_name, os, tool_type, tool_version, status, last_seen_at, created_at)
+        VALUES
+            (#{userId}, #{akId}, #{deviceName}, #{os}, #{toolType}, #{toolVersion},
+             #{status}, #{lastSeenAt}, #{createdAt})
+    </insert>
+
+    <select id="findById" resultMap="AgentConnectionResultMap">
+        SELECT * FROM agent_connection WHERE id = #{id}
+    </select>
+
+    <update id="updateStatus">
+        UPDATE agent_connection SET status = #{status} WHERE id = #{id}
+    </update>
+
+    <update id="updateLastSeenAt">
+        UPDATE agent_connection SET last_seen_at = #{lastSeenAt} WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM agent_connection WHERE id = #{id}
+    </delete>
+
+</mapper>

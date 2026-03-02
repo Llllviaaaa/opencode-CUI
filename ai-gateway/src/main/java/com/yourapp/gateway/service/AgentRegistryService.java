@@ -41,7 +41,7 @@ public class AgentRegistryService {
      * Register a new agent connection. If an existing ONLINE connection with the
      * same AK and toolType exists, it will be kicked (marked offline) first.
      *
-     * @return the newly created or updated AgentConnection
+     * @return the newly created AgentConnection (with generated id)
      */
     @Transactional
     public AgentConnection register(Long userId, String akId, String deviceName,
@@ -53,8 +53,7 @@ public class AgentRegistryService {
             AgentConnection old = existing.get();
             log.info("Kicking old agent connection: id={}, ak={}, toolType={}",
                     old.getId(), akId, toolType);
-            old.setStatus(AgentStatus.OFFLINE);
-            repository.save(old);
+            repository.updateStatus(old.getId(), AgentStatus.OFFLINE);
 
             // Close the old WebSocket session and notify Skill Server
             eventRelayService.removeAgentSession(old.getId());
@@ -72,7 +71,7 @@ public class AgentRegistryService {
                 .lastSeenAt(LocalDateTime.now())
                 .createdAt(LocalDateTime.now())
                 .build();
-        agent = repository.save(agent);
+        repository.insert(agent);
 
         log.info("Agent registered: id={}, userId={}, ak={}, device={}, os={}, tool={}/{}",
                 agent.getId(), userId, akId, deviceName, os, toolType, toolVersion);
@@ -84,11 +83,8 @@ public class AgentRegistryService {
      */
     @Transactional
     public void heartbeat(Long agentId) {
-        repository.findById(agentId).ifPresent(agent -> {
-            agent.setLastSeenAt(LocalDateTime.now());
-            repository.save(agent);
-            log.debug("Heartbeat received: agentId={}", agentId);
-        });
+        repository.updateLastSeenAt(agentId, LocalDateTime.now());
+        log.debug("Heartbeat received: agentId={}", agentId);
     }
 
     /**
@@ -96,11 +92,8 @@ public class AgentRegistryService {
      */
     @Transactional
     public void markOffline(Long agentId) {
-        repository.findById(agentId).ifPresent(agent -> {
-            agent.setStatus(AgentStatus.OFFLINE);
-            repository.save(agent);
-            log.info("Agent marked offline: agentId={}", agentId);
-        });
+        repository.updateStatus(agentId, AgentStatus.OFFLINE);
+        log.info("Agent marked offline: agentId={}", agentId);
     }
 
     /**
@@ -130,8 +123,7 @@ public class AgentRegistryService {
         if (!staleAgents.isEmpty()) {
             log.info("Found {} stale agents, marking offline", staleAgents.size());
             for (AgentConnection agent : staleAgents) {
-                agent.setStatus(AgentStatus.OFFLINE);
-                repository.save(agent);
+                repository.updateStatus(agent.getId(), AgentStatus.OFFLINE);
                 // Remove WebSocket session and notify Skill Server
                 eventRelayService.removeAgentSession(agent.getId());
                 log.info("Stale agent marked offline: agentId={}, lastSeen={}",

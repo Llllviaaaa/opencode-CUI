@@ -1,11 +1,10 @@
 package com.yourapp.skill.service;
 
+import com.yourapp.skill.model.PageResult;
 import com.yourapp.skill.model.SkillSession;
 import com.yourapp.skill.repository.SkillSessionRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -42,9 +42,9 @@ public class SkillSessionService {
                 .status(SkillSession.Status.ACTIVE)
                 .build();
 
-        SkillSession saved = sessionRepository.save(session);
-        log.info("Created skill session: id={}, userId={}, skillDefId={}", saved.getId(), userId, skillDefinitionId);
-        return saved;
+        sessionRepository.insert(session);
+        log.info("Created skill session: id={}, userId={}, skillDefId={}", session.getId(), userId, skillDefinitionId);
+        return session;
     }
 
     /**
@@ -52,11 +52,20 @@ public class SkillSessionService {
      * If statuses is null or empty, returns all sessions for the user.
      */
     @Transactional(readOnly = true)
-    public Page<SkillSession> listSessions(Long userId, List<SkillSession.Status> statuses, Pageable pageable) {
+    public PageResult<SkillSession> listSessions(Long userId, List<SkillSession.Status> statuses,
+                                                  int page, int size) {
+        int offset = page * size;
         if (statuses != null && !statuses.isEmpty()) {
-            return sessionRepository.findByUserIdAndStatusInOrderByLastActiveAtDesc(userId, statuses, pageable);
+            List<String> statusNames = statuses.stream()
+                    .map(SkillSession.Status::name)
+                    .collect(Collectors.toList());
+            List<SkillSession> content = sessionRepository.findByUserIdAndStatusIn(userId, statusNames, offset, size);
+            long total = sessionRepository.countByUserIdAndStatusIn(userId, statusNames);
+            return new PageResult<>(content, total, page, size);
         }
-        return sessionRepository.findByUserIdOrderByLastActiveAtDesc(userId, pageable);
+        List<SkillSession> content = sessionRepository.findByUserId(userId, offset, size);
+        long total = sessionRepository.countByUserId(userId);
+        return new PageResult<>(content, total, page, size);
     }
 
     /**
@@ -73,12 +82,10 @@ public class SkillSessionService {
      */
     @Transactional
     public SkillSession closeSession(Long sessionId) {
+        sessionRepository.updateStatus(sessionId, SkillSession.Status.CLOSED.name());
         SkillSession session = getSession(sessionId);
-        session.setStatus(SkillSession.Status.CLOSED);
-        session.touch();
-        SkillSession saved = sessionRepository.save(session);
         log.info("Closed skill session: id={}", sessionId);
-        return saved;
+        return session;
     }
 
     /**
@@ -86,9 +93,7 @@ public class SkillSessionService {
      */
     @Transactional
     public void touchSession(Long sessionId) {
-        SkillSession session = getSession(sessionId);
-        session.touch();
-        sessionRepository.save(session);
+        sessionRepository.updateLastActiveAt(sessionId, LocalDateTime.now());
     }
 
     /**
@@ -96,10 +101,8 @@ public class SkillSessionService {
      */
     @Transactional
     public SkillSession updateToolSessionId(Long sessionId, String toolSessionId) {
-        SkillSession session = getSession(sessionId);
-        session.setToolSessionId(toolSessionId);
-        session.touch();
-        return sessionRepository.save(session);
+        sessionRepository.updateToolSessionId(sessionId, toolSessionId, LocalDateTime.now());
+        return getSession(sessionId);
     }
 
     /**
@@ -119,7 +122,7 @@ public class SkillSessionService {
     @Transactional
     public void cleanupIdleSessions() {
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(idleTimeoutMinutes);
-        int count = sessionRepository.markIdleSessions(SkillSession.Status.IDLE, cutoff);
+        int count = sessionRepository.markIdleSessions(SkillSession.Status.IDLE.name(), cutoff);
         if (count > 0) {
             log.info("Marked {} sessions as IDLE (inactive since before {})", count, cutoff);
         }

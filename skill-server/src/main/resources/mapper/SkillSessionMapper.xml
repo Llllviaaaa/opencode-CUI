@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.yourapp.skill.repository.SkillSessionRepository">
+
+    <resultMap id="SkillSessionResultMap" type="com.yourapp.skill.model.SkillSession">
+        <id     property="id"                column="id"/>
+        <result property="userId"            column="user_id"/>
+        <result property="skillDefinitionId" column="skill_definition_id"/>
+        <result property="agentId"           column="agent_id"/>
+        <result property="toolSessionId"     column="tool_session_id"/>
+        <result property="title"             column="title"/>
+        <result property="status"            column="status"
+                typeHandler="org.apache.ibatis.type.EnumTypeHandler"
+                javaType="com.yourapp.skill.model.SkillSession$Status"/>
+        <result property="imChatId"          column="im_chat_id"/>
+        <result property="createdAt"         column="created_at"/>
+        <result property="lastActiveAt"      column="last_active_at"/>
+    </resultMap>
+
+    <sql id="selectAllColumns">
+        SELECT id, user_id, skill_definition_id, agent_id, tool_session_id,
+               title, status, im_chat_id, created_at, last_active_at
+        FROM skill_session
+    </sql>
+
+    <select id="findById" resultMap="SkillSessionResultMap">
+        <include refid="selectAllColumns"/>
+        WHERE id = #{id}
+    </select>
+
+    <select id="findByUserId" resultMap="SkillSessionResultMap">
+        <include refid="selectAllColumns"/>
+        WHERE user_id = #{userId}
+        ORDER BY last_active_at DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="findByUserIdAndStatusIn" resultMap="SkillSessionResultMap">
+        <include refid="selectAllColumns"/>
+        WHERE user_id = #{userId}
+          AND status IN
+          <foreach item="s" collection="statuses" open="(" separator="," close=")">
+              #{s}
+          </foreach>
+        ORDER BY last_active_at DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countByUserId" resultType="long">
+        SELECT COUNT(*) FROM skill_session WHERE user_id = #{userId}
+    </select>
+
+    <select id="countByUserIdAndStatusIn" resultType="long">
+        SELECT COUNT(*) FROM skill_session
+        WHERE user_id = #{userId}
+          AND status IN
+          <foreach item="s" collection="statuses" open="(" separator="," close=")">
+              #{s}
+          </foreach>
+    </select>
+
+    <select id="findByAgentId" resultMap="SkillSessionResultMap">
+        <include refid="selectAllColumns"/>
+        WHERE agent_id = #{agentId}
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO skill_session
+            (user_id, skill_definition_id, agent_id, tool_session_id, title, status, im_chat_id, created_at, last_active_at)
+        VALUES
+            (#{userId}, #{skillDefinitionId}, #{agentId}, #{toolSessionId}, #{title},
+             #{status}, #{imChatId}, NOW(), NOW())
+    </insert>
+
+    <update id="updateStatus">
+        UPDATE skill_session
+        SET status = #{status}, last_active_at = NOW()
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateLastActiveAt">
+        UPDATE skill_session
+        SET last_active_at = #{lastActiveAt}
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateToolSessionId">
+        UPDATE skill_session
+        SET tool_session_id = #{toolSessionId},
+            last_active_at  = #{lastActiveAt}
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateAgentId">
+        UPDATE skill_session
+        SET agent_id = #{agentId}
+        WHERE id = #{id}
+    </update>
+
+    <update id="markIdleSessions">
+        UPDATE skill_session
+        SET status = #{status}
+        WHERE status = 'ACTIVE'
+          AND last_active_at &lt; #{cutoff}
+    </update>
+
+</mapper>

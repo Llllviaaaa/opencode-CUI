@@ -2,6 +2,7 @@ package com.yourapp.skill.controller;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yourapp.skill.model.PageResult;
 import com.yourapp.skill.model.SkillMessage;
 import com.yourapp.skill.model.SkillSession;
 import com.yourapp.skill.service.GatewayRelayService;
@@ -10,9 +11,6 @@ import com.yourapp.skill.service.SkillMessageService;
 import com.yourapp.skill.service.SkillSessionService;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -98,7 +96,7 @@ public class SkillMessageController {
      * Get message history with pagination.
      */
     @GetMapping("/messages")
-    public ResponseEntity<Page<SkillMessage>> getMessages(
+    public ResponseEntity<PageResult<SkillMessage>> getMessages(
             @PathVariable Long sessionId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
@@ -110,8 +108,7 @@ public class SkillMessageController {
             return ResponseEntity.notFound().build();
         }
 
-        Pageable pageable = PageRequest.of(page, size);
-        Page<SkillMessage> messages = messageService.getMessageHistory(sessionId, pageable);
+        PageResult<SkillMessage> messages = messageService.getMessageHistory(sessionId, page, size);
         return ResponseEntity.ok(messages);
     }
 

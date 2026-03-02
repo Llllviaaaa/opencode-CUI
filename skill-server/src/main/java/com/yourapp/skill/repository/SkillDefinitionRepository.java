@@ -1,16 +1,26 @@
 package com.yourapp.skill.repository;
 
 import com.yourapp.skill.model.SkillDefinition;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.stereotype.Repository;
+import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
 import java.util.Optional;
 
-@Repository
-public interface SkillDefinitionRepository extends JpaRepository<SkillDefinition, Long> {
+@Mapper
+public interface SkillDefinitionRepository {
 
-    Optional<SkillDefinition> findBySkillCode(String skillCode);
+    List<SkillDefinition> findAll();
 
-    List<SkillDefinition> findByStatusOrderBySortOrderAsc(SkillDefinition.Status status);
+    Optional<SkillDefinition> findById(@Param("id") Long id);
+
+    Optional<SkillDefinition> findBySkillCode(@Param("skillCode") String skillCode);
+
+    List<SkillDefinition> findByStatus(@Param("status") String status);
+
+    List<SkillDefinition> findByStatusOrderBySortOrderAsc(@Param("status") String status);
+
+    int insert(SkillDefinition definition);
+
+    int update(SkillDefinition definition);
 }

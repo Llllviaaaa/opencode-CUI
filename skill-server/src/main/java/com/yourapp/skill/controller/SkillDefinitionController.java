@@ -28,7 +28,7 @@ public class SkillDefinitionController {
     @GetMapping
     public ResponseEntity<List<SkillDefinition>> listDefinitions() {
         List<SkillDefinition> definitions = definitionRepository
-                .findByStatusOrderBySortOrderAsc(SkillDefinition.Status.ACTIVE);
+                .findByStatusOrderBySortOrderAsc(SkillDefinition.Status.ACTIVE.name());
         log.debug("Listed {} active skill definitions", definitions.size());
         return ResponseEntity.ok(definitions);
     }

@@ -1,24 +1,24 @@
 package com.yourapp.skill.repository;
 
 import com.yourapp.skill.model.SkillMessage;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
-import org.springframework.stereotype.Repository;
+import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 
+import java.util.List;
 import java.util.Optional;
 
-@Repository
-public interface SkillMessageRepository extends JpaRepository<SkillMessage, Long> {
+@Mapper
+public interface SkillMessageRepository {
 
-    Page<SkillMessage> findBySessionIdOrderBySeqAsc(Long sessionId, Pageable pageable);
+    Optional<SkillMessage> findById(@Param("id") Long id);
 
-    @Query("SELECT COALESCE(MAX(m.seq), 0) FROM SkillMessage m WHERE m.sessionId = :sessionId")
+    List<SkillMessage> findBySessionId(@Param("sessionId") Long sessionId,
+                                       @Param("offset") int offset,
+                                       @Param("limit") int limit);
+
+    long countBySessionId(@Param("sessionId") Long sessionId);
+
     int findMaxSeqBySessionId(@Param("sessionId") Long sessionId);
 
-    Optional<SkillMessage> findBySessionIdAndSeq(Long sessionId, Integer seq);
-
-    long countBySessionId(Long sessionId);
+    int insert(SkillMessage message);
 }

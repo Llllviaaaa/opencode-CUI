@@ -16,14 +16,6 @@ spring:
       idle-timeout: 300000
       connection-timeout: 20000
 
-  jpa:
-    hibernate:
-      ddl-auto: validate
-    show-sql: false
-    properties:
-      hibernate:
-        dialect: org.hibernate.dialect.MySQLDialect
-
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -35,6 +27,12 @@ spring:
           max-active: 16
           max-idle: 8
           min-idle: 2
+
+mybatis:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.yourapp.gateway.model
+  configuration:
+    map-underscore-to-camel-case: true
 
 # Gateway custom configuration
 gateway:

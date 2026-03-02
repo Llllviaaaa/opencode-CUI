@@ -1,10 +1,9 @@
 package com.yourapp.skill.service;
 
+import com.yourapp.skill.model.PageResult;
 import com.yourapp.skill.model.SkillMessage;
 import com.yourapp.skill.repository.SkillMessageRepository;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,13 +39,13 @@ public class SkillMessageService {
                 .meta(meta)
                 .build();
 
-        SkillMessage saved = messageRepository.save(message);
+        messageRepository.insert(message);
 
         // Touch session to update last_active_at
         sessionService.touchSession(sessionId);
 
         log.debug("Saved message: sessionId={}, seq={}, role={}", sessionId, nextSeq, role);
-        return saved;
+        return message;
     }
 
     /**
@@ -89,8 +88,11 @@ public class SkillMessageService {
      * Query message history with pagination, ordered by seq ascending.
      */
     @Transactional(readOnly = true)
-    public Page<SkillMessage> getMessageHistory(Long sessionId, Pageable pageable) {
-        return messageRepository.findBySessionIdOrderBySeqAsc(sessionId, pageable);
+    public PageResult<SkillMessage> getMessageHistory(Long sessionId, int page, int size) {
+        int offset = page * size;
+        var content = messageRepository.findBySessionId(sessionId, offset, size);
+        long total = messageRepository.countBySessionId(sessionId);
+        return new PageResult<>(content, total, page, size);
     }
 
     /**

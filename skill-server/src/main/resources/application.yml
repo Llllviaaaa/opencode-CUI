@@ -17,15 +17,6 @@ spring:
       max-lifetime: 1800000
       connection-timeout: 10000
 
-  jpa:
-    hibernate:
-      ddl-auto: validate
-    show-sql: false
-    properties:
-      hibernate:
-        dialect: org.hibernate.dialect.MySQLDialect
-        format_sql: true
-
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -37,6 +28,12 @@ spring:
           min-idle: 2
           max-idle: 8
           max-active: 16
+
+mybatis:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.yourapp.skill.model
+  configuration:
+    map-underscore-to-camel-case: true
 
 # WebSocket configuration
 skill:

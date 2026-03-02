@@ -1,29 +1,44 @@
 package com.yourapp.skill.repository;
 
 import com.yourapp.skill.model.SkillSession;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Modifying;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
-import org.springframework.stereotype.Repository;
+import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
-@Repository
-public interface SkillSessionRepository extends JpaRepository<SkillSession, Long> {
+@Mapper
+public interface SkillSessionRepository {
 
-    Page<SkillSession> findByUserIdAndStatusInOrderByLastActiveAtDesc(
-            Long userId, List<SkillSession.Status> statuses, Pageable pageable);
+    Optional<SkillSession> findById(@Param("id") Long id);
 
-    Page<SkillSession> findByUserIdOrderByLastActiveAtDesc(Long userId, Pageable pageable);
+    List<SkillSession> findByUserId(@Param("userId") Long userId,
+                                    @Param("offset") int offset,
+                                    @Param("limit") int limit);
 
-    @Modifying
-    @Query("UPDATE SkillSession s SET s.status = :status WHERE s.status = 'ACTIVE' AND s.lastActiveAt < :cutoff")
-    int markIdleSessions(@Param("status") SkillSession.Status status,
-                         @Param("cutoff") LocalDateTime cutoff);
+    List<SkillSession> findByUserIdAndStatusIn(@Param("userId") Long userId,
+                                               @Param("statuses") List<String> statuses,
+                                               @Param("offset") int offset,
+                                               @Param("limit") int limit);
 
-    List<SkillSession> findByAgentId(Long agentId);
+    long countByUserId(@Param("userId") Long userId);
+
+    long countByUserIdAndStatusIn(@Param("userId") Long userId,
+                                  @Param("statuses") List<String> statuses);
+
+    List<SkillSession> findByAgentId(@Param("agentId") Long agentId);
+
+    int insert(SkillSession session);
+
+    int updateStatus(@Param("id") Long id, @Param("status") String status);
+
+    int updateLastActiveAt(@Param("id") Long id, @Param("lastActiveAt") LocalDateTime lastActiveAt);
+
+    int updateToolSessionId(@Param("id") Long id, @Param("toolSessionId") String toolSessionId,
+                            @Param("lastActiveAt") LocalDateTime lastActiveAt);
+
+    int updateAgentId(@Param("id") Long id, @Param("agentId") Long agentId);
+
+    int markIdleSessions(@Param("status") String status, @Param("cutoff") LocalDateTime cutoff);
 }
