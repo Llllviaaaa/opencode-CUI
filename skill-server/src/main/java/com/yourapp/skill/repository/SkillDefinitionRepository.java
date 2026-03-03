@@ -5,16 +5,15 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
-import java.util.Optional;
 
 @Mapper
 public interface SkillDefinitionRepository {
 
     List<SkillDefinition> findAll();
 
-    Optional<SkillDefinition> findById(@Param("id") Long id);
+    SkillDefinition findById(@Param("id") Long id);
 
-    Optional<SkillDefinition> findBySkillCode(@Param("skillCode") String skillCode);
+    SkillDefinition findBySkillCode(@Param("skillCode") String skillCode);
 
     List<SkillDefinition> findByStatus(@Param("status") String status);
 

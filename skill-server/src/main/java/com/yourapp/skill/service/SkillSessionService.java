@@ -73,8 +73,11 @@ public class SkillSessionService {
      */
     @Transactional(readOnly = true)
     public SkillSession getSession(Long sessionId) {
-        return sessionRepository.findById(sessionId)
-                .orElseThrow(() -> new IllegalArgumentException("Session not found: " + sessionId));
+        SkillSession session = sessionRepository.findById(sessionId);
+        if (session == null) {
+            throw new IllegalArgumentException("Session not found: " + sessionId);
+        }
+        return session;
     }
 
     /**

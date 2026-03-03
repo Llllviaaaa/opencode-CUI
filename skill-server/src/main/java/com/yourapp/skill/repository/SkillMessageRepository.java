@@ -5,12 +5,11 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
-import java.util.Optional;
 
 @Mapper
 public interface SkillMessageRepository {
 
-    Optional<SkillMessage> findById(@Param("id") Long id);
+    SkillMessage findById(@Param("id") Long id);
 
     List<SkillMessage> findBySessionId(@Param("sessionId") Long sessionId,
                                        @Param("offset") int offset,

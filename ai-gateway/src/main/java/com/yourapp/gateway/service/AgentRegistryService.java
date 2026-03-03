@@ -11,7 +11,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Optional;
 
 /**
  * Agent lifecycle management: registration, heartbeat, online/offline transitions.
@@ -47,16 +46,15 @@ public class AgentRegistryService {
     public AgentConnection register(Long userId, String akId, String deviceName,
                                     String os, String toolType, String toolVersion) {
         // Kick old connection with same AK + toolType
-        Optional<AgentConnection> existing = repository
+        AgentConnection existing = repository
                 .findByAkIdAndToolTypeAndStatus(akId, toolType, AgentStatus.ONLINE);
-        if (existing.isPresent()) {
-            AgentConnection old = existing.get();
+        if (existing != null) {
             log.info("Kicking old agent connection: id={}, ak={}, toolType={}",
-                    old.getId(), akId, toolType);
-            repository.updateStatus(old.getId(), AgentStatus.OFFLINE);
+                    existing.getId(), akId, toolType);
+            repository.updateStatus(existing.getId(), AgentStatus.OFFLINE);
 
             // Close the old WebSocket session and notify Skill Server
-            eventRelayService.removeAgentSession(old.getId());
+            eventRelayService.removeAgentSession(existing.getId());
         }
 
         // Create new connection record
@@ -106,7 +104,7 @@ public class AgentRegistryService {
     /**
      * Get agent by ID.
      */
-    public Optional<AgentConnection> findById(Long agentId) {
+    public AgentConnection findById(Long agentId) {
         return repository.findById(agentId);
     }
 

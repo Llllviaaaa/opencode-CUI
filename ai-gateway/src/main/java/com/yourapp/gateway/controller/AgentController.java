@@ -17,7 +17,6 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * REST API for agent management.
@@ -57,12 +56,11 @@ public class AgentController {
      */
     @GetMapping("/{id}/status")
     public ResponseEntity<Map<String, Object>> getAgentStatus(@PathVariable Long id) {
-        Optional<AgentConnection> agentOpt = agentRegistryService.findById(id);
-        if (agentOpt.isEmpty()) {
+        AgentConnection agent = agentRegistryService.findById(id);
+        if (agent == null) {
             return ResponseEntity.notFound().build();
         }
 
-        AgentConnection agent = agentOpt.get();
         Map<String, Object> status = new HashMap<>();
         status.put("agent", agent);
         status.put("wsSessionActive", eventRelayService.hasAgentSession(id));
@@ -82,12 +80,11 @@ public class AgentController {
             @PathVariable Long id,
             @RequestBody GatewayMessage message) {
 
-        Optional<AgentConnection> agentOpt = agentRegistryService.findById(id);
-        if (agentOpt.isEmpty()) {
+        AgentConnection agent = agentRegistryService.findById(id);
+        if (agent == null) {
             return ResponseEntity.notFound().build();
         }
 
-        AgentConnection agent = agentOpt.get();
         if (agent.getStatus() != AgentConnection.AgentStatus.ONLINE) {
             Map<String, Object> error = new HashMap<>();
             error.put("success", false);

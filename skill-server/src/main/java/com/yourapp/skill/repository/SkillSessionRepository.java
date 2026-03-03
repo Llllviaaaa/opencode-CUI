@@ -6,12 +6,11 @@ import org.apache.ibatis.annotations.Param;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Optional;
 
 @Mapper
 public interface SkillSessionRepository {
 
-    Optional<SkillSession> findById(@Param("id") Long id);
+    SkillSession findById(@Param("id") Long id);
 
     List<SkillSession> findByUserId(@Param("userId") Long userId,
                                     @Param("offset") int offset,
