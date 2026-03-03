@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.net.URI;
+import java.util.Locale;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -29,6 +30,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Slf4j
 @Component
 public class SkillServerWSClient implements EventRelayService.SkillServerRelayTarget {
+
+    private static final String INVALID_INTERNAL_TOKEN_REASON = "invalid internal token";
 
     private final EventRelayService eventRelayService;
     private final ObjectMapper objectMapper;
@@ -203,14 +206,23 @@ public class SkillServerWSClient implements EventRelayService.SkillServerRelayTa
         @Override
         public void onClose(int code, String reason, boolean remote) {
             log.warn("Disconnected from Skill Server: code={}, reason={}, remote={}", code, reason, remote);
-            if (running.get()) {
+            if (running.get() && !isInvalidInternalTokenReason(reason)) {
                 scheduleReconnect();
+                return;
+            }
+
+            if (running.get()) {
+                log.error("Stop reconnecting to Skill Server due to authentication failure: reason={}", reason);
             }
         }
 
         @Override
         public void onError(Exception ex) {
             log.error("Skill Server WebSocket error: {}", ex.getMessage());
+        }
+
+        private boolean isInvalidInternalTokenReason(String reason) {
+            return reason != null && reason.toLowerCase(Locale.ROOT).contains(INVALID_INTERNAL_TOKEN_REASON);
         }
     }
 }

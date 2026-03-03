@@ -42,7 +42,7 @@ skill:
     allowed-origins: "*"
   gateway:
     # Internal token for AI-Gateway <-> Skill Server authentication
-    internal-token: ${GATEWAY_INTERNAL_TOKEN:default-internal-token}
+    internal-token: ${SKILL_SERVER_INTERNAL_TOKEN:changeme}
   im:
     # IM platform API base URL for sending messages
     api-url: ${IM_API_URL:http://localhost:8080/api/im}
