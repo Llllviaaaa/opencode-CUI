@@ -1,19 +1,19 @@
-# STATE.md — Project Memory
+# STATE.md — Current Position
 
 > **Last Updated:** 2026-03-05
 
-## Current Status
-Project initialized. SPEC finalized. Ready for phase planning.
+## Current Position
+- **Phase**: 1 — Protocol Foundation — PC Agent Plugin
+- **Task**: Planning complete
+- **Status**: Ready for execution
 
-## Last Session Summary
-- Ran `/map` — identified 5 components, 30+ dependencies, 9 technical debt items
-- Read `full_stack_protocol.md` — 968 lines, 6-layer protocol specification
-- Created SPEC.md (FINALIZED) with vision, 5 goals, 5 non-goals, 8 success criteria
-- Created REQUIREMENTS.md with 26 traceable requirements mapped to SPEC goals
-- Created ROADMAP.md with 5 phases covering full-stack implementation
-- Created DECISIONS.md, JOURNAL.md, TODO.md
-- Project initialization complete via `/new-project` workflow
+## Plans Created
+- `1-PLAN.md` — Plugin 入口重构 + 事件接收 (Wave 1, 2 tasks)
+- `2-PLAN.md` — 消息格式对齐 + 下行操作 (Wave 1, 2 tasks)
+- `3-PLAN.md` — 单元测试 + Bun 兼容性验证 (Wave 2, 2 tasks)
 
-## Active Context
-- **Current Phase**: Not started
-- **Next Action**: `/discuss-phase 1` or `/plan 1` to begin Phase 1 (PC Agent Plugin)
+## Decisions Active
+- ADR-004~008 (see DECISIONS.md)
+
+## Next Steps
+1. `/execute 1` — 执行 Phase 1 所有计划
