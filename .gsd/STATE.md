@@ -4,23 +4,25 @@
 2026-03-06
 
 ## 当前阶段
-Phase 1 — Protocol Foundation (PCAgent Plugin)
+Phase 2 — AI-Gateway (完善)
 
 ## 阶段状态
 ✅ **已完成**
 
 ## 已执行计划
-| 计划                      | 状态   | 提交                                         |
-| ------------------------- | ------ | -------------------------------------------- |
-| Plan 1.1 (Plugin入口重构) | ✅ 完成 | feat(phase-1): Plugin entry point refactor   |
-| Plan 1.2 (消息格式对齐)   | ✅ 完成 | feat(phase-1): message format alignment      |
-| Plan 1.3 (单元测试+Bun)   | ✅ 完成 | test(phase-1): unit tests + Bun verification |
+| 计划              | 状态 | 提交                    |
+| ----------------- | ---- | ----------------------- |
+| Plan 2.1 编译验证 | ✅    | mvn compile 通过        |
+| Plan 2.2 REQ-26   | ✅    | feat(phase-2): REQ-26   |
+| Plan 2.3 单元测试 | ✅    | test(phase-2): 24 tests |
 
-## 关键指标
-- TypeScript: 零编译错误
-- 测试: 58 pass / 0 fail (218ms)
-- Bun 1.3.10: node:crypto 完全兼容
+## 关键产出
+- `ak_sk_credential` 表 + V2 migration
+- `AkSkCredential.java` + `AkSkCredentialRepository.java` + MyBatis mapper
+- `AkSkAuthService.lookupByAk()` 改用 DB 查询
+- `GatewayMessage` 加 `@JsonIgnore` 修复 Jackson 序列化
+- 24 个单元测试 (GatewayMessage 15 + AkSkAuthService 9)
 
-## 下一步
-- 标记 Phase 1 为完成（在 ROADMAP.md 中）
-- 开始 Phase 2 规划
+## 技术债务
+- IDE 的 JavaSE-19 classpath 配置需要修复（不影响 mvn）
+- Mockito self-attach 警告（JDK 未来版本需要加 agent）
