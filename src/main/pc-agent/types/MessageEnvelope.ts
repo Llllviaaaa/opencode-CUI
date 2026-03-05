@@ -1,8 +1,25 @@
 /**
  * MessageEnvelope — Unified protocol envelope for cross-IDE event streaming.
  *
- * Wraps all messages exchanged between PC Agent, AI-Gateway, and Skill Server
- * to provide consistent metadata, versioning, and sequence tracking.
+ * v0 protocol format (matching full_stack_protocol.md):
+ *
+ * ```json
+ * {
+ *   "type": "tool_event",
+ *   "sessionId": "42",
+ *   "event": { ... },              // type-specific payload field
+ *   "envelope": {                   // platform metadata
+ *     "version": "1.0.0",
+ *     "messageId": "uuid",
+ *     "timestamp": "ISO-8601",
+ *     "source": "OPENCODE",
+ *     "agentId": "agent-123",
+ *     "sessionId": "42",
+ *     "sequenceNumber": 1,
+ *     "sequenceScope": "session"
+ *   }
+ * }
+ * ```
  */
 
 /**
@@ -40,7 +57,11 @@ export interface EnvelopeMetadata {
 }
 
 /**
- * Complete message envelope with metadata and payload.
+ * Complete message envelope with metadata and type-specific content.
+ *
+ * The message has a `type` discriminator and an `envelope` for metadata.
+ * Additional fields are type-specific (e.g., `event` for tool_event,
+ * `error` for tool_error, etc.)
  */
 export interface MessageEnvelope<T = unknown> {
   /** Envelope metadata */
@@ -49,8 +70,11 @@ export interface MessageEnvelope<T = unknown> {
   /** Message type discriminator (e.g., 'tool_event', 'invoke', 'tool_done') */
   type: string;
 
-  /** Message payload (type-specific content) */
-  payload: T;
+  /** Top-level session ID (matches envelope.sessionId) */
+  sessionId?: string;
+
+  /** Type-specific payload fields - spread at the top level */
+  [key: string]: unknown;
 }
 
 /**
@@ -62,8 +86,7 @@ export function hasEnvelope(msg: unknown): msg is MessageEnvelope {
     msg !== null &&
     'envelope' in msg &&
     typeof (msg as Record<string, unknown>).envelope === 'object' &&
-    'type' in msg &&
-    'payload' in msg
+    'type' in msg
   );
 }
 

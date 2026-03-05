@@ -1,25 +1,26 @@
 /**
- * ProtocolAdapter — Converts OpenCode events to/from MessageEnvelope format.
+ * ProtocolAdapter — Converts OpenCode events to/from protocol message format.
  *
  * Responsibilities:
- * - Wrap outgoing OpenCode events in unified envelope
- * - Unwrap incoming enveloped commands to OpenCode SDK format
+ * - Wrap outgoing OpenCode events in protocol format matching full_stack_protocol.md
  * - Maintain per-session sequence counters for gap detection
  * - Generate unique message IDs and timestamps
+ *
+ * Output format: { type, sessionId, event, envelope }
  */
 
 import { randomUUID } from 'crypto';
-import type { MessageEnvelope, EnvelopeMetadata, MessageSource } from './types/MessageEnvelope';
+import type { EnvelopeMetadata, MessageSource } from './types/MessageEnvelope';
 import type { OpenCodeEvent } from './types/PluginTypes';
 
 /**
- * Protocol version for the unified message envelope.
- * Increment on breaking changes to envelope structure.
+ * Protocol version for the message envelope.
+ * Matches full_stack_protocol.md specification.
  */
 const PROTOCOL_VERSION = '1.0.0';
 
 /**
- * Adapter for converting between OpenCode events and MessageEnvelope protocol.
+ * Adapter for converting OpenCode events to protocol message format.
  */
 export class ProtocolAdapter {
   /** Per-session sequence counters: sessionId -> next sequence number */
@@ -38,19 +39,14 @@ export class ProtocolAdapter {
   ) { }
 
   // -----------------------------------------------------------------------
-  // Outgoing: OpenCode Event -> MessageEnvelope
+  // Outgoing: OpenCode Event -> Protocol Message
   // -----------------------------------------------------------------------
 
   /**
-   * Wrap an OpenCode event in a MessageEnvelope.
-   *
-   * @param type       Message type (e.g., 'tool_event', 'tool_done', 'tool_error')
-   * @param payload    The event payload (raw OpenCode event or custom data)
-   * @param sessionId  Optional session identifier for session-scoped messages
-   * @returns          Complete MessageEnvelope ready for transmission
+   * Create envelope metadata for a message.
    */
-  wrapEvent<T = unknown>(type: string, payload: T, sessionId?: string): MessageEnvelope<T> {
-    const envelope: EnvelopeMetadata = {
+  private createEnvelope(sessionId?: string): EnvelopeMetadata {
+    return {
       version: PROTOCOL_VERSION,
       messageId: randomUUID(),
       timestamp: new Date().toISOString(),
@@ -60,64 +56,58 @@ export class ProtocolAdapter {
       sequenceNumber: this.getNextSequence(sessionId),
       sequenceScope: sessionId ? 'session' : 'agent',
     };
+  }
 
+  /**
+   * Wrap an OpenCode event as a tool_event message.
+   * Output: { type, sessionId, event, envelope }
+   */
+  wrapToolEvent(event: OpenCodeEvent, sessionId?: string): Record<string, unknown> {
     return {
-      envelope,
-      type,
-      payload,
+      type: 'tool_event',
+      sessionId,
+      event,
+      envelope: this.createEnvelope(sessionId),
     };
   }
 
   /**
-   * Convenience method: wrap an OpenCode tool_event.
+   * Wrap a `tool_done` message (sent when session goes idle).
    */
-  wrapToolEvent(event: OpenCodeEvent, sessionId?: string): MessageEnvelope<OpenCodeEvent> {
-    return this.wrapEvent('tool_event', event, sessionId);
+  wrapToolDone(usage: unknown, sessionId?: string): Record<string, unknown> {
+    return {
+      type: 'tool_done',
+      sessionId,
+      usage,
+      envelope: this.createEnvelope(sessionId),
+    };
   }
 
   /**
-   * Convenience method: wrap a tool_done message.
+   * Wrap a `tool_error` message (sent when an SDK operation fails).
    */
-  wrapToolDone(usage: unknown, sessionId?: string): MessageEnvelope<{ usage: unknown }> {
-    return this.wrapEvent('tool_done', { usage }, sessionId);
+  wrapToolError(error: string, sessionId?: string): Record<string, unknown> {
+    return {
+      type: 'tool_error',
+      sessionId,
+      error,
+      envelope: this.createEnvelope(sessionId),
+    };
   }
 
   /**
-   * Convenience method: wrap a tool_error message.
-   */
-  wrapToolError(error: string, sessionId?: string): MessageEnvelope<{ error: string }> {
-    return this.wrapEvent('tool_error', { error }, sessionId);
-  }
-
-  /**
-   * Convenience method: wrap a session_created message.
+   * Wrap a `session_created` message.
    */
   wrapSessionCreated(
     toolSessionId: string,
     session: unknown,
-  ): MessageEnvelope<{ toolSessionId: string; session: unknown }> {
-    return this.wrapEvent('session_created', { toolSessionId, session });
-  }
-
-  // -----------------------------------------------------------------------
-  // Incoming: MessageEnvelope -> OpenCode Command
-  // -----------------------------------------------------------------------
-
-  /**
-   * Unwrap an incoming MessageEnvelope to extract the payload.
-   *
-   * @param envelope  The enveloped message from the gateway
-   * @returns         The unwrapped payload
-   */
-  unwrapEvent<T = unknown>(envelope: MessageEnvelope<T>): T {
-    // Future: validate envelope version, log warnings for mismatches
-    if (envelope.envelope.version !== PROTOCOL_VERSION) {
-      console.warn(
-        `[ProtocolAdapter] Protocol version mismatch: expected ${PROTOCOL_VERSION}, got ${envelope.envelope.version}`,
-      );
-    }
-
-    return envelope.payload;
+  ): Record<string, unknown> {
+    return {
+      type: 'session_created',
+      toolSessionId,
+      session,
+      envelope: this.createEnvelope(),
+    };
   }
 
   // -----------------------------------------------------------------------
@@ -126,9 +116,6 @@ export class ProtocolAdapter {
 
   /**
    * Get the next sequence number for a given session (or agent-level if no session).
-   *
-   * @param sessionId  Optional session identifier
-   * @returns          The next sequence number
    */
   getNextSequence(sessionId?: string): number {
     if (sessionId) {
@@ -143,8 +130,6 @@ export class ProtocolAdapter {
 
   /**
    * Reset sequence counter for a session (e.g., when session closes).
-   *
-   * @param sessionId  The session identifier to reset
    */
   resetSessionSequence(sessionId: string): void {
     this.sessionSequences.delete(sessionId);
@@ -152,9 +137,6 @@ export class ProtocolAdapter {
 
   /**
    * Get current sequence number for a session without incrementing.
-   *
-   * @param sessionId  The session identifier
-   * @returns          Current sequence number (0 if not yet initialized)
    */
   getCurrentSequence(sessionId?: string): number {
     if (sessionId) {
