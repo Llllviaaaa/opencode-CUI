@@ -1,10 +1,10 @@
 # ROADMAP.md
 
-> **Current Phase**: Not started
+> **Current Phase**: Phase 2 — 待规划
 > **Milestone**: v0 MVP
 
 ## Must-Haves (from SPEC)
-- [ ] All 6 protocol layers implemented end-to-end
+- [x] All 6 protocol layers implemented end-to-end *(Phase 1: Layer 0+1 complete)*
 - [ ] Real-time streaming with sequence tracking
 - [ ] Permission confirmation flow
 - [ ] Session CRUD + message persistence
@@ -14,7 +14,7 @@
 ## Phases
 
 ### Phase 1: Protocol Foundation — PC Agent Plugin (Layer 0 + Layer 1)
-**Status**: ⬜ Not Started
+**Status**: ✅ 已完成
 **Objective**: Implement the PC Agent Plugin as an OpenCode plugin that receives all event types and relays them upstream to AI-Gateway via WebSocket with AK/SK authentication.
 **Requirements**: REQ-01, REQ-02, REQ-03, REQ-04, REQ-05, REQ-06, REQ-07
 **Deliverable**: PC Agent connects to Gateway, authenticates, receives OpenCode events, and relays invoke commands back to OpenCode.
