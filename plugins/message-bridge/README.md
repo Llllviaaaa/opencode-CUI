@@ -1,0 +1,206 @@
+# Message Bridge Plugin
+
+A WebSocket-based bridge that connects local OpenCode instances to a remote gateway for bidirectional messaging. This plugin runs in local mode only, relaying events between OpenCode and external IM platforms.
+
+## What It Does
+
+The message-bridge plugin acts as a protocol adapter between OpenCode and a gateway service:
+
+- **Local Mode Only**: Connects to OpenCode running on localhost (port 54321 by default)
+- **WebSocket Gateway**: Maintains a persistent connection to the gateway (port 8081 by default)
+- **Event Relay**: Streams OpenCode events upstream and executes gateway commands downstream
+- **Session Management**: Creates, manages, and closes chat sessions with OpenCode
+- **Permission Handling**: Responds to permission requests from OpenCode during execution
+
+## Implemented Actions
+
+The plugin supports 5 gateway-invokable actions:
+
+### 1. chat
+Send a message to an existing OpenCode session.
+
+```typescript
+payload: {
+  sessionId: string;  // Required: target session
+  message: string;    // Required: message content
+}
+```
+
+### 2. create_session
+Create a new OpenCode session.
+
+```typescript
+payload: {
+  sessionId?: string;              // Optional: custom session ID
+  metadata?: Record<string, any>;  // Optional: session metadata
+}
+```
+
+### 3. close_session
+Close an OpenCode session using **abort semantics** (not delete). This ends the session gracefully without removing session data.
+
+```typescript
+payload: {
+  sessionId: string;  // Required: session to close
+}
+```
+
+### 4. permission_reply
+Respond to a permission request from OpenCode. Supports **dual payload formats**:
+
+**Target format** (preferred):
+```typescript
+payload: {
+  permissionId: string;
+  toolSessionId?: string;
+  response: 'allow' | 'always' | 'deny';
+}
+```
+
+**Compatibility format** (legacy):
+```typescript
+payload: {
+  permissionId: string;
+  toolSessionId?: string;
+  approved: boolean;  // true maps to 'allow', false maps to 'deny'
+}
+```
+
+### 5. status_query
+Query the connection health status.
+
+```typescript
+payload: {
+  sessionId?: string;  // Optional: for context
+}
+
+// Returns: { opencodeOnline: boolean, connectionState: string }
+```
+
+## Configuration
+
+Configuration loads from multiple sources with this priority (highest first):
+
+1. Environment variables (`BRIDGE_*`)
+2. Project config (`.opencode/message-bridge.jsonc`)
+3. User config (`~/.config/opencode/message-bridge.jsonc`)
+4. Built-in defaults
+
+### Key Configuration Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `gateway.url` | `ws://localhost:8081/ws/agent` | Gateway WebSocket endpoint |
+| `gateway.deviceName` | `Local Machine` | Device identifier |
+| `gateway.toolType` | `opencode` | Tool type identifier |
+| `sdk.baseUrl` | `http://localhost:54321` | OpenCode SDK URL |
+| `sdk.timeoutMs` | `10000` | SDK call timeout |
+| `reconnect.baseMs` | `1000` | Initial reconnect delay |
+| `reconnect.maxMs` | `30000` | Max reconnect delay |
+| `reconnect.exponential` | `true` | Use exponential backoff |
+| `event.heartbeatIntervalMs` | `30000` | Heartbeat frequency |
+| `event.healthCheckIntervalMs` | `30000` | Health check frequency |
+| `event.allowlist` | `['message.*', 'permission.*', ...]` | Allowed event patterns |
+
+### Environment Variables
+
+All config values can be set via environment variables using the `BRIDGE_` prefix:
+
+```bash
+BRIDGE_GATEWAY_URL=ws://gateway.example.com/ws/agent
+BRIDGE_SDK_BASE_URL=http://localhost:54321
+BRIDGE_AUTH_AK=your-access-key
+BRIDGE_AUTH_SK=your-secret-key
+BRIDGE_ENABLED=true
+```
+
+## Build and Test Commands
+
+```bash
+# Install dependencies
+npm install
+
+# Type check without emitting
+npm run typecheck
+
+# Build the plugin
+npm run build
+
+# Run all tests
+npm run test
+
+# Run unit tests only
+npm run test:unit
+
+# Run integration tests only
+npm run test:integration
+
+# Run e2e tests only
+npm run test:e2e
+
+# Run tests with coverage (enforces thresholds)
+npm run test:coverage
+```
+
+### Coverage Requirements
+
+The coverage gate enforces minimum thresholds:
+- **Lines**: >= 80%
+- **Branches**: >= 70%
+
+Tests use Node.js built-in test runner (`node:test`).
+
+## Quick Integration Usage
+
+```typescript
+import { MessageBridgePluginClass, DefaultActionRegistry } from '@opencode-cui/message-bridge';
+import { loadConfig } from '@opencode-cui/message-bridge/config';
+
+// Load configuration
+const config = await loadConfig('/path/to/workspace');
+
+// Create registry and plugin
+const registry = new DefaultActionRegistry();
+const plugin = new MessageBridgePluginClass(registry);
+
+// Start the plugin
+await plugin.start();
+
+// Actions are now registered and ready to receive gateway invocations
+// The plugin handles WebSocket connection, event streaming, and action execution automatically
+
+// When shutting down
+await plugin.stop();
+```
+
+## Current Status (MVP)
+
+This is a **Minimum Viable Product** with the following characteristics:
+
+- **Local mode only**: Connects to OpenCode on localhost; no remote AI tool support yet
+- **OpenCode SDK only**: Uses `@opencode-ai/sdk` for communication
+- **Single gateway connection**: One WebSocket connection per plugin instance
+- **No persistence**: Sessions live only in memory; no database integration
+- **Limited error recovery**: Basic reconnection with exponential backoff
+
+## Architecture Overview
+
+```
+┌─────────────────┐     WebSocket      ┌─────────────┐
+│  Gateway        │◄──────────────────►│  message-   │
+│  (port 8081)    │                    │  bridge     │
+└─────────────────┘                    └──────┬──────┘
+                                              │
+                                              │ SDK calls
+                                              ▼
+                                       ┌─────────────┐
+                                       │  OpenCode   │
+                                       │ (port 54321)│
+                                       └─────────────┘
+```
+
+The plugin maintains a stateful WebSocket connection to the gateway and translates gateway commands into OpenCode SDK calls.
+
+## License
+
+MIT
