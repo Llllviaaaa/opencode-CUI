@@ -1,0 +1,10 @@
+[submodule "opencode"]
+	path = plugins/opencode
+	url = https://github.com/yuzhangCZ/opencode.git
+	branch = learn-opencode
+	shallow = true
+[submodule "message-bridge-opencode-plugin"]
+	path = plugins/message-bridge-opencode-plugin
+	url = https://github.com/yuzhangCZ/message-bridge-opencode-plugin.git
+	branch = feat/testApp
+	shallow = true
