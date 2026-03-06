@@ -41,6 +41,7 @@ const App: React.FC = () => {
   const handleNewSession = useCallback(async () => {
     await createSession({
       skillDefinitionId: SKILL_DEFINITION_ID,
+      userId: 1,
       title: `Session ${new Date().toLocaleString()}`,
     });
   }, [createSession]);
@@ -50,6 +51,7 @@ const App: React.FC = () => {
       if (!activeSessionId) {
         const session = await createSession({
           skillDefinitionId: SKILL_DEFINITION_ID,
+          userId: 1,
           title: text.slice(0, 50),
         });
         if (session) {

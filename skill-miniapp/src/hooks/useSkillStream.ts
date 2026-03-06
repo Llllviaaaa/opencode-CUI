@@ -15,10 +15,14 @@ export interface UseSkillStreamReturn {
   error: string | null;
 }
 
+// In dev, Vite proxy handles /ws/* -> ws://localhost:8082
+// Use the current page origin with ws:// protocol
 const WS_BASE_URL =
   typeof import.meta !== 'undefined' && (import.meta as unknown as Record<string, Record<string, string>>).env?.VITE_SKILL_SERVER_WS
     ? (import.meta as unknown as Record<string, Record<string, string>>).env.VITE_SKILL_SERVER_WS
-    : 'ws://localhost:8082';
+    : (typeof window !== 'undefined'
+      ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
+      : 'ws://localhost:8082');
 
 /** Reconnect delay with exponential backoff (max 30s). */
 function getReconnectDelay(attempt: number): number {

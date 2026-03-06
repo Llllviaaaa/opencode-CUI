@@ -4,10 +4,12 @@ import type { Session, Message } from '../protocol/types';
 // Configuration
 // ---------------------------------------------------------------------------
 
+// Use empty base URL in dev (Vite proxy handles /api/* -> localhost:8082)
+// Set VITE_SKILL_SERVER_URL to override in production
 const DEFAULT_BASE_URL =
   typeof import.meta !== 'undefined' && (import.meta as unknown as Record<string, Record<string, string>>).env?.VITE_SKILL_SERVER_URL
     ? (import.meta as unknown as Record<string, Record<string, string>>).env.VITE_SKILL_SERVER_URL
-    : 'http://localhost:8082';
+    : '';
 
 let baseURL = DEFAULT_BASE_URL;
 
@@ -86,6 +88,7 @@ export function getDefinitions(): Promise<SkillDefinition[]> {
 // ---------------------------------------------------------------------------
 
 export interface CreateSessionParams {
+  userId?: number;
   skillDefinitionId: number;
   title?: string;
   imChatId?: string;
