@@ -14,6 +14,18 @@ import type { OpenCodeEvent } from './types/PluginTypes';
 import { ProtocolAdapter } from './ProtocolAdapter';
 import { mapPermissionResponse } from './PermissionMapper';
 import { hasEnvelope, type MessageEnvelope } from './types/MessageEnvelope';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+// Debug file logger (console output is invisible in plugin context)
+const DEBUG_LOG_PATH = path.join(process.env.TEMP || process.env.TMP || '/tmp', 'pc-agent-debug.log');
+function debugLog(context: string, ...args: unknown[]): void {
+  try {
+    const ts = new Date().toISOString();
+    const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a)).join(' ');
+    fs.appendFileSync(DEBUG_LOG_PATH, `[${ts}] [${context}] ${msg}\n`);
+  } catch { /* ignore */ }
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -159,6 +171,8 @@ export class EventRelay {
   private async handleDownstreamMessage(raw: unknown): Promise<void> {
     if (!raw || typeof raw !== 'object') return;
 
+    debugLog('downstream', 'Received raw message:', raw);
+
     // Unwrap envelope if present (backward compatibility)
     let msg: Record<string, unknown>;
     if (hasEnvelope(raw)) {
@@ -169,11 +183,13 @@ export class EventRelay {
           ? (envelope.payload as Record<string, unknown>)
           : { payload: envelope.payload }),
       };
+      debugLog('downstream', 'Unwrapped envelope, msg:', msg);
     } else {
       msg = raw as Record<string, unknown>;
     }
 
     const type = msg.type as string | undefined;
+    debugLog('downstream', 'Message type:', type);
 
     if (type === 'invoke') {
       await this.handleInvoke(msg as unknown as InvokeMessage);
@@ -193,18 +209,24 @@ export class EventRelay {
       case 'chat': {
         const toolSessionId = payload.toolSessionId as string | undefined;
         const text = payload.text as string | undefined;
+        debugLog('invoke.chat', `toolSessionId=${toolSessionId}, text=${text}, payload keys:`, Object.keys(payload));
         if (!toolSessionId || !text) {
+          debugLog('invoke.chat', 'MISSING fields! toolSessionId:', toolSessionId, 'text:', text);
           this.onError('invoke.chat', new Error('Missing toolSessionId or text in payload'));
           return;
         }
         try {
-          await (this.client as any).session.prompt({
+          const promptArgs = {
             path: { id: toolSessionId },
             body: {
-              parts: [{ type: 'text', text }],
+              parts: [{ type: 'text' as const, text }],
             },
-          });
+          };
+          debugLog('invoke.chat', 'Calling session.prompt with:', promptArgs);
+          const result = await (this.client as any).session.prompt(promptArgs);
+          debugLog('invoke.chat', 'session.prompt result:', result);
         } catch (err) {
+          debugLog('invoke.chat', 'session.prompt ERROR:', err instanceof Error ? { message: err.message, stack: err.stack } : err);
           this.onError('invoke.chat', err);
           this.trySendError(msg.sessionId, err);
         }
