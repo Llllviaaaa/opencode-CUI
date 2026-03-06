@@ -200,7 +200,9 @@ export class EventRelay {
         try {
           await (this.client as any).session.prompt({
             path: { id: toolSessionId },
-            body: { text },
+            body: {
+              parts: [{ type: 'text', text }],
+            },
           });
         } catch (err) {
           this.onError('invoke.chat', err);
