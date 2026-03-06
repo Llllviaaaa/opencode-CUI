@@ -1,0 +1,5 @@
+{
+    "dependencies": {
+        "@opencode-cui/pc-agent": "file:../src/main/pc-agent"
+    }
+}
