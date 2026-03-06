@@ -5,9 +5,9 @@ import type { Session, Message } from '../protocol/types';
 // ---------------------------------------------------------------------------
 
 const DEFAULT_BASE_URL =
-  typeof import.meta !== 'undefined' && (import.meta as Record<string, Record<string, string>>).env?.VITE_SKILL_SERVER_URL
-    ? (import.meta as Record<string, Record<string, string>>).env.VITE_SKILL_SERVER_URL
-    : 'http://localhost:8080';
+  typeof import.meta !== 'undefined' && (import.meta as unknown as Record<string, Record<string, string>>).env?.VITE_SKILL_SERVER_URL
+    ? (import.meta as unknown as Record<string, Record<string, string>>).env.VITE_SKILL_SERVER_URL
+    : 'http://localhost:8082';
 
 let baseURL = DEFAULT_BASE_URL;
 

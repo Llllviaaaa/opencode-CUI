@@ -1,109 +1,117 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import { SkillMiniBar } from './pages/SkillMiniBar';
-import { SkillMain } from './pages/SkillMain';
-import type { MiniBarStatus } from './protocol/types';
+import React, { useState, useCallback, useRef } from 'react';
+import { SessionSidebar } from './components/SessionSidebar';
+import { ConversationView } from './components/ConversationView';
+import { MessageInput } from './components/MessageInput';
+import { useSkillSession } from './hooks/useSkillSession';
+import { useSkillStream } from './hooks/useSkillStream';
+import './index.css';
 
-/**
- * App — Skill Miniapp entry point.
- *
- * Renders the SkillMiniBar (always visible) and the expanded SkillMain
- * overlay when the user taps "展开".
- *
- * The host IM client triggers this miniapp via the "/" command framework.
- * On mount we simulate the initial SKILL trigger flow:
- *   1. Check for a `sessionId` query parameter (passed by the host).
- *   2. If present, associate with that session; otherwise start fresh.
- */
+const SKILL_DEFINITION_ID = 1;
+const DEFAULT_USER_ID = '1'; // Test user
+
+const agentStatusConfig: Record<string, { className: string; label: string }> = {
+  online: { className: 'online', label: 'Online' },
+  offline: { className: 'offline', label: 'Offline' },
+  unknown: { className: 'unknown', label: 'Connecting...' },
+};
+
 const App: React.FC = () => {
-  const [expanded, setExpanded] = useState(false);
-  const [miniBarStatus, setMiniBarStatus] = useState<MiniBarStatus>('processing');
-  const [miniBarSummary, setMiniBarSummary] = useState('');
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [imChatId, setImChatId] = useState('');
-  const [userId, setUserId] = useState('');
+  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const conversationContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // ---------------------------------------------------------------
-  // Initial SKILL trigger flow
-  // ---------------------------------------------------------------
-  useEffect(() => {
-    // Read parameters from the URL that the host IM client provides.
-    const params = new URLSearchParams(window.location.search);
-    const sessionId = params.get('sessionId');
-    const chatId = params.get('chatId') ?? '';
-    const uid = params.get('userId') ?? '';
+  const {
+    sessions,
+    currentSession,
+    loading: sessionsLoading,
+    error: sessionError,
+    createSession,
+    switchSession,
+  } = useSkillSession(DEFAULT_USER_ID);
 
-    if (sessionId) {
-      setCurrentSessionId(sessionId);
-    }
-    setImChatId(chatId);
-    setUserId(uid);
+  const activeSessionId = currentSession?.id ?? null;
 
-    // Register a global callback that the "/" command framework may invoke.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).__SKILL_CALLBACK__ = (payload: {
-      action: string;
-      sessionId?: string;
-      chatId?: string;
-    }) => {
-      if (payload.action === 'trigger') {
-        if (payload.sessionId) setCurrentSessionId(payload.sessionId);
-        if (payload.chatId) setImChatId(payload.chatId);
-        setExpanded(true);
+  const {
+    messages,
+    isStreaming,
+    agentStatus,
+    sendMessage,
+    error: streamError,
+  } = useSkillStream(activeSessionId);
+
+  const handleNewSession = useCallback(async () => {
+    await createSession({
+      skillDefinitionId: SKILL_DEFINITION_ID,
+      title: `Session ${new Date().toLocaleString()}`,
+    });
+  }, [createSession]);
+
+  const handleSendMessage = useCallback(
+    async (text: string) => {
+      if (!activeSessionId) {
+        const session = await createSession({
+          skillDefinitionId: SKILL_DEFINITION_ID,
+          title: text.slice(0, 50),
+        });
+        if (session) {
+          setTimeout(() => void sendMessage(text), 100);
+        }
+        return;
       }
-    };
+      await sendMessage(text);
+    },
+    [activeSessionId, createSession, sendMessage],
+  );
 
-    return () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      delete (window as any).__SKILL_CALLBACK__;
-    };
-  }, []);
-
-  // ---------------------------------------------------------------
-  // Mini bar status sync
-  // ---------------------------------------------------------------
-  // In a production integration the host would push status updates;
-  // here we expose a global setter so the streaming hook (or host)
-  // can drive the mini bar.
-  useEffect(() => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).__SKILL_SET_STATUS__ = (
-      status: MiniBarStatus,
-      summary?: string,
-    ) => {
-      setMiniBarStatus(status);
-      if (summary !== undefined) setMiniBarSummary(summary);
-    };
-
-    return () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      delete (window as any).__SKILL_SET_STATUS__;
-    };
-  }, []);
-
-  const handleExpand = useCallback(() => {
-    setExpanded(true);
-  }, []);
-
-  const handleCollapse = useCallback(() => {
-    setExpanded(false);
-  }, []);
+  const displayError = sessionError ?? streamError;
+  const statusCfg = agentStatusConfig[agentStatus] ?? agentStatusConfig.unknown;
 
   return (
-    <>
-      <SkillMiniBar
-        status={miniBarStatus}
-        summary={miniBarSummary}
-        onExpand={handleExpand}
-      />
-      {expanded && (
-        <SkillMain
-          onCollapse={handleCollapse}
-          userId={userId}
-          initialSessionId={currentSessionId}
-          imChatId={imChatId}
-        />
-      )}
-    </>
+    <div className="app-layout">
+      {/* ---- Top Bar ---- */}
+      <div className="app-topbar">
+        <span className="app-title">💬 OpenCode Chat</span>
+        <span className="app-badge">v1</span>
+        <span className="spacer" />
+        <span className={`status-indicator ${statusCfg.className}`} />
+        <span className="status-label">{statusCfg.label}</span>
+        <button
+          type="button"
+          className="btn btn-sidebar"
+          onClick={() => setSidebarVisible((v) => !v)}
+        >
+          {sidebarVisible ? '隐藏侧栏' : '显示侧栏'}
+        </button>
+      </div>
+
+      {/* ---- Error Banner ---- */}
+      {displayError && <div className="error-banner">{displayError}</div>}
+
+      {/* ---- Body ---- */}
+      <div className="app-body">
+        {sidebarVisible && (
+          <SessionSidebar
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            onSelect={(id) => switchSession(id)}
+            onNewSession={handleNewSession}
+          />
+        )}
+        <div className="main-content">
+          <div ref={conversationContainerRef} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <ConversationView messages={messages} loading={sessionsLoading} />
+          </div>
+          <MessageInput
+            onSend={handleSendMessage}
+            disabled={isStreaming}
+            placeholder={
+              activeSessionId
+                ? '输入消息... (Enter 发送, Shift+Enter 换行)'
+                : '输入消息开始新会话...'
+            }
+          />
+        </div>
+      </div>
+    </div>
   );
 };
 

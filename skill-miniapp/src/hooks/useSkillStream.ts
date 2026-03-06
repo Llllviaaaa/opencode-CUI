@@ -16,9 +16,9 @@ export interface UseSkillStreamReturn {
 }
 
 const WS_BASE_URL =
-  typeof import.meta !== 'undefined' && (import.meta as Record<string, Record<string, string>>).env?.VITE_SKILL_SERVER_WS
-    ? (import.meta as Record<string, Record<string, string>>).env.VITE_SKILL_SERVER_WS
-    : 'ws://localhost:8080';
+  typeof import.meta !== 'undefined' && (import.meta as unknown as Record<string, Record<string, string>>).env?.VITE_SKILL_SERVER_WS
+    ? (import.meta as unknown as Record<string, Record<string, string>>).env.VITE_SKILL_SERVER_WS
+    : 'ws://localhost:8082';
 
 /** Reconnect delay with exponential backoff (max 30s). */
 function getReconnectDelay(attempt: number): number {
@@ -182,10 +182,10 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
             prev.map((m) =>
               m.id === finalId
                 ? {
-                    ...m,
-                    isStreaming: false,
-                    meta: msg.usage ? { usage: msg.usage } : m.meta,
-                  }
+                  ...m,
+                  isStreaming: false,
+                  meta: msg.usage ? { usage: msg.usage } : m.meta,
+                }
                 : m,
             ),
           );
