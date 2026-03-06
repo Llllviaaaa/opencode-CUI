@@ -216,6 +216,9 @@ public class GatewayRelayService {
         String sessionId = node.path("sessionId").asText(null);
         String agentId = node.path("agentId").asText(null);
 
+        // Trace: log key fields for full-chain debugging
+        log.debug("Gateway message dispatch: type={}, sessionId={}, agentId={}", type, sessionId, agentId);
+
         // Extract envelope metadata if present
         JsonNode envelopeNode = node.path("envelope");
         if (!envelopeNode.isMissingNode()) {
@@ -255,9 +258,12 @@ public class GatewayRelayService {
 
     private void handleToolEvent(String sessionId, JsonNode node) {
         if (sessionId == null) {
-            log.warn("tool_event missing sessionId");
+            log.warn("tool_event missing sessionId, agentId={}, raw keys={}",
+                    node.path("agentId").asText(null), node.fieldNames());
             return;
         }
+
+        log.debug("handleToolEvent: sessionId={}, broadcasting to subscribers", sessionId);
 
         // Extract raw event and persist as assistant message
         JsonNode event = node.get("event");
@@ -276,7 +282,7 @@ public class GatewayRelayService {
 
     private void handleToolDone(String sessionId, JsonNode node) {
         if (sessionId == null) {
-            log.warn("tool_done missing sessionId");
+            log.warn("tool_done missing sessionId, agentId={}", node.path("agentId").asText(null));
             return;
         }
 
