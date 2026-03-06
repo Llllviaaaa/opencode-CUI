@@ -20,7 +20,7 @@
 **Deliverable**: PC Agent connects to Gateway, authenticates, receives OpenCode events, and relays invoke commands back to OpenCode.
 
 ### Phase 2: Backend Relay — AI-Gateway (Layer 1 + Layer 2 + Layer 3)
-**Status**: ⬜ Not Started
+**Status**: ✅ 已完成并验证 (7/7 REQ PASS)
 **Objective**: Implement Gateway WebSocket handlers, AK/SK verification, agent connection management, Redis Pub/Sub routing, and bidirectional relay to Skill Server.
 **Requirements**: REQ-03, REQ-08, REQ-09, REQ-10, REQ-11, REQ-12, REQ-26
 **Deliverable**: Gateway accepts agents, validates credentials, relays events to Skill Server, and routes invoke commands back to agents via Redis.
