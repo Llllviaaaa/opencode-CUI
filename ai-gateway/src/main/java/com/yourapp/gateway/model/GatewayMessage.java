@@ -192,6 +192,8 @@ public class GatewayMessage {
                 .toolType(this.toolType)
                 .toolVersion(this.toolVersion)
                 .toolSessionId(this.toolSessionId)
+                .session(this.session)
+                .opencodeOnline(this.opencodeOnline)
                 .build();
         return copy;
     }
@@ -218,6 +220,8 @@ public class GatewayMessage {
                 .toolType(this.toolType)
                 .toolVersion(this.toolVersion)
                 .toolSessionId(this.toolSessionId)
+                .session(this.session)
+                .opencodeOnline(this.opencodeOnline)
                 .build();
         return copy;
     }
