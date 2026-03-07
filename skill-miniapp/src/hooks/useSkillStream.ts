@@ -71,7 +71,12 @@ function contentTypeForRole(role: MessageRole): Message['contentType'] {
 }
 
 function sortMessages(messages: Message[]): Message[] {
-  return [...messages].sort((left, right) => {
+  const deduped = new Map<string, Message>();
+  messages.forEach((message) => {
+    deduped.set(message.id, message);
+  });
+
+  return [...deduped.values()].sort((left, right) => {
     if (left.messageSeq != null && right.messageSeq != null && left.messageSeq !== right.messageSeq) {
       return left.messageSeq - right.messageSeq;
     }
@@ -88,6 +93,46 @@ function upsertMessage(messages: Message[], next: Message): Message[] {
   const updated = [...messages];
   updated[index] = next;
   return sortMessages(updated);
+}
+
+function mergeHistoryMessage(existing: Message, incoming: Message): Message {
+  const preserveStreaming = Boolean(existing.isStreaming);
+  const content = preserveStreaming && existing.content
+    ? existing.content
+    : (incoming.content || existing.content);
+  const parts = preserveStreaming && existing.parts && existing.parts.length > 0
+    ? existing.parts
+    : (incoming.parts ?? existing.parts);
+
+  return {
+    ...incoming,
+    role: preserveStreaming ? existing.role : incoming.role,
+    content,
+    contentType: preserveStreaming ? existing.contentType : incoming.contentType,
+    timestamp: incoming.timestamp || existing.timestamp,
+    messageSeq: incoming.messageSeq ?? existing.messageSeq,
+    meta: incoming.meta ?? existing.meta,
+    isStreaming: preserveStreaming,
+    parts,
+  };
+}
+
+function mergeHistoryMessages(messages: Message[], incomingMessages: Message[]): Message[] {
+  let merged = [...messages];
+
+  incomingMessages.forEach((incoming) => {
+    const index = merged.findIndex((message) => message.id === incoming.id);
+    if (index === -1) {
+      merged = [...merged, incoming];
+      return;
+    }
+
+    const updated = [...merged];
+    updated[index] = mergeHistoryMessage(updated[index], incoming);
+    merged = updated;
+  });
+
+  return sortMessages(merged);
 }
 
 function isKnownStreamType(type: unknown): type is StreamMessageType {
@@ -187,8 +232,18 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const historyRequestRef = useRef(0);
   const assemblersRef = useRef(new Map<string, StreamAssembler>());
   const activeMessageIdsRef = useRef(new Set<string>());
+  const knownUserMessageIdsRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    knownUserMessageIdsRef.current = new Set(
+      messages
+        .filter((message) => message.role === 'user')
+        .map((message) => message.id),
+    );
+  }, [messages]);
 
   const resetStreamingState = useCallback(() => {
     assemblersRef.current.clear();
@@ -239,6 +294,9 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   const applyStreamedMessage = useCallback((msg: StreamMessage) => {
     const messageId = msg.messageId ?? msg.sourceMessageId ?? genId('stream');
     const role = normalizeRole(msg.role);
+    if (role === 'user' || knownUserMessageIdsRef.current.has(messageId)) {
+      return;
+    }
 
     let assembler = assemblersRef.current.get(messageId);
     if (!assembler) {
@@ -289,6 +347,11 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
       return;
     }
 
+    const role = normalizeRole(msg.role ?? partMessages[0]?.role);
+    if (role === 'user' || knownUserMessageIdsRef.current.has(messageId)) {
+      return;
+    }
+
     const assembler = new StreamAssembler();
     partMessages.forEach((part) => assembler.handleMessage({
       ...part,
@@ -303,7 +366,6 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
       setIsStreaming(true);
     }
 
-    const role = normalizeRole(msg.role ?? partMessages[0]?.role);
     const content = assembler.getText();
     const parts = assembler.getParts();
     const timestamp = normalizeTimestamp(msg.emittedAt ?? partMessages[0]?.emittedAt);
@@ -393,7 +455,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
       case 'snapshot':
         if (Array.isArray(msg.messages)) {
           resetStreamingState();
-          setMessages(normalizeHistoryMessages(msg.messages));
+          setMessages(sortMessages(normalizeHistoryMessages(msg.messages)));
         }
         break;
 
@@ -408,19 +470,26 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
 
   useEffect(() => {
     if (!sessionId) {
+      historyRequestRef.current += 1;
       setMessages([]);
+      knownUserMessageIdsRef.current.clear();
       setSocketReady(false);
       resetStreamingState();
       return;
     }
 
     resetStreamingState();
+    setMessages([]);
+    knownUserMessageIdsRef.current.clear();
+    const requestId = historyRequestRef.current + 1;
+    historyRequestRef.current = requestId;
     let cancelled = false;
     (async () => {
       try {
         const response = await api.getMessages(sessionId, 0, 50);
-        if (!cancelled) {
-          setMessages(normalizeHistoryMessages(response.content as unknown as Array<Record<string, unknown>>));
+        if (!cancelled && historyRequestRef.current === requestId) {
+          const normalized = normalizeHistoryMessages(response.content as unknown as Array<Record<string, unknown>>);
+          setMessages((prev) => mergeHistoryMessages(prev, normalized));
         }
       } catch {
         // History loading failure is non-fatal.
@@ -528,9 +597,10 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
       try {
         const saved = await api.sendMessage(sessionId, text);
         const normalized = normalizeHistoryMessage(saved as unknown as Record<string, unknown>);
-        setMessages((prev) =>
-          sortMessages(prev.map((message) => (message.id === tempId ? normalized : message))),
-        );
+        setMessages((prev) => {
+          const nextMessages = prev.filter((message) => message.id !== tempId && message.id !== normalized.id);
+          return upsertMessage(nextMessages, normalized);
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to send message';
         setError(message);

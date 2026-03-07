@@ -24,6 +24,7 @@ public class OpenCodeEventTranslator {
     private final ConcurrentMap<String, String> partTypes = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Integer> partSequences = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Integer> nextPartSequences = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, String> messageRoles = new ConcurrentHashMap<>();
 
     public OpenCodeEventTranslator(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
@@ -95,17 +96,21 @@ public class OpenCodeEventTranslator {
                 ? props.path("delta").asText(null)
                 : null;
         Integer partSeq = rememberPartSeq(sessionId, messageId, partId);
+        String role = resolveMessageRole(sessionId, messageId);
 
         rememberPartType(sessionId, partId, partType);
+        if (shouldIgnoreMessage(role)) {
+            return null;
+        }
 
         return switch (partType) {
-            case "text" -> translateTextPart(sessionId, messageId, partId, partSeq, part, delta);
-            case "reasoning" -> translateReasoningPart(sessionId, messageId, partId, partSeq, part, delta);
-            case "tool" -> translateToolPart(sessionId, messageId, partId, partSeq, part);
-            case "step-start" -> messageBuilder(StreamMessage.Types.STEP_START, sessionId, messageId)
+            case "text" -> translateTextPart(sessionId, messageId, partId, partSeq, part, delta, role);
+            case "reasoning" -> translateReasoningPart(sessionId, messageId, partId, partSeq, part, delta, role);
+            case "tool" -> translateToolPart(sessionId, messageId, partId, partSeq, part, role);
+            case "step-start" -> messageBuilder(StreamMessage.Types.STEP_START, sessionId, messageId, role)
                     .build();
-            case "step-finish" -> translateStepFinish(sessionId, messageId, part);
-            case "file" -> translateFilePart(sessionId, messageId, partId, partSeq, part);
+            case "step-finish" -> translateStepFinish(sessionId, messageId, part, role);
+            case "file" -> translateFilePart(sessionId, messageId, partId, partSeq, part, role);
             default -> {
                 log.debug("Ignoring part type: {}", partType);
                 yield null;
@@ -130,11 +135,15 @@ public class OpenCodeEventTranslator {
         }
 
         Integer partSeq = rememberPartSeq(sessionId, messageId, partId);
+        String role = resolveMessageRole(sessionId, messageId);
+        if (shouldIgnoreMessage(role)) {
+            return null;
+        }
         return switch (partType) {
-            case "text" -> partBuilder(StreamMessage.Types.TEXT_DELTA, sessionId, messageId, partId, partSeq)
+            case "text" -> partBuilder(StreamMessage.Types.TEXT_DELTA, sessionId, messageId, partId, partSeq, role)
                     .content(delta)
                     .build();
-            case "reasoning" -> partBuilder(StreamMessage.Types.THINKING_DELTA, sessionId, messageId, partId, partSeq)
+            case "reasoning" -> partBuilder(StreamMessage.Types.THINKING_DELTA, sessionId, messageId, partId, partSeq, role)
                     .content(delta)
                     .build();
             default -> {
@@ -146,32 +155,32 @@ public class OpenCodeEventTranslator {
     }
 
     private StreamMessage translateTextPart(String sessionId, String messageId, String partId,
-            Integer partSeq, JsonNode part, String delta) {
+            Integer partSeq, JsonNode part, String delta, String role) {
         String type = delta != null ? StreamMessage.Types.TEXT_DELTA : StreamMessage.Types.TEXT_DONE;
         String content = delta != null ? delta : part.path("text").asText("");
-        return partBuilder(type, sessionId, messageId, partId, partSeq)
+        return partBuilder(type, sessionId, messageId, partId, partSeq, role)
                 .content(content)
                 .build();
     }
 
     private StreamMessage translateReasoningPart(String sessionId, String messageId, String partId,
-            Integer partSeq, JsonNode part, String delta) {
+            Integer partSeq, JsonNode part, String delta, String role) {
         String type = delta != null ? StreamMessage.Types.THINKING_DELTA : StreamMessage.Types.THINKING_DONE;
         String content = delta != null ? delta : part.path("text").asText("");
-        return partBuilder(type, sessionId, messageId, partId, partSeq)
+        return partBuilder(type, sessionId, messageId, partId, partSeq, role)
                 .content(content)
                 .build();
     }
 
     private StreamMessage translateToolPart(String sessionId, String messageId, String partId,
-            Integer partSeq, JsonNode part) {
+            Integer partSeq, JsonNode part, String role) {
         String toolName = part.path("tool").asText("");
         String callId = part.path("callID").asText(null);
         JsonNode state = part.get("state");
         String status = state != null ? state.path("status").asText("") : "";
 
         if ("question".equals(toolName) && "running".equals(status)) {
-            return translateQuestion(sessionId, messageId, partId, partSeq, callId, state);
+            return translateQuestion(sessionId, messageId, partId, partSeq, callId, state, role);
         }
 
         StreamMessage.StreamMessageBuilder builder = partBuilder(
@@ -179,7 +188,8 @@ public class OpenCodeEventTranslator {
                 sessionId,
                 messageId,
                 partId,
-                partSeq)
+                partSeq,
+                role)
                 .toolName(toolName)
                 .toolCallId(callId)
                 .status(status);
@@ -207,14 +217,15 @@ public class OpenCodeEventTranslator {
     }
 
     private StreamMessage translateQuestion(String sessionId, String messageId, String partId,
-            Integer partSeq, String callId, JsonNode state) {
+            Integer partSeq, String callId, JsonNode state, String role) {
         JsonNode input = state != null ? state.get("input") : null;
         StreamMessage.StreamMessageBuilder builder = partBuilder(
                 StreamMessage.Types.QUESTION,
                 sessionId,
                 messageId,
                 partId,
-                partSeq)
+                partSeq,
+                role)
                 .toolCallId(callId)
                 .toolName("question")
                 .status("running");
@@ -236,8 +247,12 @@ public class OpenCodeEventTranslator {
         return builder.build();
     }
 
-    private StreamMessage translateStepFinish(String sessionId, String messageId, JsonNode part) {
-        StreamMessage.StreamMessageBuilder builder = messageBuilder(StreamMessage.Types.STEP_DONE, sessionId, messageId);
+    private StreamMessage translateStepFinish(String sessionId, String messageId, JsonNode part, String role) {
+        StreamMessage.StreamMessageBuilder builder = messageBuilder(
+                StreamMessage.Types.STEP_DONE,
+                sessionId,
+                messageId,
+                role);
 
         JsonNode tokensNode = part.get("tokens");
         if (tokensNode != null) {
@@ -258,8 +273,8 @@ public class OpenCodeEventTranslator {
     }
 
     private StreamMessage translateFilePart(String sessionId, String messageId, String partId,
-            Integer partSeq, JsonNode part) {
-        return partBuilder(StreamMessage.Types.FILE, sessionId, messageId, partId, partSeq)
+            Integer partSeq, JsonNode part, String role) {
+        return partBuilder(StreamMessage.Types.FILE, sessionId, messageId, partId, partSeq, role)
                 .fileName(part.path("filename").asText(null))
                 .fileUrl(part.path("url").asText(null))
                 .fileMime(part.path("mime").asText(null))
@@ -304,14 +319,24 @@ public class OpenCodeEventTranslator {
     private StreamMessage translateMessageUpdated(JsonNode event) {
         JsonNode props = event.path("properties");
         JsonNode info = props.path("info");
-        if (info.isMissingNode() || !info.has("finish")) {
+        if (info.isMissingNode() || info.isNull()) {
+            return null;
+        }
+
+        String sessionId = firstNonBlank(props.path("sessionID").asText(null), info.path("sessionID").asText(null));
+        String messageId = firstNonBlank(props.path("messageID").asText(null), info.path("id").asText(null));
+        String role = normalizeRole(info.path("role").asText(null));
+        rememberMessageRole(sessionId, messageId, role);
+
+        if (!info.has("finish") || shouldIgnoreMessage(role)) {
             return null;
         }
 
         return messageBuilder(
                 StreamMessage.Types.STEP_DONE,
-                props.path("sessionID").asText(null),
-                props.path("messageID").asText(null))
+                sessionId,
+                messageId,
+                role)
                 .reason(info.path("finish").path("reason").asText(null))
                 .build();
     }
@@ -379,8 +404,16 @@ public class OpenCodeEventTranslator {
     }
 
     private StreamMessage.StreamMessageBuilder messageBuilder(String type, String sessionId, String sourceMessageId) {
+        return messageBuilder(type, sessionId, sourceMessageId, resolveMessageRole(sessionId, sourceMessageId));
+    }
+
+    private StreamMessage.StreamMessageBuilder messageBuilder(
+            String type,
+            String sessionId,
+            String sourceMessageId,
+            String role) {
         StreamMessage.StreamMessageBuilder builder = baseBuilder(type, sessionId)
-                .role("assistant");
+                .role(normalizeRole(role));
         if (sourceMessageId != null && !sourceMessageId.isBlank()) {
             builder.messageId(sourceMessageId);
             builder.sourceMessageId(sourceMessageId);
@@ -390,7 +423,12 @@ public class OpenCodeEventTranslator {
 
     private StreamMessage.StreamMessageBuilder partBuilder(String type, String sessionId, String sourceMessageId,
             String partId, Integer partSeq) {
-        StreamMessage.StreamMessageBuilder builder = messageBuilder(type, sessionId, sourceMessageId)
+        return partBuilder(type, sessionId, sourceMessageId, partId, partSeq, resolveMessageRole(sessionId, sourceMessageId));
+    }
+
+    private StreamMessage.StreamMessageBuilder partBuilder(String type, String sessionId, String sourceMessageId,
+            String partId, Integer partSeq, String role) {
+        StreamMessage.StreamMessageBuilder builder = messageBuilder(type, sessionId, sourceMessageId, role)
                 .partId(partId);
         if (partSeq != null) {
             builder.partSeq(partSeq);
@@ -454,6 +492,7 @@ public class OpenCodeEventTranslator {
         partTypes.keySet().removeIf(key -> key.startsWith(prefix));
         partSequences.keySet().removeIf(key -> key.startsWith(prefix));
         nextPartSequences.keySet().removeIf(key -> key.startsWith(prefix));
+        messageRoles.keySet().removeIf(key -> key.startsWith(prefix));
     }
 
     private String partCacheKey(String sessionId, String partId) {
@@ -462,6 +501,32 @@ public class OpenCodeEventTranslator {
 
     private String messageCacheKey(String sessionId, String messageId) {
         return sessionId + ":" + messageId;
+    }
+
+    private void rememberMessageRole(String sessionId, String messageId, String role) {
+        if (sessionId == null || sessionId.isBlank() || messageId == null || messageId.isBlank()
+                || role == null || role.isBlank()) {
+            return;
+        }
+        messageRoles.put(messageCacheKey(sessionId, messageId), role);
+    }
+
+    private String resolveMessageRole(String sessionId, String messageId) {
+        if (sessionId == null || sessionId.isBlank() || messageId == null || messageId.isBlank()) {
+            return "assistant";
+        }
+        return normalizeRole(messageRoles.get(messageCacheKey(sessionId, messageId)));
+    }
+
+    private boolean shouldIgnoreMessage(String role) {
+        return "user".equals(normalizeRole(role));
+    }
+
+    private String normalizeRole(String role) {
+        if (role == null || role.isBlank()) {
+            return "assistant";
+        }
+        return role.toLowerCase();
     }
 
     private String firstNonBlank(String first, String second) {

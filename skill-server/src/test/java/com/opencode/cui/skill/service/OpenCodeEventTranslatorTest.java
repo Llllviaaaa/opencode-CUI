@@ -98,6 +98,58 @@ class OpenCodeEventTranslatorTest {
     }
 
     @Test
+    @DisplayName("user message role from message.updated suppresses echoed text parts")
+    void ignoresUserMessagePartsAfterRoleIsLearned() throws Exception {
+        var messageUpdated = objectMapper.readTree("""
+                {
+                  "type": "message.updated",
+                  "properties": {
+                    "sessionID": "sess-user",
+                    "messageID": "msg-user",
+                    "info": {
+                      "id": "msg-user",
+                      "role": "user"
+                    }
+                  }
+                }
+                """);
+        var partUpdated = objectMapper.readTree("""
+                {
+                  "type": "message.part.updated",
+                  "properties": {
+                    "part": {
+                      "id": "part-user",
+                      "sessionID": "sess-user",
+                      "messageID": "msg-user",
+                      "type": "text",
+                      "text": "user prompt"
+                    }
+                  }
+                }
+                """);
+        var partDelta = objectMapper.readTree("""
+                {
+                  "type": "message.part.delta",
+                  "properties": {
+                    "sessionID": "sess-user",
+                    "messageID": "msg-user",
+                    "partID": "part-user",
+                    "field": "text",
+                    "delta": "user prompt"
+                  }
+                }
+                """);
+
+        StreamMessage roleEvent = translator.translate(messageUpdated);
+        StreamMessage seededPart = translator.translate(partUpdated);
+        StreamMessage deltaEvent = translator.translate(partDelta);
+
+        assertNull(roleEvent);
+        assertNull(seededPart);
+        assertNull(deltaEvent);
+    }
+
+    @Test
     @DisplayName("question.asked is mapped to a frontend question message")
     void translatesQuestionAsked() throws Exception {
         var event = objectMapper.readTree("""
