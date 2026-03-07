@@ -12,7 +12,8 @@
     "test:unit": "npm run build && bun test tests/unit",
     "test:integration": "npm run build && bun test tests/integration",
     "test:e2e": "npm run build && bun test tests/e2e",
-    "test:coverage": "npm run build && node ./scripts/check-coverage.mjs"
+    "test:coverage": "npm run build && node ./scripts/check-coverage.mjs",
+    "debug:e2e": "bash ./scripts/debug-e2e.sh"
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.2.18",
