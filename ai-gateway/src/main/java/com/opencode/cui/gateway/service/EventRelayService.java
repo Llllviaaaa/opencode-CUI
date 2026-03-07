@@ -134,6 +134,10 @@ public class EventRelayService {
         // Attach agentId for Skill Server routing
         GatewayMessage forwarded = message.withAgentId(agentId);
 
+        // Trace: log sessionId for upstream event debugging
+        log.debug("Relaying to Skill Server: agentId={}, type={}, sessionId={}, toolSessionId={}",
+                agentId, message.getType(), forwarded.getSessionId(), forwarded.getToolSessionId());
+
         // Log envelope metadata if present
         if (forwarded.hasEnvelope()) {
             var env = forwarded.getEnvelope();

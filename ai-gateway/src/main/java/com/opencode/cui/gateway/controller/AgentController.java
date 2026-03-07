@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.HashMap;
@@ -21,9 +22,10 @@ import java.util.Map;
 /**
  * REST API for agent management.
  *
- * GET  /api/gateway/agents           - list online agents
- * GET  /api/gateway/agents/{id}/status - agent status
- * POST /api/gateway/agents/{id}/invoke - backup channel to send command to PCAgent
+ * GET /api/gateway/agents - list online agents
+ * GET /api/gateway/agents/{id}/status - agent status
+ * POST /api/gateway/agents/{id}/invoke - backup channel to send command to
+ * PCAgent
  */
 @Slf4j
 @RestController
@@ -35,24 +37,32 @@ public class AgentController {
     private final ObjectMapper objectMapper;
 
     public AgentController(AgentRegistryService agentRegistryService,
-                           EventRelayService eventRelayService,
-                           ObjectMapper objectMapper) {
+            EventRelayService eventRelayService,
+            ObjectMapper objectMapper) {
         this.agentRegistryService = agentRegistryService;
         this.eventRelayService = eventRelayService;
         this.objectMapper = objectMapper;
     }
 
     /**
-     * GET /api/gateway/agents - List all online agents.
+     * GET /api/gateway/agents - List online agents.
+     * Optional userId parameter to filter by user.
      */
     @GetMapping
-    public ResponseEntity<List<AgentConnection>> listOnlineAgents() {
-        List<AgentConnection> agents = agentRegistryService.findOnlineAgents();
+    public ResponseEntity<List<AgentConnection>> listOnlineAgents(
+            @RequestParam(required = false) Long userId) {
+        List<AgentConnection> agents;
+        if (userId != null) {
+            agents = agentRegistryService.findOnlineByUserId(userId);
+        } else {
+            agents = agentRegistryService.findOnlineAgents();
+        }
         return ResponseEntity.ok(agents);
     }
 
     /**
-     * GET /api/gateway/agents/{id}/status - Get agent status including WebSocket session info.
+     * GET /api/gateway/agents/{id}/status - Get agent status including WebSocket
+     * session info.
      */
     @GetMapping("/{id}/status")
     public ResponseEntity<Map<String, Object>> getAgentStatus(@PathVariable Long id) {
@@ -70,10 +80,13 @@ public class AgentController {
     }
 
     /**
-     * POST /api/gateway/agents/{id}/invoke - Backup channel to send a command to PCAgent.
+     * POST /api/gateway/agents/{id}/invoke - Backup channel to send a command to
+     * PCAgent.
      *
-     * Request body should be a GatewayMessage (type=invoke with action and payload).
-     * This is used when Skill Server needs to reach a PCAgent via REST as a fallback.
+     * Request body should be a GatewayMessage (type=invoke with action and
+     * payload).
+     * This is used when Skill Server needs to reach a PCAgent via REST as a
+     * fallback.
      */
     @PostMapping("/{id}/invoke")
     public ResponseEntity<Map<String, Object>> invokeAgent(

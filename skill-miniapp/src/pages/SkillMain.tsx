@@ -1,11 +1,13 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SessionSidebar } from '../components/SessionSidebar';
 import { ConversationView } from '../components/ConversationView';
 import { MessageInput } from '../components/MessageInput';
 import { SendToImButton } from '../components/SendToImButton';
+import { AgentSelector } from '../components/AgentSelector';
 import { useSkillSession } from '../hooks/useSkillSession';
 import { useSkillStream } from '../hooks/useSkillStream';
 import { useSendToIm } from '../hooks/useSendToIm';
+import { useAgentSelector } from '../hooks/useAgentSelector';
 
 interface SkillMainProps {
   onCollapse: () => void;
@@ -115,6 +117,7 @@ export const SkillMain: React.FC<SkillMainProps> = ({
 }) => {
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const conversationContainerRef = useRef<HTMLDivElement | null>(null);
+  const pendingInitialMessageRef = useRef<string | null>(null);
 
   // Session management
   const {
@@ -142,6 +145,7 @@ export const SkillMain: React.FC<SkillMainProps> = ({
     messages,
     isStreaming,
     agentStatus,
+    socketReady,
     sendMessage,
     error: streamError,
   } = useSkillStream(activeSessionId);
@@ -154,32 +158,54 @@ export const SkillMain: React.FC<SkillMainProps> = ({
     error: imError,
   } = useSendToIm(activeSessionId);
 
+  // Agent selector
+  const {
+    agents,
+    selectedAgent,
+    selectAgent,
+    loading: agentsLoading,
+  } = useAgentSelector(userId);
+
   const handleNewSession = useCallback(async () => {
+    if (!selectedAgent) return;
     await createSession({
       skillDefinitionId: SKILL_DEFINITION_ID,
+      agentId: selectedAgent.id,
       title: `Session ${new Date().toLocaleString()}`,
       imChatId,
     });
-  }, [createSession, imChatId]);
+  }, [createSession, imChatId, selectedAgent]);
+
+  useEffect(() => {
+    if (!activeSessionId || !socketReady || !pendingInitialMessageRef.current) {
+      return;
+    }
+
+    const text = pendingInitialMessageRef.current;
+    pendingInitialMessageRef.current = null;
+    void sendMessage(text);
+  }, [activeSessionId, socketReady, sendMessage]);
 
   const handleSendMessage = useCallback(
     async (text: string) => {
+      if (!selectedAgent) return;
       // Auto-create a session if none exists
       if (!activeSessionId) {
+        pendingInitialMessageRef.current = text;
         const session = await createSession({
           skillDefinitionId: SKILL_DEFINITION_ID,
+          agentId: selectedAgent.id,
           title: text.slice(0, 50),
           imChatId,
         });
-        if (session) {
-          // The hook will reconnect with the new session; send after a tick
-          setTimeout(() => void sendMessage(text), 100);
+        if (!session) {
+          pendingInitialMessageRef.current = null;
         }
         return;
       }
       await sendMessage(text);
     },
-    [activeSessionId, createSession, imChatId, sendMessage],
+    [activeSessionId, createSession, imChatId, sendMessage, selectedAgent],
   );
 
   const handleSendToIm = useCallback(
@@ -243,13 +269,21 @@ export const SkillMain: React.FC<SkillMainProps> = ({
               loading={sessionsLoading}
             />
           </div>
+          <AgentSelector
+            agents={agents}
+            selectedAgent={selectedAgent}
+            onSelect={selectAgent}
+            loading={agentsLoading}
+          />
           <MessageInput
             onSend={handleSendMessage}
-            disabled={isStreaming}
+            disabled={isStreaming || !selectedAgent}
             placeholder={
-              activeSessionId
-                ? '输入消息... (Shift+Enter 换行)'
-                : '输入消息开始新会话...'
+              !selectedAgent
+                ? '请先选择 Agent...'
+                : activeSessionId
+                  ? '输入消息... (Shift+Enter 换行)'
+                  : '输入消息开始新会话...'
             }
           />
         </div>

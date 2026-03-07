@@ -214,6 +214,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
             return;
         }
 
+        // Trace: log sessionId from PCAgent message for upstream debugging
+        log.debug("PCAgent -> Skill relay: agentId={}, type={}, sessionId={}",
+                agentId, message.getType(), message.getSessionId());
+
         eventRelayService.relayToSkillServer(agentId, message);
     }
 }
