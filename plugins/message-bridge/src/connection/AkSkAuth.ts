@@ -35,11 +35,13 @@ export class DefaultAkSkAuth implements AkSkAuth {
   }
 
   generateQueryParams(): URLSearchParams {
-    const ts = Date.now().toString();
+    // AI-Gateway expects Unix seconds.
+    const ts = Math.floor(Date.now() / 1000).toString();
     const nonce = randomUUID();
+    // AI-Gateway verifies HMAC-SHA256(SK, "AK\nTS\nNONCE"), Base64 encoded.
     const sign = createHmac('sha256', this._secretKey)
-      .update(`${this._accessKey}:${ts}:${nonce}`)
-      .digest('hex');
+      .update(`${this._accessKey}\n${ts}\n${nonce}`)
+      .digest('base64');
 
     return new URLSearchParams({
       ak: this._accessKey,
