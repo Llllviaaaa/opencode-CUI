@@ -1,16 +1,22 @@
 # STATE.md — Project Memory
 
-> Last updated: 2026-03-07
+> Last updated: 2026-03-08
 
 ## Current Position
 
 ```
-Phase: 1 — 端到端集成验证
+Phase: 1 — 端到端协议报文定义
 Status: Not Started
 Milestone: v1.0
 ```
 
 ## Session Log
+
+### 2026-03-08: Insert Phase 1 — Protocol Definition
+- Inserted new Phase 1: 端到端协议报文定义
+- Renumbered existing Phase 1-4 → Phase 2-5
+- Created e2e protocol overview document for reference
+- Next: 逐个确认每个环节的协议报文
 
 ### 2026-03-07: Project Initialization
 - Ran /install → GSD v1.4.0 installed
