@@ -10,6 +10,7 @@ export interface UseSkillStreamReturn {
   messages: Message[];
   isStreaming: boolean;
   agentStatus: AgentStatus;
+  socketReady: boolean;
   sendMessage: (text: string) => Promise<void>;
   error: string | null;
 }
@@ -36,6 +37,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>('unknown');
+  const [socketReady, setSocketReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -50,6 +52,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   useEffect(() => {
     if (!sessionId) {
       setMessages([]);
+      setSocketReady(false);
       return;
     }
     let cancelled = false;
@@ -74,6 +77,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   const connect = useCallback(() => {
     if (!sessionId) return;
 
+    setSocketReady(false);
     const url = `${WS_BASE_URL}/ws/skill/stream/${sessionId}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
@@ -82,6 +86,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
       reconnectAttemptRef.current = 0;
       setError(null);
       setAgentStatus('online');
+      setSocketReady(true);
     };
 
     ws.onmessage = (evt) => {
@@ -95,10 +100,12 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
 
     ws.onerror = () => {
       setError('WebSocket connection error');
+      setSocketReady(false);
     };
 
     ws.onclose = () => {
       wsRef.current = null;
+      setSocketReady(false);
       scheduleReconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -254,6 +261,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
     connect();
 
     return () => {
+      setSocketReady(false);
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -300,6 +308,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
     messages,
     isStreaming,
     agentStatus,
+    socketReady,
     sendMessage: sendMessageFn,
     error,
   };

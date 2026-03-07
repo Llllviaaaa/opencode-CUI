@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SessionSidebar } from '../components/SessionSidebar';
 import { ConversationView } from '../components/ConversationView';
 import { MessageInput } from '../components/MessageInput';
@@ -117,6 +117,7 @@ export const SkillMain: React.FC<SkillMainProps> = ({
 }) => {
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const conversationContainerRef = useRef<HTMLDivElement | null>(null);
+  const pendingInitialMessageRef = useRef<string | null>(null);
 
   // Session management
   const {
@@ -144,6 +145,7 @@ export const SkillMain: React.FC<SkillMainProps> = ({
     messages,
     isStreaming,
     agentStatus,
+    socketReady,
     sendMessage,
     error: streamError,
   } = useSkillStream(activeSessionId);
@@ -174,20 +176,30 @@ export const SkillMain: React.FC<SkillMainProps> = ({
     });
   }, [createSession, imChatId, selectedAgent]);
 
+  useEffect(() => {
+    if (!activeSessionId || !socketReady || !pendingInitialMessageRef.current) {
+      return;
+    }
+
+    const text = pendingInitialMessageRef.current;
+    pendingInitialMessageRef.current = null;
+    void sendMessage(text);
+  }, [activeSessionId, socketReady, sendMessage]);
+
   const handleSendMessage = useCallback(
     async (text: string) => {
       if (!selectedAgent) return;
       // Auto-create a session if none exists
       if (!activeSessionId) {
+        pendingInitialMessageRef.current = text;
         const session = await createSession({
           skillDefinitionId: SKILL_DEFINITION_ID,
           agentId: selectedAgent.id,
           title: text.slice(0, 50),
           imChatId,
         });
-        if (session) {
-          // The hook will reconnect with the new session; send after a tick
-          setTimeout(() => void sendMessage(text), 100);
+        if (!session) {
+          pendingInitialMessageRef.current = null;
         }
         return;
       }

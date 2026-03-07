@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SessionSidebar } from './components/SessionSidebar';
 import { ConversationView } from './components/ConversationView';
 import { MessageInput } from './components/MessageInput';
@@ -20,6 +20,7 @@ const agentStatusConfig: Record<string, { className: string; label: string }> = 
 const App: React.FC = () => {
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const conversationContainerRef = useRef<HTMLDivElement | null>(null);
+  const pendingInitialMessageRef = useRef<string | null>(null);
 
   const {
     sessions,
@@ -36,6 +37,7 @@ const App: React.FC = () => {
     messages,
     isStreaming,
     agentStatus,
+    socketReady,
     sendMessage,
     error: streamError,
   } = useSkillStream(activeSessionId);
@@ -57,19 +59,30 @@ const App: React.FC = () => {
     });
   }, [createSession, selectedAgent]);
 
+  useEffect(() => {
+    if (!activeSessionId || !socketReady || !pendingInitialMessageRef.current) {
+      return;
+    }
+
+    const text = pendingInitialMessageRef.current;
+    pendingInitialMessageRef.current = null;
+    void sendMessage(text);
+  }, [activeSessionId, socketReady, sendMessage]);
+
   const handleSendMessage = useCallback(
     async (text: string) => {
       if (!selectedAgent) return;
 
       if (!activeSessionId) {
+        pendingInitialMessageRef.current = text;
         const session = await createSession({
           skillDefinitionId: SKILL_DEFINITION_ID,
           userId: 1,
           agentId: selectedAgent.id,
           title: text.slice(0, 50),
         });
-        if (session) {
-          setTimeout(() => void sendMessage(text), 100);
+        if (!session) {
+          pendingInitialMessageRef.current = null;
         }
         return;
       }
