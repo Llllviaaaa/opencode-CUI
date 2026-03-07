@@ -149,7 +149,36 @@ npm run test:e2e
 
 # Run tests with coverage (enforces thresholds)
 npm run test:coverage
+
+# One-click local debug flow (mock gateway + opencode + plugin)
+npm run debug:e2e
 ```
+
+## Developer Debug Flow
+
+Use the one-click script to validate the full chain: plugin loading, gateway handshake, action routing, and log reporting.
+
+```bash
+cd plugins/message-bridge
+npm run debug:e2e
+```
+
+The script will:
+
+1. Build plugin (`npm run build`)
+2. Start a local mock gateway (`ws://127.0.0.1:8081/ws/agent`)
+3. Start `opencode serve` with isolated HOME and only this plugin enabled
+4. Trigger `session.create` + `prompt_async`
+5. Assert key checkpoints (`gateway.ready`, `router.route.completed`, `runtime.invoke.completed`)
+6. Write logs under `plugins/message-bridge/logs/e2e-debug-<timestamp>/`
+
+Useful environment variables:
+
+- `MB_SKIP_BUILD=true`: skip build step
+- `MB_OPENCODE_PORT=4096`: override OpenCode port
+- `MB_GATEWAY_PORT=8081`: override mock gateway port
+- `MB_LOG_LEVEL=DEBUG`: OpenCode log level
+- `BRIDGE_DEBUG=true`: include richer bridge log `extra` fields
 
 ### Coverage Requirements
 
