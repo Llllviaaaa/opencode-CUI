@@ -49,7 +49,7 @@ export function createInvokeMessage(overrides = {}) {
     type: 'invoke',
     sessionId: overrides.sessionId || generateTestId('sess'),
     action: overrides.action || 'chat',
-    payload: overrides.payload || { text: 'Hello' },
+    payload: overrides.payload || { toolSessionId: generateTestId('oc-sess'), text: 'Hello' },
     timestamp: Date.now(),
     ...overrides
   };
@@ -75,7 +75,6 @@ export function createToolDoneMessage(overrides = {}) {
 export function createToolErrorMessage(overrides = {}) {
   return {
     type: 'tool_error',
-    code: overrides.code || 'SDK_ERROR',
     error: overrides.error || 'Test error',
     sessionId: overrides.sessionId || generateTestId('sess'),
     envelope: createEnvelope(overrides.envelope),
@@ -147,6 +146,8 @@ export function createCloseSessionPayload(overrides = {}) {
 export function createPermissionReplyPayload(overrides = {}) {
   return {
     permissionId: overrides.permissionId || generateTestId('perm'),
+    toolSessionId: overrides.toolSessionId || generateTestId('oc-sess'),
+    response: overrides.response || 'allow',
     ...overrides
   };
 }
@@ -216,8 +217,7 @@ export function createTestConfig(overrides = {}) {
       }
     },
     sdk: {
-      timeoutMs: 10000,
-      baseUrl: 'http://localhost:54321'
+      timeoutMs: 10000
     },
     auth: {
       ak: 'test-ak',

@@ -1,9 +1,10 @@
-import { 
-  Action, 
-  ChatPayload, 
-  ValidationResult, 
-  ActionResult, 
-  ActionContext, 
+import {
+  Action,
+  ChatPayload,
+  OpencodeClient,
+  ValidationResult,
+  ActionResult,
+  ActionContext,
   ErrorCode,
   isOpencodeClient,
   hasError,
@@ -17,30 +18,91 @@ import {
 export class ChatAction implements Action<ChatPayload> {
   name: string = 'chat';
 
+  private formatUnknownError(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    if (typeof error === 'string') {
+      return error;
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+
+  private normalizePayload(payload: unknown): { toolSessionId: string; text: string } | null {
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+
+    const p = payload as {
+      toolSessionId?: unknown;
+      text?: unknown;
+    };
+
+    const toolSessionId = typeof p.toolSessionId === 'string' && p.toolSessionId.trim()
+      ? p.toolSessionId
+      : null;
+    const text = typeof p.text === 'string' && p.text.trim().length > 0 ? p.text : null;
+
+    if (!toolSessionId || text === null) {
+      return null;
+    }
+
+    return { toolSessionId, text };
+  }
+
+  private getErrorMessageFromResult(data: unknown): string {
+    if (data && typeof data === 'object' && 'error' in data) {
+      const errorField = (data as { error: unknown }).error;
+      if (errorField && typeof errorField === 'object' && 'message' in (errorField as Record<string, unknown>)) {
+        const messageField = (errorField as { message: unknown }).message;
+        if (typeof messageField === 'string') {
+          return messageField;
+        }
+        return String(messageField);
+      }
+      return this.formatUnknownError(errorField);
+    }
+    return 'Unknown error';
+  }
+
+  private async sendPrompt(
+    client: OpencodeClient,
+    toolSessionId: string,
+    text: string,
+  ): Promise<{ success: true; data: unknown } | { success: false; error: string }> {
+    const executionResult = await safeExecute(
+      client.session.prompt({
+        path: { id: toolSessionId },
+        body: { parts: [{ type: 'text', text }] },
+      }),
+      (error) => this.formatUnknownError(error),
+    );
+
+    if (executionResult.success) {
+      if (!hasError(executionResult.data)) {
+        return { success: true, data: executionResult.data };
+      }
+
+      const sdkError = this.getErrorMessageFromResult(executionResult.data);
+      return { success: false, error: `Failed to send message: ${sdkError || 'Unknown error'}` };
+    }
+
+    return { success: false, error: `Failed to send message: ${executionResult.error}` };
+  }
+
   /**
    * Validate chat payload
    */
   validate(payload: unknown): ValidationResult {
-    if (!payload || typeof payload !== 'object') {
+    const normalized = this.normalizePayload(payload);
+    if (!normalized) {
       return {
         valid: false,
-        error: 'Chat payload must be an object'
-      };
-    }
-
-    const p = payload as Partial<ChatPayload>;
-
-    if (typeof p.sessionId !== 'string' || !p.sessionId.trim()) {
-      return {
-        valid: false,
-        error: 'sessionId is required and must be a non-empty string'
-      };
-    }
-
-    if (typeof p.message !== 'string') {
-      return {
-        valid: false,
-        error: 'message is required and must be a string'
+        error: 'chat payload requires toolSessionId and text'
       };
     }
 
@@ -53,10 +115,19 @@ export class ChatAction implements Action<ChatPayload> {
    * Execute chat action
    */
   async execute(payload: ChatPayload, context: ActionContext): Promise<ActionResult> {
+    const normalized = this.normalizePayload(payload);
+    if (!normalized) {
+      return {
+        success: false,
+        errorCode: 'INVALID_PAYLOAD',
+        errorMessage: 'chat payload requires toolSessionId and text'
+      };
+    }
+
     const startedAt = Date.now();
     context.logger?.info('action.chat.started', {
-      sessionId: payload.sessionId,
-      messageLength: payload.message.length,
+      toolSessionId: normalized.toolSessionId,
+      messageLength: normalized.text.length,
     });
     if (context.connectionState !== 'READY') {
       context.logger?.warn('action.chat.rejected_state', { state: context.connectionState });
@@ -75,64 +146,31 @@ export class ChatAction implements Action<ChatPayload> {
         errorMessage: 'OpenCode client not available or invalid in context'
       };
     }
+    const client = context.client;
 
     try {
-      const executionResult = await safeExecute(
-        context.client.session.prompt({
-          sessionId: payload.sessionId,
-          message: payload.message,
-          meta: {
-            source: 'message-bridge'
-          }
-        }),
-        (error) => `Failed to send message: ${error instanceof Error ? error.message : String(error)}`
+      const executionResult = await this.sendPrompt(
+        client,
+        normalized.toolSessionId,
+        normalized.text,
       );
 
       if (executionResult.success) {
-        if (hasError(executionResult.data)) {
-            // Extract the error message in a type-safe way
-            let errorMessage = 'Unknown error';
-            
-            if (executionResult.data && typeof executionResult.data === 'object' && 'error' in executionResult.data) {
-              const errorField = (executionResult.data as { error: unknown }).error;
-              if (errorField && typeof errorField === 'object' && errorField !== null && 'message' in errorField) {
-                const messageField = (errorField as { message: unknown }).message;
-                if (typeof messageField === 'string') {
-                  errorMessage = messageField;
-                } else {
-                  errorMessage = String(messageField) || 'Unknown error';
-                }
-              } else {
-                errorMessage = String(errorField) || 'Unknown error';
-              }
-            }
-            
-            context.logger?.error('action.chat.sdk_error_payload', {
-              error: errorMessage,
-              latencyMs: Date.now() - startedAt,
-            });
-            return {
-              success: false,
-              errorCode: 'SDK_UNREACHABLE',
-              errorMessage: `Failed to send message: ${errorMessage}`
-            };
-        }
-        
         return {
           success: true,
           data: executionResult.data
         };
-      } else {
-        context.logger?.error('action.chat.failed', {
-          error: executionResult.error,
-          latencyMs: Date.now() - startedAt,
-        });
-        return {
-          success: false,
-          errorCode: 'SDK_UNREACHABLE',
-          errorMessage: executionResult.error
-        };
       }
+
+      context.logger?.error('action.chat.failed', {
+        error: executionResult.error,
+        latencyMs: Date.now() - startedAt,
+      });
+      return {
+        success: false,
+        errorCode: 'SDK_UNREACHABLE',
+        errorMessage: executionResult.error
+      };
     } catch (error) {
       const errorCode = this.errorMapper(error);
       const errorMessage = error instanceof Error ? error.message : String(error);

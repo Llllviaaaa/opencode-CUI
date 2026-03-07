@@ -13,10 +13,6 @@ export interface BridgeConfig {
 
   // Canonical config block
   events: EventConfig;
-
-  // Legacy compatibility blocks
-  reconnect?: ReconnectConfig;
-  event?: EventConfig;
 }
 
 export interface ConfigValidationError {
@@ -41,7 +37,6 @@ export interface PingConfig {
 }
 
 export interface SDKConfig {
-  baseUrl: string;
   timeoutMs: number;
 }
 
@@ -124,7 +119,6 @@ export interface ToolDoneMessage {
 export interface ToolErrorMessage {
   type: 'tool_error';
   sessionId?: string;
-  code: ErrorCode;
   error: string;
   envelope: Envelope;
 }
@@ -132,6 +126,8 @@ export interface ToolErrorMessage {
 export interface SessionCreatedMessage {
   type: 'session_created';
   sessionId: string;
+  toolSessionId?: string;
+  session?: unknown;
   envelope: Envelope;
 }
 
@@ -144,6 +140,7 @@ export interface StatusResponseMessage {
 
 export interface InvokeMessage {
   type: 'invoke';
+  sessionId?: string;
   action: InvokeAction;
   payload: unknown;
   envelope?: Envelope;
@@ -178,8 +175,8 @@ export type InvokeAction =
   | 'status_query';
 
 export interface ChatPayload {
-  sessionId: string;
-  message: string;
+  toolSessionId: string;
+  text: string;
 }
 
 export interface CreateSessionPayload {
@@ -188,24 +185,15 @@ export interface CreateSessionPayload {
 }
 
 export interface CloseSessionPayload {
-  sessionId: string;
+  toolSessionId: string;
 }
 
 export interface PermissionReplyPayloadTarget {
   permissionId: string;
-  toolSessionId?: string;
+  toolSessionId: string;
   response: 'allow' | 'always' | 'deny';
 }
-
-export interface PermissionReplyPayloadCompat {
-  permissionId: string;
-  toolSessionId?: string;
-  approved: boolean;
-}
-
-export type PermissionReplyPayload =
-  | PermissionReplyPayloadTarget
-  | PermissionReplyPayloadCompat;
+export type PermissionReplyPayload = PermissionReplyPayloadTarget;
 
 export interface StatusQueryPayload {
   sessionId?: string;
@@ -219,10 +207,6 @@ export function isPermissionReplyTarget(
   payload: PermissionReplyPayload,
 ): payload is PermissionReplyPayloadTarget {
   return 'response' in payload && typeof payload.response === 'string';
-}
-
-export function mapApprovedToResponse(approved: boolean): 'allow' | 'deny' {
-  return approved ? 'allow' : 'deny';
 }
 
 // ---------------------------------------------------------------------------
@@ -252,7 +236,6 @@ export function stateToErrorCode(state: ConnectionState): ErrorCode {
 export interface ToolErrorPayload {
   type: 'tool_error';
   sessionId?: string;
-  code: ErrorCode;
   error: string;
   envelope: Envelope;
 }
@@ -262,19 +245,22 @@ export interface ToolErrorPayload {
 // ---------------------------------------------------------------------------
 
 export interface OpencodeSessionClient {
-  create(options?: { sessionId?: string; metadata?: Record<string, unknown> } & Record<string, unknown>): Promise<unknown>;
-  abort(options: { sessionId: string } & Record<string, unknown>): Promise<unknown>;
-  prompt(options: { sessionId: string; message: string; meta?: Record<string, string> } & Record<string, unknown>): Promise<unknown>;
+  create(options?: { body?: Record<string, unknown> }): Promise<unknown>;
+  abort(options: { path: { id: string } }): Promise<unknown>;
+  prompt(options: {
+    path: { id: string };
+    body: { parts: Array<{ type: 'text'; text: string }> };
+  }): Promise<unknown>;
 }
 
 export interface OpencodeClient {
   session: OpencodeSessionClient;
   postSessionIdPermissionsPermissionId: (options: {
-    sessionId: string;
-    permissionId: string;
-    request: { decision: 'allow' | 'always' | 'deny' | 'once' | 'reject' };
-  } & Record<string, unknown>) => Promise<unknown>;
+    path: { id: string; permissionID: string };
+    body: { response: 'once' | 'always' | 'reject' };
+  }) => Promise<unknown>;
   app?: {
+    health?: (options?: Record<string, unknown>) => Promise<unknown> | unknown;
     log: (options?: {
       body?: {
         service: string;

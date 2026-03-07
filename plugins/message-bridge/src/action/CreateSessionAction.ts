@@ -1,9 +1,9 @@
-import { 
-  Action, 
-  CreateSessionPayload, 
-  ValidationResult, 
-  ActionResult, 
-  ActionContext, 
+import {
+  Action,
+  CreateSessionPayload,
+  ValidationResult,
+  ActionResult,
+  ActionContext,
   ErrorCode,
   isOpencodeClient,
   hasError,
@@ -28,23 +28,6 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
       };
     }
 
-    const typedPayload = payload as CreateSessionPayload;
-
-    if (typedPayload.sessionId !== undefined && (typeof typedPayload.sessionId !== 'string' || !typedPayload.sessionId.trim())) {
-      return {
-        valid: false,
-        error: 'sessionId must be a non-empty string when provided'
-      };
-    }
-
-    // metadata is optional, but if provided, should be an object
-    if (typedPayload.metadata !== undefined && typeof typedPayload.metadata !== 'object') {
-      return {
-        valid: false,
-        error: 'metadata must be an object if provided'
-      };
-    }
-
     return {
       valid: true
     };
@@ -56,11 +39,10 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
   async execute(payload: CreateSessionPayload, context: ActionContext): Promise<ActionResult> {
     const startedAt = Date.now();
     context.logger?.info('action.create_session.started', {
-      requestedSessionId: payload.sessionId,
-      hasMetadata: !!payload.metadata,
+      payloadKeys: Object.keys(payload ?? {}),
     });
+
     try {
-      // Check connection state
       if (context.connectionState !== 'READY') {
         context.logger?.warn('action.create_session.rejected_state', { state: context.connectionState });
         return {
@@ -79,77 +61,62 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
         };
       }
 
-      const client = context.client;
-      
-      // Create a new session
-      const options: { sessionId?: string; metadata?: Record<string, unknown> } = {};
-      if (payload.sessionId) {
-        options.sessionId = payload.sessionId;
-      }
-      if (payload.metadata) {
-        options.metadata = payload.metadata;
-      }
-
       const executionResult = await safeExecute(
-        client.session.create(options),
+        context.client.session.create({ body: payload as Record<string, unknown> }),
         (error) => `Create session failed: ${error instanceof Error ? error.message : String(error)}`
       );
 
       if (executionResult.success) {
         if (!hasError(executionResult.data)) {
-          // Safely extract the session ID from result data
-          let returnedSessionId: string | undefined;
-          if (executionResult.data && typeof executionResult.data === 'object' && 'data' in executionResult.data) {
-            const possibleData = executionResult.data.data;
-            if (possibleData && typeof possibleData === 'object' && 'sessionId' in possibleData) {
-              returnedSessionId = (possibleData as { sessionId?: string }).sessionId;
-            }
-          }
+          const root = executionResult.data as Record<string, unknown> | undefined;
+          const nested = root?.data as Record<string, unknown> | undefined;
+          const pick = (value: unknown): string | undefined =>
+            typeof value === 'string' && value.trim() ? value : undefined;
+          const returnedSessionId =
+            pick(root?.sessionId) ??
+            pick(root?.id) ??
+            pick(nested?.sessionId) ??
+            pick(nested?.id);
+
           return {
             success: true,
-            data: { 
-              sessionId: returnedSessionId || payload.sessionId 
+            data: {
+              sessionId: returnedSessionId
             }
-          };
-        } else {
-          // Extract error message in a type-safe way
-          let errorMessage = 'Unknown error';
-          
-          if (executionResult.data && typeof executionResult.data === 'object' && 'error' in executionResult.data) {
-            const errorField = (executionResult.data as { error: unknown }).error;
-            if (errorField && typeof errorField === 'object' && errorField !== null && 'message' in errorField) {
-              const messageField = (errorField as { message: unknown }).message;
-              if (typeof messageField === 'string') {
-                errorMessage = messageField;
-              } else {
-                errorMessage = String(messageField) || 'Unknown error';
-              }
-            } else {
-              errorMessage = String(errorField) || 'Unknown error';
-            }
-          }
-          
-          context.logger?.error('action.create_session.sdk_error_payload', {
-            error: errorMessage,
-            latencyMs: Date.now() - startedAt,
-          });
-          return {
-            success: false,
-            errorCode: 'SDK_UNREACHABLE',
-            errorMessage: `Failed to create session: ${errorMessage}`
           };
         }
-      } else {
-        context.logger?.error('action.create_session.failed', {
-          error: executionResult.error,
+
+        let errorMessage = 'Unknown error';
+        if (executionResult.data && typeof executionResult.data === 'object' && 'error' in executionResult.data) {
+          const errorField = (executionResult.data as { error: unknown }).error;
+          if (errorField && typeof errorField === 'object' && errorField !== null && 'message' in errorField) {
+            const messageField = (errorField as { message: unknown }).message;
+            errorMessage = typeof messageField === 'string' ? messageField : String(messageField) || 'Unknown error';
+          } else {
+            errorMessage = String(errorField) || 'Unknown error';
+          }
+        }
+
+        context.logger?.error('action.create_session.sdk_error_payload', {
+          error: errorMessage,
           latencyMs: Date.now() - startedAt,
         });
         return {
           success: false,
           errorCode: 'SDK_UNREACHABLE',
-          errorMessage: executionResult.error
+          errorMessage: `Failed to create session: ${errorMessage}`
         };
       }
+
+      context.logger?.error('action.create_session.failed', {
+        error: executionResult.error,
+        latencyMs: Date.now() - startedAt,
+      });
+      return {
+        success: false,
+        errorCode: 'SDK_UNREACHABLE',
+        errorMessage: executionResult.error
+      };
     } catch (error) {
       const errorCode = this.errorMapper(error);
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -175,7 +142,7 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
   errorMapper(error: unknown): ErrorCode {
     if (error instanceof Error) {
       const message = error.message.toLowerCase();
-      
+
       if (message.includes('timeout') || message.includes('network')) {
         return 'SDK_TIMEOUT';
       } else if (message.includes('unreachable') || message.includes('connect')) {
@@ -184,7 +151,7 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
         return 'INVALID_PAYLOAD';
       }
     }
-    
+
     return 'SDK_UNREACHABLE';
   }
 }

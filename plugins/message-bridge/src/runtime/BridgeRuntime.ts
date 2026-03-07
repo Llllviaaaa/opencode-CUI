@@ -3,7 +3,8 @@ import {
   Action,
   ActionResult,
   DownstreamMessage,
-  stateToErrorCode,
+  InvokeAction,
+  hasEnvelope,
 } from '../types';
 import { ChatAction } from '../action/ChatAction';
 import { CreateSessionAction } from '../action/CreateSessionAction';
@@ -42,6 +43,8 @@ export class BridgeRuntime {
   private started = false;
   private readonly sdkClient: unknown;
   private readonly logger: BridgeLogger;
+  private readonly toolToSkillSessionMap = new Map<string, string>();
+  private lastSkillSessionId: string | null = null;
 
   constructor(private readonly options: BridgeRuntimeOptions) {
     this.logger = new AppLogger(options.client, { component: 'runtime' });
@@ -73,7 +76,8 @@ export class BridgeRuntime {
     this.envelopeBuilder = new EnvelopeBuilder(agentId);
     this.eventFilter = new EventFilter(config.events.allowlist);
 
-    const queryParams = new DefaultAkSkAuth(config.auth.ak, config.auth.sk).generateQueryParams();
+    const auth = new DefaultAkSkAuth(config.auth.ak, config.auth.sk);
+    const queryParamsProvider = () => auth.generateQueryParams();
 
     const connection = new DefaultGatewayConnection({
       url: config.gateway.url,
@@ -83,7 +87,7 @@ export class BridgeRuntime {
       heartbeatIntervalMs: config.gateway.heartbeatIntervalMs,
       pongTimeoutMs: config.gateway.ping?.pongTimeoutMs,
       abortSignal: options.abortSignal,
-      queryParams,
+      queryParamsProvider,
       registerMessage: {
         type: 'register',
         deviceName: config.gateway.deviceName,
@@ -100,6 +104,8 @@ export class BridgeRuntime {
       if (state === 'CONNECTING') {
         const nextAgentId = this.stateManager.resetForReconnect();
         this.envelopeBuilder = new EnvelopeBuilder(nextAgentId);
+        this.toolToSkillSessionMap.clear();
+        this.lastSkillSessionId = null;
         this.logger.info('runtime.agent.rebound', { agentId: nextAgentId });
       }
     });
@@ -110,7 +116,7 @@ export class BridgeRuntime {
           ? String((message as { type?: unknown }).type ?? '')
           : 'unknown';
       this.logger.debug('gateway.message.received', { messageType });
-      this.handleDownstreamMessage(message as DownstreamMessage).catch((error) => {
+      this.handleDownstreamMessage(message).catch((error) => {
         this.logger.error('runtime.downstream_message_error', {
           error: error instanceof Error ? error.message : String(error),
         });
@@ -164,8 +170,9 @@ export class BridgeRuntime {
       return;
     }
 
-    const sessionId = this.extractSessionId(event);
-    this.logger.info('event.forwarding', { eventType: event.type, sessionId });
+    const toolSessionId = this.extractSessionId(event);
+    const sessionId = this.resolveSkillSessionId(toolSessionId);
+    this.logger.info('event.forwarding', { eventType: event.type, toolSessionId, sessionId });
     this.gatewayConnection.send({
       type: 'tool_event',
       sessionId,
@@ -193,12 +200,33 @@ export class BridgeRuntime {
     }
   }
 
-  private async handleDownstreamMessage(message: DownstreamMessage): Promise<void> {
+  private async handleDownstreamMessage(raw: unknown): Promise<void> {
     if (!this.gatewayConnection || !this.envelopeBuilder) {
       this.logger.warn('runtime.downstream_ignored_no_connection');
       return;
     }
     const startedAt = Date.now();
+    const message = this.normalizeDownstreamMessage(raw);
+    if (!message) {
+      const rawType = this.extractRawDownstreamType(raw);
+      const fallbackSessionId =
+        raw && typeof raw === 'object' && typeof (raw as { sessionId?: unknown }).sessionId === 'string'
+          ? (raw as { sessionId: string }).sessionId
+          : undefined;
+
+      this.logger.warn('runtime.downstream_ignored_non_protocol', {
+        messageType: rawType ?? 'unknown',
+        hasSessionId: !!fallbackSessionId,
+      });
+
+      if (rawType === 'invoke') {
+        this.sendToolError(
+          { success: false, errorCode: 'INVALID_PAYLOAD', errorMessage: 'Invalid invoke payload shape' },
+          fallbackSessionId,
+        );
+      }
+      return;
+    }
 
     if (message.type === 'status_query') {
       this.logger.info('runtime.status_query.received', { sessionId: message.sessionId });
@@ -222,52 +250,71 @@ export class BridgeRuntime {
     }
 
     this.logger.info('runtime.invoke.received', { action: message.action });
+    const skillSessionId =
+      message.sessionId ??
+      (message.envelope as { sessionId?: string } | undefined)?.sessionId;
+    const toolSessionId = this.extractToolSessionId(message.payload);
+    if (toolSessionId && skillSessionId) {
+      this.rememberSessionMapping(toolSessionId, skillSessionId);
+    }
+
     const result = await this.actionRouter.route(
       message.action,
       message.payload,
-      this.buildActionContext(this.extractSessionId(message.payload) ?? (message.envelope as { sessionId?: string } | undefined)?.sessionId),
+      this.buildActionContext(skillSessionId),
     );
 
-    const payloadSessionId = this.extractSessionId(message.payload);
-    const envelopeSessionId = payloadSessionId ?? (message.envelope as { sessionId?: string } | undefined)?.sessionId;
-
     if (!result.success) {
-      this.sendToolError(result, envelopeSessionId);
+      this.sendToolError(result, skillSessionId);
       return;
     }
 
     if (message.action === 'create_session') {
-      const createdSessionId = (result.data as { sessionId?: string } | undefined)?.sessionId;
-      if (!createdSessionId) {
+      const toolSessionId = (result.data as { sessionId?: string } | undefined)?.sessionId;
+      if (!toolSessionId) {
         this.sendToolError(
           { success: false, errorCode: 'SDK_UNREACHABLE', errorMessage: 'create_session returned without sessionId' },
-          envelopeSessionId,
+          skillSessionId,
+        );
+        return;
+      }
+      if (!skillSessionId) {
+        this.sendToolError(
+          { success: false, errorCode: 'INVALID_PAYLOAD', errorMessage: 'create_session missing skill sessionId' },
+          undefined,
         );
         return;
       }
 
+      this.rememberSessionMapping(toolSessionId, skillSessionId);
+
       this.gatewayConnection.send({
         type: 'session_created',
-        sessionId: createdSessionId,
-        envelope: this.envelopeBuilder.build(createdSessionId),
+        // sessionId is the Skill session ID expected by skill-server.
+        sessionId: skillSessionId,
+        toolSessionId,
+        session: result.data,
+        envelope: this.envelopeBuilder.build(skillSessionId),
       });
       this.logger.info('runtime.invoke.completed', {
         action: message.action,
-        sessionId: createdSessionId,
+        sessionId: skillSessionId,
+        toolSessionId,
         latencyMs: Date.now() - startedAt,
       });
       return;
     }
 
-    this.gatewayConnection.send({
-      type: 'tool_done',
-      sessionId: envelopeSessionId,
-      result: result.data,
-      envelope: this.envelopeBuilder.build(envelopeSessionId),
-    });
+    if (message.action === 'close_session' && toolSessionId) {
+      this.toolToSkillSessionMap.delete(toolSessionId);
+      if (this.lastSkillSessionId === skillSessionId) {
+        this.lastSkillSessionId = null;
+      }
+    }
+
     this.logger.info('runtime.invoke.completed', {
       action: message.action,
-      sessionId: envelopeSessionId,
+      sessionId: skillSessionId,
       latencyMs: Date.now() - startedAt,
     });
   }
@@ -300,10 +347,6 @@ export class BridgeRuntime {
       return p.sessionId;
     }
 
-    if (typeof p.toolSessionId === 'string' && p.toolSessionId.trim()) {
-      return p.toolSessionId;
-    }
-
     const fromProperties = p.properties?.sessionId;
     if (typeof fromProperties === 'string' && fromProperties.trim()) {
       return fromProperties;
@@ -312,20 +355,105 @@ export class BridgeRuntime {
     return undefined;
   }
 
+  private extractToolSessionId(payload: unknown): string | undefined {
+    if (!payload || typeof payload !== 'object') {
+      return undefined;
+    }
+    const p = payload as { toolSessionId?: unknown };
+    if (typeof p.toolSessionId === 'string' && p.toolSessionId.trim()) {
+      return p.toolSessionId;
+    }
+    return undefined;
+  }
+
+  private rememberSessionMapping(toolSessionId: string, skillSessionId: string): void {
+    this.toolToSkillSessionMap.set(toolSessionId, skillSessionId);
+    this.lastSkillSessionId = skillSessionId;
+  }
+
+  private resolveSkillSessionId(toolSessionId?: string): string | undefined {
+    if (toolSessionId && this.toolToSkillSessionMap.has(toolSessionId)) {
+      return this.toolToSkillSessionMap.get(toolSessionId);
+    }
+    return this.lastSkillSessionId ?? undefined;
+  }
+
+  private normalizeDownstreamMessage(raw: unknown): DownstreamMessage | null {
+    if (!raw || typeof raw !== 'object') {
+      return null;
+    }
+
+    let msg = raw as Record<string, unknown>;
+    if (hasEnvelope(raw)) {
+      const envelopeMsg = raw as Record<string, unknown>;
+      msg = {
+        type: envelopeMsg.type,
+        ...(typeof envelopeMsg.payload === 'object' && envelopeMsg.payload !== null
+          ? (envelopeMsg.payload as Record<string, unknown>)
+          : { payload: envelopeMsg.payload }),
+      };
+    }
+    const type = typeof msg.type === 'string' ? msg.type : undefined;
+    if (!type) {
+      return null;
+    }
+
+    if (type === 'status_query') {
+      return {
+        type: 'status_query',
+        sessionId: typeof msg.sessionId === 'string' ? msg.sessionId : undefined,
+        envelope: msg.envelope as DownstreamMessage['envelope'],
+      };
+    }
+
+    if (type !== 'invoke') {
+      return null;
+    }
+
+    const action = typeof msg.action === 'string' ? msg.action : undefined;
+    const payload = msg.payload;
+    if (!action) {
+      return null;
+    }
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+
+    return {
+      type: 'invoke',
+      action: action as InvokeAction,
+      payload,
+      sessionId: typeof msg.sessionId === 'string' ? msg.sessionId : undefined,
+      envelope: msg.envelope as DownstreamMessage['envelope'],
+    };
+  }
+
+  private extractRawDownstreamType(raw: unknown): string | undefined {
+    if (!raw || typeof raw !== 'object') {
+      return undefined;
+    }
+
+    if (hasEnvelope(raw)) {
+      const envelopeMsg = raw as Record<string, unknown>;
+      return typeof envelopeMsg.type === 'string' ? envelopeMsg.type : undefined;
+    }
+
+    const msg = raw as Record<string, unknown>;
+    return typeof msg.type === 'string' ? msg.type : undefined;
+  }
+
   private sendToolError(result: ActionResult, sessionId?: string): void {
     if (!this.gatewayConnection || !this.envelopeBuilder) {
       this.logger.warn('runtime.tool_error.skipped_no_connection', { sessionId });
       return;
     }
 
-    const code = result.errorCode ?? stateToErrorCode(this.stateManager.getState());
     const error = result.errorMessage ?? 'Unknown error';
-    this.logger.error('runtime.tool_error.sending', { sessionId, code, error });
+    this.logger.error('runtime.tool_error.sending', { sessionId, error });
 
     this.gatewayConnection.send({
       type: 'tool_error',
       sessionId,
-      code,
       error,
       envelope: this.envelopeBuilder.build(sessionId),
     });

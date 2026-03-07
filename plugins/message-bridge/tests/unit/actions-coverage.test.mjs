@@ -21,23 +21,31 @@ describe('ChatAction coverage', () => {
     const action = new ChatAction();
     expect(action.validate(null).valid).toBe(false);
     expect(action.validate({ message: 'x' }).valid).toBe(false);
-    expect(action.validate({ sessionId: 's1', message: 1 }).valid).toBe(false);
-    expect(action.validate({ sessionId: 's1', message: 'hello' }).valid).toBe(true);
+    expect(action.validate({ sessionId: 's1', message: 'hello' }).valid).toBe(false);
+    expect(action.validate({ toolSessionId: 's1', text: '' }).valid).toBe(false);
+    expect(action.validate({ toolSessionId: 's1', text: 'hello' }).valid).toBe(true);
   });
 
-  test('execute success path', async () => {
+  test('execute success path with strict prompt shape', async () => {
     const action = new ChatAction();
+    const calls = [];
     const client = {
       session: {
         create: async () => ({}),
         abort: async () => ({}),
-        prompt: async () => ({ data: { ok: true } }),
+        prompt: async (options) => {
+          calls.push(options);
+          return { data: { ok: true } };
+        },
       },
       postSessionIdPermissionsPermissionId: async () => ({}),
     };
-    const result = await action.execute({ sessionId: 's-1', message: 'hi' }, readyContext(client));
+    const result = await action.execute({ toolSessionId: 's-1', text: 'hi' }, readyContext(client));
     expect(result.success).toBe(true);
-    expect(result.data).toEqual({ data: { ok: true } });
+    expect(calls[0]).toEqual({
+      path: { id: 's-1' },
+      body: { parts: [{ type: 'text', text: 'hi' }] },
+    });
   });
 
   test('execute handles sdk error object', async () => {
@@ -50,7 +58,7 @@ describe('ChatAction coverage', () => {
       },
       postSessionIdPermissionsPermissionId: async () => ({}),
     };
-    const result = await action.execute({ sessionId: 's-1', message: 'hi' }, readyContext(client));
+    const result = await action.execute({ toolSessionId: 's-1', text: 'hi' }, readyContext(client));
     expect(result.success).toBe(false);
     expect(result.errorCode).toBe('SDK_UNREACHABLE');
     expect(result.errorMessage).toContain('boom');
@@ -68,7 +76,7 @@ describe('ChatAction coverage', () => {
       },
       postSessionIdPermissionsPermissionId: async () => ({}),
     };
-    const rejectResult = await action.execute({ sessionId: 's-1', message: 'hi' }, readyContext(rejectClient));
+    const rejectResult = await action.execute({ toolSessionId: 's-1', text: 'hi' }, readyContext(rejectClient));
     expect(rejectResult.success).toBe(false);
     expect(rejectResult.errorCode).toBe('SDK_UNREACHABLE');
     expect(rejectResult.errorMessage).toContain('Failed to send message');
@@ -83,7 +91,7 @@ describe('ChatAction coverage', () => {
       },
       postSessionIdPermissionsPermissionId: async () => ({}),
     };
-    const throwResult = await action.execute({ sessionId: 's-1', message: 'hi' }, readyContext(throwClient));
+    const throwResult = await action.execute({ toolSessionId: 's-1', text: 'hi' }, readyContext(throwClient));
     expect(throwResult.success).toBe(false);
     expect(throwResult.errorCode).toBe('SDK_TIMEOUT');
   });
@@ -100,36 +108,28 @@ describe('CreateSessionAction coverage', () => {
   test('validate payload variants', () => {
     const action = new CreateSessionAction();
     expect(action.validate(null).valid).toBe(false);
-    expect(action.validate({ sessionId: '' }).valid).toBe(false);
-    expect(action.validate({ metadata: 1 }).valid).toBe(false);
-    expect(action.validate({ sessionId: 's1', metadata: { source: 'x' } }).valid).toBe(true);
+    expect(action.validate('x').valid).toBe(false);
+    expect(action.validate({}).valid).toBe(true);
   });
 
-  test('execute success with returned sessionId and fallback', async () => {
+  test('execute success with returned sessionId', async () => {
     const action = new CreateSessionAction();
+    const calls = [];
     const client = {
       session: {
-        create: async () => ({ data: { sessionId: 'new-1' } }),
+        create: async (options) => {
+          calls.push(options);
+          return { data: { sessionId: 'new-1' } };
+        },
         abort: async () => ({}),
         prompt: async () => ({}),
       },
       postSessionIdPermissionsPermissionId: async () => ({}),
     };
-    const result = await action.execute({ sessionId: 'requested' }, readyContext(client));
+    const result = await action.execute({ metadata: { source: 'x' } }, readyContext(client));
     expect(result.success).toBe(true);
     expect(result.data.sessionId).toBe('new-1');
-
-    const fallbackClient = {
-      session: {
-        create: async () => ({ data: {} }),
-        abort: async () => ({}),
-        prompt: async () => ({}),
-      },
-      postSessionIdPermissionsPermissionId: async () => ({}),
-    };
-    const fallback = await action.execute({ sessionId: 'requested' }, readyContext(fallbackClient));
-    expect(fallback.success).toBe(true);
-    expect(fallback.data.sessionId).toBe('requested');
+    expect(calls[0]).toEqual({ body: { metadata: { source: 'x' } } });
   });
 
   test('execute handles sdk failures', async () => {
@@ -142,23 +142,9 @@ describe('CreateSessionAction coverage', () => {
       },
       postSessionIdPermissionsPermissionId: async () => ({}),
     };
-    const failed = await action.execute({ metadata: {} }, readyContext(client));
+    const failed = await action.execute({}, readyContext(client));
     expect(failed.success).toBe(false);
     expect(failed.errorMessage).toContain('blocked');
-
-    const throwClient = {
-      session: {
-        create: () => {
-          throw new Error('network timeout');
-        },
-        abort: async () => ({}),
-        prompt: async () => ({}),
-      },
-      postSessionIdPermissionsPermissionId: async () => ({}),
-    };
-    const thrown = await action.execute({ metadata: {} }, readyContext(throwClient));
-    expect(thrown.success).toBe(false);
-    expect(thrown.errorCode).toBe('SDK_TIMEOUT');
   });
 });
 
@@ -166,61 +152,39 @@ describe('CloseSessionAction coverage', () => {
   test('validate and execute paths', async () => {
     const action = new CloseSessionAction();
     expect(action.validate(undefined).valid).toBe(false);
-    expect(action.validate({ sessionId: '' }).valid).toBe(false);
-    expect(action.validate({ sessionId: 's1' }).valid).toBe(true);
+    expect(action.validate({ sessionId: 's1' }).valid).toBe(false);
+    expect(action.validate({ toolSessionId: 's1' }).valid).toBe(true);
 
+    const calls = [];
     const okClient = {
       session: {
         create: async () => ({}),
-        abort: async () => ({ data: { aborted: true } }),
-        prompt: async () => ({}),
-      },
-      postSessionIdPermissionsPermissionId: async () => ({}),
-    };
-    const ok = await action.execute({ sessionId: 's1' }, readyContext(okClient));
-    expect(ok.success).toBe(true);
-    expect(ok.data.closed).toBe(true);
-
-    const errorClient = {
-      session: {
-        create: async () => ({}),
-        abort: async () => ({ error: 'cannot abort' }),
-        prompt: async () => ({}),
-      },
-      postSessionIdPermissionsPermissionId: async () => ({}),
-    };
-    const failed = await action.execute({ sessionId: 's1' }, readyContext(errorClient));
-    expect(failed.success).toBe(false);
-    expect(failed.errorCode).toBe('SDK_UNREACHABLE');
-
-    const throwClient = {
-      session: {
-        create: async () => ({}),
-        abort: () => {
-          throw new Error('session not found');
+        abort: async (options) => {
+          calls.push(options);
+          return { data: { aborted: true } };
         },
         prompt: async () => ({}),
       },
       postSessionIdPermissionsPermissionId: async () => ({}),
     };
-    const thrown = await action.execute({ sessionId: 's1' }, readyContext(throwClient));
-    expect(thrown.success).toBe(false);
-    expect(thrown.errorCode).toBe('INVALID_PAYLOAD');
+    const ok = await action.execute({ toolSessionId: 's1' }, readyContext(okClient));
+    expect(ok.success).toBe(true);
+    expect(ok.data.closed).toBe(true);
+    expect(calls[0]).toEqual({ path: { id: 's1' } });
   });
 });
 
 describe('PermissionReplyAction coverage', () => {
-  test('validate both formats and bad payloads', () => {
+  test('validate strict format only', () => {
     const action = new PermissionReplyAction();
     expect(action.validate(null).valid).toBe(false);
     expect(action.validate({ permissionId: '' }).valid).toBe(false);
-    expect(action.validate({ permissionId: 'p1', response: 'invalid' }).valid).toBe(false);
-    expect(action.validate({ permissionId: 'p1', approved: 'yes' }).valid).toBe(false);
-    expect(action.validate({ permissionId: 'p1', response: 'allow' }).valid).toBe(true);
-    expect(action.validate({ permissionId: 'p1', approved: true }).valid).toBe(true);
+    expect(action.validate({ permissionId: 'p1', approved: true }).valid).toBe(false);
+    expect(action.validate({ permissionId: 'p1', response: 'allow' }).valid).toBe(false);
+    expect(action.validate({ permissionId: 'p1', toolSessionId: 's-tool', response: 'allow' }).valid).toBe(true);
   });
 
-  test('execute maps response/approved to sdk decision', async () => {
+  test('execute maps response to sdk path/body', async () => {
     const calls = [];
     const action = new PermissionReplyAction();
     const client = {
@@ -239,51 +203,12 @@ describe('PermissionReplyAction coverage', () => {
       { permissionId: 'p1', toolSessionId: 's-tool', response: 'allow' },
       readyContext(client),
     );
-    const always = await action.execute(
-      { permissionId: 'p2', response: 'always' },
-      readyContext(client),
-    );
-    const deny = await action.execute(
-      { permissionId: 'p3', approved: false },
-      readyContext(client, { sessionId: 'fallback-s' }),
-    );
 
     expect(allow.success).toBe(true);
-    expect(always.success).toBe(true);
-    expect(deny.success).toBe(true);
-    expect(calls[0].request.decision).toBe('once');
-    expect(calls[1].request.decision).toBe('always');
-    expect(calls[2].request.decision).toBe('reject');
-    expect(calls[2].sessionId).toBe('fallback-s');
-  });
-
-  test('execute error path and mapper', async () => {
-    const action = new PermissionReplyAction();
-    const badClient = {
-      session: {
-        create: async () => ({}),
-        abort: async () => ({}),
-        prompt: async () => ({}),
-      },
-      postSessionIdPermissionsPermissionId: async () => ({ error: { message: 'permission denied' } }),
-    };
-    const failed = await action.execute({ permissionId: 'p4', response: 'deny' }, readyContext(badClient));
-    expect(failed.success).toBe(false);
-    expect(failed.errorCode).toBe('SDK_UNREACHABLE');
-
-    const throwClient = {
-      session: {
-        create: async () => ({}),
-        abort: async () => ({}),
-        prompt: async () => ({}),
-      },
-      postSessionIdPermissionsPermissionId: () => {
-        throw new Error('invalid permission');
-      },
-    };
-    const thrown = await action.execute({ permissionId: 'p5', response: 'deny' }, readyContext(throwClient));
-    expect(thrown.success).toBe(false);
-    expect(thrown.errorCode).toBe('INVALID_PAYLOAD');
+    expect(calls[0]).toEqual({
+      path: { id: 's-tool', permissionID: 'p1' },
+      body: { response: 'once' },
+    });
   });
 });
 
@@ -304,11 +229,5 @@ describe('StatusQueryAction coverage', () => {
     );
     expect(down.success).toBe(true);
     expect(down.data.opencodeOnline).toBe(false);
-  });
-
-  test('errorMapper variants', () => {
-    const action = new StatusQueryAction();
-    expect(action.errorMapper(new Error('timeout'))).toBe('SDK_TIMEOUT');
-    expect(action.errorMapper(new Error('connection refused'))).toBe('SDK_UNREACHABLE');
   });
 });

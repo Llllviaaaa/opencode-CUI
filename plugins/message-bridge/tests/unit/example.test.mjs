@@ -22,9 +22,9 @@ function context(state) {
 }
 
 function payloadFor(actionName) {
-  if (actionName === 'chat') return { sessionId: 's-1', message: 'hi' };
+  if (actionName === 'chat') return { toolSessionId: 's-1', text: 'hi' };
   if (actionName === 'create_session') return { metadata: {} };
-  if (actionName === 'close_session') return { sessionId: 's-1' };
+  if (actionName === 'close_session') return { toolSessionId: 's-1' };
   return { permissionId: 'p1', toolSessionId: 's-1', response: 'allow' };
 }
 

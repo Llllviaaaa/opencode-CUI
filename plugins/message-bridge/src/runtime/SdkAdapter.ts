@@ -14,22 +14,25 @@ export function createSdkAdapter(client: unknown): unknown {
 
   return {
     session: {
-      create: async (options: { sessionId?: string; metadata?: Record<string, unknown> } & Record<string, unknown>) => {
+      create: async (options: { body?: Record<string, unknown> }) => {
         return c.session!.create(options);
       },
-      abort: async (options: { sessionId: string } & Record<string, unknown>) => {
+      abort: async (options: { path: { id: string } }) => {
         return c.session!.abort(options);
       },
-      prompt: async (options: { sessionId: string; message: string; meta?: Record<string, string> } & Record<string, unknown>) => {
+      prompt: async (options: {
+        path: { id: string };
+        body: { parts: Array<{ type: 'text'; text: string }> };
+      }) => {
         return c.session!.prompt(options);
       },
     },
     postSessionIdPermissionsPermissionId: async (options: {
-      sessionId: string;
-      permissionId: string;
-      request: { decision: 'allow' | 'always' | 'deny' | 'once' | 'reject' };
-    } & Record<string, unknown>) => {
+      path: { id: string; permissionID: string };
+      body: { response: 'once' | 'always' | 'reject' };
+    }) => {
       return c.postSessionIdPermissionsPermissionId!(options);
     },
+    app: c.app,
   } as OpencodeClient;
 }

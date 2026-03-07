@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { ToolErrorPayload, Envelope, MessageSource, ErrorCode } from '../types';
+import { ToolErrorPayload, Envelope, MessageSource } from '../types';
 import { FastFailDetector } from './FastFailDetector';
 import { ErrorMapper } from './ErrorMapper';
 
@@ -11,7 +11,6 @@ export class BridgeError extends Error {
 }
 
 export function buildToolError(
-  code: ErrorCode,
   error: string,
   agentId: string,
   source: MessageSource,
@@ -32,7 +31,6 @@ export function buildToolError(
   return {
     type: 'tool_error',
     sessionId,
-    code,
     error,
     envelope
   };
