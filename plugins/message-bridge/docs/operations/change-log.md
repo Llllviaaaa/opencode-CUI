@@ -10,6 +10,17 @@
 
 ### Added
 
+- `operations/logging-reference.md`（新增日志可观测性手册，包含日志级别语义、字段字典、关键路径 Mermaid 时序图、全事件清单与排障指引）
+
+### Changed
+
+- `docs/README.md`：在“治理与变更”中加入日志手册入口。
+- `../README.md`：`Structured Logging` 小节增加日志手册链接。
+
+## 2026-03-07（文档重构）
+
+### Added
+
 - `architecture/adr/README.md`
 - `architecture/adr/0001-doc-information-architecture.md`
 - `design/interfaces/protocol-contract.md`
