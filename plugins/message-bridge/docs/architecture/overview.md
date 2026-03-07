@@ -14,6 +14,10 @@
 
 message-bridge 是 OpenCode 原生插件，桥接本地 OpenCode 实例与远端 AI-Gateway。插件采用**透明透传**架构，保持事件与 action 的可扩展性，确保后续协议演进无需修改核心引擎。
 
+补充约束（更正）：
+1. 插件入口契约：`PluginInput -> Hooks`
+2. 边界：上行事件走 `event` hook，下行 `invoke/status_query` 走后台 runtime 主循环
+
 ### 1.2 设计原则
 
 | 序号 | 原则 | 说明 |
@@ -238,7 +242,7 @@ env (BRIDGE_*) > project (.opencode/message-bridge.jsonc) > user (~/.config/open
 
 1. 应用层继续按固定间隔发送 `heartbeat`，用于 Gateway 更新 `last_seen_at`
 2. 连接层通过 WebSocket 控制帧进行探活：客户端周期发送 `ws.ping`
-3. 若在 `pongTimeoutMs`（建议 10s，可配置）内未收到 `pong`，判定链路不可达并触发断开重连
+3. `pongTimeoutMs` 探活判定作为 backlog（`REQ-MB-CONN-002`），当前版本未实现；当前重连主要由连接关闭/错误触发
 4. 重连使用指数退避（`1s → 2s → 4s → ... → 30s`）
 5. 不依赖 `heartbeat_ack`；`read-idle` 仅用于观测，不作为重连触发条件
 
@@ -776,8 +780,8 @@ plugins/message-bridge/
 | E2E Smoke | 注册、心跳、create+chat+close、permission_reply、断连重连、不可达启动失败 |
 
 **测试框架基线（与测试验证文档一致）**：
-- Unit / Integration：`node:test`（主框架）
-- E2E 协议链路：`node:test` + Mock Gateway/SDK
+- Unit / Integration：`bun test`（主框架）
+- E2E 协议链路：`bun test` + Mock Gateway/SDK
 - E2E Web UI（后续可选）：Playwright Test
 
 ### 8.2 覆盖率
@@ -857,7 +861,7 @@ plugins/message-bridge/
 
 | 序号 | 确认项 | 结论 | 优先级 |
 |---|---|---|---|
-| 1 | **心跳响应机制** | ✅ **已确认** - 重连判定基准采用 WebSocket `ping/pong`：客户端周期发送 `ws.ping`，`pongTimeoutMs` 内未收到 `pong` 即触发断开重连。`heartbeat` 仅用于 Gateway 更新 `last_seen_at`（无 `heartbeat_ack`）。`read-idle` 仅用于观测，不作为重连触发条件。 | P1 |
+| 1 | **心跳响应机制** | ✅ **已确认（更新）** - `heartbeat` 继续用于 Gateway 更新 `last_seen_at`。`pongTimeoutMs` 探活判定已登记 backlog（`REQ-MB-CONN-002`），当前版本不作为重连触发条件。 | P1 |
 | 2 | **重连时的消息缓冲** | ✅ **已确认** - 现有 PC-Agent 实现：**事件被丢弃，不缓冲**。`GatewayConnection.send()` 在非 CONNECTED 状态时抛出错误。无队列、缓冲、缓存实现。遵循 Fast Fail 原则，继续丢弃并记录计数。 | P1 |
 | 3 | **sequenceNumber 持久化** | ✅ **已确认** - 现有实现：内存中 Map 存储，插件重启后重置。按 session 独立计数器 + agent 级计数器。按 session 重置（与现有行为一致），文档中已明确说明。 | P2 |
 | 4 | **并发 invoke 处理** | ✅ **已确认** - **不支持**同一 session 的并发 invoke。OpenCode SDK 设计为顺序操作，保持会话上下文完整性。用户期望线性对话流，消息乱序会导致体验混乱。技术上当前实现已为顺序处理，支持并发存在高风险的消息混乱和上下文损坏。 | P2 |

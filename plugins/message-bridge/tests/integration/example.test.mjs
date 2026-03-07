@@ -1,101 +1,89 @@
-import { test, describe } from 'node:test';
-import { strict as assert } from 'node:assert';
-import { MessageBridgePluginClass } from '../../dist/plugin/MessageBridgePlugin.js';
-import { DefaultActionRouter } from '../../dist/action/ActionRouter.js';
-import { DefaultActionRegistry } from '../../dist/action/ActionRegistry.js';
-import { createMockSDK } from '../helpers/mock-sdk.mjs';
+import { describe, test, expect } from 'bun:test';
 
-describe('Full Integration Tests', () => {
-  function createStack(connectionState = 'READY') {
-    const registry = new DefaultActionRegistry();
-    new MessageBridgePluginClass(registry);
+import { BridgeRuntime } from '../../dist/runtime/BridgeRuntime.js';
+import { EnvelopeBuilder } from '../../dist/event/EnvelopeBuilder.js';
 
-    const router = new DefaultActionRouter();
-    router.setRegistry(registry);
+function createRuntimeHarness({ state = 'READY', routeResult } = {}) {
+  const runtime = new BridgeRuntime({ client: {} });
+  const sent = [];
 
-    const mockClient = createMockSDK();
-    const context = {
-      client: mockClient,
-      connectionState,
-      agentId: 'bridge-integration-test',
-      sessionId: 'ctx-session',
-    };
+  runtime.gatewayConnection = {
+    send: (message) => sent.push(message),
+  };
+  runtime.envelopeBuilder = new EnvelopeBuilder('agent-test');
+  runtime.stateManager.setState(state);
+  runtime.actionRouter = {
+    route: async () => routeResult ?? { success: true, data: { ok: true } },
+  };
 
-    return { registry, router, mockClient, context };
-  }
+  return { runtime, sent };
+}
 
-  test('routes all required actions', async () => {
-    const { registry, router, context } = createStack();
-    for (const action of ['chat', 'create_session', 'close_session', 'permission_reply', 'status_query']) {
-      assert.ok(registry.has(action), `${action} should be registered`);
-    }
+describe('downlink -> uplink protocol', () => {
+  test('invoke/chat -> tool_done', async () => {
+    const { runtime, sent } = createRuntimeHarness({
+      routeResult: { success: true, data: { text: 'ok' } },
+    });
 
-    const createResult = await router.route('create_session', { metadata: { test: true } }, context);
-    assert.equal(createResult.success, true);
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      action: 'chat',
+      payload: { sessionId: 's-1', message: 'hi' },
+      envelope: { sessionId: 's-1' },
+    });
 
-    const sessionId = createResult.data.sessionId;
-
-    const chatResult = await router.route('chat', { sessionId, message: 'hello' }, context);
-    assert.equal(chatResult.success, true);
-
-    const closeResult = await router.route('close_session', { sessionId }, context);
-    assert.equal(closeResult.success, true);
-
-    const statusResult = await router.route('status_query', { sessionId }, context);
-    assert.equal(statusResult.success, true);
-    assert.equal(statusResult.data.opencodeOnline, true);
-
-    const permResult = await router.route(
-      'permission_reply',
-      { permissionId: 'perm-1', response: 'allow', toolSessionId: sessionId },
-      context,
-    );
-    assert.equal(permResult.success, true);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('tool_done');
+    expect(sent[0].sessionId).toBe('s-1');
+    expect(sent[0].result).toEqual({ text: 'ok' });
   });
 
-  test('close_session uses abort and never delete', async () => {
-    const { router, mockClient, context } = createStack();
+  test('invoke/create_session -> session_created', async () => {
+    const { runtime, sent } = createRuntimeHarness({
+      routeResult: { success: true, data: { sessionId: 'created-1' } },
+    });
 
-    const create = await router.route('create_session', {}, context);
-    const sessionId = create.data.sessionId;
-    const close = await router.route('close_session', { sessionId }, context);
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      action: 'create_session',
+      payload: {},
+      envelope: {},
+    });
 
-    assert.equal(close.success, true);
-    assert.equal(mockClient.getCallCount('sessionAbort'), 1);
-    assert.equal(mockClient.getCallCount('sessionDelete'), 0);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('session_created');
+    expect(sent[0].sessionId).toBe('created-1');
   });
 
-  test('permission_reply maps decision correctly', async () => {
-    const { router, mockClient, context } = createStack();
+  test('invalid payload failure -> tool_error(INVALID_PAYLOAD)', async () => {
+    const { runtime, sent } = createRuntimeHarness({
+      routeResult: { success: false, errorCode: 'INVALID_PAYLOAD', errorMessage: 'bad payload' },
+    });
 
-    const allow = await router.route('permission_reply', { permissionId: 'p1', approved: true, toolSessionId: 's1' }, context);
-    const deny = await router.route('permission_reply', { permissionId: 'p2', approved: false, toolSessionId: 's1' }, context);
-    const always = await router.route('permission_reply', { permissionId: 'p3', response: 'always', toolSessionId: 's1' }, context);
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      action: 'chat',
+      payload: { bad: true },
+      envelope: { sessionId: 's-err' },
+    });
 
-    assert.equal(allow.success, true);
-    assert.equal(deny.success, true);
-    assert.equal(always.success, true);
-
-    const calls = mockClient.calls.permissionReply;
-    assert.equal(calls[0].options.request.decision, 'once');
-    assert.equal(calls[1].options.request.decision, 'reject');
-    assert.equal(calls[2].options.request.decision, 'always');
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('tool_error');
+    expect(sent[0].code).toBe('INVALID_PAYLOAD');
   });
 
-  test('fast-fail state mapping follows PRD', async () => {
-    const { router, context } = createStack('DISCONNECTED');
-    const disconnected = await router.route('chat', { sessionId: 's1', message: 'm1' }, context);
-    assert.equal(disconnected.success, false);
-    assert.equal(disconnected.errorCode, 'GATEWAY_UNREACHABLE');
+  test('status_query -> status_response', async () => {
+    const { runtime, sent } = createRuntimeHarness({
+      routeResult: { success: true, data: { opencodeOnline: true } },
+    });
 
-    context.connectionState = 'CONNECTING';
-    const connecting = await router.route('chat', { sessionId: 's1', message: 'm1' }, context);
-    assert.equal(connecting.success, false);
-    assert.equal(connecting.errorCode, 'GATEWAY_UNREACHABLE');
+    await runtime.handleDownstreamMessage({
+      type: 'status_query',
+      sessionId: 's-2',
+    });
 
-    context.connectionState = 'CONNECTED';
-    const connected = await router.route('chat', { sessionId: 's1', message: 'm1' }, context);
-    assert.equal(connected.success, false);
-    assert.equal(connected.errorCode, 'AGENT_NOT_READY');
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('status_response');
+    expect(sent[0].opencodeOnline).toBe(true);
   });
 });

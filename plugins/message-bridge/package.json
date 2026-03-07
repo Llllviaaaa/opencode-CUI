@@ -8,21 +8,19 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/**/*.test.mjs",
-    "test:unit": "node --test tests/unit/**/*.test.mjs",
-    "test:integration": "node --test tests/integration/**/*.test.mjs",
-    "test:e2e": "node --test tests/e2e/**/*.test.mjs",
-    "test:coverage": "c8 --check-coverage --lines 80 --branches 70 --exclude-after-remap --exclude=src/connection/** --exclude=src/config/** --exclude=tests/helpers/** --reporter=text --reporter=html --reporter=lcov node --test tests/**/*.test.mjs"
+    "test": "npm run build && bun test",
+    "test:unit": "npm run build && bun test tests/unit",
+    "test:integration": "npm run build && bun test tests/integration",
+    "test:e2e": "npm run build && bun test tests/e2e",
+    "test:coverage": "npm run build && node ./scripts/check-coverage.mjs"
   },
   "dependencies": {
+    "@opencode-ai/plugin": "^1.2.18",
     "@opencode-ai/sdk": "^1.2.15",
-    "ws": "^8.18.0",
     "jsonc-parser": "^3.3.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
-    "@types/ws": "^8.5.13",
-    "c8": "^10.1.2",
     "typescript": "^5.7.2"
   }
 }

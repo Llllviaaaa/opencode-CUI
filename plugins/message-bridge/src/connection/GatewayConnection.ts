@@ -1,5 +1,4 @@
 import { EventEmitter } from 'events';
-import WebSocket from 'ws';
 import { ConnectionState, HeartbeatMessage, RegisterMessage } from '../types';
 
 export interface GatewayConnectionEvents {
@@ -24,15 +23,18 @@ export interface GatewayConnectionOptions {
   reconnectExponential?: boolean;
   heartbeatIntervalMs?: number;
   pongTimeoutMs?: number;
+  abortSignal?: AbortSignal;
   queryParams?: URLSearchParams;
   registerMessage: RegisterMessage;
 }
 
+type WsMessageEvent = { data: string | ArrayBuffer | Blob | Uint8Array };
+
 export class DefaultGatewayConnection extends EventEmitter implements GatewayConnection {
   private ws: WebSocket | null = null;
   private reconnectAttempts = 0;
-  private heartbeatTimer: NodeJS.Timeout | null = null;
-  private pongTimeoutTimer: NodeJS.Timeout | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private manuallyDisconnected = false;
   private state: ConnectionState = 'DISCONNECTED';
 
@@ -41,9 +43,55 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
   }
 
   async connect(): Promise<void> {
+    if (this.options.abortSignal?.aborted) {
+      this.manuallyDisconnected = true;
+      this.setState('DISCONNECTED');
+      throw new Error('gateway_connection_aborted');
+    }
+
     this.setState('CONNECTING');
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      let opened = false;
+
+      const finalizeResolve = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanupAbortListener();
+        resolve();
+      };
+
+      const finalizeReject = (error: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanupAbortListener();
+        reject(error);
+      };
+
+      const abortHandler = () => {
+        this.manuallyDisconnected = true;
+        if (this.ws) {
+          this.ws.close();
+          this.ws = null;
+        }
+        this.teardownTimers();
+        this.setState('DISCONNECTED');
+        finalizeReject(new Error('gateway_connection_aborted'));
+      };
+
+      const cleanupAbortListener = () => {
+        this.options.abortSignal?.removeEventListener('abort', abortHandler);
+      };
+
+      if (this.options.abortSignal) {
+        this.options.abortSignal.addEventListener('abort', abortHandler, { once: true });
+      }
+
       try {
         const url = new URL(this.options.url);
         if (this.options.queryParams) {
@@ -52,61 +100,60 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
           }
         }
 
-        this.ws = new WebSocket(url.toString());
+        const ws = new WebSocket(url.toString());
+        this.ws = ws;
         this.manuallyDisconnected = false;
 
-        this.ws.on('open', () => {
+        ws.onopen = () => {
+          opened = true;
           this.reconnectAttempts = 0;
           this.setState('CONNECTED');
 
           this.send(this.options.registerMessage);
-          // PRD: gateway has no explicit register ack, send register then enter READY.
           this.setState('READY');
-
           this.setupHeartbeat();
-          resolve();
-        });
+          finalizeResolve();
+        };
 
-        this.ws.on('close', () => {
+        ws.onclose = () => {
+          if (!opened) {
+            finalizeReject(new Error('gateway_websocket_closed_before_open'));
+          }
           this.teardownTimers();
           this.setState('DISCONNECTED');
 
-          if (!this.manuallyDisconnected) {
+          if (opened && !this.manuallyDisconnected && !this.options.abortSignal?.aborted) {
             this.attemptReconnect();
           }
-        });
+        };
 
-        this.ws.on('error', (error) => {
+        ws.onerror = () => {
+          const error = new Error('gateway_websocket_error');
           this.emit('error', error);
           if (this.state !== 'DISCONNECTED') {
             this.setState('DISCONNECTED');
           }
-          reject(error);
-        });
+          finalizeReject(error);
+        };
 
-        this.ws.on('message', (data) => {
-          try {
-            const message = JSON.parse(data.toString());
-            this.emit('message', message);
-          } catch {
-            // Ignore non-json messages from gateway.
-          }
-        });
-
-        this.ws.on('pong', () => {
-          if (this.pongTimeoutTimer) {
-            clearTimeout(this.pongTimeoutTimer);
-            this.pongTimeoutTimer = null;
-          }
-        });
+        ws.onmessage = (event: MessageEvent) => {
+          this.handleMessage(event as unknown as WsMessageEvent).catch((error) => {
+            this.emit('error', error instanceof Error ? error : new Error(String(error)));
+          });
+        };
       } catch (error) {
-        reject(error as Error);
+        finalizeReject(error as Error);
       }
     });
   }
 
   disconnect(): void {
     this.manuallyDisconnected = true;
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
 
     if (this.ws) {
       this.ws.close();
@@ -137,7 +184,6 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
     this.teardownTimers();
 
     const heartbeatIntervalMs = this.options.heartbeatIntervalMs ?? 30000;
-    const pongTimeoutMs = this.options.pongTimeoutMs ?? 10000;
 
     this.heartbeatTimer = setInterval(() => {
       if (!this.isConnected() || !this.ws) {
@@ -149,17 +195,6 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
         timestamp: new Date().toISOString(),
       };
       this.ws.send(JSON.stringify(heartbeat));
-      this.ws.ping('heartbeat');
-
-      if (this.pongTimeoutTimer) {
-        clearTimeout(this.pongTimeoutTimer);
-      }
-
-      this.pongTimeoutTimer = setTimeout(() => {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-          this.ws.terminate();
-        }
-      }, pongTimeoutMs);
     }, heartbeatIntervalMs);
   }
 
@@ -168,14 +203,13 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
     }
-
-    if (this.pongTimeoutTimer) {
-      clearTimeout(this.pongTimeoutTimer);
-      this.pongTimeoutTimer = null;
-    }
   }
 
   private attemptReconnect(): void {
+    if (this.options.abortSignal?.aborted) {
+      return;
+    }
+
     this.reconnectAttempts += 1;
 
     const base = this.options.reconnectBaseMs ?? 1000;
@@ -186,8 +220,8 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
       ? Math.min(base * Math.pow(2, this.reconnectAttempts - 1), cap)
       : Math.min(base, cap);
 
-    setTimeout(async () => {
-      if (this.manuallyDisconnected) {
+    this.reconnectTimer = setTimeout(async () => {
+      if (this.manuallyDisconnected || this.options.abortSignal?.aborted) {
         return;
       }
 
@@ -199,6 +233,27 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
         }
       }
     }, delay);
+  }
+
+  private async handleMessage(event: WsMessageEvent): Promise<void> {
+    let text: string;
+
+    if (typeof event.data === 'string') {
+      text = event.data;
+    } else if (event.data instanceof Uint8Array) {
+      text = new TextDecoder().decode(event.data);
+    } else if (event.data instanceof ArrayBuffer) {
+      text = new TextDecoder().decode(new Uint8Array(event.data));
+    } else {
+      text = await (event.data as Blob).text();
+    }
+
+    try {
+      const message = JSON.parse(text);
+      this.emit('message', message);
+    } catch {
+      // Ignore non-json messages from gateway.
+    }
   }
 
   private setState(next: ConnectionState): void {
