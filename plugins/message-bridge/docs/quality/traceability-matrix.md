@@ -170,10 +170,10 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 | §9.1 | Unit tests | **Implemented** | `tests/unit/example.test.mjs` (lines 1-405): comprehensive unit tests | Tests for all 5 actions, FastFailDetector, ErrorMapper, EventFilter, EnvelopeBuilder. |
 | §9.1 | Integration tests | **Implemented** | `tests/integration/plugin.test.mjs` (lines 1-159): integration tests | Tests plugin lifecycle, action registry, routing. |
 | §9.1 | E2E smoke tests | **Implemented** | `tests/e2e/example.test.mjs` (exists) | File present (content not examined). |
-| §9.3 | Test framework: node:test | **Implemented** | `package.json` (lines 11-15): uses `node --test` | Native Node.js test runner per PRD. |
-| §9.3 | Coverage tool: c8 | **Implemented** | `package.json` (line 15): `c8 --check-coverage` | c8 coverage tool configured. |
-| §9.3 | Lines coverage >= 80% | **Implemented** | `package.json` (line 15): `--lines 80` | Threshold enforced. |
-| §9.3 | Branches coverage >= 70% | **Implemented** | `package.json` (line 15): `--branches 70` | Threshold enforced. |
+| §9.3 | Test framework: bun test | **Implemented** | `package.json` (scripts): uses `bun test` | Bun test runner baseline. |
+| §9.3 | Coverage gate | **Implemented** | `package.json` + `scripts/check-coverage.mjs` | Bun coverage + threshold validation script. |
+| §9.3 | Lines coverage >= 80% | **Implemented** | `scripts/check-coverage.mjs` | Threshold enforced by coverage gate script. |
+| §9.3 | Branches coverage >= 70% | **Planned / Observable** | `scripts/check-coverage.mjs` | Bun coverage 在当前环境可能出现 `BRF=0`，暂不作为硬门禁。 |
 | §9.2 | 5 action normal paths tested | **Implemented** | `tests/unit/example.test.mjs` (lines 51-291): tests for all actions | Each action has validation and execution tests. |
 | §9.2 | approved/response dual format tested | **Implemented** | `tests/unit/example.test.mjs` (lines 194-256): PermissionReplyAction tests | Tests both target and compat formats. |
 | §9.2 | close_session -> abort tested | **Implemented** | `tests/unit/example.test.mjs` (lines 165-177): tests abort semantics | Verified in test. |

@@ -221,6 +221,14 @@
 - `../architecture/overview.md`（架构口径）
 - `../quality/test-strategy.md`（测试口径）
 
+### 8.4 Runtime 与插件契约基线（更正）
+1. 当前实现与验收基线为 **Bun-only**，不再以 Node 作为当前交付运行时。  
+2. 插件入口契约为 **`PluginInput -> Hooks`**。  
+3. 事件与指令边界：
+- 上行事件通过 `event` hook 转发
+- 下行 `invoke/status_query` 通过后台 runtime 主循环处理
+4. `pongTimeoutMs` 探活机制记为 backlog（`REQ-MB-CONN-002`），当前版本未实现该判定链路。  
+
 ## 九、测试与验收标准
 ### 9.1 测试分层
 1. Unit：白名单、映射、路由、错误分支、envelope/sequence  
@@ -244,7 +252,7 @@
 - unit/integration/e2e smoke 全通过  
 - 覆盖率（插件目录）：
 - `lines >= 80%`
-- `branches >= 70%`
+- `branches >= 70%`（当前 Bun 覆盖报告在本环境存在 `BRF=0` 限制，暂作为观测项，非 CI 硬门禁）  
 
 ## 十、兼容矩阵
 - 策略：已验证矩阵 + 主版本范围  
