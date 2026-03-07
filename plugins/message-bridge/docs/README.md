@@ -48,5 +48,6 @@
 
 1. [文档治理规范](./AGENTS.md)
 2. [发布检查清单](./operations/release-checklist.md)
-3. [变更日志](./operations/change-log.md)
-4. [路径映射](./migration/path-mapping.md)
+3. [日志可观测性手册](./operations/logging-reference.md)
+4. [变更日志](./operations/change-log.md)
+5. [路径映射](./migration/path-mapping.md)

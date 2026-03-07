@@ -122,6 +122,7 @@ This plugin now emits key-chain logs via OpenCode client API `client.app.log()` 
 - Levels: `debug`, `info`, `warn`, `error`
 - `BRIDGE_DEBUG=true` adds richer `extra` payload fields (with sensitive keys redacted)
 - Log delivery failures never block bridge traffic
+- Detailed reference (levels/fields/triggers/sequence diagrams): `docs/operations/logging-reference.md`
 
 ## Build and Test Commands
 
