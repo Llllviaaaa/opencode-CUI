@@ -45,6 +45,11 @@ export class StatusQueryAction implements Action<StatusQueryPayload> {
    * Returns online status from health check
    */
   async execute(payload: StatusQueryPayload, context: ActionContext): Promise<ActionResult> {
+    const startedAt = Date.now();
+    context.logger?.debug('action.status_query.started', {
+      sessionId: payload.sessionId,
+      state: context.connectionState,
+    });
     try {
       // The primary status comes from the connection state
       // READY means OpenCode is accessible through our bridge
@@ -62,12 +67,19 @@ export class StatusQueryAction implements Action<StatusQueryPayload> {
     } catch (error) {
       const errorCode = this.errorMapper(error);
       const errorMessage = error instanceof Error ? error.message : String(error);
+      context.logger?.error('action.status_query.exception', {
+        error: errorMessage,
+        errorCode,
+        latencyMs: Date.now() - startedAt,
+      });
 
       return {
         success: false,
         errorCode,
         errorMessage
       };
+    } finally {
+      context.logger?.debug('action.status_query.finished', { latencyMs: Date.now() - startedAt });
     }
   }
 

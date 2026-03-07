@@ -1,6 +1,8 @@
 import type { OpencodeClient } from '../types';
 
 export function createSdkAdapter(client: unknown): unknown {
+  // Keep action execution on the minimal session/permission surface.
+  // Logging uses the original input client (client.app.log) and does not go through this adapter.
   if (!client || typeof client !== 'object') {
     return client;
   }

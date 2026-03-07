@@ -274,6 +274,16 @@ export interface OpencodeClient {
     permissionId: string;
     request: { decision: 'allow' | 'always' | 'deny' | 'once' | 'reject' };
   } & Record<string, unknown>) => Promise<unknown>;
+  app?: {
+    log: (options?: {
+      body?: {
+        service: string;
+        level: 'debug' | 'info' | 'warn' | 'error';
+        message: string;
+        extra?: Record<string, unknown>;
+      };
+    }) => Promise<unknown> | unknown;
+  };
 }
 
 export function isOpencodeClient(client: unknown): client is OpencodeClient {
@@ -326,6 +336,13 @@ export interface ActionContext {
   connectionState: ConnectionState;
   agentId: string;
   sessionId?: string;
+  logger?: {
+    debug(message: string, extra?: Record<string, unknown>): void;
+    info(message: string, extra?: Record<string, unknown>): void;
+    warn(message: string, extra?: Record<string, unknown>): void;
+    error(message: string, extra?: Record<string, unknown>): void;
+    getTraceId(): string;
+  };
 }
 
 export interface ValidationResult {

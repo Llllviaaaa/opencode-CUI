@@ -114,6 +114,15 @@ BRIDGE_AUTH_SK=your-secret-key
 BRIDGE_ENABLED=true
 ```
 
+### Structured Logging
+
+This plugin now emits key-chain logs via OpenCode client API `client.app.log()` (`POST /log`).
+
+- Service name is fixed as `message-bridge`
+- Levels: `debug`, `info`, `warn`, `error`
+- `BRIDGE_DEBUG=true` adds richer `extra` payload fields (with sensitive keys redacted)
+- Log delivery failures never block bridge traffic
+
 ## Build and Test Commands
 
 ```bash

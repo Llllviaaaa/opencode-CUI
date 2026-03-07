@@ -1,6 +1,7 @@
 import { GatewayConnection, StateManager } from '../connection';
 import { EventFilter } from './EventFilter';
 import { EnvelopeBuilder } from './EnvelopeBuilder';
+import type { BridgeLogger } from '../runtime/AppLogger';
 
 export interface OpenCodeEvent {
   type: string;
@@ -12,6 +13,7 @@ export interface OpenCodeEvent {
 export interface EventRelayOptions {
   eventFilter?: EventFilter;
   allowlist?: readonly string[];
+  logger?: BridgeLogger;
 }
 
 export class EventRelay {
@@ -21,6 +23,7 @@ export class EventRelay {
 
   private currentAgentId: string | null = null;
   private envelopeBuilder: EnvelopeBuilder | null = null;
+  private readonly logger?: BridgeLogger;
 
   constructor(
     private readonly opencode: { event: { subscribe: (listener: (event: OpenCodeEvent) => void) => () => void } },
@@ -29,6 +32,7 @@ export class EventRelay {
     options: EventRelayOptions = {},
   ) {
     this.eventFilter = options.eventFilter ?? new EventFilter(options.allowlist);
+    this.logger = options.logger;
   }
 
   async start(): Promise<void> {
@@ -37,9 +41,10 @@ export class EventRelay {
     }
 
     this.isRunning = true;
+    this.logger?.info('event.relay.started');
     this.subscription = this.opencode.event.subscribe((event: OpenCodeEvent) => {
       this.handleEvent(event).catch((error) => {
-        console.error('event_relay_error', { error: error instanceof Error ? error.message : String(error) });
+        this.logger?.error('event.relay.error', { error: error instanceof Error ? error.message : String(error) });
       });
     });
   }
@@ -50,6 +55,7 @@ export class EventRelay {
     }
 
     this.isRunning = false;
+    this.logger?.info('event.relay.stopped');
     if (this.subscription) {
       this.subscription();
       this.subscription = null;
@@ -58,16 +64,18 @@ export class EventRelay {
 
   private async handleEvent(event: OpenCodeEvent): Promise<void> {
     if (!this.stateManager.isReady()) {
+      this.logger?.debug('event.relay.ignored_not_ready', { eventType: event.type });
       return;
     }
 
     if (!this.eventFilter.isAllowed(event.type)) {
-      console.warn('unsupported_event', { eventType: event.type });
+      this.logger?.warn('event.relay.rejected_allowlist', { eventType: event.type });
       return;
     }
 
     const sessionId = this.extractSessionId(event);
     const envelope = this.getEnvelopeBuilder().build(sessionId);
+    this.logger?.debug('event.relay.forwarding', { eventType: event.type, sessionId });
 
     this.gateway.send({
       type: 'tool_event',

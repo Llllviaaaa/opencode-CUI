@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { ConnectionState, HeartbeatMessage, RegisterMessage } from '../types';
+import type { BridgeLogger } from '../runtime/AppLogger';
 
 export interface GatewayConnectionEvents {
   stateChange: (state: ConnectionState) => void;
@@ -26,6 +27,7 @@ export interface GatewayConnectionOptions {
   abortSignal?: AbortSignal;
   queryParams?: URLSearchParams;
   registerMessage: RegisterMessage;
+  logger?: BridgeLogger;
 }
 
 type WsMessageEvent = { data: string | ArrayBuffer | Blob | Uint8Array };
@@ -43,9 +45,11 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
   }
 
   async connect(): Promise<void> {
+    this.options.logger?.info('gateway.connect.started', { url: this.options.url, state: this.state });
     if (this.options.abortSignal?.aborted) {
       this.manuallyDisconnected = true;
       this.setState('DISCONNECTED');
+      this.options.logger?.warn('gateway.connect.aborted_precheck');
       throw new Error('gateway_connection_aborted');
     }
 
@@ -81,6 +85,7 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
         }
         this.teardownTimers();
         this.setState('DISCONNECTED');
+        this.options.logger?.warn('gateway.connect.aborted');
         finalizeReject(new Error('gateway_connection_aborted'));
       };
 
@@ -107,15 +112,26 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
         ws.onopen = () => {
           opened = true;
           this.reconnectAttempts = 0;
+          this.options.logger?.info('gateway.open');
           this.setState('CONNECTED');
 
           this.send(this.options.registerMessage);
+          this.options.logger?.info('gateway.register.sent', {
+            toolType: this.options.registerMessage.toolType,
+            toolVersion: this.options.registerMessage.toolVersion,
+          });
           this.setState('READY');
+          this.options.logger?.info('gateway.ready');
           this.setupHeartbeat();
           finalizeResolve();
         };
 
         ws.onclose = () => {
+          this.options.logger?.warn('gateway.close', {
+            opened,
+            manuallyDisconnected: this.manuallyDisconnected,
+            aborted: !!this.options.abortSignal?.aborted,
+          });
           if (!opened) {
             finalizeReject(new Error('gateway_websocket_closed_before_open'));
           }
@@ -129,6 +145,7 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
 
         ws.onerror = () => {
           const error = new Error('gateway_websocket_error');
+          this.options.logger?.error('gateway.error', { error: error.message });
           this.emit('error', error);
           if (this.state !== 'DISCONNECTED') {
             this.setState('DISCONNECTED');
@@ -142,12 +159,16 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
           });
         };
       } catch (error) {
+        this.options.logger?.error('gateway.connect.failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
         finalizeReject(error as Error);
       }
     });
   }
 
   disconnect(): void {
+    this.options.logger?.info('gateway.disconnect.requested', { state: this.state });
     this.manuallyDisconnected = true;
 
     if (this.reconnectTimer) {
@@ -166,9 +187,15 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
 
   send(message: unknown): void {
     if (!this.isConnected() || !this.ws) {
+      this.options.logger?.warn('gateway.send.rejected_not_connected');
       throw new Error('WebSocket is not connected. Cannot send message.');
     }
 
+    const messageType =
+      message && typeof message === 'object' && 'type' in (message as { type?: unknown })
+        ? String((message as { type?: unknown }).type ?? '')
+        : 'unknown';
+    this.options.logger?.debug('gateway.send', { messageType });
     this.ws.send(JSON.stringify(message));
   }
 
@@ -195,6 +222,7 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
         timestamp: new Date().toISOString(),
       };
       this.ws.send(JSON.stringify(heartbeat));
+      this.options.logger?.debug('gateway.heartbeat.sent');
     }, heartbeatIntervalMs);
   }
 
@@ -219,6 +247,10 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
     const delay = exp
       ? Math.min(base * Math.pow(2, this.reconnectAttempts - 1), cap)
       : Math.min(base, cap);
+    this.options.logger?.warn('gateway.reconnect.scheduled', {
+      attempt: this.reconnectAttempts,
+      delayMs: delay,
+    });
 
     this.reconnectTimer = setTimeout(async () => {
       if (this.manuallyDisconnected || this.options.abortSignal?.aborted) {
@@ -226,6 +258,9 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
       }
 
       try {
+        this.options.logger?.info('gateway.reconnect.attempt', {
+          attempt: this.reconnectAttempts,
+        });
         await this.connect();
       } catch {
         if (!this.manuallyDisconnected) {
@@ -250,8 +285,14 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
 
     try {
       const message = JSON.parse(text);
+      const messageType =
+        message && typeof message === 'object' && 'type' in (message as { type?: unknown })
+          ? String((message as { type?: unknown }).type ?? '')
+          : 'unknown';
+      this.options.logger?.debug('gateway.message.received', { messageType });
       this.emit('message', message);
     } catch {
+      this.options.logger?.debug('gateway.message.ignored_non_json');
       // Ignore non-json messages from gateway.
     }
   }
