@@ -84,19 +84,21 @@ describe('createSdkAdapter coverage', () => {
     };
 
     const adapted = createSdkAdapter(raw);
-    const r1 = await adapted.session.create({ sessionId: 's1', metadata: { a: 1 } });
-    const r2 = await adapted.session.abort({ sessionId: 's1' });
-    const r3 = await adapted.session.prompt({ sessionId: 's1', message: 'hi' });
+    const r1 = await adapted.session.create({ body: { metadata: { a: 1 } } });
+    const r2 = await adapted.session.abort({ path: { id: 's1' } });
+    const r3 = await adapted.session.prompt({
+      path: { id: 's1' },
+      body: { parts: [{ type: 'text', text: 'hi' }] },
+    });
     const r4 = await adapted.postSessionIdPermissionsPermissionId({
-      sessionId: 's1',
-      permissionId: 'p1',
-      request: { decision: 'once' },
+      path: { id: 's1', permissionID: 'p1' },
+      body: { response: 'once' },
     });
 
     expect(calls).toEqual({ create: 1, abort: 1, prompt: 1, permission: 1 });
-    expect(r1.data.sessionId).toBe('s1');
-    expect(r2.data.sessionId).toBe('s1');
-    expect(r3.data.message).toBe('hi');
-    expect(r4.data.permissionId).toBe('p1');
+    expect(r1.data.body.metadata.a).toBe(1);
+    expect(r2.data.path.id).toBe('s1');
+    expect(r3.data.body.parts[0].text).toBe('hi');
+    expect(r4.data.path.permissionID).toBe('p1');
   });
 });

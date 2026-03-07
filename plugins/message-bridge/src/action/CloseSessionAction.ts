@@ -1,9 +1,9 @@
-import { 
-  Action, 
-  CloseSessionPayload, 
-  ValidationResult, 
-  ActionResult, 
-  ActionContext, 
+import {
+  Action,
+  CloseSessionPayload,
+  ValidationResult,
+  ActionResult,
+  ActionContext,
   ErrorCode,
   isOpencodeClient,
   hasError,
@@ -17,23 +17,33 @@ import {
 export class CloseSessionAction implements Action<CloseSessionPayload> {
   name: string = 'close_session';
 
+  private normalizePayload(payload: unknown): { toolSessionId: string } | null {
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+
+    const p = payload as { toolSessionId?: unknown };
+    const toolSessionId =
+      typeof p.toolSessionId === 'string' && p.toolSessionId.trim()
+        ? p.toolSessionId
+        : null;
+
+    if (!toolSessionId) {
+      return null;
+    }
+
+    return { toolSessionId };
+  }
+
   /**
    * Validate close session payload
    */
   validate(payload: unknown): ValidationResult {
-    if (!payload || typeof payload !== 'object') {
+    const normalized = this.normalizePayload(payload);
+    if (!normalized) {
       return {
         valid: false,
-        error: 'Close session payload must be an object'
-      };
-    }
-
-    const typedPayload = payload as CloseSessionPayload;
-    
-    if (typeof typedPayload.sessionId !== 'string' || !typedPayload.sessionId.trim()) {
-      return {
-        valid: false,
-        error: 'sessionId is required and must be a non-empty string'
+        error: 'close_session payload requires toolSessionId'
       };
     }
 
@@ -46,12 +56,20 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
    * Execute close session action (using abort semantics - PRD §FR-MB-05)
    */
   async execute(payload: CloseSessionPayload, context: ActionContext): Promise<ActionResult> {
+    const normalized = this.normalizePayload(payload);
+    if (!normalized) {
+      return {
+        success: false,
+        errorCode: 'INVALID_PAYLOAD',
+        errorMessage: 'close_session payload requires toolSessionId'
+      };
+    }
+
     const startedAt = Date.now();
     context.logger?.info('action.close_session.started', {
-      sessionId: payload.sessionId,
+      toolSessionId: normalized.toolSessionId,
     });
     try {
-      // Check connection state
       if (context.connectionState !== 'READY') {
         context.logger?.warn('action.close_session.rejected_state', { state: context.connectionState });
         return {
@@ -71,12 +89,9 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
       }
 
       const client = context.client;
-
-      // Use abort semantics instead of delete (PRD §FR-MB-05)
-      // This ends the session gracefully without deleting data
       const executionResult = await safeExecute(
         client.session.abort({
-          sessionId: payload.sessionId
+          path: { id: normalized.toolSessionId }
         }),
         (error) => `Close session (abort) failed: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -85,47 +100,41 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
         if (!hasError(executionResult.data)) {
           return {
             success: true,
-            data: { sessionId: payload.sessionId, closed: true }
-          };
-        } else {
-          // Extract error message in a type-safe way
-          let errorMessage = 'Unknown error';
-          
-          if (executionResult.data && typeof executionResult.data === 'object' && 'error' in executionResult.data) {
-            const errorField = (executionResult.data as { error: unknown }).error;
-            if (errorField && typeof errorField === 'object' && errorField !== null && 'message' in errorField) {
-              const messageField = (errorField as { message: unknown }).message;
-              if (typeof messageField === 'string') {
-                errorMessage = messageField;
-              } else {
-                errorMessage = String(messageField) || 'Unknown error';
-              }
-            } else {
-              errorMessage = String(errorField) || 'Unknown error';
-            }
-          }
-          
-          context.logger?.error('action.close_session.sdk_error_payload', {
-            error: errorMessage,
-            latencyMs: Date.now() - startedAt,
-          });
-          return {
-            success: false,
-            errorCode: 'SDK_UNREACHABLE',
-            errorMessage: `Failed to close session (abort): ${errorMessage}`
+            data: { sessionId: normalized.toolSessionId, closed: true }
           };
         }
-      } else {
-        context.logger?.error('action.close_session.failed', {
-          error: executionResult.error,
+
+        let errorMessage = 'Unknown error';
+        if (executionResult.data && typeof executionResult.data === 'object' && 'error' in executionResult.data) {
+          const errorField = (executionResult.data as { error: unknown }).error;
+          if (errorField && typeof errorField === 'object' && errorField !== null && 'message' in errorField) {
+            const messageField = (errorField as { message: unknown }).message;
+            errorMessage = typeof messageField === 'string' ? messageField : String(messageField) || 'Unknown error';
+          } else {
+            errorMessage = String(errorField) || 'Unknown error';
+          }
+        }
+
+        context.logger?.error('action.close_session.sdk_error_payload', {
+          error: errorMessage,
           latencyMs: Date.now() - startedAt,
         });
         return {
           success: false,
           errorCode: 'SDK_UNREACHABLE',
-          errorMessage: executionResult.error
+          errorMessage: `Failed to close session (abort): ${errorMessage}`
         };
       }
+
+      context.logger?.error('action.close_session.failed', {
+        error: executionResult.error,
+        latencyMs: Date.now() - startedAt,
+      });
+      return {
+        success: false,
+        errorCode: 'SDK_UNREACHABLE',
+        errorMessage: executionResult.error
+      };
     } catch (error) {
       const errorCode = this.errorMapper(error);
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -151,7 +160,7 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
   errorMapper(error: unknown): ErrorCode {
     if (error instanceof Error) {
       const message = error.message.toLowerCase();
-      
+
       if (message.includes('timeout') || message.includes('network')) {
         return 'SDK_TIMEOUT';
       } else if (message.includes('unreachable') || message.includes('connect')) {
@@ -160,7 +169,7 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
         return 'INVALID_PAYLOAD';
       }
     }
-    
+
     return 'SDK_UNREACHABLE';
   }
 }

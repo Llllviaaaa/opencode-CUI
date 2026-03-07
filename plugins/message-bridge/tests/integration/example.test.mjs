@@ -20,22 +20,19 @@ function createRuntimeHarness({ state = 'READY', routeResult } = {}) {
 }
 
 describe('downlink -> uplink protocol', () => {
-  test('invoke/chat -> tool_done', async () => {
+  test('invoke/chat success -> no immediate uplink ack', async () => {
     const { runtime, sent } = createRuntimeHarness({
       routeResult: { success: true, data: { text: 'ok' } },
     });
 
     await runtime.handleDownstreamMessage({
       type: 'invoke',
+      sessionId: 's-1',
       action: 'chat',
-      payload: { sessionId: 's-1', message: 'hi' },
-      envelope: { sessionId: 's-1' },
+      payload: { toolSessionId: 'tool-1', text: 'hi' },
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_done');
-    expect(sent[0].sessionId).toBe('s-1');
-    expect(sent[0].result).toEqual({ text: 'ok' });
+    expect(sent).toHaveLength(0);
   });
 
   test('invoke/create_session -> session_created', async () => {
@@ -45,31 +42,33 @@ describe('downlink -> uplink protocol', () => {
 
     await runtime.handleDownstreamMessage({
       type: 'invoke',
+      sessionId: 'skill-1',
       action: 'create_session',
       payload: {},
-      envelope: {},
     });
 
     expect(sent).toHaveLength(1);
     expect(sent[0].type).toBe('session_created');
-    expect(sent[0].sessionId).toBe('created-1');
+    expect(sent[0].sessionId).toBe('skill-1');
+    expect(sent[0].toolSessionId).toBe('created-1');
   });
 
-  test('invalid payload failure -> tool_error(INVALID_PAYLOAD)', async () => {
+  test('invalid payload failure -> tool_error without code field', async () => {
     const { runtime, sent } = createRuntimeHarness({
       routeResult: { success: false, errorCode: 'INVALID_PAYLOAD', errorMessage: 'bad payload' },
     });
 
     await runtime.handleDownstreamMessage({
       type: 'invoke',
+      sessionId: 's-err',
       action: 'chat',
       payload: { bad: true },
-      envelope: { sessionId: 's-err' },
     });
 
     expect(sent).toHaveLength(1);
     expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].code).toBe('INVALID_PAYLOAD');
+    expect(sent[0].error).toBe('bad payload');
+    expect('code' in sent[0]).toBe(false);
   });
 
   test('status_query -> status_response', async () => {

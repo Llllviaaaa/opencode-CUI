@@ -51,9 +51,16 @@ export class StatusQueryAction implements Action<StatusQueryPayload> {
       state: context.connectionState,
     });
     try {
-      // The primary status comes from the connection state
-      // READY means OpenCode is accessible through our bridge
-      const opencodeOnline = context.connectionState === 'READY';
+      let opencodeOnline = context.connectionState === 'READY';
+      const app = (context.client as { app?: { health?: () => Promise<unknown> | unknown } } | null | undefined)?.app;
+      if (app?.health) {
+        try {
+          await app.health();
+          opencodeOnline = true;
+        } catch {
+          opencodeOnline = false;
+        }
+      }
       
       return {
         success: true,

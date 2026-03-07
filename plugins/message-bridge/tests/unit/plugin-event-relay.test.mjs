@@ -49,6 +49,6 @@ describe('event uplink via hook boundary', () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0].type).toBe('tool_event');
-    expect(sent[0].sessionId).toBe('s-1');
+    expect(sent[0].sessionId).toBeUndefined();
   });
 });
