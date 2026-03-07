@@ -25,7 +25,7 @@ export interface GatewayConnectionOptions {
   heartbeatIntervalMs?: number;
   pongTimeoutMs?: number;
   abortSignal?: AbortSignal;
-  queryParams?: URLSearchParams;
+  queryParamsProvider?: () => URLSearchParams;
   registerMessage: RegisterMessage;
   logger?: BridgeLogger;
 }
@@ -99,8 +99,9 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
 
       try {
         const url = new URL(this.options.url);
-        if (this.options.queryParams) {
-          for (const [key, value] of this.options.queryParams.entries()) {
+        const queryParams = this.options.queryParamsProvider?.();
+        if (queryParams) {
+          for (const [key, value] of queryParams.entries()) {
             url.searchParams.set(key, value);
           }
         }
