@@ -12,6 +12,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -349,6 +350,11 @@ public class GatewayRelayService {
                     .error(error)
                     .build();
             broadcastStreamMessage(sessionId, msg);
+            try {
+                persistenceService.finalizeActiveAssistantTurn(Long.valueOf(sessionId));
+            } catch (NumberFormatException e) {
+                log.warn("Cannot finalize active message after tool_error: invalid sessionId={}", sessionId);
+            }
         }
 
         log.error("Tool error for session {}: {}", sessionId, error);
@@ -423,6 +429,11 @@ public class GatewayRelayService {
                 sessionId, msg.getPermissionId());
     }
 
+    public void publishProtocolMessage(String sessionId, StreamMessage msg) {
+        broadcastStreamMessage(sessionId, msg);
+        bufferService.accumulate(sessionId, msg);
+    }
+
     // ==================== Internal Helpers ====================
 
     /**
@@ -433,6 +444,7 @@ public class GatewayRelayService {
      */
     private void broadcastStreamMessage(String sessionId, StreamMessage msg) {
         try {
+            enrichStreamMessage(sessionId, msg);
             ObjectNode envelope = objectMapper.createObjectNode();
             envelope.put("sessionId", sessionId);
             envelope.set("message", objectMapper.valueToTree(msg));
@@ -442,6 +454,20 @@ public class GatewayRelayService {
         } catch (Exception e) {
             log.error("Failed to broadcast StreamMessage to session {}: type={}, error={}",
                     sessionId, msg.getType(), e.getMessage());
+        }
+    }
+
+    private void enrichStreamMessage(String sessionId, StreamMessage msg) {
+        if (msg.getSessionId() == null || msg.getSessionId().isBlank()) {
+            msg.setSessionId(sessionId);
+        }
+        if (msg.getEmittedAt() == null || msg.getEmittedAt().isBlank()) {
+            msg.setEmittedAt(Instant.now().toString());
+        }
+        try {
+            persistenceService.prepareMessageContext(Long.valueOf(sessionId), msg);
+        } catch (NumberFormatException e) {
+            log.warn("Cannot prepare stream message context: invalid sessionId={}", sessionId);
         }
     }
 

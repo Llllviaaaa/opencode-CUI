@@ -10,11 +10,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Skill Server → Frontend WebSocket message DTO.
- * <p>
- * Semantic, flat-structured message translated from OpenCode events.
- * Frontend consumes this directly without needing to understand OpenCode
- * internals.
+ * Skill Server -> frontend WebSocket message DTO.
  */
 @Data
 @Builder
@@ -23,48 +19,52 @@ import java.util.Map;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class StreamMessage {
 
-    // ─── Required ───
-    private String type; // StreamMessageType value
-    private Long seq; // Sequence number for ordering
+    private String type;
+    private Long seq;
+    private String sessionId;
+    private String emittedAt;
+    private Object raw;
 
-    // ─── Content fields (text/thinking) ───
-    private String partId; // Part unique ID for incremental updates
-    private String content; // Text content (delta or full)
+    private String messageId;
+    private Integer messageSeq;
+    private String role;
+    private String sourceMessageId;
 
-    // ─── Tool fields ───
-    private String toolName; // bash / edit / question / ...
-    private String toolCallId; // OpenCode callID
-    private String status; // pending / running / completed / error
-    private Object input; // Tool input parameters
-    private String output; // Tool output result
-    private String title; // Tool / permission title
+    private String partId;
+    private Integer partSeq;
+    private String content;
 
-    // ─── Question fields ───
-    private String header; // Question header
-    private String question; // Question text
-    private List<String> options; // Option list
+    private String toolName;
+    private String toolCallId;
+    private String status;
+    private Object input;
+    private String output;
+    private String title;
 
-    // ─── Permission fields ───
+    private String header;
+    private String question;
+    private List<String> options;
+
     private String permissionId;
     private String permType;
     private Object metadata;
+    private String response;
 
-    // ─── Stats fields (step.done) ───
     private Map<String, Object> tokens;
     private Double cost;
-    private String reason; // Finish reason
+    private String reason;
 
-    // ─── Error ───
     private String error;
+    private String sessionStatus;
 
-    // ─── Session fields ───
-    private String sessionStatus; // busy / idle
+    private String fileName;
+    private String fileUrl;
+    private String fileMime;
 
-    /**
-     * All supported StreamMessage types.
-     */
+    private List<Object> messages;
+    private List<Object> parts;
+
     public static final class Types {
-        // Content
         public static final String TEXT_DELTA = "text.delta";
         public static final String TEXT_DONE = "text.done";
         public static final String THINKING_DELTA = "thinking.delta";
@@ -73,23 +73,19 @@ public class StreamMessage {
         public static final String QUESTION = "question";
         public static final String FILE = "file";
 
-        // Status
         public static final String STEP_START = "step.start";
         public static final String STEP_DONE = "step.done";
         public static final String SESSION_STATUS = "session.status";
         public static final String SESSION_TITLE = "session.title";
         public static final String SESSION_ERROR = "session.error";
 
-        // Interaction
         public static final String PERMISSION_ASK = "permission.ask";
         public static final String PERMISSION_REPLY = "permission.reply";
 
-        // System
         public static final String AGENT_ONLINE = "agent.online";
         public static final String AGENT_OFFLINE = "agent.offline";
         public static final String ERROR = "error";
 
-        // Special (for resume)
         public static final String SNAPSHOT = "snapshot";
         public static final String STREAMING = "streaming";
 

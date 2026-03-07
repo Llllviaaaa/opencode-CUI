@@ -147,6 +147,7 @@ export const SkillMain: React.FC<SkillMainProps> = ({
     agentStatus,
     socketReady,
     sendMessage,
+    replyPermission,
     error: streamError,
   } = useSkillStream(activeSessionId);
 
@@ -215,6 +216,20 @@ export const SkillMain: React.FC<SkillMainProps> = ({
     [sendToIm, imChatId],
   );
 
+  const handleQuestionAnswer = useCallback(
+    (answer: string) => {
+      void handleSendMessage(answer);
+    },
+    [handleSendMessage],
+  );
+
+  const handlePermissionDecision = useCallback(
+    (permissionId: string, allow: boolean) => {
+      void replyPermission(permissionId, allow);
+    },
+    [replyPermission],
+  );
+
   const displayError = sessionError ?? streamError ?? imError;
   const statusCfg = agentStatusConfig[agentStatus] ?? agentStatusConfig.unknown;
 
@@ -267,6 +282,8 @@ export const SkillMain: React.FC<SkillMainProps> = ({
             <ConversationView
               messages={messages}
               loading={sessionsLoading}
+              onQuestionAnswer={handleQuestionAnswer}
+              onPermissionDecision={handlePermissionDecision}
             />
           </div>
           <AgentSelector

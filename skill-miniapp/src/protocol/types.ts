@@ -1,9 +1,5 @@
-// ============================================================
-// StreamMessage Protocol Type Definitions (v2)
-// Adapted from backend StreamMessage.java — 17 message types
-// ============================================================
+export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
-/** All supported StreamMessage type strings */
 export type StreamMessageType =
   | 'text.delta'
   | 'text.done'
@@ -15,27 +11,40 @@ export type StreamMessageType =
   | 'step.start'
   | 'step.done'
   | 'session.status'
+  | 'session.title'
+  | 'session.error'
   | 'permission.ask'
-  | 'permission.result'
+  | 'permission.reply'
   | 'agent.online'
   | 'agent.offline'
   | 'error'
   | 'snapshot'
   | 'streaming';
 
-/**
- * StreamMessage delivered from Skill Server WebSocket.
- * The backend translates OpenCode events into this semantic format.
- */
+export interface StreamTokenUsage {
+  input?: number;
+  output?: number;
+  reasoning?: number;
+  cache?: { read?: number; write?: number };
+  [key: string]: unknown;
+}
+
 export interface StreamMessage {
   type: StreamMessageType;
   seq?: number;
-  partId?: string;
+  sessionId?: string;
+  emittedAt?: string;
+  raw?: unknown;
 
-  // Text content (text.delta / text.done / thinking.delta / thinking.done)
+  messageId?: string;
+  messageSeq?: number;
+  role?: MessageRole;
+  sourceMessageId?: string;
+
+  partId?: string;
+  partSeq?: number;
   content?: string;
 
-  // Tool fields (tool.update)
   toolName?: string;
   toolCallId?: string;
   status?: 'pending' | 'running' | 'completed' | 'error';
@@ -43,43 +52,37 @@ export interface StreamMessage {
   output?: string;
   title?: string;
 
-  // Question fields
   header?: string;
   question?: string;
   options?: string[];
 
-  // Permission fields
   permissionId?: string;
   permType?: string;
+  metadata?: Record<string, unknown>;
+  response?: string;
 
-  // Step fields
-  tokens?: { input?: number; output?: number };
+  tokens?: StreamTokenUsage;
   cost?: number;
   reason?: string;
 
-  // Session status
-  sessionStatus?: string;
-
-  // Error
+  sessionStatus?: 'busy' | 'idle' | 'retry' | 'completed' | string;
   error?: string;
 
-  // Metadata
-  metadata?: Record<string, unknown>;
-  raw?: unknown;
+  fileName?: string;
+  fileUrl?: string;
+  fileMime?: string;
+
+  messages?: Array<Record<string, unknown>>;
+  parts?: Array<Record<string, unknown>>;
 }
 
-// ============================================================
-// UI State Types
-// ============================================================
-
-/** A structured part within an assistant message */
 export interface MessagePart {
   partId: string;
+  partSeq?: number;
   type: 'text' | 'thinking' | 'tool' | 'question' | 'permission' | 'file';
   content: string;
   isStreaming: boolean;
 
-  // Tool-specific
   toolName?: string;
   toolCallId?: string;
   toolStatus?: 'pending' | 'running' | 'completed' | 'error';
@@ -87,36 +90,33 @@ export interface MessagePart {
   toolOutput?: string;
   toolTitle?: string;
 
-  // Question-specific
   header?: string;
   question?: string;
   options?: string[];
   answered?: boolean;
 
-  // Permission-specific
   permissionId?: string;
   permType?: string;
   permResolved?: boolean;
+  permissionResponse?: string;
 
-  // File-specific
   fileName?: string;
   fileUrl?: string;
   fileMime?: string;
 }
 
-/** A single message in the conversation */
 export interface Message {
   id: string;
-  role: 'user' | 'assistant' | 'system' | 'tool';
+  role: MessageRole;
   content: string;
   contentType: 'markdown' | 'code' | 'plain';
   timestamp: number;
+  messageSeq?: number;
   meta?: Record<string, unknown>;
   isStreaming?: boolean;
   parts?: MessagePart[];
 }
 
-/** A Skill session */
 export interface Session {
   id: string;
   title: string;
@@ -125,10 +125,8 @@ export interface Session {
   lastActiveAt: string;
 }
 
-/** Mini Bar status indicator */
 export type MiniBarStatus = 'processing' | 'completed' | 'error' | 'offline';
 
-/** Tool use information for rendering (legacy, kept for compat) */
 export interface ToolUseInfo {
   toolName: string;
   args?: Record<string, unknown>;
@@ -137,7 +135,6 @@ export interface ToolUseInfo {
   status: 'running' | 'completed' | 'error';
 }
 
-// Legacy type re-exports for backward compatibility
 export type OpenCodeEventType = string;
 export type OpenCodeEvent = Record<string, unknown>;
 export type ParsedEvent = Record<string, unknown>;

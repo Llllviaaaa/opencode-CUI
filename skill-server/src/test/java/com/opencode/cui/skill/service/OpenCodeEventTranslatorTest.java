@@ -48,7 +48,12 @@ class OpenCodeEventTranslatorTest {
         assertNotNull(seed);
         assertNotNull(translated);
         assertEquals(StreamMessage.Types.TEXT_DELTA, translated.getType());
+        assertEquals("sess-1", translated.getSessionId());
+        assertEquals("msg-1", translated.getMessageId());
+        assertEquals("msg-1", translated.getSourceMessageId());
         assertEquals("part-1", translated.getPartId());
+        assertEquals(1, translated.getPartSeq());
+        assertEquals("assistant", translated.getRole());
         assertEquals("hello", translated.getContent());
     }
 
@@ -87,6 +92,8 @@ class OpenCodeEventTranslatorTest {
 
         assertNotNull(translated);
         assertEquals(StreamMessage.Types.THINKING_DELTA, translated.getType());
+        assertEquals("sess-2", translated.getSessionId());
+        assertEquals("msg-2", translated.getMessageId());
         assertEquals("thinking", translated.getContent());
     }
 
@@ -116,6 +123,8 @@ class OpenCodeEventTranslatorTest {
 
         assertNotNull(translated);
         assertEquals(StreamMessage.Types.QUESTION, translated.getType());
+        assertEquals("question-1", translated.getPartId());
+        assertEquals("assistant", translated.getRole());
         assertEquals("Choose one", translated.getHeader());
         assertEquals("Which option?", translated.getQuestion());
         assertEquals(java.util.List.of("A", "B"), translated.getOptions());

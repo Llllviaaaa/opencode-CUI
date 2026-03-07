@@ -8,6 +8,7 @@ import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.repository.SkillMessagePartRepository;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.ImMessageService;
+import com.opencode.cui.skill.service.MessagePersistenceService;
 import com.opencode.cui.skill.service.SkillMessageService;
 import com.opencode.cui.skill.service.SkillSessionService;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,6 +43,8 @@ class SkillMessageControllerTest {
     private ImMessageService imMessageService;
     @Mock
     private SkillMessagePartRepository partRepository;
+    @Mock
+    private MessagePersistenceService messagePersistenceService;
 
     private SkillMessageController controller;
 
@@ -49,7 +52,8 @@ class SkillMessageControllerTest {
     void setUp() {
         controller = new SkillMessageController(
                 messageService, sessionService, gatewayRelayService,
-                imMessageService, new ObjectMapper(), partRepository);
+                imMessageService, new ObjectMapper(), partRepository,
+                messagePersistenceService);
     }
 
     @Test
@@ -71,6 +75,7 @@ class SkillMessageControllerTest {
 
         ResponseEntity<?> response = controller.sendMessage(1L, request);
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        verify(messagePersistenceService).finalizeActiveAssistantTurn(1L);
         verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("chat"), any());
     }
 
@@ -128,6 +133,7 @@ class SkillMessageControllerTest {
         assertEquals(true, response.getBody().get("success"));
         assertEquals("p-abc", response.getBody().get("permissionId"));
         verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("permission_reply"), any());
+        verify(gatewayRelayService).publishProtocolMessage(eq("1"), any());
     }
 
     @Test

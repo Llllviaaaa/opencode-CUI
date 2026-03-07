@@ -14,18 +14,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Persists streaming messages to the database.
- * <p>
- * Strategy: Only persist FINAL states, not intermediate deltas.
- * <ul>
- * <li>text.done / thinking.done → persist full content</li>
- * <li>tool.update (completed/error) → persist final tool state</li>
- * <li>question (running) → persist question (needs user response)</li>
- * <li>file → persist immediately</li>
- * <li>step.done → update message-level token stats</li>
- * <li>text.delta / thinking.delta → SKIP (intermediate)</li>
- * <li>tool.update (pending/running) → SKIP (intermediate)</li>
- * </ul>
+ * Persists streamed assistant output and maintains stable message identity.
  */
 @Slf4j
 @Service
@@ -35,12 +24,7 @@ public class MessagePersistenceService {
     private final SkillMessagePartRepository partRepository;
     private final ObjectMapper objectMapper;
 
-    /**
-     * Tracks the current assistant message ID per session.
-     * When a new assistant turn starts (first part), we create a message row.
-     * Subsequent parts in the same turn attach to the same message ID.
-     */
-    private final ConcurrentHashMap<Long, Long> activeMessageIds = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, ActiveMessageRef> activeMessages = new ConcurrentHashMap<>();
 
     public MessagePersistenceService(SkillMessageService messageService,
             SkillMessagePartRepository partRepository,
@@ -50,85 +34,144 @@ public class MessagePersistenceService {
         this.objectMapper = objectMapper;
     }
 
+    @Transactional
+    public void prepareMessageContext(Long sessionId, StreamMessage msg) {
+        if (msg == null || msg.getType() == null || !requiresMessageContext(msg)) {
+            return;
+        }
+        resolveActiveMessage(sessionId, msg);
+    }
+
     /**
      * Persist a StreamMessage if it represents a final state.
-     * Called from GatewayRelayService after broadcasting.
-     *
-     * @param sessionId the skill session ID
-     * @param msg       the translated StreamMessage
      */
     @Transactional
     public void persistIfFinal(Long sessionId, StreamMessage msg) {
-        if (msg == null || msg.getType() == null)
+        if (msg == null || msg.getType() == null) {
             return;
+        }
+
+        ActiveMessageRef active = requiresMessageContext(msg)
+                ? resolveActiveMessage(sessionId, msg)
+                : null;
 
         switch (msg.getType()) {
-            case StreamMessage.Types.TEXT_DONE -> persistTextPart(sessionId, msg, "text");
-            case StreamMessage.Types.THINKING_DONE -> persistTextPart(sessionId, msg, "reasoning");
-            case StreamMessage.Types.TOOL_UPDATE -> persistToolPartIfFinal(sessionId, msg);
-            case StreamMessage.Types.QUESTION -> persistToolPart(sessionId, msg);
-            case StreamMessage.Types.FILE -> persistFilePart(sessionId, msg);
-            case StreamMessage.Types.STEP_DONE -> persistStepDone(sessionId, msg);
+            case StreamMessage.Types.TEXT_DONE -> persistTextPart(sessionId, msg, "text", active);
+            case StreamMessage.Types.THINKING_DONE -> persistTextPart(sessionId, msg, "reasoning", active);
+            case StreamMessage.Types.TOOL_UPDATE -> persistToolPartIfFinal(sessionId, msg, active);
+            case StreamMessage.Types.QUESTION -> persistToolPart(sessionId, msg, active);
+            case StreamMessage.Types.FILE -> persistFilePart(sessionId, msg, active);
+            case StreamMessage.Types.STEP_DONE -> persistStepDone(sessionId, msg, active);
             case StreamMessage.Types.SESSION_STATUS -> handleSessionStatus(sessionId, msg);
             default -> {
-                // text.delta, thinking.delta, step.start, etc. → skip persistence
+                // Intermediate deltas and status-only events do not persist parts.
             }
         }
     }
 
     /**
-     * Get or create the active assistant message for a session.
+     * Clear active tracking for a session.
      */
-    private Long getOrCreateMessageId(Long sessionId) {
-        return activeMessageIds.computeIfAbsent(sessionId, sid -> {
-            SkillMessage message = messageService.saveMessage(
-                    sid,
-                    SkillMessage.Role.ASSISTANT,
-                    "", // content will be updated later or left empty
-                    SkillMessage.ContentType.MARKDOWN,
-                    null);
-            log.debug("Created new assistant message for session {}: messageId={}", sid, message.getId());
-            return message.getId();
-        });
+    public void clearSession(Long sessionId) {
+        activeMessages.remove(sessionId);
     }
 
     /**
-     * Persist a completed text or reasoning part.
+     * Finalize the current assistant turn before a new user turn starts.
      */
-    private void persistTextPart(Long sessionId, StreamMessage msg, String partType) {
-        Long messageId = getOrCreateMessageId(sessionId);
-        int nextSeq = partRepository.findMaxSeqByMessageId(messageId) + 1;
+    @Transactional
+    public void finalizeActiveAssistantTurn(Long sessionId) {
+        ActiveMessageRef active = activeMessages.remove(sessionId);
+        if (active == null) {
+            return;
+        }
+
+        messageService.markMessageFinished(active.dbId());
+        log.debug("Finalized dangling assistant message before user turn: sessionId={}, messageId={}, protocolId={}",
+                sessionId, active.dbId(), active.protocolMessageId());
+    }
+
+    private ActiveMessageRef resolveActiveMessage(Long sessionId, StreamMessage msg) {
+        String requestedMessageId = firstNonBlank(msg.getMessageId(), msg.getSourceMessageId());
+        String role = normalizeRole(msg.getRole());
+
+        ActiveMessageRef active = activeMessages.get(sessionId);
+        if (active != null) {
+            if (requestedMessageId == null || requestedMessageId.equals(active.protocolMessageId())) {
+                applyMessageContext(msg, active, role);
+                return active;
+            }
+
+            finalizeActiveMessage(sessionId, active, "message_id_changed");
+        }
+
+        if (requestedMessageId != null) {
+            SkillMessage existing = messageService.findBySessionIdAndMessageId(sessionId, requestedMessageId);
+            if (existing != null) {
+                ActiveMessageRef existingRef = new ActiveMessageRef(
+                        existing.getId(),
+                        existing.getMessageId(),
+                        existing.getSeq());
+                activeMessages.put(sessionId, existingRef);
+                applyMessageContext(msg, existingRef, role);
+                return existingRef;
+            }
+        }
+
+        SkillMessage created = messageService.saveMessage(
+                sessionId,
+                requestedMessageId,
+                toRoleEnum(role),
+                "",
+                toContentType(role),
+                null);
+        ActiveMessageRef createdRef = new ActiveMessageRef(
+                created.getId(),
+                created.getMessageId(),
+                created.getSeq());
+        activeMessages.put(sessionId, createdRef);
+        applyMessageContext(msg, createdRef, role);
+        log.debug("Created active streamed message: sessionId={}, dbId={}, protocolId={}, seq={}",
+                sessionId, createdRef.dbId(), createdRef.protocolMessageId(), createdRef.messageSeq());
+        return createdRef;
+    }
+
+    private void applyMessageContext(StreamMessage msg, ActiveMessageRef active, String role) {
+        msg.setMessageId(active.protocolMessageId());
+        msg.setMessageSeq(active.messageSeq());
+        msg.setRole(role);
+    }
+
+    private void persistTextPart(Long sessionId, StreamMessage msg, String partType, ActiveMessageRef active) {
+        if (active == null) {
+            return;
+        }
 
         SkillMessagePart part = SkillMessagePart.builder()
-                .messageId(messageId)
+                .messageId(active.dbId())
                 .sessionId(sessionId)
-                .partId(msg.getPartId() != null ? msg.getPartId() : partType + "-" + nextSeq)
-                .seq(nextSeq)
+                .partId(msg.getPartId() != null ? msg.getPartId() : partType + "-" + active.messageSeq())
+                .seq(resolvePartSeq(sessionId, active.dbId(), msg))
                 .partType(partType)
                 .content(msg.getContent())
                 .build();
 
         partRepository.upsert(part);
-        log.debug("Persisted {} part: sessionId={}, partId={}", partType, sessionId, part.getPartId());
+        log.debug("Persisted {} part: sessionId={}, protocolId={}, partId={}",
+                partType, sessionId, active.protocolMessageId(), part.getPartId());
     }
 
-    /**
-     * Persist a tool part only if it's in a final state (completed or error).
-     */
-    private void persistToolPartIfFinal(Long sessionId, StreamMessage msg) {
+    private void persistToolPartIfFinal(Long sessionId, StreamMessage msg, ActiveMessageRef active) {
         String status = msg.getStatus();
         if ("completed".equals(status) || "error".equals(status)) {
-            persistToolPart(sessionId, msg);
+            persistToolPart(sessionId, msg, active);
         }
-        // pending / running → skip
     }
 
-    /**
-     * Persist a tool part (any status — used for question and final tool states).
-     */
-    private void persistToolPart(Long sessionId, StreamMessage msg) {
-        Long messageId = getOrCreateMessageId(sessionId);
-        int nextSeq = partRepository.findMaxSeqByMessageId(messageId) + 1;
+    private void persistToolPart(Long sessionId, StreamMessage msg, ActiveMessageRef active) {
+        if (active == null) {
+            return;
+        }
 
         String inputJson = null;
         if (msg.getInput() != null) {
@@ -140,10 +183,10 @@ public class MessagePersistenceService {
         }
 
         SkillMessagePart part = SkillMessagePart.builder()
-                .messageId(messageId)
+                .messageId(active.dbId())
                 .sessionId(sessionId)
-                .partId(msg.getPartId() != null ? msg.getPartId() : "tool-" + nextSeq)
-                .seq(nextSeq)
+                .partId(msg.getPartId() != null ? msg.getPartId() : "tool-" + active.messageSeq())
+                .seq(resolvePartSeq(sessionId, active.dbId(), msg))
                 .partType("tool")
                 .toolName(msg.getToolName())
                 .toolCallId(msg.getToolCallId())
@@ -155,63 +198,55 @@ public class MessagePersistenceService {
                 .build();
 
         partRepository.upsert(part);
-        log.debug("Persisted tool part: sessionId={}, tool={}, status={}",
-                sessionId, msg.getToolName(), msg.getStatus());
+        log.debug("Persisted tool part: sessionId={}, protocolId={}, tool={}, status={}",
+                sessionId, active.protocolMessageId(), msg.getToolName(), msg.getStatus());
     }
 
-    /**
-     * Persist a file part.
-     */
-    private void persistFilePart(Long sessionId, StreamMessage msg) {
-        Long messageId = getOrCreateMessageId(sessionId);
-        int nextSeq = partRepository.findMaxSeqByMessageId(messageId) + 1;
-
-        String mime = "";
-        if (msg.getMetadata() instanceof Map<?, ?> meta) {
-            Object mimeVal = meta.get("mime");
-            if (mimeVal != null)
-                mime = mimeVal.toString();
+    private void persistFilePart(Long sessionId, StreamMessage msg, ActiveMessageRef active) {
+        if (active == null) {
+            return;
         }
 
         SkillMessagePart part = SkillMessagePart.builder()
-                .messageId(messageId)
+                .messageId(active.dbId())
                 .sessionId(sessionId)
-                .partId(msg.getPartId() != null ? msg.getPartId() : "file-" + nextSeq)
-                .seq(nextSeq)
+                .partId(msg.getPartId() != null ? msg.getPartId() : "file-" + active.messageSeq())
+                .seq(resolvePartSeq(sessionId, active.dbId(), msg))
                 .partType("file")
-                .fileName(msg.getTitle())
-                .fileUrl(msg.getContent())
-                .fileMime(mime)
+                .fileName(msg.getFileName())
+                .fileUrl(msg.getFileUrl())
+                .fileMime(msg.getFileMime())
                 .build();
 
         partRepository.upsert(part);
-        log.debug("Persisted file part: sessionId={}, file={}", sessionId, msg.getTitle());
+        log.debug("Persisted file part: sessionId={}, protocolId={}, file={}",
+                sessionId, active.protocolMessageId(), msg.getFileName());
     }
 
-    /**
-     * Persist step completion with token/cost stats.
-     * Also updates the parent message's aggregate stats.
-     */
-    private void persistStepDone(Long sessionId, StreamMessage msg) {
-        Long messageId = getOrCreateMessageId(sessionId);
-        int nextSeq = partRepository.findMaxSeqByMessageId(messageId) + 1;
+    private void persistStepDone(Long sessionId, StreamMessage msg, ActiveMessageRef active) {
+        if (active == null) {
+            return;
+        }
 
         Integer tokensIn = null;
         Integer tokensOut = null;
         if (msg.getTokens() != null) {
             Object inVal = msg.getTokens().get("input");
             Object outVal = msg.getTokens().get("output");
-            if (inVal instanceof Number n)
-                tokensIn = n.intValue();
-            if (outVal instanceof Number n)
-                tokensOut = n.intValue();
+            if (inVal instanceof Number inNumber) {
+                tokensIn = inNumber.intValue();
+            }
+            if (outVal instanceof Number outNumber) {
+                tokensOut = outNumber.intValue();
+            }
         }
 
+        int partSeq = resolvePartSeq(sessionId, active.dbId(), msg);
         SkillMessagePart part = SkillMessagePart.builder()
-                .messageId(messageId)
+                .messageId(active.dbId())
                 .sessionId(sessionId)
-                .partId("step-done-" + nextSeq)
-                .seq(nextSeq)
+                .partId(msg.getPartId() != null ? msg.getPartId() : "step-done-" + partSeq)
+                .seq(partSeq)
                 .partType("step-finish")
                 .tokensIn(tokensIn)
                 .tokensOut(tokensOut)
@@ -220,32 +255,97 @@ public class MessagePersistenceService {
                 .build();
 
         partRepository.insert(part);
-
-        // Update message-level stats
-        messageService.updateMessageStats(messageId, tokensIn, tokensOut, msg.getCost());
-        log.debug("Persisted step.done: sessionId={}, tokensIn={}, tokensOut={}, cost={}",
-                sessionId, tokensIn, tokensOut, msg.getCost());
+        messageService.updateMessageStats(active.dbId(), tokensIn, tokensOut, msg.getCost());
+        log.debug("Persisted step.done: sessionId={}, protocolId={}, tokensIn={}, tokensOut={}, cost={}",
+                sessionId, active.protocolMessageId(), tokensIn, tokensOut, msg.getCost());
     }
 
-    /**
-     * Handle session status changes.
-     * When session goes idle, finalize the current message and clear the active ID.
-     */
     private void handleSessionStatus(Long sessionId, StreamMessage msg) {
-        if ("idle".equals(msg.getSessionStatus())) {
-            Long messageId = activeMessageIds.remove(sessionId);
-            if (messageId != null) {
-                messageService.markMessageFinished(messageId);
-                log.debug("Finalized assistant message: sessionId={}, messageId={}", sessionId, messageId);
-            }
+        if (!"idle".equals(msg.getSessionStatus()) && !"completed".equals(msg.getSessionStatus())) {
+            return;
+        }
+
+        ActiveMessageRef active = activeMessages.remove(sessionId);
+        if (active != null) {
+            messageService.markMessageFinished(active.dbId());
+            log.debug("Finalized assistant message on session status: sessionId={}, messageId={}, protocolId={}",
+                    sessionId, active.dbId(), active.protocolMessageId());
         }
     }
 
-    /**
-     * Clear the active message tracking for a session.
-     * Called when a session is closed or reset.
-     */
-    public void clearSession(Long sessionId) {
-        activeMessageIds.remove(sessionId);
+    private void finalizeActiveMessage(Long sessionId, ActiveMessageRef active, String reason) {
+        activeMessages.remove(sessionId, active);
+        messageService.markMessageFinished(active.dbId());
+        log.debug("Finalized active streamed message: sessionId={}, messageId={}, protocolId={}, reason={}",
+                sessionId, active.dbId(), active.protocolMessageId(), reason);
+    }
+
+    private int resolvePartSeq(Long sessionId, Long messageDbId, StreamMessage msg) {
+        if (msg.getPartId() != null && !msg.getPartId().isBlank()) {
+            SkillMessagePart existing = partRepository.findByPartId(sessionId, msg.getPartId());
+            if (existing != null && existing.getSeq() != null) {
+                return existing.getSeq();
+            }
+        }
+
+        if (msg.getPartSeq() != null && msg.getPartSeq() > 0) {
+            return msg.getPartSeq();
+        }
+
+        return partRepository.findMaxSeqByMessageId(messageDbId) + 1;
+    }
+
+    private boolean requiresMessageContext(StreamMessage msg) {
+        return switch (msg.getType()) {
+            case StreamMessage.Types.TEXT_DELTA,
+                    StreamMessage.Types.TEXT_DONE,
+                    StreamMessage.Types.THINKING_DELTA,
+                    StreamMessage.Types.THINKING_DONE,
+                    StreamMessage.Types.TOOL_UPDATE,
+                    StreamMessage.Types.QUESTION,
+                    StreamMessage.Types.FILE,
+                    StreamMessage.Types.STEP_START,
+                    StreamMessage.Types.STEP_DONE,
+                    StreamMessage.Types.PERMISSION_ASK,
+                    StreamMessage.Types.PERMISSION_REPLY -> true;
+            default -> false;
+        };
+    }
+
+    private String normalizeRole(String role) {
+        if (role == null || role.isBlank()) {
+            return "assistant";
+        }
+        return role.toLowerCase();
+    }
+
+    private SkillMessage.Role toRoleEnum(String role) {
+        return switch (role) {
+            case "user" -> SkillMessage.Role.USER;
+            case "system" -> SkillMessage.Role.SYSTEM;
+            case "tool" -> SkillMessage.Role.TOOL;
+            default -> SkillMessage.Role.ASSISTANT;
+        };
+    }
+
+    private SkillMessage.ContentType toContentType(String role) {
+        return switch (role) {
+            case "user", "system" -> SkillMessage.ContentType.PLAIN;
+            case "tool" -> SkillMessage.ContentType.CODE;
+            default -> SkillMessage.ContentType.MARKDOWN;
+        };
+    }
+
+    private String firstNonBlank(String first, String second) {
+        if (first != null && !first.isBlank()) {
+            return first;
+        }
+        if (second != null && !second.isBlank()) {
+            return second;
+        }
+        return null;
+    }
+
+    private record ActiveMessageRef(Long dbId, String protocolMessageId, Integer messageSeq) {
     }
 }
