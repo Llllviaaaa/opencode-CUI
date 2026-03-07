@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
-import com.opencode.cui.skill.ws.GatewayWSHandler;
 import com.opencode.cui.skill.ws.SkillStreamHandler;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -16,23 +15,26 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * Manages communication with AI-Gateway (v1 protocol - 方案5).
+ * Manages communication with AI-Gateway.
  *
- * Upstream (Gateway �?Skill via WS):
- * - Receives tool_event/done/error/session_created/agent_online/offline from
- * GatewayWSHandler
+ * Upstream (Gateway -> Skill via WS):
+ * - Receives tool_event/done/error/session_created/agent_online/offline
  * - Persists to DB, then publishes to Skill Redis session:{id} for
  * multi-instance broadcast
- * - Each Skill instance subscribes to session:{id} and pushes to local Clients
+ * - Each Skill instance subscribes to session:{id} and pushes to local clients
  *
- * Downstream (Skill �?Gateway):
- * - If this instance has Gateway WS �?sendToGateway() directly [fast path]
- * - If no Gateway WS �?publishInvokeRelay() �?another instance relays [relay
- * path]
+ * Downstream (Skill -> Gateway):
+ * - Sends invoke messages through the active internal WebSocket connection
  */
 @Slf4j
 @Service
 public class GatewayRelayService {
+
+    public interface GatewayRelayTarget {
+        boolean sendToGateway(String message);
+
+        boolean hasActiveConnection();
+    }
 
     private final ObjectMapper objectMapper;
     private final SkillStreamHandler skillStreamHandler;
@@ -40,10 +42,10 @@ public class GatewayRelayService {
     private final SkillSessionService sessionService;
     private final RedisMessageBroker redisMessageBroker;
     private final SequenceTracker sequenceTracker;
-    private final GatewayWSHandler gatewayWSHandler;
     private final OpenCodeEventTranslator translator;
     private final MessagePersistenceService persistenceService;
     private final StreamBufferService bufferService;
+    private volatile GatewayRelayTarget gatewayRelayTarget;
 
     public GatewayRelayService(ObjectMapper objectMapper,
             SkillStreamHandler skillStreamHandler,
@@ -51,7 +53,6 @@ public class GatewayRelayService {
             SkillSessionService sessionService,
             RedisMessageBroker redisMessageBroker,
             SequenceTracker sequenceTracker,
-            GatewayWSHandler gatewayWSHandler,
             OpenCodeEventTranslator translator,
             MessagePersistenceService persistenceService,
             StreamBufferService bufferService) {
@@ -61,17 +62,19 @@ public class GatewayRelayService {
         this.sessionService = sessionService;
         this.redisMessageBroker = redisMessageBroker;
         this.sequenceTracker = sequenceTracker;
-        this.gatewayWSHandler = gatewayWSHandler;
         this.translator = translator;
         this.persistenceService = persistenceService;
         this.bufferService = bufferService;
     }
 
+    public void setGatewayRelayTarget(GatewayRelayTarget gatewayRelayTarget) {
+        this.gatewayRelayTarget = gatewayRelayTarget;
+    }
+
     // ==================== Initialization ====================
 
     /**
-     * On startup, subscribe to Skill Redis channels for all ACTIVE sessions
-     * and set up invoke_relay listener if we have a Gateway WS.
+     * On startup, subscribe to Skill Redis channels for all ACTIVE sessions.
      */
     @PostConstruct
     public void init() {
@@ -135,11 +138,10 @@ public class GatewayRelayService {
         }
     }
 
-    // ==================== Downstream: Skill �?Gateway ====================
+    // ==================== Downstream: Skill -> Gateway ====================
 
     /**
-     * Send an invoke command to AI-Gateway.
-     * v1 protocol: WS direct path with invoke_relay fallback.
+     * Send an invoke command to AI-Gateway over the active internal WebSocket.
      *
      * @param agentId   the target agent ID
      * @param sessionId the skill session ID
@@ -171,54 +173,27 @@ public class GatewayRelayService {
             return;
         }
 
-        // v1 protocol: try WS direct path first, fall back to invoke_relay
-        if (gatewayWSHandler.hasActiveConnection()) {
-            boolean sent = gatewayWSHandler.sendToGateway(messageText);
-            if (sent) {
-                log.debug("Invoke sent via WS direct path: agentId={}, action={}", agentId, action);
-                return;
-            }
+        GatewayRelayTarget relayTarget = gatewayRelayTarget;
+        if (relayTarget == null || !relayTarget.hasActiveConnection()) {
+            log.warn("Gateway WS connection not available, invoke dropped: agentId={}, action={}",
+                    agentId, action);
+            return;
         }
 
-        // Fallback: publish to Skill Redis invoke_relay channel
-        redisMessageBroker.publishInvokeRelay(agentId, messageText);
-        log.debug("Invoke sent via invoke_relay: agentId={}, action={}", agentId, action);
-    }
-
-    // ==================== invoke_relay Listener ====================
-
-    /**
-     * Subscribe to invoke_relay:{agentId} channel.
-     * Called when this instance has a Gateway WS and can relay invoke for other
-     * instances.
-     */
-    public void subscribeToInvokeRelay(String agentId) {
-        redisMessageBroker.subscribeInvokeRelay(agentId, message -> {
-            handleInvokeRelay(agentId, message);
-        });
-        log.info("Subscribed to invoke_relay:{}", agentId);
-    }
-
-    /**
-     * Handle an invoke_relay message: forward to Gateway via WS.
-     */
-    private void handleInvokeRelay(String agentId, String message) {
-        if (gatewayWSHandler.hasActiveConnection()) {
-            boolean sent = gatewayWSHandler.sendToGateway(message);
-            if (sent) {
-                log.debug("Relayed invoke to Gateway via WS: agentId={}", agentId);
-            } else {
-                log.warn("Failed to relay invoke to Gateway: agentId={}", agentId);
-            }
-        } else {
-            log.warn("Received invoke_relay but no Gateway WS on this instance: agentId={}", agentId);
+        boolean sent = relayTarget.sendToGateway(messageText);
+        if (!sent) {
+            log.warn("Failed to send invoke through Gateway WS: agentId={}, action={}",
+                    agentId, action);
+            return;
         }
+
+        log.debug("Invoke sent via Gateway WS: agentId={}, action={}", agentId, action);
     }
 
-    // ==================== Upstream: Gateway �?Skill (via WS) ====================
+    // ==================== Upstream: Gateway -> Skill (via WS) ====================
 
     /**
-     * Handle an incoming message from AI-Gateway (received by GatewayWSHandler).
+     * Handle an incoming message from AI-Gateway.
      * Dispatches to appropriate handler based on message type.
      */
     public void handleGatewayMessage(String rawMessage) {

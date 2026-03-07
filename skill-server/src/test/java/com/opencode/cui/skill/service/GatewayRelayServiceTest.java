@@ -1,9 +1,8 @@
 package com.opencode.cui.skill.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.model.SkillSession;
-import com.opencode.cui.skill.ws.GatewayWSHandler;
+import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.ws.SkillStreamHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -12,12 +11,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
-/**
- * Tests for GatewayRelayService v1 protocol (方案5) message routing.
- */
 @ExtendWith(MockitoExtension.class)
 class GatewayRelayServiceTest {
 
@@ -32,27 +33,30 @@ class GatewayRelayServiceTest {
     @Mock
     private SequenceTracker sequenceTracker;
     @Mock
-    private GatewayWSHandler gatewayWSHandler;
-    @Mock
     private OpenCodeEventTranslator translator;
     @Mock
     private MessagePersistenceService persistenceService;
     @Mock
     private StreamBufferService bufferService;
+    @Mock
+    private GatewayRelayService.GatewayRelayTarget gatewayRelayTarget;
 
-    private ObjectMapper objectMapper;
     private GatewayRelayService service;
 
     @BeforeEach
     void setUp() {
-        objectMapper = new ObjectMapper();
         service = new GatewayRelayService(
-                objectMapper, skillStreamHandler, messageService,
-                sessionService, redisMessageBroker, sequenceTracker,
-                gatewayWSHandler, translator, persistenceService, bufferService);
+                new ObjectMapper(),
+                skillStreamHandler,
+                messageService,
+                sessionService,
+                redisMessageBroker,
+                sequenceTracker,
+                translator,
+                persistenceService,
+                bufferService);
+        service.setGatewayRelayTarget(gatewayRelayTarget);
     }
-
-    // ==================== Upstream: Gateway �?Skill ====================
 
     @Test
     @DisplayName("tool_event persists and broadcasts to Skill Redis")
@@ -76,6 +80,7 @@ class GatewayRelayServiceTest {
     @DisplayName("tool_done broadcasts via Skill Redis")
     void toolDoneBroadcasts() {
         String msg = "{\"type\":\"tool_done\",\"sessionId\":\"42\",\"usage\":{\"tokens\":100}}";
+
         service.handleGatewayMessage(msg);
 
         verify(redisMessageBroker).publishToSession(eq("42"), contains("session.status"));
@@ -88,6 +93,7 @@ class GatewayRelayServiceTest {
     @DisplayName("tool_error persists and broadcasts via Skill Redis")
     void toolErrorPersistsAndBroadcasts() {
         String msg = "{\"type\":\"tool_error\",\"sessionId\":\"42\",\"error\":\"timeout\"}";
+
         service.handleGatewayMessage(msg);
 
         verify(messageService).saveSystemMessage(eq(42L), contains("timeout"));
@@ -125,6 +131,7 @@ class GatewayRelayServiceTest {
     @DisplayName("session_created updates toolSessionId")
     void sessionCreatedUpdatesToolSessionId() {
         String msg = "{\"type\":\"session_created\",\"agentId\":\"1\",\"sessionId\":\"42\",\"toolSessionId\":\"ts-abc\"}";
+
         service.handleGatewayMessage(msg);
 
         verify(sessionService).updateToolSessionId(eq(42L), eq("ts-abc"));
@@ -148,7 +155,9 @@ class GatewayRelayServiceTest {
     @DisplayName("unknown type logs warning without errors")
     void unknownTypeLogsWarning() {
         String msg = "{\"type\":\"unknown_type\",\"sessionId\":\"42\"}";
+
         service.handleGatewayMessage(msg);
+
         verifyNoInteractions(skillStreamHandler);
         verifyNoInteractions(redisMessageBroker);
     }
@@ -164,48 +173,47 @@ class GatewayRelayServiceTest {
     @DisplayName("tool_event with missing sessionId logs warning")
     void toolEventMissingSessionId() {
         String msg = "{\"type\":\"tool_event\",\"event\":{\"data\":\"hello\"}}";
+
         service.handleGatewayMessage(msg);
+
         verifyNoInteractions(skillStreamHandler);
         verifyNoInteractions(redisMessageBroker);
     }
 
-    // ==================== Downstream: Skill �?Gateway ====================
-
     @Test
-    @DisplayName("sendInvokeToGateway uses WS direct path when available")
-    void sendInvokeUsesWSDirectPath() {
-        when(gatewayWSHandler.hasActiveConnection()).thenReturn(true);
-        when(gatewayWSHandler.sendToGateway(anyString())).thenReturn(true);
+    @DisplayName("sendInvokeToGateway uses active WS connection")
+    void sendInvokeUsesGatewayWs() {
+        when(gatewayRelayTarget.hasActiveConnection()).thenReturn(true);
+        when(gatewayRelayTarget.sendToGateway(any())).thenReturn(true);
 
         service.sendInvokeToGateway("agent-1", "session-1", "chat", "{\"text\":\"hello\"}");
 
-        verify(gatewayWSHandler).sendToGateway(contains("invoke"));
+        verify(gatewayRelayTarget).sendToGateway(contains("invoke"));
+        verify(redisMessageBroker, never()).publishToSession(any(), any());
+    }
+
+    @Test
+    @DisplayName("sendInvokeToGateway drops when no active connection")
+    void sendInvokeDropsWhenNoActiveConnection() {
+        when(gatewayRelayTarget.hasActiveConnection()).thenReturn(false);
+
+        service.sendInvokeToGateway("agent-1", "session-1", "chat", "{\"text\":\"hello\"}");
+
+        verify(gatewayRelayTarget, never()).sendToGateway(any());
         verifyNoInteractions(redisMessageBroker);
     }
 
     @Test
-    @DisplayName("sendInvokeToGateway falls back to invoke_relay when no WS")
-    void sendInvokeFallsBackToInvokeRelay() {
-        when(gatewayWSHandler.hasActiveConnection()).thenReturn(false);
+    @DisplayName("sendInvokeToGateway logs failed send without redis fallback")
+    void sendInvokeDoesNotFallbackToRedis() {
+        when(gatewayRelayTarget.hasActiveConnection()).thenReturn(true);
+        when(gatewayRelayTarget.sendToGateway(any())).thenReturn(false);
 
         service.sendInvokeToGateway("agent-1", "session-1", "chat", "{\"text\":\"hello\"}");
 
-        verify(redisMessageBroker).publishInvokeRelay(eq("agent-1"), contains("invoke"));
+        verify(gatewayRelayTarget).sendToGateway(contains("invoke"));
+        verifyNoInteractions(redisMessageBroker);
     }
-
-    @Test
-    @DisplayName("sendInvokeToGateway falls back when WS send fails")
-    void sendInvokeFallsBackOnWSSendFailure() {
-        when(gatewayWSHandler.hasActiveConnection()).thenReturn(true);
-        when(gatewayWSHandler.sendToGateway(anyString())).thenReturn(false);
-
-        service.sendInvokeToGateway("agent-1", "session-1", "chat", "{\"text\":\"hello\"}");
-
-        verify(gatewayWSHandler).sendToGateway(contains("invoke"));
-        verify(redisMessageBroker).publishInvokeRelay(eq("agent-1"), contains("invoke"));
-    }
-
-    // ==================== Redis Subscriptions ====================
 
     @Test
     @DisplayName("subscribeToSessionBroadcast delegates to RedisMessageBroker")
@@ -220,12 +228,5 @@ class GatewayRelayServiceTest {
         service.unsubscribeFromSession("42");
         verify(redisMessageBroker).unsubscribeFromSession(eq("42"));
         verify(sequenceTracker).resetSession(eq("42"));
-    }
-
-    @Test
-    @DisplayName("subscribeToInvokeRelay delegates to RedisMessageBroker")
-    void subscribeToInvokeRelayDelegatesToBroker() {
-        service.subscribeToInvokeRelay("agent-1");
-        verify(redisMessageBroker).subscribeInvokeRelay(eq("agent-1"), any());
     }
 }

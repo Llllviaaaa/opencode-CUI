@@ -37,12 +37,12 @@ mybatis:
 
 # Gateway custom configuration
 gateway:
-  # Skill Server WebSocket endpoint
-  skill-server:
-    ws-url: ${SKILL_SERVER_WS_URL:ws://localhost:8082/ws/internal/gateway}
-    internal-token: ${SKILL_SERVER_INTERNAL_TOKEN:sk-intl-9f2a7d3e4b1c}
-    reconnect-initial-delay-ms: 1000
-    reconnect-max-delay-ms: 30000
+  instance-id: ${GATEWAY_INSTANCE_ID:${HOSTNAME:gateway-local}}
+
+  skill-relay:
+    owner-heartbeat-interval-seconds: 10
+    owner-ttl-seconds: 30
+    session-route-ttl-seconds: 1800
 
   # Agent heartbeat timeout
   agent:
@@ -53,6 +53,10 @@ gateway:
   auth:
     timestamp-tolerance-seconds: 300
     nonce-ttl-seconds: 300
+
+skill:
+  gateway:
+    internal-token: ${SKILL_SERVER_INTERNAL_TOKEN:sk-intl-9f2a7d3e4b1c}
 
 opencode:
   logging:
