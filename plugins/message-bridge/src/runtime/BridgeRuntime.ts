@@ -3,7 +3,6 @@ import {
   Action,
   ActionResult,
   DownstreamMessage,
-  MessageBridgePlugin,
   stateToErrorCode,
 } from '../types';
 import { ChatAction } from '../action/ChatAction';
@@ -12,62 +11,52 @@ import { CloseSessionAction } from '../action/CloseSessionAction';
 import { PermissionReplyAction } from '../action/PermissionReplyAction';
 import { StatusQueryAction } from '../action/StatusQueryAction';
 import { DefaultActionRouter } from '../action/ActionRouter';
-import { ActionRegistry } from '../action/ActionRegistry';
+import { DefaultActionRegistry } from '../action/ActionRegistry';
 import { loadConfig } from '../config';
 import { DefaultAkSkAuth } from '../connection/AkSkAuth';
 import { DefaultGatewayConnection, GatewayConnection } from '../connection/GatewayConnection';
 import { DefaultStateManager } from '../connection/StateManager';
 import { EnvelopeBuilder } from '../event/EnvelopeBuilder';
-import { EventRelay } from '../event/EventRelay';
+import { EventFilter } from '../event/EventFilter';
+import { BridgeEvent } from './types';
+import { createSdkAdapter } from './SdkAdapter';
 
-interface OpenCodeEventSource {
-  event: {
-    subscribe: (listener: (event: any) => void) => () => void;
-  };
-}
-
-export interface MessageBridgePluginOptions {
+export interface BridgeRuntimeOptions {
   workspacePath?: string;
-  opencodeClient?: unknown;
-  opencodeEventSource?: OpenCodeEventSource;
+  client: unknown;
 }
 
-export class MessageBridgePluginClass implements MessageBridgePlugin {
+export interface BridgeRuntimeStartOptions {
+  abortSignal?: AbortSignal;
+}
+
+export class BridgeRuntime {
   private readonly actionRouter = new DefaultActionRouter();
   private readonly stateManager = new DefaultStateManager();
+  private readonly registry = new DefaultActionRegistry();
 
-  private options?: MessageBridgePluginOptions;
   private gatewayConnection: GatewayConnection | null = null;
-  private eventRelay: EventRelay | null = null;
   private envelopeBuilder: EnvelopeBuilder | null = null;
+  private eventFilter: EventFilter | null = null;
   private started = false;
+  private readonly sdkClient: unknown;
 
-  constructor(private readonly registry: ActionRegistry, options?: MessageBridgePluginOptions) {
-    this.options = options;
+  constructor(private readonly options: BridgeRuntimeOptions) {
+    this.sdkClient = createSdkAdapter(options.client);
     this.registerActions();
-    this.actionRouter.setRegistry(registry);
+    this.actionRouter.setRegistry(this.registry);
   }
 
-  private registerActions(): void {
-    const actions: Action[] = [
-      new ChatAction(),
-      new CreateSessionAction(),
-      new CloseSessionAction(),
-      new PermissionReplyAction(),
-      new StatusQueryAction(),
-    ];
-
-    for (const action of actions) {
-      this.registry.register(action);
-    }
-  }
-
-  async start(): Promise<void> {
+  async start(options: BridgeRuntimeStartOptions = {}): Promise<void> {
     if (this.started) {
       return;
     }
 
-    const config = await loadConfig(this.options?.workspacePath);
+    if (options.abortSignal?.aborted) {
+      throw new Error('runtime_start_aborted');
+    }
+
+    const config = await loadConfig(this.options.workspacePath);
     if (!config.enabled) {
       this.started = true;
       return;
@@ -75,6 +64,7 @@ export class MessageBridgePluginClass implements MessageBridgePlugin {
 
     const agentId = this.stateManager.generateAndBindAgentId();
     this.envelopeBuilder = new EnvelopeBuilder(agentId);
+    this.eventFilter = new EventFilter(config.events.allowlist);
 
     const queryParams = new DefaultAkSkAuth(config.auth.ak, config.auth.sk).generateQueryParams();
 
@@ -85,6 +75,7 @@ export class MessageBridgePluginClass implements MessageBridgePlugin {
       reconnectExponential: config.gateway.reconnect.exponential,
       heartbeatIntervalMs: config.gateway.heartbeatIntervalMs,
       pongTimeoutMs: config.gateway.ping?.pongTimeoutMs,
+      abortSignal: options.abortSignal,
       queryParams,
       registerMessage: {
         type: 'register',
@@ -112,33 +103,66 @@ export class MessageBridgePluginClass implements MessageBridgePlugin {
     });
 
     this.gatewayConnection = connection;
-
-    if (this.options?.opencodeEventSource) {
-      this.eventRelay = new EventRelay(
-        this.options.opencodeEventSource,
-        connection,
-        this.stateManager,
-        { allowlist: config.events.allowlist },
-      );
-      await this.eventRelay.start();
+    if (options.abortSignal?.aborted) {
+      this.gatewayConnection.disconnect();
+      this.gatewayConnection = null;
+      throw new Error('runtime_start_aborted');
     }
 
     await connection.connect();
+    if (options.abortSignal?.aborted) {
+      this.gatewayConnection.disconnect();
+      this.gatewayConnection = null;
+      throw new Error('runtime_start_aborted');
+    }
+
     this.started = true;
   }
 
-  async stop(): Promise<void> {
-    if (this.eventRelay) {
-      this.eventRelay.stop();
-      this.eventRelay = null;
-    }
-
+  stop(): void {
     if (this.gatewayConnection) {
       this.gatewayConnection.disconnect();
       this.gatewayConnection = null;
     }
 
     this.started = false;
+  }
+
+  async handleEvent(event: BridgeEvent): Promise<void> {
+    if (!this.stateManager.isReady() || !this.gatewayConnection || !this.envelopeBuilder || !this.eventFilter) {
+      return;
+    }
+
+    if (!this.eventFilter.isAllowed(event.type)) {
+      console.warn('unsupported_event', { eventType: event.type });
+      return;
+    }
+
+    const sessionId = this.extractSessionId(event);
+    this.gatewayConnection.send({
+      type: 'tool_event',
+      sessionId,
+      event,
+      envelope: this.envelopeBuilder.build(sessionId),
+    });
+  }
+
+  getStarted(): boolean {
+    return this.started;
+  }
+
+  private registerActions(): void {
+    const actions: Action[] = [
+      new ChatAction(),
+      new CreateSessionAction(),
+      new CloseSessionAction(),
+      new PermissionReplyAction(),
+      new StatusQueryAction(),
+    ];
+
+    for (const action of actions) {
+      this.registry.register(action);
+    }
   }
 
   private async handleDownstreamMessage(message: DownstreamMessage): Promise<void> {
@@ -204,7 +228,7 @@ export class MessageBridgePluginClass implements MessageBridgePlugin {
 
   private buildActionContext(sessionId?: string) {
     return {
-      client: this.options?.opencodeClient,
+      client: this.sdkClient,
       connectionState: this.stateManager.getState(),
       agentId: this.stateManager.getAgentId() ?? 'unknown-agent',
       sessionId,
@@ -216,13 +240,24 @@ export class MessageBridgePluginClass implements MessageBridgePlugin {
       return undefined;
     }
 
-    const p = payload as { sessionId?: unknown; toolSessionId?: unknown };
+    const p = payload as {
+      sessionId?: unknown;
+      toolSessionId?: unknown;
+      properties?: { sessionId?: unknown };
+    };
     if (typeof p.sessionId === 'string' && p.sessionId.trim()) {
       return p.sessionId;
     }
+
     if (typeof p.toolSessionId === 'string' && p.toolSessionId.trim()) {
       return p.toolSessionId;
     }
+
+    const fromProperties = p.properties?.sessionId;
+    if (typeof fromProperties === 'string' && fromProperties.trim()) {
+      return fromProperties;
+    }
+
     return undefined;
   }
 
@@ -231,15 +266,14 @@ export class MessageBridgePluginClass implements MessageBridgePlugin {
       return;
     }
 
-    const code =
-      result.errorCode ??
-      stateToErrorCode(this.stateManager.getState());
+    const code = result.errorCode ?? stateToErrorCode(this.stateManager.getState());
+    const error = result.errorMessage ?? 'Unknown error';
 
     this.gatewayConnection.send({
       type: 'tool_error',
       sessionId,
       code,
-      error: result.errorMessage ?? 'Unknown error',
+      error,
       envelope: this.envelopeBuilder.build(sessionId),
     });
   }
