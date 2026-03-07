@@ -46,9 +46,14 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
    * Execute close session action (using abort semantics - PRD §FR-MB-05)
    */
   async execute(payload: CloseSessionPayload, context: ActionContext): Promise<ActionResult> {
+    const startedAt = Date.now();
+    context.logger?.info('action.close_session.started', {
+      sessionId: payload.sessionId,
+    });
     try {
       // Check connection state
       if (context.connectionState !== 'READY') {
+        context.logger?.warn('action.close_session.rejected_state', { state: context.connectionState });
         return {
           success: false,
           errorCode: stateToErrorCode(context.connectionState),
@@ -57,6 +62,7 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
       }
 
       if (!isOpencodeClient(context.client)) {
+        context.logger?.error('action.close_session.invalid_client');
         return {
           success: false,
           errorCode: 'SDK_UNREACHABLE',
@@ -99,6 +105,10 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
             }
           }
           
+          context.logger?.error('action.close_session.sdk_error_payload', {
+            error: errorMessage,
+            latencyMs: Date.now() - startedAt,
+          });
           return {
             success: false,
             errorCode: 'SDK_UNREACHABLE',
@@ -106,6 +116,10 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
           };
         }
       } else {
+        context.logger?.error('action.close_session.failed', {
+          error: executionResult.error,
+          latencyMs: Date.now() - startedAt,
+        });
         return {
           success: false,
           errorCode: 'SDK_UNREACHABLE',
@@ -115,12 +129,19 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
     } catch (error) {
       const errorCode = this.errorMapper(error);
       const errorMessage = error instanceof Error ? error.message : String(error);
+      context.logger?.error('action.close_session.exception', {
+        error: errorMessage,
+        errorCode,
+        latencyMs: Date.now() - startedAt,
+      });
 
       return {
         success: false,
         errorCode,
         errorMessage
       };
+    } finally {
+      context.logger?.debug('action.close_session.finished', { latencyMs: Date.now() - startedAt });
     }
   }
 

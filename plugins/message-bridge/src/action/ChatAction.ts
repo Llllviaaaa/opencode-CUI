@@ -53,7 +53,13 @@ export class ChatAction implements Action<ChatPayload> {
    * Execute chat action
    */
   async execute(payload: ChatPayload, context: ActionContext): Promise<ActionResult> {
+    const startedAt = Date.now();
+    context.logger?.info('action.chat.started', {
+      sessionId: payload.sessionId,
+      messageLength: payload.message.length,
+    });
     if (context.connectionState !== 'READY') {
+      context.logger?.warn('action.chat.rejected_state', { state: context.connectionState });
       return {
         success: false,
         errorCode: stateToErrorCode(context.connectionState),
@@ -62,6 +68,7 @@ export class ChatAction implements Action<ChatPayload> {
     }
 
     if (!isOpencodeClient(context.client)) {
+      context.logger?.error('action.chat.invalid_client');
       return {
         success: false,
         errorCode: 'SDK_UNREACHABLE',
@@ -100,6 +107,10 @@ export class ChatAction implements Action<ChatPayload> {
               }
             }
             
+            context.logger?.error('action.chat.sdk_error_payload', {
+              error: errorMessage,
+              latencyMs: Date.now() - startedAt,
+            });
             return {
               success: false,
               errorCode: 'SDK_UNREACHABLE',
@@ -112,6 +123,10 @@ export class ChatAction implements Action<ChatPayload> {
           data: executionResult.data
         };
       } else {
+        context.logger?.error('action.chat.failed', {
+          error: executionResult.error,
+          latencyMs: Date.now() - startedAt,
+        });
         return {
           success: false,
           errorCode: 'SDK_UNREACHABLE',
@@ -121,12 +136,19 @@ export class ChatAction implements Action<ChatPayload> {
     } catch (error) {
       const errorCode = this.errorMapper(error);
       const errorMessage = error instanceof Error ? error.message : String(error);
+      context.logger?.error('action.chat.exception', {
+        error: errorMessage,
+        errorCode,
+        latencyMs: Date.now() - startedAt,
+      });
 
       return {
         success: false,
         errorCode,
         errorMessage
       };
+    } finally {
+      context.logger?.debug('action.chat.finished', { latencyMs: Date.now() - startedAt });
     }
   }
 

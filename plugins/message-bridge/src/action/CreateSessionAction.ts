@@ -54,9 +54,15 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
    * Execute create session action
    */
   async execute(payload: CreateSessionPayload, context: ActionContext): Promise<ActionResult> {
+    const startedAt = Date.now();
+    context.logger?.info('action.create_session.started', {
+      requestedSessionId: payload.sessionId,
+      hasMetadata: !!payload.metadata,
+    });
     try {
       // Check connection state
       if (context.connectionState !== 'READY') {
+        context.logger?.warn('action.create_session.rejected_state', { state: context.connectionState });
         return {
           success: false,
           errorCode: stateToErrorCode(context.connectionState),
@@ -65,6 +71,7 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
       }
 
       if (!isOpencodeClient(context.client)) {
+        context.logger?.error('action.create_session.invalid_client');
         return {
           success: false,
           errorCode: 'SDK_UNREACHABLE',
@@ -122,6 +129,10 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
             }
           }
           
+          context.logger?.error('action.create_session.sdk_error_payload', {
+            error: errorMessage,
+            latencyMs: Date.now() - startedAt,
+          });
           return {
             success: false,
             errorCode: 'SDK_UNREACHABLE',
@@ -129,6 +140,10 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
           };
         }
       } else {
+        context.logger?.error('action.create_session.failed', {
+          error: executionResult.error,
+          latencyMs: Date.now() - startedAt,
+        });
         return {
           success: false,
           errorCode: 'SDK_UNREACHABLE',
@@ -138,12 +153,19 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
     } catch (error) {
       const errorCode = this.errorMapper(error);
       const errorMessage = error instanceof Error ? error.message : String(error);
+      context.logger?.error('action.create_session.exception', {
+        error: errorMessage,
+        errorCode,
+        latencyMs: Date.now() - startedAt,
+      });
 
       return {
         success: false,
         errorCode,
         errorMessage
       };
+    } finally {
+      context.logger?.debug('action.create_session.finished', { latencyMs: Date.now() - startedAt });
     }
   }
 

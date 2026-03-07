@@ -95,9 +95,16 @@ export class PermissionReplyAction implements Action<PermissionReplyPayload> {
    * Execute permission reply action
    */
   async execute(payload: PermissionReplyPayload, context: ActionContext): Promise<ActionResult> {
+    const startedAt = Date.now();
+    context.logger?.info('action.permission_reply.started', {
+      permissionId: payload.permissionId,
+      hasToolSessionId: !!payload.toolSessionId,
+      payloadFormat: isPermissionReplyTarget(payload) ? 'target' : 'compat',
+    });
     try {
       // Check connection state
       if (context.connectionState !== 'READY') {
+        context.logger?.warn('action.permission_reply.rejected_state', { state: context.connectionState });
         return {
           success: false,
           errorCode: stateToErrorCode(context.connectionState),
@@ -106,6 +113,7 @@ export class PermissionReplyAction implements Action<PermissionReplyPayload> {
       }
 
       if (!isOpencodeClient(context.client)) {
+        context.logger?.error('action.permission_reply.invalid_client');
         return {
           success: false,
           errorCode: 'SDK_UNREACHABLE',
@@ -169,6 +177,10 @@ export class PermissionReplyAction implements Action<PermissionReplyPayload> {
             }
           }
           
+          context.logger?.error('action.permission_reply.sdk_error_payload', {
+            error: errorMessage,
+            latencyMs: Date.now() - startedAt,
+          });
           return {
             success: false,
             errorCode: 'SDK_UNREACHABLE',
@@ -176,6 +188,10 @@ export class PermissionReplyAction implements Action<PermissionReplyPayload> {
           };
         }
       } else {
+        context.logger?.error('action.permission_reply.failed', {
+          error: executionResult.error,
+          latencyMs: Date.now() - startedAt,
+        });
         return {
           success: false,
           errorCode: 'SDK_UNREACHABLE',
@@ -185,12 +201,19 @@ export class PermissionReplyAction implements Action<PermissionReplyPayload> {
     } catch (error) {
       const errorCode = this.errorMapper(error);
       const errorMessage = error instanceof Error ? error.message : String(error);
+      context.logger?.error('action.permission_reply.exception', {
+        error: errorMessage,
+        errorCode,
+        latencyMs: Date.now() - startedAt,
+      });
 
       return {
         success: false,
         errorCode,
         errorMessage
       };
+    } finally {
+      context.logger?.debug('action.permission_reply.finished', { latencyMs: Date.now() - startedAt });
     }
   }
 

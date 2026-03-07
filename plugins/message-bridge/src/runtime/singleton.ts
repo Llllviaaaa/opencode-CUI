@@ -1,5 +1,6 @@
 import { BridgeRuntime } from './BridgeRuntime';
 import type { PluginInput } from './types';
+import { AppLogger } from './AppLogger';
 
 let runtime: BridgeRuntime | null = null;
 let initializing: Promise<BridgeRuntime> | null = null;
@@ -7,11 +8,14 @@ let lifecycleAbortController: AbortController | null = null;
 let generation = 0;
 
 export async function getOrCreateRuntime(input: PluginInput): Promise<BridgeRuntime> {
+  const logger = new AppLogger(input.client, { component: 'singleton' });
   if (runtime) {
+    logger.debug('runtime.singleton.reuse_existing');
     return runtime;
   }
 
   if (initializing) {
+    logger.debug('runtime.singleton.await_initializing');
     return initializing;
   }
 
@@ -27,13 +31,18 @@ export async function getOrCreateRuntime(input: PluginInput): Promise<BridgeRunt
     .then(() => {
       if (token !== generation || lifecycleAbortController?.signal.aborted) {
         candidate.stop();
+        logger.warn('runtime.singleton.initialization_cancelled');
         throw new Error('runtime_initialization_cancelled');
       }
       runtime = candidate;
+      logger.info('runtime.singleton.initialized');
       return candidate;
     })
     .catch((error) => {
       runtime = null;
+      logger.error('runtime.singleton.initialization_failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     })
     .finally(() => {

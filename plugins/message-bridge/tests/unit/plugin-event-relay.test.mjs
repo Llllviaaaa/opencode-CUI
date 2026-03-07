@@ -1,22 +1,22 @@
-import { describe, test, expect, spyOn, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect } from 'bun:test';
 
 import { BridgeRuntime } from '../../dist/runtime/BridgeRuntime.js';
 import { EnvelopeBuilder } from '../../dist/event/EnvelopeBuilder.js';
 import { EventFilter } from '../../dist/event/EventFilter.js';
 
 describe('event uplink via hook boundary', () => {
-  let warnSpy;
-
-  beforeEach(() => {
-    warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    warnSpy.mockRestore();
-  });
-
   test('allowlist reject records unsupported_event', async () => {
-    const runtime = new BridgeRuntime({ client: {} });
+    const logs = [];
+    const runtime = new BridgeRuntime({
+      client: {
+        app: {
+          log: async (options) => {
+            logs.push(options);
+            return true;
+          },
+        },
+      },
+    });
     const sent = [];
 
     runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
@@ -25,10 +25,11 @@ describe('event uplink via hook boundary', () => {
     runtime.stateManager.setState('READY');
 
     await runtime.handleEvent({ type: 'session.created' });
+    await new Promise((r) => setTimeout(r, 10));
 
     expect(sent).toHaveLength(0);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0][0]).toBe('unsupported_event');
+    const warnEntry = logs.find((item) => item?.body?.message === 'event.rejected_allowlist');
+    expect(!!warnEntry).toBe(true);
   });
 
   test('allowed event sends tool_event', async () => {
