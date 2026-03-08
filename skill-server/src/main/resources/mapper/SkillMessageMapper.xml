@@ -6,8 +6,10 @@
 
     <resultMap id="SkillMessageResultMap" type="com.opencode.cui.skill.model.SkillMessage">
         <id     property="id"          column="id"/>
+        <result property="messageId"   column="message_id"/>
         <result property="sessionId"   column="session_id"/>
         <result property="seq"         column="seq"/>
+        <result property="messageSeq"  column="seq"/>
         <result property="role"        column="role"
                 typeHandler="org.apache.ibatis.type.EnumTypeHandler"
                 javaType="com.opencode.cui.skill.model.SkillMessage$Role"/>
@@ -20,13 +22,20 @@
     </resultMap>
 
     <sql id="selectAllColumns">
-        SELECT id, session_id, seq, role, content, content_type, created_at, meta
+        SELECT id, message_id, session_id, seq, role, content, content_type, created_at, meta
         FROM skill_message
     </sql>
 
     <select id="findById" resultMap="SkillMessageResultMap">
         <include refid="selectAllColumns"/>
         WHERE id = #{id}
+    </select>
+
+    <select id="findBySessionIdAndMessageId" resultMap="SkillMessageResultMap">
+        <include refid="selectAllColumns"/>
+        WHERE session_id = #{sessionId}
+          AND message_id = #{messageId}
+        LIMIT 1
     </select>
 
     <select id="findBySessionId" resultMap="SkillMessageResultMap">
@@ -46,9 +55,9 @@
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO skill_message
-            (session_id, seq, role, content, content_type, created_at, meta)
+            (message_id, session_id, seq, role, content, content_type, created_at, meta)
         VALUES
-            (#{sessionId}, #{seq}, #{role}, #{content}, #{contentType}, NOW(), #{meta})
+            (#{messageId}, #{sessionId}, #{seq}, #{role}, #{content}, #{contentType}, NOW(), #{meta})
     </insert>
 
     <update id="updateStats">

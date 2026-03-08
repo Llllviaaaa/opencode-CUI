@@ -13,9 +13,10 @@ node_modules/
 .DS_Store
 Thumbs.db
 
-# Claude Code / OMC internal state
+# Claude Code / OMC internal state 
 .claude/
 .omc/
+.sisyphus/
 
 # Environment
 .env

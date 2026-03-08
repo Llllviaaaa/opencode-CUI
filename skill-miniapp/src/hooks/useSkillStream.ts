@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import type { Message, StreamMessage } from '../protocol/types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Message, MessageRole, StreamMessage, StreamMessageType } from '../protocol/types';
 import { StreamAssembler } from '../protocol/StreamAssembler';
+import { normalizeHistoryMessage, normalizeHistoryMessages } from '../protocol/history';
 import * as api from '../utils/api';
 
 type AgentStatus = 'online' | 'offline' | 'unknown';
@@ -9,11 +10,12 @@ export interface UseSkillStreamReturn {
   messages: Message[];
   isStreaming: boolean;
   agentStatus: AgentStatus;
+  socketReady: boolean;
   sendMessage: (text: string) => Promise<void>;
+  replyPermission: (permissionId: string, allow: boolean) => Promise<void>;
   error: string | null;
 }
 
-// WebSocket base URL: use env var, or derive from page origin
 const WS_BASE_URL =
   typeof import.meta !== 'undefined' && (import.meta as unknown as Record<string, Record<string, string>>).env?.VITE_SKILL_SERVER_WS
     ? (import.meta as unknown as Record<string, Record<string, string>>).env.VITE_SKILL_SERVER_WS
@@ -21,104 +23,367 @@ const WS_BASE_URL =
       ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
       : 'ws://localhost:8082');
 
-/** Reconnect delay with exponential backoff (max 30s). */
 function getReconnectDelay(attempt: number): number {
   return Math.min(1000 * Math.pow(2, attempt), 30_000);
 }
 
 let nextMsgId = 1;
-function genId(): string {
-  return `msg_${Date.now()}_${nextMsgId++}`;
+function genId(prefix = 'msg'): string {
+  return `${prefix}_${Date.now()}_${nextMsgId++}`;
+}
+
+function normalizeRole(role: string | null | undefined): MessageRole {
+  switch (role?.toLowerCase()) {
+    case 'user':
+    case 'assistant':
+    case 'system':
+    case 'tool':
+      return role.toLowerCase() as MessageRole;
+    default:
+      return 'assistant';
+  }
+}
+
+function normalizeTimestamp(value: string | number | null | undefined): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return Date.now();
+}
+
+function contentTypeForRole(role: MessageRole): Message['contentType'] {
+  switch (role) {
+    case 'assistant':
+      return 'markdown';
+    case 'tool':
+      return 'code';
+    default:
+      return 'plain';
+  }
+}
+
+function sortMessages(messages: Message[]): Message[] {
+  const deduped = new Map<string, Message>();
+  messages.forEach((message) => {
+    deduped.set(message.id, message);
+  });
+
+  return [...deduped.values()].sort((left, right) => {
+    if (left.messageSeq != null && right.messageSeq != null && left.messageSeq !== right.messageSeq) {
+      return left.messageSeq - right.messageSeq;
+    }
+    return left.timestamp - right.timestamp;
+  });
+}
+
+function upsertMessage(messages: Message[], next: Message): Message[] {
+  const index = messages.findIndex((message) => message.id === next.id);
+  if (index === -1) {
+    return sortMessages([...messages, next]);
+  }
+
+  const updated = [...messages];
+  updated[index] = next;
+  return sortMessages(updated);
+}
+
+function mergeHistoryMessage(existing: Message, incoming: Message): Message {
+  const preserveStreaming = Boolean(existing.isStreaming);
+  const content = preserveStreaming && existing.content
+    ? existing.content
+    : (incoming.content || existing.content);
+  const parts = preserveStreaming && existing.parts && existing.parts.length > 0
+    ? existing.parts
+    : (incoming.parts ?? existing.parts);
+
+  return {
+    ...incoming,
+    role: preserveStreaming ? existing.role : incoming.role,
+    content,
+    contentType: preserveStreaming ? existing.contentType : incoming.contentType,
+    timestamp: incoming.timestamp || existing.timestamp,
+    messageSeq: incoming.messageSeq ?? existing.messageSeq,
+    meta: incoming.meta ?? existing.meta,
+    isStreaming: preserveStreaming,
+    parts,
+  };
+}
+
+function mergeHistoryMessages(messages: Message[], incomingMessages: Message[]): Message[] {
+  let merged = [...messages];
+
+  incomingMessages.forEach((incoming) => {
+    const index = merged.findIndex((message) => message.id === incoming.id);
+    if (index === -1) {
+      merged = [...merged, incoming];
+      return;
+    }
+
+    const updated = [...merged];
+    updated[index] = mergeHistoryMessage(updated[index], incoming);
+    merged = updated;
+  });
+
+  return sortMessages(merged);
+}
+
+function isKnownStreamType(type: unknown): type is StreamMessageType {
+  return typeof type === 'string' && [
+    'text.delta',
+    'text.done',
+    'thinking.delta',
+    'thinking.done',
+    'tool.update',
+    'question',
+    'file',
+    'step.start',
+    'step.done',
+    'session.status',
+    'session.title',
+    'session.error',
+    'permission.ask',
+    'permission.reply',
+    'agent.online',
+    'agent.offline',
+    'error',
+    'snapshot',
+    'streaming',
+  ].includes(type);
+}
+
+function normalizeStreamingPart(raw: Record<string, unknown>): StreamMessage | null {
+  if (isKnownStreamType(raw.type)) {
+    return raw as unknown as StreamMessage;
+  }
+
+  const base: Partial<StreamMessage> = {
+    sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : undefined,
+    emittedAt: typeof raw.emittedAt === 'string' ? raw.emittedAt : undefined,
+    messageId: typeof raw.messageId === 'string' ? raw.messageId : undefined,
+    messageSeq: typeof raw.messageSeq === 'number' ? raw.messageSeq : undefined,
+    role: typeof raw.role === 'string' ? normalizeRole(raw.role) : undefined,
+    sourceMessageId: typeof raw.sourceMessageId === 'string' ? raw.sourceMessageId : undefined,
+    partId: typeof raw.partId === 'string' ? raw.partId : undefined,
+    partSeq: typeof raw.partSeq === 'number' ? raw.partSeq : undefined,
+  };
+
+  switch (raw.type) {
+    case 'text':
+      return { ...base, type: 'text.delta', content: typeof raw.content === 'string' ? raw.content : '' };
+    case 'thinking':
+      return { ...base, type: 'thinking.delta', content: typeof raw.content === 'string' ? raw.content : '' };
+    case 'tool':
+      return {
+        ...base,
+        type: 'tool.update',
+        toolName: typeof raw.toolName === 'string' ? raw.toolName : undefined,
+        toolCallId: typeof raw.toolCallId === 'string' ? raw.toolCallId : undefined,
+        status: typeof raw.status === 'string' ? raw.status as StreamMessage['status'] : undefined,
+        title: typeof raw.title === 'string' ? raw.title : undefined,
+        output: typeof raw.output === 'string' ? raw.output : undefined,
+      };
+    case 'question':
+      return {
+        ...base,
+        type: 'question',
+        toolName: 'question',
+        toolCallId: typeof raw.toolCallId === 'string' ? raw.toolCallId : undefined,
+        status: 'running',
+        header: typeof raw.header === 'string' ? raw.header : undefined,
+        question: typeof raw.question === 'string' ? raw.question : undefined,
+        options: Array.isArray(raw.options) ? raw.options.filter((value): value is string => typeof value === 'string') : undefined,
+      };
+    case 'permission':
+      return {
+        ...base,
+        type: 'permission.ask',
+        permissionId: typeof raw.permissionId === 'string' ? raw.permissionId : undefined,
+        permType: typeof raw.permType === 'string' ? raw.permType : undefined,
+        content: typeof raw.content === 'string' ? raw.content : undefined,
+      };
+    case 'file':
+      return {
+        ...base,
+        type: 'file',
+        fileName: typeof raw.fileName === 'string' ? raw.fileName : undefined,
+        fileUrl: typeof raw.fileUrl === 'string' ? raw.fileUrl : undefined,
+        fileMime: typeof raw.fileMime === 'string' ? raw.fileMime : undefined,
+      };
+    default:
+      return null;
+  }
 }
 
 export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>('unknown');
+  const [socketReady, setSocketReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const assemblerRef = useRef(new StreamAssembler());
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const streamingMsgIdRef = useRef<string | null>(null);
+  const historyRequestRef = useRef(0);
+  const assemblersRef = useRef(new Map<string, StreamAssembler>());
+  const activeMessageIdsRef = useRef(new Set<string>());
+  const knownUserMessageIdsRef = useRef(new Set<string>());
 
-  // ------------------------------------------------------------------
-  // Load message history when session changes
-  // ------------------------------------------------------------------
   useEffect(() => {
-    if (!sessionId) {
-      setMessages([]);
+    knownUserMessageIdsRef.current = new Set(
+      messages
+        .filter((message) => message.role === 'user')
+        .map((message) => message.id),
+    );
+  }, [messages]);
+
+  const resetStreamingState = useCallback(() => {
+    assemblersRef.current.clear();
+    activeMessageIdsRef.current.clear();
+    setIsStreaming(false);
+  }, []);
+
+  const finalizeMessage = useCallback((messageId: string) => {
+    const assembler = assemblersRef.current.get(messageId);
+    if (assembler) {
+      assembler.complete();
+      const content = assembler.getText();
+      const parts = assembler.getParts();
+
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === messageId
+            ? {
+                ...message,
+                content,
+                isStreaming: false,
+                parts: parts.length > 0 ? [...parts] : message.parts,
+              }
+            : message,
+        ),
+      );
+
+      assemblersRef.current.delete(messageId);
+    } else {
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === messageId ? { ...message, isStreaming: false } : message,
+        ),
+      );
+    }
+
+    activeMessageIdsRef.current.delete(messageId);
+    if (activeMessageIdsRef.current.size === 0) {
+      setIsStreaming(false);
+    }
+  }, []);
+
+  const finalizeAllStreamingMessages = useCallback(() => {
+    const activeIds = Array.from(activeMessageIdsRef.current);
+    activeIds.forEach((messageId) => finalizeMessage(messageId));
+  }, [finalizeMessage]);
+
+  const applyStreamedMessage = useCallback((msg: StreamMessage) => {
+    const messageId = msg.messageId ?? msg.sourceMessageId ?? genId('stream');
+    const role = normalizeRole(msg.role);
+    if (role === 'user' || knownUserMessageIdsRef.current.has(messageId)) {
       return;
     }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await api.getMessages(sessionId, 0, 50);
-        if (!cancelled) {
-          setMessages(res.content);
-        }
-      } catch {
-        /* history load failure is non-fatal */
+
+    let assembler = assemblersRef.current.get(messageId);
+    if (!assembler) {
+      assembler = new StreamAssembler();
+      assemblersRef.current.set(messageId, assembler);
+    }
+
+    assembler.handleMessage({ ...msg, messageId, role });
+    activeMessageIdsRef.current.add(messageId);
+    setIsStreaming(true);
+
+    const content = assembler.getText();
+    const parts = assembler.getParts();
+    const timestamp = normalizeTimestamp(msg.emittedAt);
+
+    setMessages((prev) => {
+      const existing = prev.find((message) => message.id === messageId);
+      const nextMessage: Message = {
+        id: messageId,
+        role,
+        content,
+        contentType: existing?.contentType ?? contentTypeForRole(role),
+        timestamp: existing?.timestamp ?? timestamp,
+        messageSeq: msg.messageSeq ?? existing?.messageSeq,
+        meta: existing?.meta,
+        isStreaming: true,
+        parts: parts.length > 0 ? [...parts] : existing?.parts,
+      };
+      return upsertMessage(prev, nextMessage);
+    });
+  }, []);
+
+  const restoreStreamingMessage = useCallback((msg: StreamMessage) => {
+    const rawParts = Array.isArray(msg.parts) ? msg.parts : [];
+    const partMessages = rawParts
+      .map((part) => normalizeStreamingPart(part))
+      .filter((part): part is StreamMessage => part !== null);
+
+    const messageId = msg.messageId
+      ?? partMessages[0]?.messageId
+      ?? partMessages[0]?.sourceMessageId
+      ?? genId('stream');
+
+    if (partMessages.length === 0) {
+      if (msg.sessionStatus === 'idle') {
+        finalizeAllStreamingMessages();
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId]);
+      return;
+    }
 
-  // ------------------------------------------------------------------
-  // WebSocket connection lifecycle
-  // ------------------------------------------------------------------
-  const connect = useCallback(() => {
-    if (!sessionId) return;
+    const role = normalizeRole(msg.role ?? partMessages[0]?.role);
+    if (role === 'user' || knownUserMessageIdsRef.current.has(messageId)) {
+      return;
+    }
 
-    const url = `${WS_BASE_URL}/ws/skill/stream/${sessionId}`;
-    const ws = new WebSocket(url);
-    wsRef.current = ws;
+    const assembler = new StreamAssembler();
+    partMessages.forEach((part) => assembler.handleMessage({
+      ...part,
+      messageId,
+      role: part.role ?? msg.role ?? 'assistant',
+      messageSeq: part.messageSeq ?? msg.messageSeq,
+    }));
+    assemblersRef.current.set(messageId, assembler);
 
-    ws.onopen = () => {
-      reconnectAttemptRef.current = 0;
-      setError(null);
-      setAgentStatus('online');
-    };
+    if (msg.sessionStatus !== 'idle') {
+      activeMessageIdsRef.current.add(messageId);
+      setIsStreaming(true);
+    }
 
-    ws.onmessage = (evt) => {
-      try {
-        const msg: StreamMessage = JSON.parse(evt.data as string);
-        handleStreamMessage(msg);
-      } catch {
-        /* ignore malformed messages */
-      }
-    };
+    const content = assembler.getText();
+    const parts = assembler.getParts();
+    const timestamp = normalizeTimestamp(msg.emittedAt ?? partMessages[0]?.emittedAt);
 
-    ws.onerror = () => {
-      setError('WebSocket connection error');
-    };
+    setMessages((prev) => upsertMessage(prev, {
+      id: messageId,
+      role,
+      content,
+      contentType: contentTypeForRole(role),
+      timestamp,
+      messageSeq: msg.messageSeq ?? partMessages[0]?.messageSeq,
+      isStreaming: msg.sessionStatus !== 'idle',
+      parts: parts.length > 0 ? [...parts] : undefined,
+    }));
+  }, [finalizeAllStreamingMessages]);
 
-    ws.onclose = () => {
-      wsRef.current = null;
-      scheduleReconnect();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
-
-  const scheduleReconnect = useCallback(() => {
-    if (reconnectTimerRef.current) return;
-    const delay = getReconnectDelay(reconnectAttemptRef.current);
-    reconnectAttemptRef.current += 1;
-    reconnectTimerRef.current = setTimeout(() => {
-      reconnectTimerRef.current = null;
-      connect();
-    }, delay);
-  }, [connect]);
-
-  // ------------------------------------------------------------------
-  // Handle incoming stream messages (v2 protocol)
-  // ------------------------------------------------------------------
   const handleStreamMessage = useCallback((msg: StreamMessage) => {
     switch (msg.type) {
-      // ---- Text streaming ----
       case 'text.delta':
       case 'text.done':
       case 'thinking.delta':
@@ -126,89 +391,54 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
       case 'tool.update':
       case 'question':
       case 'permission.ask':
-      case 'file': {
-        setIsStreaming(true);
-
-        // Feed the message to the assembler
-        const assembler = assemblerRef.current;
-        assembler.handleMessage(msg);
-
-        // Upsert the streaming assistant message with parts
-        const currentText = assembler.getText();
-        const currentParts = assembler.getParts();
-
-        setMessages((prev) => {
-          if (streamingMsgIdRef.current) {
-            return prev.map((m) =>
-              m.id === streamingMsgIdRef.current
-                ? { ...m, content: currentText, parts: [...currentParts], isStreaming: true }
-                : m,
-            );
-          }
-          const id = genId();
-          streamingMsgIdRef.current = id;
-          return [
-            ...prev,
-            {
-              id,
-              role: 'assistant',
-              content: currentText,
-              contentType: 'markdown',
-              timestamp: Date.now(),
-              isStreaming: true,
-              parts: [...currentParts],
-            },
-          ];
-        });
+      case 'permission.reply':
+      case 'file':
+        applyStreamedMessage(msg);
         break;
-      }
 
-      // ---- Step events (metadata only, no UI part) ----
       case 'step.start':
-        setIsStreaming(true);
+        if (msg.messageId) {
+          activeMessageIdsRef.current.add(msg.messageId);
+          setIsStreaming(true);
+        }
         break;
 
       case 'step.done':
-        // Update message meta with token info
-        if (streamingMsgIdRef.current && msg.tokens) {
-          const finalId = streamingMsgIdRef.current;
+        if (msg.messageId) {
           setMessages((prev) =>
-            prev.map((m) =>
-              m.id === finalId
-                ? { ...m, meta: { ...m.meta, tokens: msg.tokens, cost: msg.cost } }
-                : m,
+            prev.map((message) =>
+              message.id === msg.messageId
+                ? {
+                    ...message,
+                    meta: {
+                      ...message.meta,
+                      tokens: msg.tokens,
+                      cost: msg.cost,
+                      reason: msg.reason,
+                    },
+                  }
+                : message,
             ),
           );
         }
         break;
 
-      // ---- Session status ----
-      case 'session.status': {
+      case 'session.status':
         if (msg.sessionStatus === 'idle' || msg.sessionStatus === 'completed') {
-          // Finalize the current streaming message
-          assemblerRef.current.complete();
-          setIsStreaming(false);
-
-          if (streamingMsgIdRef.current) {
-            const finalId = streamingMsgIdRef.current;
-            const finalParts = assemblerRef.current.getParts();
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === finalId
-                  ? { ...m, isStreaming: false, parts: [...finalParts] }
-                  : m,
-              ),
-            );
-          }
-
-          // Reset for next message
-          assemblerRef.current.reset();
-          streamingMsgIdRef.current = null;
+          finalizeAllStreamingMessages();
+        } else if (msg.sessionStatus === 'busy' || msg.sessionStatus === 'retry') {
+          setIsStreaming(true);
         }
         break;
-      }
 
-      // ---- Agent status ----
+      case 'session.error':
+        finalizeAllStreamingMessages();
+        setError(msg.error ?? 'Session error');
+        break;
+
+      case 'session.title':
+        break;
+
       case 'agent.online':
         setAgentStatus('online');
         break;
@@ -217,78 +447,179 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
         setAgentStatus('offline');
         break;
 
-      // ---- Error ----
       case 'error':
-        setIsStreaming(false);
+        finalizeAllStreamingMessages();
         setError(msg.error ?? 'Unknown stream error');
-        assemblerRef.current.reset();
-        streamingMsgIdRef.current = null;
         break;
 
-      // ---- Snapshot (reconnect recovery) ----
-      case 'snapshot': {
-        // snapshot contains full message history, replace current
-        // This will be implemented when Phase 3 (Redis buffer) is done
+      case 'snapshot':
+        if (Array.isArray(msg.messages)) {
+          resetStreamingState();
+          setMessages(sortMessages(normalizeHistoryMessages(msg.messages)));
+        }
         break;
-      }
 
-      // ---- Streaming parts (reconnect recovery) ----
-      case 'streaming': {
-        // Contains in-progress parts to resume display
-        // This will be implemented when Phase 3 (Redis buffer) is done
+      case 'streaming':
+        restoreStreamingMessage(msg);
         break;
-      }
 
       default:
-        // Unknown type - silently ignore
         break;
     }
-  }, []);
+  }, [applyStreamedMessage, finalizeAllStreamingMessages, resetStreamingState, restoreStreamingMessage]);
 
-  // ------------------------------------------------------------------
-  // Connect / disconnect
-  // ------------------------------------------------------------------
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId) {
+      historyRequestRef.current += 1;
+      setMessages([]);
+      knownUserMessageIdsRef.current.clear();
+      setSocketReady(false);
+      resetStreamingState();
+      return;
+    }
+
+    resetStreamingState();
+    setMessages([]);
+    knownUserMessageIdsRef.current.clear();
+    const requestId = historyRequestRef.current + 1;
+    historyRequestRef.current = requestId;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await api.getMessages(sessionId, 0, 50);
+        if (!cancelled && historyRequestRef.current === requestId) {
+          const normalized = normalizeHistoryMessages(response.content as unknown as Array<Record<string, unknown>>);
+          setMessages((prev) => mergeHistoryMessages(prev, normalized));
+        }
+      } catch {
+        // History loading failure is non-fatal.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [resetStreamingState, sessionId]);
+
+  const connect = useCallback(() => {
+    if (!sessionId) {
+      return;
+    }
+
+    setSocketReady(false);
+    const url = `${WS_BASE_URL}/ws/skill/stream/${sessionId}`;
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      reconnectAttemptRef.current = 0;
+      setError(null);
+      setAgentStatus('online');
+      setSocketReady(true);
+      ws.send(JSON.stringify({ action: 'resume' }));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg: StreamMessage = JSON.parse(event.data as string);
+        handleStreamMessage(msg);
+      } catch {
+        // Ignore malformed messages.
+      }
+    };
+
+    ws.onerror = () => {
+      setError('WebSocket connection error');
+      setSocketReady(false);
+    };
+
+    ws.onclose = () => {
+      wsRef.current = null;
+      setSocketReady(false);
+      scheduleReconnect();
+    };
+  }, [handleStreamMessage, sessionId]);
+
+  const scheduleReconnect = useCallback(() => {
+    if (reconnectTimerRef.current) {
+      return;
+    }
+
+    const delay = getReconnectDelay(reconnectAttemptRef.current);
+    reconnectAttemptRef.current += 1;
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null;
+      connect();
+    }, delay);
+  }, [connect]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      return;
+    }
+
     connect();
 
     return () => {
+      setSocketReady(false);
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
       reconnectAttemptRef.current = 0;
       if (wsRef.current) {
-        wsRef.current.onclose = null; // prevent reconnect on intentional close
+        wsRef.current.onclose = null;
         wsRef.current.close();
         wsRef.current = null;
       }
     };
-  }, [sessionId, connect]);
+  }, [connect, sessionId]);
 
-  // ------------------------------------------------------------------
-  // Send a user message
-  // ------------------------------------------------------------------
   const sendMessageFn = useCallback(
     async (text: string) => {
-      if (!sessionId) return;
-      setError(null);
+      if (!sessionId) {
+        return;
+      }
 
-      // Optimistic local message
-      const userMsg: Message = {
-        id: genId(),
+      setError(null);
+      finalizeAllStreamingMessages();
+
+      const tempId = genId('user');
+      const optimisticMessage: Message = {
+        id: tempId,
         role: 'user',
         content: text,
         contentType: 'plain',
         timestamp: Date.now(),
       };
-      setMessages((prev) => [...prev, userMsg]);
+      setMessages((prev) => upsertMessage(prev, optimisticMessage));
 
       try {
-        await api.sendMessage(sessionId, text);
+        const saved = await api.sendMessage(sessionId, text);
+        const normalized = normalizeHistoryMessage(saved as unknown as Record<string, unknown>);
+        setMessages((prev) => {
+          const nextMessages = prev.filter((message) => message.id !== tempId && message.id !== normalized.id);
+          return upsertMessage(nextMessages, normalized);
+        });
       } catch (err) {
-        const message =
-          err instanceof Error ? err.message : 'Failed to send message';
+        const message = err instanceof Error ? err.message : 'Failed to send message';
+        setError(message);
+      }
+    },
+    [finalizeAllStreamingMessages, sessionId],
+  );
+
+  const replyPermissionFn = useCallback(
+    async (permissionId: string, allow: boolean) => {
+      if (!sessionId) {
+        return;
+      }
+
+      setError(null);
+      try {
+        await api.replyPermission(sessionId, permissionId, allow);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to reply permission';
         setError(message);
       }
     },
@@ -299,7 +630,9 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
     messages,
     isStreaming,
     agentStatus,
+    socketReady,
     sendMessage: sendMessageFn,
+    replyPermission: replyPermissionFn,
     error,
   };
 }

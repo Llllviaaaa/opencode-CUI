@@ -3,9 +3,12 @@ package com.opencode.cui.skill.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.PageResult;
 import com.opencode.cui.skill.model.SkillMessage;
+import com.opencode.cui.skill.model.SkillMessageView;
 import com.opencode.cui.skill.model.SkillSession;
+import com.opencode.cui.skill.repository.SkillMessagePartRepository;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.ImMessageService;
+import com.opencode.cui.skill.service.MessagePersistenceService;
 import com.opencode.cui.skill.service.SkillMessageService;
 import com.opencode.cui.skill.service.SkillSessionService;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,6 +41,10 @@ class SkillMessageControllerTest {
     private GatewayRelayService gatewayRelayService;
     @Mock
     private ImMessageService imMessageService;
+    @Mock
+    private SkillMessagePartRepository partRepository;
+    @Mock
+    private MessagePersistenceService messagePersistenceService;
 
     private SkillMessageController controller;
 
@@ -45,7 +52,8 @@ class SkillMessageControllerTest {
     void setUp() {
         controller = new SkillMessageController(
                 messageService, sessionService, gatewayRelayService,
-                imMessageService, new ObjectMapper());
+                imMessageService, new ObjectMapper(), partRepository,
+                messagePersistenceService);
     }
 
     @Test
@@ -54,6 +62,7 @@ class SkillMessageControllerTest {
         SkillSession session = new SkillSession();
         session.setId(1L);
         session.setAgentId(99L);
+        session.setToolSessionId("tool-session-1");
         session.setStatus(SkillSession.Status.ACTIVE);
         when(sessionService.getSession(1L)).thenReturn(session);
 
@@ -66,6 +75,7 @@ class SkillMessageControllerTest {
 
         ResponseEntity<?> response = controller.sendMessage(1L, request);
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        verify(messagePersistenceService).finalizeActiveAssistantTurn(1L);
         verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("chat"), any());
     }
 
@@ -101,7 +111,7 @@ class SkillMessageControllerTest {
         when(messageService.getMessageHistory(1L, 0, 50))
                 .thenReturn(new PageResult<>(List.of(), 0, 0, 50));
 
-        ResponseEntity<PageResult<SkillMessage>> response =
+        ResponseEntity<PageResult<SkillMessageView>> response =
                 controller.getMessages(1L, 0, 50);
         assertEquals(HttpStatus.OK, response.getStatusCode());
     }
@@ -123,6 +133,7 @@ class SkillMessageControllerTest {
         assertEquals(true, response.getBody().get("success"));
         assertEquals("p-abc", response.getBody().get("permissionId"));
         verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("permission_reply"), any());
+        verify(gatewayRelayService).publishProtocolMessage(eq("1"), any());
     }
 
     @Test

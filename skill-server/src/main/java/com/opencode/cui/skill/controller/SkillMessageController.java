@@ -4,9 +4,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.PageResult;
 import com.opencode.cui.skill.model.SkillMessage;
+import com.opencode.cui.skill.model.SkillMessageView;
 import com.opencode.cui.skill.model.SkillSession;
+import com.opencode.cui.skill.model.StreamMessage;
+import com.opencode.cui.skill.repository.SkillMessagePartRepository;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.ImMessageService;
+import com.opencode.cui.skill.service.MessagePersistenceService;
 import com.opencode.cui.skill.service.SkillMessageService;
 import com.opencode.cui.skill.service.SkillSessionService;
 import lombok.Data;
@@ -33,17 +37,23 @@ public class SkillMessageController {
     private final GatewayRelayService gatewayRelayService;
     private final ImMessageService imMessageService;
     private final ObjectMapper objectMapper;
+    private final SkillMessagePartRepository partRepository;
+    private final MessagePersistenceService messagePersistenceService;
 
     public SkillMessageController(SkillMessageService messageService,
             SkillSessionService sessionService,
             GatewayRelayService gatewayRelayService,
             ImMessageService imMessageService,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            SkillMessagePartRepository partRepository,
+            MessagePersistenceService messagePersistenceService) {
         this.messageService = messageService;
         this.sessionService = sessionService;
         this.gatewayRelayService = gatewayRelayService;
         this.imMessageService = imMessageService;
         this.objectMapper = objectMapper;
+        this.partRepository = partRepository;
+        this.messagePersistenceService = messagePersistenceService;
     }
 
     /**
@@ -74,6 +84,7 @@ public class SkillMessageController {
         }
 
         // Persist user message
+        messagePersistenceService.finalizeActiveAssistantTurn(sessionId);
         SkillMessage message = messageService.saveUserMessage(sessionId, request.getContent());
 
         // Send chat invoke to AI-Gateway to trigger OpenCode processing
@@ -101,7 +112,7 @@ public class SkillMessageController {
      * Get message history with pagination.
      */
     @GetMapping("/messages")
-    public ResponseEntity<PageResult<SkillMessage>> getMessages(
+    public ResponseEntity<PageResult<SkillMessageView>> getMessages(
             @PathVariable Long sessionId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
@@ -114,7 +125,15 @@ public class SkillMessageController {
         }
 
         PageResult<SkillMessage> messages = messageService.getMessageHistory(sessionId, page, size);
-        return ResponseEntity.ok(messages);
+        var content = messages.getContent().stream()
+                .map(message -> SkillMessageView.from(
+                        message,
+                        partRepository.findByMessageId(message.getId())))
+                .toList();
+        return ResponseEntity.ok(new PageResult<>(content,
+                messages.getTotalElements(),
+                messages.getNumber(),
+                messages.getSize()));
     }
 
     /**
@@ -204,6 +223,14 @@ public class SkillMessageController {
                 sessionId.toString(),
                 "permission_reply",
                 payload);
+
+        StreamMessage replyMessage = StreamMessage.builder()
+                .type(StreamMessage.Types.PERMISSION_REPLY)
+                .role("assistant")
+                .permissionId(permId)
+                .response(request.getApproved() ? "approved" : "rejected")
+                .build();
+        gatewayRelayService.publishProtocolMessage(sessionId.toString(), replyMessage);
 
         log.info("Permission reply sent: sessionId={}, permId={}, approved={}",
                 sessionId, permId, request.getApproved());

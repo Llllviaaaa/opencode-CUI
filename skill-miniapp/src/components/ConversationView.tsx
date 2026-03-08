@@ -5,11 +5,15 @@ import type { Message } from '../protocol/types';
 interface ConversationViewProps {
   messages: Message[];
   loading?: boolean;
+  onQuestionAnswer?: (answer: string) => void;
+  onPermissionDecision?: (permissionId: string, allow: boolean) => void;
 }
 
 export const ConversationView: React.FC<ConversationViewProps> = ({
   messages,
   loading = false,
+  onQuestionAnswer,
+  onPermissionDecision,
 }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -43,7 +47,12 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   return (
     <div ref={containerRef} className="conversation-container">
       {messages.map((msg) => (
-        <MessageBubble key={msg.id} message={msg} />
+        <MessageBubble
+          key={msg.id}
+          message={msg}
+          onQuestionAnswer={onQuestionAnswer}
+          onPermissionDecision={onPermissionDecision}
+        />
       ))}
       <div ref={bottomRef} />
     </div>

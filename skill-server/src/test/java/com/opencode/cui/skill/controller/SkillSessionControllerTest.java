@@ -52,6 +52,8 @@ class SkillSessionControllerTest {
         ResponseEntity<SkillSession> response = controller.createSession(request);
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
         assertNotNull(response.getBody());
+        verify(gatewayRelayService).subscribeToSessionBroadcast("1");
+        verify(gatewayRelayService).sendInvokeToGateway(eq("3"), eq("1"), eq("create_session"), isNull());
     }
 
     @Test
@@ -96,6 +98,7 @@ class SkillSessionControllerTest {
         var response = controller.closeSession(42L);
         assertEquals(HttpStatus.OK, response.getStatusCode());
         verify(sessionService).closeSession(42L);
+        verify(gatewayRelayService).unsubscribeFromSession("42");
     }
 
     @Test

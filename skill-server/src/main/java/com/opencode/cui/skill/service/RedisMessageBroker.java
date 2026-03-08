@@ -123,44 +123,6 @@ public class RedisMessageBroker {
         sessionSequences.remove(sessionId);
     }
 
-    // ==================== invoke_relay (v1 protocol) ====================
-
-    /**
-     * Publish an invoke message to the invoke_relay channel for a specific agent.
-     * Used when this Skill instance has no direct Gateway WS connection,
-     * so the message is relayed through Redis to a Skill instance that does.
-     *
-     * @param agentId the target agent ID
-     * @param message the invoke message (JSON string)
-     */
-    public void publishInvokeRelay(String agentId, String message) {
-        String channel = "invoke_relay:" + agentId;
-        publishMessage(channel, message, null);
-    }
-
-    /**
-     * Subscribe to invoke_relay channels for a specific agent.
-     * Called by Skill instances that have a Gateway WS connection,
-     * so they can relay invoke messages on behalf of other instances.
-     *
-     * @param agentId the agent ID to subscribe to
-     * @param handler callback to handle received invoke messages
-     */
-    public void subscribeInvokeRelay(String agentId, Consumer<String> handler) {
-        String channel = "invoke_relay:" + agentId;
-        subscribe(channel, handler);
-    }
-
-    /**
-     * Unsubscribe from invoke_relay channel for a specific agent.
-     *
-     * @param agentId the agent ID to unsubscribe from
-     */
-    public void unsubscribeInvokeRelay(String agentId) {
-        String channel = "invoke_relay:" + agentId;
-        unsubscribe(channel);
-    }
-
     // ========== Internal methods ==========
 
     private void publishMessage(String channel, String message, Long sequenceNumber) {
@@ -187,6 +149,8 @@ public class RedisMessageBroker {
     }
 
     private void subscribe(String channel, Consumer<String> handler) {
+        unsubscribe(channel);
+
         MessageListener listener = (Message message, byte[] pattern) -> {
             try {
                 String json = new String(message.getBody(), StandardCharsets.UTF_8);

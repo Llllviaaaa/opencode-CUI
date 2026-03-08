@@ -1,5 +1,5 @@
 {
-    "dependencies": {
-        "@opencode-cui/pc-agent": "file:../src/main/pc-agent"
-    }
+  "dependencies": {
+    "@opencode-ai/plugin": "1.2.21"
+  }
 }

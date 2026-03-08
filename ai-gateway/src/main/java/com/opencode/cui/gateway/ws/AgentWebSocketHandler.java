@@ -30,7 +30,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * - register: registers agent in AgentRegistryService, notifies Skill Server
  * agent_online
  * - heartbeat: updates last_seen_at
- * - tool_event / tool_done / tool_error / session_created: relayed to Skill
+ * - tool_event / tool_done / tool_error / session_created / permission_request:
+ * relayed to Skill
  * Server
  * On close: marks agent offline, notifies Skill Server agent_offline
  */
@@ -128,7 +129,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
         switch (type) {
             case "register" -> handleRegister(session, message, userId, akId);
             case "heartbeat" -> handleHeartbeat(session);
-            case "tool_event", "tool_done", "tool_error", "session_created", "status_response" ->
+            case "tool_event", "tool_done", "tool_error", "session_created",
+                    "permission_request", "status_response" ->
                 handleRelayToSkillServer(session, message);
             default -> log.warn("Unknown message type from PCAgent: type={}, sessionId={}",
                     type, session.getId());

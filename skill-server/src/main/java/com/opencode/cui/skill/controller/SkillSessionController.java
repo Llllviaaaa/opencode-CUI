@@ -57,6 +57,8 @@ public class SkillSessionController {
                 request.getImChatId()
         );
 
+        gatewayRelayService.subscribeToSessionBroadcast(session.getId().toString());
+
         // Send create_session invoke to AI-Gateway if agentId is provided
         if (request.getAgentId() != null) {
             gatewayRelayService.sendInvokeToGateway(
@@ -127,6 +129,7 @@ public class SkillSessionController {
             }
 
             sessionService.closeSession(id);
+            gatewayRelayService.unsubscribeFromSession(id.toString());
             return ResponseEntity.ok(Map.of("status", "closed", "sessionId", id.toString()));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.notFound().build();

@@ -49,7 +49,7 @@ public class StreamBufferService {
         try {
             switch (msg.getType()) {
                 case StreamMessage.Types.TEXT_DELTA:
-                    appendContent(sessionId, msg.getPartId(), "text", msg.getContent());
+                    appendContent(sessionId, msg, "text");
                     setSessionStreaming(sessionId, true);
                     break;
 
@@ -61,7 +61,7 @@ public class StreamBufferService {
                     break;
 
                 case StreamMessage.Types.THINKING_DELTA:
-                    appendContent(sessionId, msg.getPartId(), "thinking", msg.getContent());
+                    appendContent(sessionId, msg, "thinking");
                     setSessionStreaming(sessionId, true);
                     break;
 
@@ -81,13 +81,13 @@ public class StreamBufferService {
                     break;
 
                 case StreamMessage.Types.PERMISSION_ASK:
+                case StreamMessage.Types.PERMISSION_REPLY:
                     String permPartId = msg.getPartId() != null ? msg.getPartId() : msg.getPermissionId();
                     setPartFull(sessionId, permPartId, msg);
                     break;
 
-                case StreamMessage.Types.STEP_DONE:
-                    // Step completed: clear all parts for this session
-                    clearSession(sessionId);
+                case StreamMessage.Types.FILE:
+                    setPartFull(sessionId, msg.getPartId(), msg);
                     break;
 
                 case StreamMessage.Types.SESSION_STATUS:
@@ -165,7 +165,9 @@ public class StreamBufferService {
      * Append content to an existing part (used for text.delta / thinking.delta).
      * If part doesn't exist, creates it.
      */
-    private void appendContent(String sessionId, String partId, String partType, String content) {
+    private void appendContent(String sessionId, StreamMessage msg, String partType) {
+        String partId = msg.getPartId();
+        String content = msg.getContent();
         if (partId == null || content == null)
             return;
 
@@ -181,6 +183,7 @@ public class StreamBufferService {
                     StreamMessage part = objectMapper.readValue(existing, StreamMessage.class);
                     String newContent = (part.getContent() != null ? part.getContent() : "") + content;
                     part.setContent(newContent);
+                    part.setEmittedAt(msg.getEmittedAt());
                     redis.opsForValue().set(key, objectMapper.writeValueAsString(part),
                             TTL_HOURS, TimeUnit.HOURS);
                 } catch (JsonProcessingException e) {
@@ -191,7 +194,14 @@ public class StreamBufferService {
             // New part: create with initial content
             StreamMessage part = StreamMessage.builder()
                     .type(partType.equals("text") ? StreamMessage.Types.TEXT_DELTA : StreamMessage.Types.THINKING_DELTA)
+                    .sessionId(msg.getSessionId())
+                    .emittedAt(msg.getEmittedAt())
+                    .messageId(msg.getMessageId())
+                    .messageSeq(msg.getMessageSeq())
+                    .role(msg.getRole())
+                    .sourceMessageId(msg.getSourceMessageId())
                     .partId(partId)
+                    .partSeq(msg.getPartSeq())
                     .content(content)
                     .build();
             try {
