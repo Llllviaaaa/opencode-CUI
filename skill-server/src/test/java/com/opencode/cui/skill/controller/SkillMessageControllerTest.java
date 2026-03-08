@@ -3,7 +3,6 @@ package com.opencode.cui.skill.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.PageResult;
 import com.opencode.cui.skill.model.SkillMessage;
-import com.opencode.cui.skill.model.SkillMessageView;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.repository.SkillMessagePartRepository;
 import com.opencode.cui.skill.service.GatewayRelayService;
@@ -21,7 +20,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;

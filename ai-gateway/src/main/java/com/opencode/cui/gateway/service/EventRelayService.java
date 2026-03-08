@@ -113,6 +113,30 @@ public class EventRelayService {
         }
     }
 
+    /**
+     * Send a status_query message to the agent identified by ak.
+     * The PC Agent will respond with a status_response containing OpenCode health
+     * info.
+     */
+    public void sendStatusQuery(String ak) {
+        GatewayMessage query = GatewayMessage.builder()
+                .type("status_query")
+                .build();
+        sendToLocalAgent(ak, query);
+        log.debug("Sent status_query to agent: ak={}", ak);
+    }
+
+    /**
+     * Send status_query to all currently connected agents.
+     */
+    public void sendStatusQueryToAll() {
+        agentSessions.forEach((ak, session) -> {
+            if (session.isOpen()) {
+                sendStatusQuery(ak);
+            }
+        });
+    }
+
     public int getActiveSessionCount() {
         return (int) agentSessions.values().stream()
                 .filter(WebSocketSession::isOpen)
