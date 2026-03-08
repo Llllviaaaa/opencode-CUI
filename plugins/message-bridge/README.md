@@ -119,6 +119,7 @@ Only `auth.ak` and `auth.sk` are required fields (when `enabled` is not `false`)
 |--------|----------|---------|-------------|
 | `auth.ak` | yes* | none | Access Key |
 | `auth.sk` | yes* | none | Secret Key |
+| `debug` | no | `false` | Enable detailed debug logging |
 | `gateway.url` | no | `ws://localhost:8081/ws/agent` | Gateway WebSocket endpoint |
 | `gateway.deviceName` | no | `Local Machine` | Device identifier |
 | `gateway.toolType` | no | `opencode` | Tool type identifier |
@@ -146,7 +147,10 @@ BRIDGE_SDK_TIMEOUT_MS=10000
 BRIDGE_AUTH_AK=your-access-key
 BRIDGE_AUTH_SK=your-secret-key
 BRIDGE_ENABLED=true
+BRIDGE_DEBUG=true
 ```
+
+The `BRIDGE_DEBUG` environment variable is also supported for backward compatibility (equivalent to setting `debug: true` in config).
 
 The plugin uses the injected OpenCode `client` from the plugin runtime and does not accept `sdk.baseUrl`.
 
