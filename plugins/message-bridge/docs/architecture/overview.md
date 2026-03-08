@@ -153,27 +153,48 @@ env (BRIDGE_*) > project (.opencode/message-bridge.jsonc) > user (~/.config/open
 
 #### 3.1.3 配置示例
 
+**最小配置（仅必填字段）：**
+
 ```jsonc
 {
-  "config_version": 1,              // 必填，当前仅支持 1
-  "enabled": true,                  // false 时安全禁用插件
+  "auth": {
+    "ak": "your-access-key",
+    "sk": "your-secret-key"
+  }
+}
+```
+
+**完整配置（所有字段）：**
+
+```jsonc
+{
+  "config_version": 1,              // 默认: 1
+  "enabled": true,                  // 默认: true，false 时安全禁用插件
   "gateway": {
-    "url": "wss://gateway.example.com/ws/agent",
-    "heartbeatIntervalMs": 30000,   // 默认 30s
+    "url": "wss://gateway.example.com/ws/agent",  // 默认: ws://localhost:8081/ws/agent
+    "deviceName": "My Device",      // 默认: Local Machine
+    "toolType": "opencode",         // 默认: opencode
+    "toolVersion": "1.0.0",         // 默认: 1.0.0
+    "heartbeatIntervalMs": 30000,   // 默认: 30000
     "reconnect": {
-      "baseMs": 1000,               // 指数退避起始值
-      "maxMs": 30000                // 指数退避上限
+      "baseMs": 1000,               // 默认: 1000
+      "maxMs": 30000,               // 默认: 30000
+      "exponential": true           // 默认: true
+    },
+    "ping": {
+      "intervalMs": 30000,          // 默认: 30000
+      "pongTimeoutMs": 10000        // 默认: 10000
     }
   },
   "sdk": {
-    "timeoutMs": 10000              // SDK 调用超时，默认 10s
+    "timeoutMs": 10000              // 默认: 10000
   },
   "auth": {
     "ak": "${BRIDGE_AK}",           // 支持 env 占位符
     "sk": "${BRIDGE_SK}"
   },
   "events": {
-    "allowlist": [                  // 前缀匹配 + 精确匹配
+    "allowlist": [                  // 默认: ['message.*', 'permission.*', ...]
       "message.*",
       "permission.*",
       "session.*",
