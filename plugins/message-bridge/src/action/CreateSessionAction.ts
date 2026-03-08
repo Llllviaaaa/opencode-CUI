@@ -71,6 +71,7 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
         if (!hasError(executionResult.data)) {
           const root = executionResult.data as Record<string, unknown> | undefined;
           const nested = root?.data as Record<string, unknown> | undefined;
+          const sessionObject = nested ?? root ?? {};
           const pick = (value: unknown): string | undefined =>
             typeof value === 'string' && value.trim() ? value : undefined;
           const returnedSessionId =
@@ -82,7 +83,8 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
           return {
             success: true,
             data: {
-              sessionId: returnedSessionId
+              sessionId: returnedSessionId,
+              session: sessionObject,
             }
           };
         }

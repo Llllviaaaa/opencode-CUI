@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test';
 
 import { ChatAction } from '../../dist/action/ChatAction.js';
 import { CreateSessionAction } from '../../dist/action/CreateSessionAction.js';
+import { AbortSessionAction } from '../../dist/action/AbortSessionAction.js';
 import { CloseSessionAction } from '../../dist/action/CloseSessionAction.js';
 import { PermissionReplyAction } from '../../dist/action/PermissionReplyAction.js';
 import { QuestionReplyAction } from '../../dist/action/QuestionReplyAction.js';
@@ -179,8 +180,11 @@ describe('CloseSessionAction coverage', () => {
     const okClient = {
       session: {
         create: async () => ({}),
-        abort: async (options) => {
+        delete: async (options) => {
           calls.push(options);
+          return { data: { deleted: true } };
+        },
+        abort: async (options) => {
           return { data: { aborted: true } };
         },
         prompt: async () => ({}),
@@ -190,6 +194,33 @@ describe('CloseSessionAction coverage', () => {
     const ok = await action.execute({ toolSessionId: 's1' }, readyContext(okClient));
     expect(ok.success).toBe(true);
     expect(ok.data.closed).toBe(true);
+    expect(calls[0]).toEqual({ path: { id: 's1' } });
+  });
+});
+
+describe('AbortSessionAction coverage', () => {
+  test('validate and execute paths', async () => {
+    const action = new AbortSessionAction();
+    expect(action.validate(undefined).valid).toBe(false);
+    expect(action.validate({ toolSessionId: 's1' }).valid).toBe(true);
+
+    const calls = [];
+    const okClient = {
+      session: {
+        create: async () => ({}),
+        delete: async () => ({}),
+        abort: async (options) => {
+          calls.push(options);
+          return { data: { aborted: true } };
+        },
+        prompt: async () => ({}),
+      },
+      postSessionIdPermissionsPermissionId: async () => ({}),
+    };
+
+    const ok = await action.execute({ toolSessionId: 's1' }, readyContext(okClient));
+    expect(ok.success).toBe(true);
+    expect(ok.data.aborted).toBe(true);
     expect(calls[0]).toEqual({ path: { id: 's1' } });
   });
 });
@@ -240,21 +271,38 @@ describe('QuestionReplyAction coverage', () => {
     const action = new QuestionReplyAction();
     expect(action.validate(null).valid).toBe(false);
     expect(action.validate({ toolSessionId: 's-tool', toolCallId: 'call-1' }).valid).toBe(false);
-    expect(action.validate({ toolSessionId: 's-tool', answer: 'vite' }).valid).toBe(false);
+    expect(action.validate({ toolSessionId: 's-tool', answer: 'vite' }).valid).toBe(true);
     expect(action.validate({ toolCallId: 'call-1', answer: 'vite' }).valid).toBe(false);
     expect(action.validate({ toolSessionId: 's-tool', toolCallId: 'call-1', answer: 'vite' }).valid).toBe(true);
   });
 
-  test('execute maps answer to session.prompt text and does not pass toolCallId to sdk', async () => {
-    const calls = [];
+  test('execute maps answer to raw question reply endpoint', async () => {
+    const getCalls = [];
+    const postCalls = [];
     const action = new QuestionReplyAction();
     const client = {
       session: {
         create: async () => ({}),
+        delete: async () => ({}),
         abort: async () => ({}),
-        prompt: async (options) => {
-          calls.push(options);
-          return { data: { ok: true } };
+        prompt: async () => ({ data: { ok: true } }),
+      },
+      _client: {
+        get: async (options) => {
+          getCalls.push(options);
+          return {
+            data: [
+              {
+                id: 'question-request-1',
+                sessionID: 's-tool',
+                tool: { callID: 'call-1' },
+              },
+            ],
+          };
+        },
+        post: async (options) => {
+          postCalls.push(options);
+          return { data: undefined };
         },
       },
       postSessionIdPermissionsPermissionId: async () => ({}),
@@ -266,10 +314,15 @@ describe('QuestionReplyAction coverage', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(calls[0]).toEqual({
-      path: { id: 's-tool' },
-      body: { parts: [{ type: 'text', text: 'Vite' }] },
-    });
+    expect(getCalls).toEqual([{ url: '/question' }]);
+    expect(postCalls).toEqual([
+      {
+        url: '/question/{requestID}/reply',
+        path: { requestID: 'question-request-1' },
+        body: { answers: [['Vite']] },
+        headers: { 'Content-Type': 'application/json' },
+      },
+    ]);
   });
 
   test('execute handles sdk errors', async () => {
@@ -277,8 +330,13 @@ describe('QuestionReplyAction coverage', () => {
     const client = {
       session: {
         create: async () => ({}),
+        delete: async () => ({}),
         abort: async () => ({}),
-        prompt: async () => ({ error: { message: 'question blocked' } }),
+        prompt: async () => ({ data: { ok: true } }),
+      },
+      _client: {
+        get: async () => ({ data: [] }),
+        post: async () => ({ data: undefined }),
       },
       postSessionIdPermissionsPermissionId: async () => ({}),
     };
@@ -288,8 +346,8 @@ describe('QuestionReplyAction coverage', () => {
       readyContext(client),
     );
     expect(failed.success).toBe(false);
-    expect(failed.errorCode).toBe('SDK_UNREACHABLE');
-    expect(failed.errorMessage).toContain('question blocked');
+    expect(failed.errorCode).toBe('INVALID_PAYLOAD');
+    expect(failed.errorMessage).toContain('Unable to resolve pending question request');
   });
 
   test('execute maps timeout errors to SDK_TIMEOUT', async () => {
@@ -297,10 +355,15 @@ describe('QuestionReplyAction coverage', () => {
     const client = {
       session: {
         create: async () => ({}),
+        delete: async () => ({}),
         abort: async () => ({}),
-        prompt: async () => {
+        prompt: async () => ({ data: { ok: true } }),
+      },
+      _client: {
+        get: async () => {
           throw new Error('request timed out');
         },
+        post: async () => ({ data: undefined }),
       },
       postSessionIdPermissionsPermissionId: async () => ({}),
     };

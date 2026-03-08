@@ -111,44 +111,39 @@ export interface HeartbeatMessage {
 
 export interface ToolEventMessage {
   type: 'tool_event';
-  sessionId?: string;
+  toolSessionId?: string;
   event: unknown;
-  envelope: Envelope;
 }
 
 export interface ToolDoneMessage {
   type: 'tool_done';
-  sessionId?: string;
+  toolSessionId?: string;
   result?: unknown;
-  envelope: Envelope;
+  usage?: unknown;
 }
 
 export interface ToolErrorMessage {
   type: 'tool_error';
-  sessionId?: string;
+  welinkSessionId?: string;
+  toolSessionId?: string;
   error: string;
-  envelope: Envelope;
 }
 
 export interface SessionCreatedMessage {
   type: 'session_created';
-  sessionId: string;
-  toolSessionId?: string;
+  welinkSessionId?: string;
+  toolSessionId: string;
   session?: unknown;
-  envelope: Envelope;
 }
 
 export interface StatusResponseMessage {
   type: 'status_response';
   opencodeOnline: boolean;
-  sessionId?: string;
-  envelope: Envelope;
 }
 
 interface BaseInvokeMessage {
   type: 'invoke';
-  sessionId?: string;
-  envelope?: Envelope;
+  welinkSessionId?: string;
 }
 
 export interface ChatInvokeMessage extends BaseInvokeMessage {
@@ -166,6 +161,11 @@ export interface CloseSessionInvokeMessage extends BaseInvokeMessage {
   payload: CloseSessionPayload;
 }
 
+export interface AbortSessionInvokeMessage extends BaseInvokeMessage {
+  action: 'abort_session';
+  payload: AbortSessionPayload;
+}
+
 export interface PermissionReplyInvokeMessage extends BaseInvokeMessage {
   action: 'permission_reply';
   payload: PermissionReplyPayload;
@@ -180,13 +180,12 @@ export type InvokeMessage =
   | ChatInvokeMessage
   | CreateSessionInvokeMessage
   | CloseSessionInvokeMessage
+  | AbortSessionInvokeMessage
   | PermissionReplyInvokeMessage
   | QuestionReplyInvokeMessage;
 
 export interface StatusQueryMessage {
   type: 'status_query';
-  sessionId?: string;
-  envelope?: Envelope;
 }
 
 export type UpstreamMessage =
@@ -204,7 +203,7 @@ export type DownstreamMessage = InvokeMessage | StatusQueryMessage;
 // Actions
 // ---------------------------------------------------------------------------
 
-export const INVOKE_ACTIONS = ['chat', 'create_session', 'close_session', 'permission_reply', 'question_reply'] as const;
+export const INVOKE_ACTIONS = ['chat', 'create_session', 'abort_session', 'close_session', 'permission_reply', 'question_reply'] as const;
 export type InvokeAction = typeof INVOKE_ACTIONS[number];
 
 export interface ChatPayload {
@@ -212,12 +211,13 @@ export interface ChatPayload {
   text: string;
 }
 
-export interface CreateSessionPayload {
-  sessionId?: string;
-  metadata?: Record<string, unknown>;
-}
+export type CreateSessionPayload = Record<string, unknown>;
 
 export interface CloseSessionPayload {
+  toolSessionId: string;
+}
+
+export interface AbortSessionPayload {
   toolSessionId: string;
 }
 
@@ -232,7 +232,7 @@ export interface PermissionReplyPayload {
 
 export interface QuestionReplyPayload {
   toolSessionId: string;
-  toolCallId: string;
+  toolCallId?: string;
   answer: string;
 }
 
@@ -277,9 +277,9 @@ export function stateToErrorCode(state: ConnectionState): ErrorCode {
 
 export interface ToolErrorPayload {
   type: 'tool_error';
-  sessionId?: string;
+  welinkSessionId?: string;
+  toolSessionId?: string;
   error: string;
-  envelope: Envelope;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +289,7 @@ export interface ToolErrorPayload {
 export interface OpencodeSessionClient {
   create(options?: { body?: Record<string, unknown> }): Promise<unknown>;
   abort(options: { path: { id: string } }): Promise<unknown>;
+  delete?: (options: { path: { id: string } }) => Promise<unknown>;
   prompt(options: {
     path: { id: string };
     body: { parts: Array<{ type: 'text'; text: string }> };
@@ -301,6 +302,10 @@ export interface OpencodeClient {
     path: { id: string; permissionID: string };
     body: { response: 'once' | 'always' | 'reject' };
   }) => Promise<unknown>;
+  _client?: {
+    get?: (options: Record<string, unknown>) => Promise<unknown>;
+    post?: (options: Record<string, unknown>) => Promise<unknown>;
+  };
   app?: {
     health?: (options?: Record<string, unknown>) => Promise<unknown> | unknown;
     log: (options?: {

@@ -12,6 +12,15 @@
 插件为全新实现（非 `pc-agent` 二次开发），但兼容现有 `pc-agent <-> ai-gateway` 外边界。  
 本次仅实现插件，不改 `ai-gateway`、`skill-server` 业务代码。
 
+### 1.1 协议对齐更正（2026-03-09）
+
+当前实现与 `pc-agent` 协议统一后的口径如下：
+
+1. 边界消息不再使用 `envelope`。
+2. 会话字段采用 `welinkSessionId`（技能侧）与 `toolSessionId`（OpenCode 侧）。
+3. `close_session` 映射 `session.delete`；新增 `abort_session` 映射 `session.abort`。
+4. `question_reply` 走 question API（`GET /question` + `POST /question/{requestID}/reply`），不再走 `session.prompt`。
+
 ## 二、目标与范围
 ### 2.1 目标
 1. 实现 OpenCode 原生插件与 `ai-gateway` 的稳定桥接。

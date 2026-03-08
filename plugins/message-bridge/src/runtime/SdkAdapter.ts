@@ -12,6 +12,14 @@ export function createSdkAdapter(client: unknown): unknown {
     return client;
   }
 
+  const rawClient =
+    c._client && typeof c._client === 'object'
+      ? {
+          get: typeof c._client.get === 'function' ? c._client.get.bind(c._client) : undefined,
+          post: typeof c._client.post === 'function' ? c._client.post.bind(c._client) : undefined,
+        }
+      : undefined;
+
   return {
     session: {
       create: async (options: { body?: Record<string, unknown> }) => {
@@ -19,6 +27,12 @@ export function createSdkAdapter(client: unknown): unknown {
       },
       abort: async (options: { path: { id: string } }) => {
         return c.session!.abort(options);
+      },
+      delete: async (options: { path: { id: string } }) => {
+        if (!c.session!.delete) {
+          throw new Error('SDK session.delete is not available');
+        }
+        return c.session!.delete(options);
       },
       prompt: async (options: {
         path: { id: string };
@@ -30,9 +44,10 @@ export function createSdkAdapter(client: unknown): unknown {
     postSessionIdPermissionsPermissionId: async (options: {
       path: { id: string; permissionID: string };
       body: { response: 'once' | 'always' | 'reject' };
-    }) => {
+      }) => {
       return c.postSessionIdPermissionsPermissionId!(options);
     },
+    _client: rawClient,
     app: c.app,
   } as OpencodeClient;
 }

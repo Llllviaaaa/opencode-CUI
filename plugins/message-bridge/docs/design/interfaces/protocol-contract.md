@@ -1,269 +1,127 @@
-# Message-Bridge 协议契约
+# Message-Bridge 协议契约（当前生效）
 
-**Version:** 1.1  
-**Date:** 2026-03-07  
-**Status:** Draft  
+**Version:** 1.2
+**Date:** 2026-03-09
+**Status:** Active
 **Owner:** message-bridge maintainers  
-**Related:** `../../product/prd.md`, `../../architecture/overview.md`, `../solution-design.md`
+**Related:** `../../product/prd.md`, `../../architecture/overview.md`
 
-## In Scope
+## 1. 范围
 
-- 插件边界的上下行消息类型契约
-- Envelope 字段及语义约束
-- `permission_reply` 的标准字段定义
-- `question_reply` 的标准字段定义
+- 仅定义 `message-bridge <-> ai-gateway` 边界协议。
+- 不定义 Gateway/Skill-Server 内部路由与持久化。
 
-## Out of Scope
-
-- Gateway 内部处理逻辑
-- Skill-server 的持久化逻辑
-
-## External Dependencies
-
-- `ai-gateway` WebSocket 端点 `/ws/agent`
-- `@opencode-ai/sdk` 的 action 与 event 语义
-
-## 消息类型
+## 2. 消息类型
 
 | 方向 | 类型 |
 |---|---|
 | 下行 | `invoke`, `status_query` |
 | 上行 | `register`, `heartbeat`, `tool_event`, `tool_done`, `tool_error`, `session_created`, `status_response` |
 
-## Envelope 契约
+## 3. 字段约定（关键）
 
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| `version` | yes | envelope 版本 |
-| `source` | yes | 消息来源 |
-| `agentId` | yes | 当前 MVP 使用本地生成 agentId |
-| `sessionId` | conditional | `status_response` 场景可选 |
-| `sequenceNumber` | yes | scope 内单调递增 |
-| `sequenceScope` | yes | `session` 或 `global` |
+1. **不再使用 `envelope`**；边界报文全部改为扁平字段。
+2. `welinkSessionId`：技能侧会话标识（Gateway/Skill 侧语义）。
+3. `toolSessionId`：OpenCode 会话标识（SDK 侧语义）。
+4. `status_query`/`status_response` 不携带会话字段。
 
-## 插件与 AI-Gateway 报文示例（上下行全量）
+## 4. 下行协议（Gateway -> 插件）
 
-以下示例仅覆盖插件与 AI-Gateway 边界消息。`tool_event.event` 为透传字段，本文件不展开 `opencode-server` 原始完整报文。
-
-### 下行消息（Gateway -> 插件）
-
-#### `invoke`（通用外层）
+### 4.1 `invoke`
 
 ```json
 {
   "type": "invoke",
+  "welinkSessionId": "wlk-001",
   "action": "chat",
   "payload": {
-    "toolSessionId": "tool-001",
-    "text": "请总结最近变更"
-  },
-  "envelope": {
-    "version": "1.0",
-    "messageId": "msg-0001",
-    "timestamp": 1741334400000,
-    "source": "message-bridge",
-    "agentId": "bridge-a1b2c3d4",
-    "sessionId": "sess-001",
-    "sequenceNumber": 1,
-    "sequenceScope": "session"
+    "toolSessionId": "ses_001",
+    "text": "继续"
   }
 }
 ```
 
-`invoke.payload` 按 `action` 变化，示例如下：
+`action` 取值：
 
-`chat`
+- `chat`
+- `create_session`
+- `abort_session`
+- `close_session`
+- `permission_reply`
+- `question_reply`
 
-```json
-{
-  "toolSessionId": "tool-001",
-  "text": "继续上一条任务"
-}
-```
-
-`create_session`
+### 4.2 `status_query`
 
 ```json
 {
-  "sessionId": "sess-002",
-  "metadata": {
-    "origin": "im-miniapp"
-  }
+  "type": "status_query"
 }
 ```
 
-`close_session`
+## 5. 上行协议（插件 -> Gateway）
 
-```json
-{
-  "toolSessionId": "tool-001"
-}
-```
-
-`permission_reply`
-
-```json
-{
-  "permissionId": "perm-100",
-  "toolSessionId": "tool-001",
-  "response": "once"
-}
-```
-
-`question_reply`
-
-```json
-{
-  "toolSessionId": "tool-001",
-  "toolCallId": "call-200",
-  "answer": "Vite"
-}
-```
-
-#### `status_query`
-
-```json
-{
-  "type": "status_query",
-  "sessionId": "sess-001",
-  "envelope": {
-    "version": "1.0",
-    "messageId": "msg-0002",
-    "timestamp": 1741334401000,
-    "source": "message-bridge",
-    "agentId": "bridge-a1b2c3d4",
-    "sessionId": "sess-001",
-    "sequenceNumber": 2,
-    "sequenceScope": "session"
-  }
-}
-```
-
-### 上行消息（插件 -> AI-Gateway）
-
-#### `register`
-
-```json
-{
-  "type": "register",
-  "deviceName": "Local Machine",
-  "os": "darwin",
-  "toolType": "opencode",
-  "toolVersion": "1.2.15"
-}
-```
-
-#### `heartbeat`
-
-```json
-{
-  "type": "heartbeat",
-  "timestamp": "2026-03-07T10:00:00.000Z"
-}
-```
-
-#### `tool_event`（通用外层）
+### 5.1 `tool_event`
 
 ```json
 {
   "type": "tool_event",
-  "sessionId": "sess-001",
-  "event": { // opencode原始报文透传
-    "type": "message.part.updated",
-    "properties": {}
-  },
-  "envelope": {
-    "version": "1.0",
-    "messageId": "msg-1001",
-    "timestamp": 1741334410000,
-    "source": "message-bridge",
-    "agentId": "bridge-a1b2c3d4",
-    "sessionId": "sess-001",
-    "sequenceNumber": 10,
-    "sequenceScope": "session"
-  }
+  "toolSessionId": "ses_001",
+  "event": { "type": "message.part.updated" }
 }
 ```
 
-#### `tool_done`
+### 5.2 `tool_done`
 
 ```json
 {
   "type": "tool_done",
-  "sessionId": "sess-001",
-  "result": {
-    "ok": true
-  },
-  "envelope": {
-    "version": "1.0",
-    "messageId": "msg-1002",
-    "timestamp": 1741334415000,
-    "source": "message-bridge",
-    "agentId": "bridge-a1b2c3d4",
-    "sessionId": "sess-001",
-    "sequenceNumber": 11,
-    "sequenceScope": "session"
-  }
+  "toolSessionId": "ses_001"
 }
 ```
 
-#### `tool_error`
+### 5.3 `tool_error`
 
 ```json
 {
   "type": "tool_error",
-  "sessionId": "sess-001",
-  "error": "OpenCode SDK request timeout",
-  "envelope": {
-    "version": "1.0",
-    "messageId": "msg-1003",
-    "timestamp": 1741334420000,
-    "source": "message-bridge",
-    "agentId": "bridge-a1b2c3d4",
-    "sessionId": "sess-001",
-    "sequenceNumber": 12,
-    "sequenceScope": "session"
-  }
+  "welinkSessionId": "wlk-001",
+  "toolSessionId": "ses_001",
+  "error": "error message"
 }
 ```
 
-#### `session_created`
+### 5.4 `session_created`
 
 ```json
 {
   "type": "session_created",
-  "sessionId": "sess-002",
-  "envelope": {
-    "version": "1.0",
-    "messageId": "msg-1004",
-    "timestamp": 1741334425000,
-    "source": "message-bridge",
-    "agentId": "bridge-a1b2c3d4",
-    "sessionId": "sess-002",
-    "sequenceNumber": 1,
-    "sequenceScope": "session"
-  }
+  "welinkSessionId": "wlk-001",
+  "toolSessionId": "ses_new_001",
+  "session": { "id": "ses_new_001" }
 }
 ```
 
-#### `status_response`
+### 5.5 `status_response`
 
 ```json
 {
   "type": "status_response",
-  "opencodeOnline": true,
-  "sessionId": "sess-001",
-  "envelope": {
-    "version": "1.0",
-    "messageId": "msg-1005",
-    "timestamp": 1741334430000,
-    "source": "message-bridge",
-    "agentId": "bridge-a1b2c3d4",
-    "sessionId": "sess-001",
-    "sequenceNumber": 13,
-    "sequenceScope": "session"
-  }
+  "opencodeOnline": true
 }
 ```
 
-`status_response.sessionId` 为可选字段；未绑定会话时可省略。
+## 6. Action 与 SDK 映射
+
+| Action | SDK 调用 |
+|---|---|
+| `chat` | `session.prompt` |
+| `create_session` | `session.create`（payload 透传） |
+| `abort_session` | `session.abort` |
+| `close_session` | `session.delete` |
+| `permission_reply` | `postSessionIdPermissionsPermissionId` |
+| `question_reply` | `GET /question` + `POST /question/{requestID}/reply` |
+
+## 7. 兼容性声明
+
+- 本文件定义的是当前唯一有效契约。
+- 历史 `envelope/sessionId` 形态视为废弃，不再作为兼容输入输出。

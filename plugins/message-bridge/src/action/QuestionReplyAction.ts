@@ -1,24 +1,19 @@
 import {
   Action,
   QuestionReplyPayload,
-  OpencodeClient,
   ValidationResult,
   ActionResult,
   ActionContext,
   ErrorCode,
   isOpencodeClient,
-  hasError,
-  safeExecute,
   stateToErrorCode
 } from '../types';
 import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
 /**
  * Concrete implementation of question_reply action.
- * Accepts payload: { toolSessionId, toolCallId, answer }.
- *
- * Per layer4 protocol, toolCallId is used for protocol-level correlation
- * only and is not passed to SDK. The answer is sent via session.prompt().
+ * Accepts payload: { toolSessionId, toolCallId?, answer }.
+ * Uses raw question APIs: GET /question + POST /question/{requestID}/reply.
  */
 export class QuestionReplyAction implements Action<QuestionReplyPayload> {
   name: string = 'question_reply';
@@ -41,57 +36,72 @@ export class QuestionReplyAction implements Action<QuestionReplyPayload> {
     const toolCallId =
       typeof p.toolCallId === 'string' && p.toolCallId.trim()
         ? p.toolCallId
-        : null;
+        : undefined;
     const answer =
       typeof p.answer === 'string' && p.answer.trim()
         ? p.answer
         : null;
 
-    if (!toolSessionId || !toolCallId || !answer) {
+    if (!toolSessionId || !answer) {
       return null;
     }
 
     return { toolSessionId, toolCallId, answer };
   }
 
-  private getErrorMessageFromResult(data: unknown): string {
-    if (data && typeof data === 'object' && 'error' in data) {
-      const errorField = (data as { error: unknown }).error;
-      if (errorField && typeof errorField === 'object' && 'message' in (errorField as Record<string, unknown>)) {
-        const messageField = (errorField as { message: unknown }).message;
-        if (typeof messageField === 'string') {
-          return messageField;
-        }
-        return String(messageField);
-      }
-      return getErrorMessage(errorField);
-    }
-    return 'Unknown error';
+  private readRecord(value: unknown): Record<string, unknown> | undefined {
+    return value !== null && typeof value === 'object'
+      ? value as Record<string, unknown>
+      : undefined;
   }
 
-  private async sendPrompt(
-    client: OpencodeClient,
+  private readString(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim() ? value : undefined;
+  }
+
+  private extractResultData<T>(result: unknown): T | undefined {
+    const resultRecord = this.readRecord(result);
+    if (!resultRecord) {
+      return undefined;
+    }
+    if ('data' in resultRecord) {
+      return resultRecord.data as T;
+    }
+    return result as T;
+  }
+
+  private async findPendingQuestionRequestId(
+    context: ActionContext,
     toolSessionId: string,
-    answer: string,
-  ): Promise<{ success: true; data: unknown } | { success: false; error: string }> {
-    const executionResult = await safeExecute(
-      client.session.prompt({
-        path: { id: toolSessionId },
-        body: { parts: [{ type: 'text', text: answer }] },
-      }),
-      (error) => getErrorMessage(error),
-    );
-
-    if (executionResult.success) {
-      if (!hasError(executionResult.data)) {
-        return { success: true, data: executionResult.data };
-      }
-
-      const sdkError = this.getErrorMessageFromResult(executionResult.data);
-      return { success: false, error: `Failed to send question reply: ${sdkError || 'Unknown error'}` };
+    toolCallId?: string,
+  ): Promise<string | undefined> {
+    const rawClient = this.readRecord((context.client as { _client?: unknown } | undefined)?._client);
+    const getFn = rawClient?.get as ((options: Record<string, unknown>) => Promise<unknown>) | undefined;
+    if (!getFn) {
+      throw new Error('raw client GET unavailable on client');
     }
 
-    return { success: false, error: `Failed to send question reply: ${executionResult.error}` };
+    const listResult = await getFn({ url: '/question' });
+    const pendingQuestions = this.extractResultData<unknown>(listResult);
+    const requests = Array.isArray(pendingQuestions)
+      ? pendingQuestions.filter((item): item is Record<string, unknown> => item !== null && typeof item === 'object')
+      : [];
+
+    const matched = requests.find((request) => {
+      const sessionID = this.readString(request.sessionID);
+      if (sessionID !== toolSessionId) {
+        return false;
+      }
+
+      if (!toolCallId) {
+        return true;
+      }
+
+      const tool = this.readRecord(request.tool);
+      return this.readString(tool?.callID) === toolCallId;
+    });
+
+    return this.readString(matched?.id);
   }
 
   validate(payload: unknown): ValidationResult {
@@ -99,7 +109,7 @@ export class QuestionReplyAction implements Action<QuestionReplyPayload> {
     if (!normalized) {
       return {
         valid: false,
-        error: 'question_reply payload requires toolSessionId, toolCallId, and answer'
+        error: 'question_reply payload requires toolSessionId and answer'
       };
     }
 
@@ -112,7 +122,7 @@ export class QuestionReplyAction implements Action<QuestionReplyPayload> {
       return {
         success: false,
         errorCode: 'INVALID_PAYLOAD',
-        errorMessage: 'question_reply payload requires toolSessionId, toolCallId, and answer'
+        errorMessage: 'question_reply payload requires toolSessionId and answer'
       };
     }
 
@@ -144,29 +154,44 @@ export class QuestionReplyAction implements Action<QuestionReplyPayload> {
     const client = context.client;
 
     try {
-      const executionResult = await this.sendPrompt(
-        client,
+      const requestId = await this.findPendingQuestionRequestId(
+        context,
         normalized.toolSessionId,
-        normalized.answer,
+        normalized.toolCallId,
       );
-
-      if (executionResult.success) {
+      if (!requestId) {
         return {
-          success: true,
-          data: executionResult.data
+          success: false,
+          errorCode: 'INVALID_PAYLOAD',
+          errorMessage: `Unable to resolve pending question request for toolSessionId=${normalized.toolSessionId}, toolCallId=${normalized.toolCallId ?? 'unknown'}`
         };
       }
 
-      context.logger?.error('action.question_reply.failed', {
-        toolSessionId: normalized.toolSessionId,
-        toolCallId: normalized.toolCallId,
-        error: executionResult.error,
-        latencyMs: Date.now() - startedAt,
+      const rawClient = this.readRecord((client as { _client?: unknown })._client);
+      const postFn = rawClient?.post as ((options: Record<string, unknown>) => Promise<unknown>) | undefined;
+      if (!postFn) {
+        return {
+          success: false,
+          errorCode: 'SDK_UNREACHABLE',
+          errorMessage: 'raw client POST unavailable on client'
+        };
+      }
+
+      await postFn({
+        url: '/question/{requestID}/reply',
+        path: { requestID: requestId },
+        body: { answers: [[normalized.answer]] },
+        headers: {
+          'Content-Type': 'application/json',
+        },
       });
+
       return {
-        success: false,
-        errorCode: this.errorMapper(executionResult.error),
-        errorMessage: executionResult.error
+        success: true,
+        data: {
+          requestId,
+          replied: true,
+        },
       };
     } catch (error) {
       const errorCode = this.errorMapper(error);

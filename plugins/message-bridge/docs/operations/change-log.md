@@ -6,6 +6,14 @@
 **Owner:** message-bridge maintainers  
 **Related:** `../migration/path-mapping.md`, `../README.md`
 
+## 2026-03-09
+
+### Changed
+
+- `design/interfaces/protocol-contract.md`：重写为当前生效协议（移除 `envelope`，统一 `welinkSessionId/toolSessionId`，新增 `abort_session`，`close_session -> session.delete`，`question_reply` 改为 question API）。
+- `architecture/overview.md`：新增“协议对齐更正（2026-03-09）”说明，并修订上行职责描述。
+- `product/prd.md`：新增协议对齐更正小节，标注当前实现口径。
+
 ## 2026-03-07
 
 ### Added

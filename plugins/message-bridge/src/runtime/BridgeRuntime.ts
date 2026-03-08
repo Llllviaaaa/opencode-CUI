@@ -1,6 +1,7 @@
 import os from 'os';
 import {
   Action,
+  AbortSessionInvokeMessage,
   ActionResult,
   ChatInvokeMessage,
   CloseSessionInvokeMessage,
@@ -10,8 +11,9 @@ import {
   PermissionReplyInvokeMessage,
   QuestionReplyInvokeMessage,
   StatusQueryMessage,
-  hasEnvelope,
+  buildMessageId,
 } from '../types';
+import { AbortSessionAction } from '../action/AbortSessionAction';
 import { ChatAction } from '../action/ChatAction';
 import { CreateSessionAction } from '../action/CreateSessionAction';
 import { CloseSessionAction } from '../action/CloseSessionAction';
@@ -25,10 +27,8 @@ import { DefaultAkSkAuth } from '../connection/AkSkAuth';
 import {
   DefaultGatewayConnection,
   GatewayConnection,
-  type GatewaySendLogContext,
 } from '../connection/GatewayConnection';
 import { DefaultStateManager } from '../connection/StateManager';
-import { EnvelopeBuilder } from '../event/EnvelopeBuilder';
 import { EventFilter } from '../event/EventFilter';
 import { BridgeEvent } from './types';
 import { createSdkAdapter } from './SdkAdapter';
@@ -61,7 +61,7 @@ interface DownstreamLogFields extends Record<string, unknown> {
   messageType?: string;
   gatewayMessageId?: string;
   action?: string;
-  sessionId?: string;
+  welinkSessionId?: string;
   toolSessionId?: string;
 }
 
@@ -69,6 +69,7 @@ interface ToolErrorLogOptions {
   traceId?: string;
   gatewayMessageId?: string;
   action?: string;
+  welinkSessionId?: string;
   toolSessionId?: string;
   opencodeMessageId?: string;
   logger?: BridgeLogger;
@@ -80,13 +81,10 @@ export class BridgeRuntime {
   private readonly registry = new DefaultActionRegistry();
 
   private gatewayConnection: GatewayConnection | null = null;
-  private envelopeBuilder: EnvelopeBuilder | null = null;
   private eventFilter: EventFilter | null = null;
   private started = false;
   private readonly sdkClient: unknown;
   private logger: BridgeLogger;
-  private readonly toolToSkillSessionMap = new Map<string, string>();
-  private lastSkillSessionId: string | null = null;
 
   constructor(private readonly options: BridgeRuntimeOptions) {
     this.logger = new AppLogger(options.client, { component: 'runtime' }, undefined, undefined, options.debug);
@@ -141,7 +139,6 @@ export class BridgeRuntime {
     }
 
     const agentId = this.stateManager.generateAndBindAgentId();
-    this.envelopeBuilder = new EnvelopeBuilder(agentId);
     this.eventFilter = new EventFilter(config.events.allowlist);
 
     const auth = new DefaultAkSkAuth(config.auth.ak, config.auth.sk);
@@ -171,9 +168,6 @@ export class BridgeRuntime {
       this.logger.info('gateway.state.changed', { state });
       if (state === 'CONNECTING') {
         const nextAgentId = this.stateManager.resetForReconnect();
-        this.envelopeBuilder = new EnvelopeBuilder(nextAgentId);
-        this.toolToSkillSessionMap.clear();
-        this.lastSkillSessionId = null;
         this.logger.info('runtime.agent.rebound', { agentId: nextAgentId });
       }
     });
@@ -227,7 +221,7 @@ export class BridgeRuntime {
     const eventTraceId = eventFields.opencodeMessageId ?? this.logger.getTraceId();
     const eventLogger = this.createMessageLogger(eventFields, eventTraceId);
     eventLogger.debug('event.received');
-    if (!this.stateManager.isReady() || !this.gatewayConnection || !this.envelopeBuilder || !this.eventFilter) {
+    if (!this.stateManager.isReady() || !this.gatewayConnection || !this.eventFilter) {
       eventLogger.debug('event.ignored_not_ready', {
         state: this.stateManager.getState(),
       });
@@ -240,13 +234,11 @@ export class BridgeRuntime {
     }
 
     const toolSessionId = eventFields.toolSessionId;
-    const sessionId = this.resolveSkillSessionId(toolSessionId);
-    const envelope = this.envelopeBuilder.build(sessionId);
-    const bridgeMessageId = envelope.messageId;
+    const bridgeMessageId = buildMessageId();
     const forwardingLogger = this.createMessageLogger(
       {
         ...eventFields,
-        sessionId,
+        toolSessionId,
       },
       bridgeMessageId,
     );
@@ -255,15 +247,13 @@ export class BridgeRuntime {
     this.gatewayConnection.send(
       {
         type: 'tool_event',
-        sessionId,
+        toolSessionId,
         event,
-        envelope,
       },
       {
         traceId: bridgeMessageId,
         runtimeTraceId: this.logger.getTraceId(),
-        bridgeMessageId,
-        sessionId,
+        gatewayMessageId: bridgeMessageId,
         toolSessionId,
         eventType: event.type,
         opencodeMessageId: eventFields.opencodeMessageId,
@@ -282,6 +272,7 @@ export class BridgeRuntime {
     const actions: Action[] = [
       new ChatAction(),
       new CreateSessionAction(),
+      new AbortSessionAction(),
       new CloseSessionAction(),
       new PermissionReplyAction(),
       new QuestionReplyAction(),
@@ -299,7 +290,7 @@ export class BridgeRuntime {
     traceId: string = this.logger.getTraceId(),
     baseFields: DownstreamLogFields = {},
   ): Promise<void> {
-    if (!this.gatewayConnection || !this.envelopeBuilder) {
+    if (!this.gatewayConnection) {
       messageLogger.warn('runtime.downstream_ignored_no_connection');
       return;
     }
@@ -308,20 +299,20 @@ export class BridgeRuntime {
     if (!message) {
       const rawType = this.extractRawDownstreamType(raw);
       const fallbackSessionId =
-        raw && typeof raw === 'object' && typeof (raw as { sessionId?: unknown }).sessionId === 'string'
-          ? (raw as { sessionId: string }).sessionId
+        raw && typeof raw === 'object' && typeof (raw as { welinkSessionId?: unknown }).welinkSessionId === 'string'
+          ? (raw as { welinkSessionId: string }).welinkSessionId
           : undefined;
 
       messageLogger.warn('runtime.downstream_ignored_non_protocol', {
         messageType: rawType ?? 'unknown',
-        hasSessionId: !!fallbackSessionId,
-        hasEnvelope: hasEnvelope(raw),
+        hasWelinkSessionId: !!fallbackSessionId,
       });
 
       if (rawType === 'invoke') {
         this.sendToolError(
           { success: false, errorCode: 'INVALID_PAYLOAD', errorMessage: 'Invalid invoke payload shape' },
           fallbackSessionId,
+          undefined,
           {
             traceId,
             gatewayMessageId: baseFields.gatewayMessageId,
@@ -332,10 +323,16 @@ export class BridgeRuntime {
       return;
     }
 
+    const rawDownstreamFields = this.extractDownstreamLogFields(raw);
+    const normalizedDownstreamFields = this.extractDownstreamLogFields(message);
     const downstreamFields = {
+      ...rawDownstreamFields,
       ...baseFields,
-      ...this.extractDownstreamLogFields(message),
+      ...normalizedDownstreamFields,
     };
+    if (!downstreamFields.gatewayMessageId) {
+      downstreamFields.gatewayMessageId = rawDownstreamFields.gatewayMessageId ?? baseFields.gatewayMessageId;
+    }
     const downstreamTraceId = downstreamFields.gatewayMessageId ?? traceId;
     const downstreamLogger = this.createMessageLogger(downstreamFields, downstreamTraceId);
 
@@ -343,11 +340,11 @@ export class BridgeRuntime {
       downstreamLogger.info('runtime.status_query.received');
       const result = await this.actionRouter.route(
         'status_query',
-        { sessionId: message.sessionId },
-        this.buildActionContext(message.sessionId, downstreamLogger),
+        {},
+        this.buildActionContext(undefined, downstreamLogger),
       );
       if (!result.success) {
-        this.sendToolError(result, message.sessionId, {
+        this.sendToolError(result, undefined, undefined, {
           traceId: downstreamTraceId,
           gatewayMessageId: downstreamFields.gatewayMessageId,
           action: 'status_query',
@@ -356,21 +353,15 @@ export class BridgeRuntime {
         return;
       }
 
-      const envelope = this.envelopeBuilder.build(message.sessionId);
-      const bridgeMessageId = envelope.messageId;
       this.gatewayConnection.send(
         {
           type: 'status_response',
           opencodeOnline: !!(result.data as { opencodeOnline?: boolean } | undefined)?.opencodeOnline,
-          sessionId: message.sessionId,
-          envelope,
         },
         {
           traceId: downstreamTraceId,
           runtimeTraceId: this.logger.getTraceId(),
-          bridgeMessageId,
           gatewayMessageId: downstreamFields.gatewayMessageId,
-          sessionId: message.sessionId,
           action: 'status_query',
         },
       );
@@ -380,38 +371,30 @@ export class BridgeRuntime {
       return;
     }
 
-    const skillSessionId =
-      message.sessionId ??
-      (message.envelope as { sessionId?: string } | undefined)?.sessionId;
+    const welinkSessionId = message.welinkSessionId;
     const toolSessionId = this.extractToolSessionId(message.payload);
     const invokeLogger = this.createMessageLogger(
       {
         ...downstreamFields,
         action: message.action,
-        sessionId: skillSessionId,
+        welinkSessionId,
         toolSessionId,
       },
       downstreamTraceId,
     );
-    invokeLogger.info('runtime.invoke.received', {
-      hasEnvelope: !!message.envelope,
-    });
-    if (toolSessionId && skillSessionId) {
-      this.rememberSessionMapping(toolSessionId, skillSessionId);
-    }
+    invokeLogger.info('runtime.invoke.received');
 
     const result = await this.actionRouter.route(
       message.action,
       message.payload,
-      this.buildActionContext(skillSessionId, invokeLogger),
+      this.buildActionContext(welinkSessionId, invokeLogger),
     );
 
     if (!result.success) {
-      this.sendToolError(result, skillSessionId, {
+      this.sendToolError(result, welinkSessionId, toolSessionId, {
         traceId: downstreamTraceId,
         gatewayMessageId: downstreamFields.gatewayMessageId,
         action: message.action,
-        toolSessionId,
         logger: invokeLogger,
       });
       return;
@@ -422,50 +405,30 @@ export class BridgeRuntime {
       if (!toolSessionId) {
         this.sendToolError(
           { success: false, errorCode: 'SDK_UNREACHABLE', errorMessage: 'create_session returned without sessionId' },
-          skillSessionId,
-          {
-            traceId: downstreamTraceId,
-            gatewayMessageId: downstreamFields.gatewayMessageId,
-            action: message.action,
-            logger: invokeLogger,
-          },
-        );
-        return;
-      }
-      if (!skillSessionId) {
-        this.sendToolError(
-          { success: false, errorCode: 'INVALID_PAYLOAD', errorMessage: 'create_session missing skill sessionId' },
+          welinkSessionId,
           undefined,
           {
             traceId: downstreamTraceId,
             gatewayMessageId: downstreamFields.gatewayMessageId,
             action: message.action,
-            toolSessionId,
             logger: invokeLogger,
           },
         );
         return;
       }
-
-      this.rememberSessionMapping(toolSessionId, skillSessionId);
-
-      const envelope = this.envelopeBuilder.build(skillSessionId);
-      const bridgeMessageId = envelope.messageId;
+      const sessionData = (result.data as { session?: unknown } | undefined)?.session ?? result.data;
       this.gatewayConnection.send(
         {
           type: 'session_created',
-          // sessionId is the Skill session ID expected by skill-server.
-          sessionId: skillSessionId,
+          welinkSessionId,
           toolSessionId,
-          session: result.data,
-          envelope,
+          session: sessionData,
         },
         {
           traceId: downstreamTraceId,
           runtimeTraceId: this.logger.getTraceId(),
-          bridgeMessageId,
           gatewayMessageId: downstreamFields.gatewayMessageId,
-          sessionId: skillSessionId,
+          welinkSessionId,
           toolSessionId,
           action: message.action,
         },
@@ -474,13 +437,6 @@ export class BridgeRuntime {
         latencyMs: Date.now() - startedAt,
       });
       return;
-    }
-
-    if (message.action === 'close_session' && toolSessionId) {
-      this.toolToSkillSessionMap.delete(toolSessionId);
-      if (this.lastSkillSessionId === skillSessionId) {
-        this.lastSkillSessionId = null;
-      }
     }
 
     invokeLogger.info('runtime.invoke.completed', {
@@ -544,91 +500,34 @@ export class BridgeRuntime {
     return undefined;
   }
 
-  private rememberSessionMapping(toolSessionId: string, skillSessionId: string): void {
-    this.toolToSkillSessionMap.set(toolSessionId, skillSessionId);
-    this.lastSkillSessionId = skillSessionId;
-    this.logger.debug('runtime.session_mapping.updated', {
-      toolSessionId,
-      sessionId: skillSessionId,
-      mappingSize: this.toolToSkillSessionMap.size,
-    });
-  }
-
-  private resolveSkillSessionId(toolSessionId?: string): string | undefined {
-    if (toolSessionId && this.toolToSkillSessionMap.has(toolSessionId)) {
-      return this.toolToSkillSessionMap.get(toolSessionId);
-    }
-    return this.lastSkillSessionId ?? undefined;
-  }
-
   private normalizeDownstreamMessage(raw: unknown): DownstreamMessage | null {
-    const normalized = this.extractDownstreamRecord(raw);
-    if (!normalized) {
+    if (!raw || typeof raw !== 'object') {
       return null;
     }
-
-    const { msg, envelope } = normalized;
+    const msg = raw as Record<string, unknown>;
     const type = typeof msg.type === 'string' ? msg.type : undefined;
     if (!type) {
       return null;
     }
 
     if (type === 'status_query') {
-      return this.normalizeStatusQueryMessage(msg, envelope);
+      return this.normalizeStatusQueryMessage();
     }
 
     if (type !== 'invoke') {
       return null;
     }
 
-    return this.normalizeInvokeMessage(msg, envelope);
+    return this.normalizeInvokeMessage(msg);
   }
 
-  private extractDownstreamRecord(
-    raw: unknown,
-  ): { msg: Record<string, unknown>; envelope?: DownstreamMessage['envelope'] } | null {
-    if (!raw || typeof raw !== 'object') {
-      return null;
-    }
-
-    if (hasEnvelope(raw)) {
-      const envelopeMsg = raw as Record<string, unknown>;
-      const payload =
-        typeof envelopeMsg.payload === 'object' && envelopeMsg.payload !== null
-          ? (envelopeMsg.payload as Record<string, unknown>)
-          : null;
-
-      return {
-        msg: {
-          ...(payload ?? {}),
-          type: envelopeMsg.type,
-          action: envelopeMsg.action ?? payload?.action,
-          sessionId: envelopeMsg.sessionId ?? payload?.sessionId,
-        },
-        envelope: envelopeMsg.envelope as DownstreamMessage['envelope'],
-      };
-    }
-
-    return {
-      msg: raw as Record<string, unknown>,
-    };
-  }
-
-  private normalizeStatusQueryMessage(
-    msg: Record<string, unknown>,
-    envelope?: DownstreamMessage['envelope'],
-  ): StatusQueryMessage {
+  private normalizeStatusQueryMessage(): StatusQueryMessage {
     return {
       type: 'status_query',
-      sessionId: typeof msg.sessionId === 'string' ? msg.sessionId : undefined,
-      envelope,
     };
   }
 
-  private normalizeInvokeMessage(
-    msg: Record<string, unknown>,
-    envelope?: DownstreamMessage['envelope'],
-  ): DownstreamMessage | null {
+  private normalizeInvokeMessage(msg: Record<string, unknown>): DownstreamMessage | null {
     const action = typeof msg.action === 'string' ? msg.action : undefined;
     if (!action) {
       return null;
@@ -636,24 +535,23 @@ export class BridgeRuntime {
 
     switch (action) {
       case 'chat':
-        return this.normalizeChatInvokeMessage(msg, envelope);
+        return this.normalizeChatInvokeMessage(msg);
       case 'create_session':
-        return this.normalizeCreateSessionInvokeMessage(msg, envelope);
+        return this.normalizeCreateSessionInvokeMessage(msg);
+      case 'abort_session':
+        return this.normalizeAbortSessionInvokeMessage(msg);
       case 'close_session':
-        return this.normalizeCloseSessionInvokeMessage(msg, envelope);
+        return this.normalizeCloseSessionInvokeMessage(msg);
       case 'permission_reply':
-        return this.normalizePermissionReplyInvokeMessage(msg, envelope);
+        return this.normalizePermissionReplyInvokeMessage(msg);
       case 'question_reply':
-        return this.normalizeQuestionReplyInvokeMessage(msg, envelope);
+        return this.normalizeQuestionReplyInvokeMessage(msg);
       default:
         return null;
     }
   }
 
-  private normalizeChatInvokeMessage(
-    msg: Record<string, unknown>,
-    envelope?: DownstreamMessage['envelope'],
-  ): ChatInvokeMessage | null {
+  private normalizeChatInvokeMessage(msg: Record<string, unknown>): ChatInvokeMessage | null {
     const payload = this.extractInvokePayload(msg);
     const toolSessionId = this.readNonEmptyString(payload?.toolSessionId);
     const text = this.readNonEmptyString(payload?.text);
@@ -665,41 +563,40 @@ export class BridgeRuntime {
       type: 'invoke',
       action: 'chat',
       payload: { toolSessionId, text },
-      sessionId: this.readNonEmptyString(msg.sessionId),
-      envelope,
+      welinkSessionId: this.readNonEmptyString(msg.welinkSessionId),
     };
   }
 
-  private normalizeCreateSessionInvokeMessage(
-    msg: Record<string, unknown>,
-    envelope?: DownstreamMessage['envelope'],
-  ): CreateSessionInvokeMessage | null {
+  private normalizeCreateSessionInvokeMessage(msg: Record<string, unknown>): CreateSessionInvokeMessage | null {
     const payload = this.extractInvokePayload(msg);
     if (!payload) {
       return null;
     }
 
-    const metadata =
-      typeof payload.metadata === 'object' && payload.metadata !== null
-        ? (payload.metadata as Record<string, unknown>)
-        : undefined;
-
     return {
       type: 'invoke',
       action: 'create_session',
-      payload: {
-        sessionId: this.readNonEmptyString(payload.sessionId),
-        metadata,
-      },
-      sessionId: this.readNonEmptyString(msg.sessionId),
-      envelope,
+      payload: { ...payload },
+      welinkSessionId: this.readNonEmptyString(msg.welinkSessionId),
     };
   }
 
-  private normalizeCloseSessionInvokeMessage(
-    msg: Record<string, unknown>,
-    envelope?: DownstreamMessage['envelope'],
-  ): CloseSessionInvokeMessage | null {
+  private normalizeAbortSessionInvokeMessage(msg: Record<string, unknown>): AbortSessionInvokeMessage | null {
+    const payload = this.extractInvokePayload(msg);
+    const toolSessionId = this.readNonEmptyString(payload?.toolSessionId);
+    if (!payload || !toolSessionId) {
+      return null;
+    }
+
+    return {
+      type: 'invoke',
+      action: 'abort_session',
+      payload: { toolSessionId },
+      welinkSessionId: this.readNonEmptyString(msg.welinkSessionId),
+    };
+  }
+
+  private normalizeCloseSessionInvokeMessage(msg: Record<string, unknown>): CloseSessionInvokeMessage | null {
     const payload = this.extractInvokePayload(msg);
     const toolSessionId = this.readNonEmptyString(payload?.toolSessionId);
     if (!payload || !toolSessionId) {
@@ -710,15 +607,11 @@ export class BridgeRuntime {
       type: 'invoke',
       action: 'close_session',
       payload: { toolSessionId },
-      sessionId: this.readNonEmptyString(msg.sessionId),
-      envelope,
+      welinkSessionId: this.readNonEmptyString(msg.welinkSessionId),
     };
   }
 
-  private normalizePermissionReplyInvokeMessage(
-    msg: Record<string, unknown>,
-    envelope?: DownstreamMessage['envelope'],
-  ): PermissionReplyInvokeMessage | null {
+  private normalizePermissionReplyInvokeMessage(msg: Record<string, unknown>): PermissionReplyInvokeMessage | null {
     const payload = this.extractInvokePayload(msg);
     const toolSessionId = this.readNonEmptyString(payload?.toolSessionId);
     const permissionId = this.readNonEmptyString(payload?.permissionId);
@@ -735,20 +628,16 @@ export class BridgeRuntime {
       type: 'invoke',
       action: 'permission_reply',
       payload: { toolSessionId, permissionId, response: normalizedResponse },
-      sessionId: this.readNonEmptyString(msg.sessionId),
-      envelope,
+      welinkSessionId: this.readNonEmptyString(msg.welinkSessionId),
     };
   }
 
-  private normalizeQuestionReplyInvokeMessage(
-    msg: Record<string, unknown>,
-    envelope?: DownstreamMessage['envelope'],
-  ): QuestionReplyInvokeMessage | null {
+  private normalizeQuestionReplyInvokeMessage(msg: Record<string, unknown>): QuestionReplyInvokeMessage | null {
     const payload = this.extractInvokePayload(msg);
     const toolSessionId = this.readNonEmptyString(payload?.toolSessionId);
     const toolCallId = this.readNonEmptyString(payload?.toolCallId);
     const answer = this.readNonEmptyString(payload?.answer);
-    if (!payload || !toolSessionId || !toolCallId || !answer) {
+    if (!payload || !toolSessionId || !answer) {
       return null;
     }
 
@@ -756,20 +645,19 @@ export class BridgeRuntime {
       type: 'invoke',
       action: 'question_reply',
       payload: { toolSessionId, toolCallId, answer },
-      sessionId: this.readNonEmptyString(msg.sessionId),
-      envelope,
+      welinkSessionId: this.readNonEmptyString(msg.welinkSessionId),
     };
   }
 
   private extractInvokePayload(msg: Record<string, unknown>): Record<string, unknown> | null {
-    if ('payload' in msg) {
-      if (!msg.payload || typeof msg.payload !== 'object') {
-        return null;
-      }
-      return msg.payload as Record<string, unknown>;
+    if (!('payload' in msg)) {
+      return null;
     }
 
-    return msg;
+    if (!msg.payload || typeof msg.payload !== 'object') {
+      return null;
+    }
+    return msg.payload as Record<string, unknown>;
   }
 
   private readNonEmptyString(value: unknown): string | undefined {
@@ -781,38 +669,41 @@ export class BridgeRuntime {
       return undefined;
     }
 
-    if (hasEnvelope(raw)) {
-      const envelopeMsg = raw as Record<string, unknown>;
-      return typeof envelopeMsg.type === 'string' ? envelopeMsg.type : undefined;
-    }
-
     const msg = raw as Record<string, unknown>;
     return typeof msg.type === 'string' ? msg.type : undefined;
   }
 
-  private sendToolError(result: ActionResult, sessionId?: string, options: ToolErrorLogOptions = {}): void {
-    if (!this.gatewayConnection || !this.envelopeBuilder) {
-      (options.logger ?? this.logger).warn('runtime.tool_error.skipped_no_connection', { sessionId });
+  private sendToolError(
+    result: ActionResult,
+    welinkSessionId?: string,
+    toolSessionId?: string,
+    options: ToolErrorLogOptions = {},
+  ): void {
+    if (!this.gatewayConnection) {
+      (options.logger ?? this.logger).warn('runtime.tool_error.skipped_no_connection', {
+        welinkSessionId,
+        toolSessionId,
+      });
       return;
     }
 
     const error = result.errorMessage ?? 'Unknown error';
-    const envelope = this.envelopeBuilder.build(sessionId);
-    const bridgeMessageId = envelope.messageId;
+    const bridgeMessageId = buildMessageId();
     const errorLogger =
       options.logger ??
       this.createMessageLogger(
         {
           gatewayMessageId: options.gatewayMessageId,
-          sessionId,
-          toolSessionId: options.toolSessionId,
+          welinkSessionId,
+          toolSessionId: toolSessionId ?? options.toolSessionId,
           action: options.action,
         },
         options.traceId ?? bridgeMessageId,
       );
 
     errorLogger.error('runtime.tool_error.sending', {
-      sessionId,
+      welinkSessionId,
+      toolSessionId: toolSessionId ?? options.toolSessionId,
       error,
       errorCode: result.errorCode,
       state: this.stateManager.getState(),
@@ -821,17 +712,17 @@ export class BridgeRuntime {
     this.gatewayConnection.send(
       {
         type: 'tool_error',
-        sessionId,
+        welinkSessionId,
+        toolSessionId: toolSessionId ?? options.toolSessionId,
         error,
-        envelope,
       },
       {
         traceId: options.traceId,
         runtimeTraceId: this.logger.getTraceId(),
         bridgeMessageId,
         gatewayMessageId: options.gatewayMessageId,
-        sessionId,
-        toolSessionId: options.toolSessionId,
+        welinkSessionId,
+        toolSessionId: toolSessionId ?? options.toolSessionId,
         action: options.action,
         opencodeMessageId: options.opencodeMessageId,
       },
@@ -888,31 +779,18 @@ export class BridgeRuntime {
 
   private extractDownstreamLogFields(message: DownstreamMessage | unknown): DownstreamLogFields {
     const record = this.getRecord(message);
-    const envelope = hasEnvelope(message) ? this.getRecord(message.envelope) : this.getRecord(record?.envelope);
     const payload = this.getRecord(record?.payload);
 
     return {
       messageType: this.readNonEmptyString(record?.type) ?? 'unknown',
-      gatewayMessageId: this.readNonEmptyString(envelope?.messageId),
+      gatewayMessageId: this.readNonEmptyString(record?.messageId),
       action: this.readNonEmptyString(record?.action),
-      sessionId:
-        this.readNonEmptyString(record?.sessionId) ??
-        this.readNonEmptyString(envelope?.sessionId) ??
-        this.readNonEmptyString(payload?.sessionId),
+      welinkSessionId:
+        this.readNonEmptyString(record?.welinkSessionId) ??
+        this.readNonEmptyString(payload?.welinkSessionId),
       toolSessionId:
         this.readNonEmptyString(payload?.toolSessionId) ??
         this.readNonEmptyString(record?.toolSessionId),
-    };
-  }
-
-  private buildSendLogContext(
-    traceId: string,
-    extra: Omit<GatewaySendLogContext, 'traceId' | 'runtimeTraceId'>,
-  ): GatewaySendLogContext {
-    return {
-      traceId,
-      runtimeTraceId: this.logger.getTraceId(),
-      ...extra,
     };
   }
 
