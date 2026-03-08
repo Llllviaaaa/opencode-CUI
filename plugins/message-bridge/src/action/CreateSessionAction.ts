@@ -10,6 +10,7 @@ import {
   safeExecute,
   stateToErrorCode
 } from '../types';
+import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
 /**
  * Concrete implementation of create_session action for creating OpenCode sessions
@@ -63,7 +64,7 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
 
       const executionResult = await safeExecute(
         context.client.session.create({ body: payload as Record<string, unknown> }),
-        (error) => `Create session failed: ${error instanceof Error ? error.message : String(error)}`
+        (error) => `Create session failed: ${getErrorMessage(error)}`
       );
 
       if (executionResult.success) {
@@ -86,21 +87,17 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
           };
         }
 
-        let errorMessage = 'Unknown error';
-        if (executionResult.data && typeof executionResult.data === 'object' && 'error' in executionResult.data) {
-          const errorField = (executionResult.data as { error: unknown }).error;
-          if (errorField && typeof errorField === 'object' && errorField !== null && 'message' in errorField) {
-            const messageField = (errorField as { message: unknown }).message;
-            errorMessage = typeof messageField === 'string' ? messageField : String(messageField) || 'Unknown error';
-          } else {
-            errorMessage = String(errorField) || 'Unknown error';
-          }
-        }
+        const errorField =
+          executionResult.data && typeof executionResult.data === 'object' && 'error' in executionResult.data
+            ? (executionResult.data as { error: unknown }).error
+            : undefined;
+        const errorMessage = errorField !== undefined ? getErrorMessage(errorField) : 'Unknown error';
 
         context.logger?.error('action.create_session.sdk_error_payload', {
           requestedSessionId: payload.sessionId,
           payloadKeys: Object.keys(payload ?? {}),
           error: errorMessage,
+          ...(errorField !== undefined ? getErrorDetailsForLog(errorField) : {}),
           latencyMs: Date.now() - startedAt,
         });
         return {
@@ -123,12 +120,13 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
       };
     } catch (error) {
       const errorCode = this.errorMapper(error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = getErrorMessage(error);
       context.logger?.error('action.create_session.exception', {
         requestedSessionId: payload.sessionId,
         payloadKeys: Object.keys(payload ?? {}),
         error: errorMessage,
         errorCode,
+        ...getErrorDetailsForLog(error),
         latencyMs: Date.now() - startedAt,
       });
 

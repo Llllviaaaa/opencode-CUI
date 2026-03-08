@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { ConnectionState, HeartbeatMessage, RegisterMessage } from '../types';
 import type { BridgeLogger } from '../runtime/AppLogger';
+import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
 export interface GatewayConnectionEvents {
   stateChange: (state: ConnectionState) => void;
@@ -31,6 +32,41 @@ export interface GatewayConnectionOptions {
 }
 
 type WsMessageEvent = { data: string | ArrayBuffer | Blob | Uint8Array };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}
+
+function extractWebSocketErrorDetails(event: unknown): Record<string, unknown> {
+  const details: Record<string, unknown> = {};
+
+  if (!isRecord(event)) {
+    return {
+      ...getErrorDetailsForLog(event),
+    };
+  }
+
+  const baseError =
+    event.error !== undefined && event.error !== event
+      ? getErrorDetailsForLog(event.error)
+      : getErrorDetailsForLog(event);
+  Object.assign(details, baseError);
+
+  if (typeof event.type === 'string') {
+    details.eventType = event.type;
+  }
+
+  if (!details.errorDetail && typeof event.message === 'string' && event.message.trim()) {
+    details.errorDetail = event.message;
+  }
+
+  const target = event.target;
+  if (isRecord(target) && typeof target.readyState === 'number') {
+    details.readyState = target.readyState;
+  }
+
+  return details;
+}
 
 export class DefaultGatewayConnection extends EventEmitter implements GatewayConnection {
   private ws: WebSocket | null = null;
@@ -147,11 +183,13 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
           }
         };
 
-        ws.onerror = () => {
+        ws.onerror = (event?: unknown) => {
           const error = new Error('gateway_websocket_error');
+          const errorDetails = extractWebSocketErrorDetails(event);
           this.options.logger?.error('gateway.error', {
             error: error.message,
             state: this.state,
+            ...errorDetails,
           });
           this.emit('error', error);
           if (this.state !== 'DISCONNECTED') {
@@ -162,14 +200,15 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
 
         ws.onmessage = (event: MessageEvent) => {
           this.handleMessage(event as unknown as WsMessageEvent).catch((error) => {
-            this.emit('error', error instanceof Error ? error : new Error(String(error)));
+            this.emit('error', error instanceof Error ? error : new Error(getErrorMessage(error)));
           });
         };
       } catch (error) {
         this.options.logger?.error('gateway.connect.failed', {
-          error: error instanceof Error ? error.message : String(error),
+          error: getErrorMessage(error),
+          ...getErrorDetailsForLog(error),
         });
-        finalizeReject(error as Error);
+        finalizeReject(error instanceof Error ? error : new Error(getErrorMessage(error)));
       }
     });
   }
@@ -278,7 +317,8 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
       } catch (error) {
         this.options.logger?.warn('gateway.reconnect.failed', {
           attempt: this.reconnectAttempts,
-          error: error instanceof Error ? error.message : String(error),
+          error: getErrorMessage(error),
+          ...getErrorDetailsForLog(error),
         });
         if (!this.manuallyDisconnected) {
           this.attemptReconnect();

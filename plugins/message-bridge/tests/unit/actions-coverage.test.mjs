@@ -96,6 +96,25 @@ describe('ChatAction coverage', () => {
     expect(throwResult.errorCode).toBe('SDK_TIMEOUT');
   });
 
+  test('execute formats unknown object errors without collapsing to [object Object]', async () => {
+    const action = new ChatAction();
+    const client = {
+      session: {
+        create: async () => ({}),
+        abort: async () => ({}),
+        prompt: async () => {
+          throw { reason: 'transport down', code: 'E_DOWN' };
+        },
+      },
+      postSessionIdPermissionsPermissionId: async () => ({}),
+    };
+
+    const result = await action.execute({ toolSessionId: 's-1', text: 'hi' }, readyContext(client));
+    expect(result.success).toBe(false);
+    expect(result.errorMessage).toContain('transport down');
+    expect(result.errorMessage).not.toContain('[object Object]');
+  });
+
   test('errorMapper variants', () => {
     const action = new ChatAction();
     expect(action.errorMapper(new Error('connection refused'))).toBe('SDK_UNREACHABLE');

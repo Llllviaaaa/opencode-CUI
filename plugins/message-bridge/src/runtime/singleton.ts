@@ -1,6 +1,7 @@
 import { BridgeRuntime } from './BridgeRuntime';
 import type { PluginInput } from './types';
 import { AppLogger } from './AppLogger';
+import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
 let runtime: BridgeRuntime | null = null;
 let initializing: Promise<BridgeRuntime> | null = null;
@@ -41,7 +42,8 @@ export async function getOrCreateRuntime(input: PluginInput): Promise<BridgeRunt
     .catch((error) => {
       runtime = null;
       logger.error('runtime.singleton.initialization_failed', {
-        error: error instanceof Error ? error.message : String(error),
+        error: getErrorMessage(error),
+        ...getErrorDetailsForLog(error),
       });
       throw error;
     })

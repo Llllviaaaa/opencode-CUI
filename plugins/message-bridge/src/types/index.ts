@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { getErrorMessage } from '../utils/error';
 
 // ---------------------------------------------------------------------------
 // Configuration Types
@@ -299,9 +300,7 @@ export async function safeExecute<T>(
   } catch (error) {
     const errorMessage = errorMapper
       ? errorMapper(error)
-      : error instanceof Error
-      ? error.message
-      : String(error);
+      : getErrorMessage(error);
     return { success: false, error: errorMessage };
   }
 }
