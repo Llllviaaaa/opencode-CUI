@@ -114,6 +114,10 @@ export class ConfigResolver {
       envConfig.enabled = process.env.BRIDGE_ENABLED.toLowerCase() === 'true';
     }
 
+    if (process.env.BRIDGE_DEBUG !== undefined) {
+      envConfig.debug = process.env.BRIDGE_DEBUG.toLowerCase() === 'true';
+    }
+
     if (process.env.BRIDGE_CONFIG_VERSION !== undefined) {
       envConfig.config_version = parseInt(process.env.BRIDGE_CONFIG_VERSION, 10);
     }
