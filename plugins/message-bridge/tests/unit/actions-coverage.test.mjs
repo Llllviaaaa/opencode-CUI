@@ -198,12 +198,12 @@ describe('PermissionReplyAction coverage', () => {
     const action = new PermissionReplyAction();
     expect(action.validate(null).valid).toBe(false);
     expect(action.validate({ permissionId: '' }).valid).toBe(false);
-    expect(action.validate({ permissionId: 'p1', approved: true }).valid).toBe(false);
     expect(action.validate({ permissionId: 'p1', response: 'allow' }).valid).toBe(false);
-    expect(action.validate({ permissionId: 'p1', toolSessionId: 's-tool', response: 'allow' }).valid).toBe(true);
+    expect(action.validate({ permissionId: 'p1', toolSessionId: 's-tool', response: 'allow' }).valid).toBe(false);
+    expect(action.validate({ permissionId: 'p1', toolSessionId: 's-tool', response: 'once' }).valid).toBe(true);
   });
 
-  test('execute maps response to sdk path/body', async () => {
+  test('execute sends response directly to sdk path/body', async () => {
     const calls = [];
     const action = new PermissionReplyAction();
     const client = {
@@ -218,16 +218,19 @@ describe('PermissionReplyAction coverage', () => {
       },
     };
 
-    const allow = await action.execute(
-      { permissionId: 'p1', toolSessionId: 's-tool', response: 'allow' },
-      readyContext(client),
-    );
+    for (const response of ['once', 'always', 'reject']) {
+      calls.length = 0;
+      const result = await action.execute(
+        { permissionId: 'p1', toolSessionId: 's-tool', response },
+        readyContext(client),
+      );
 
-    expect(allow.success).toBe(true);
-    expect(calls[0]).toEqual({
-      path: { id: 's-tool', permissionID: 'p1' },
-      body: { response: 'once' },
-    });
+      expect(result.success).toBe(true);
+      expect(calls[0]).toEqual({
+        path: { id: 's-tool', permissionID: 'p1' },
+        body: { response },
+      });
+    }
   });
 });
 

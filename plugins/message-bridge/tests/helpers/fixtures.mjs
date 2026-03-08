@@ -45,11 +45,22 @@ export function createRegisterMessage(overrides = {}) {
  * Create an invoke message for testing
  */
 export function createInvokeMessage(overrides = {}) {
+  const action = overrides.action || 'chat';
+  const payload =
+    overrides.payload ||
+    (action === 'chat'
+      ? { toolSessionId: generateTestId('oc-sess'), text: 'Hello' }
+      : action === 'create_session'
+        ? {}
+        : action === 'close_session'
+          ? { toolSessionId: generateTestId('oc-sess') }
+          : { permissionId: generateTestId('perm'), toolSessionId: generateTestId('oc-sess'), response: 'once' });
+
   return {
     type: 'invoke',
     sessionId: overrides.sessionId || generateTestId('sess'),
-    action: overrides.action || 'chat',
-    payload: overrides.payload || { toolSessionId: generateTestId('oc-sess'), text: 'Hello' },
+    action,
+    payload,
     timestamp: Date.now(),
     ...overrides
   };
@@ -62,7 +73,7 @@ export function createToolDoneMessage(overrides = {}) {
   return {
     type: 'tool_done',
     sessionId: overrides.sessionId || generateTestId('sess'),
-    payload: overrides.payload || { success: true },
+    result: overrides.result || { success: true },
     envelope: createEnvelope(overrides.envelope),
     timestamp: Date.now(),
     ...overrides
@@ -147,7 +158,7 @@ export function createPermissionReplyPayload(overrides = {}) {
   return {
     permissionId: overrides.permissionId || generateTestId('perm'),
     toolSessionId: overrides.toolSessionId || generateTestId('oc-sess'),
-    response: overrides.response || 'allow',
+    response: overrides.response || 'once',
     ...overrides
   };
 }

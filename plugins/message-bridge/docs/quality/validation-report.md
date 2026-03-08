@@ -179,10 +179,10 @@ The implementation correctly uses `session.abort()` as required. No `delete` sem
 
 ---
 
-## 6. Permission Reply Dual Format Validation
+## 6. Permission Reply Protocol Validation
 
 ### Principle
-Per PRD §FR-MB-06: Must support both target format (`response: allow|always|deny`) and compat format (`approved: boolean`).
+Per PRD §FR-MB-06: `permission_reply` uses the canonical protocol field `response: once|always|reject`.
 
 ### Evidence
 
@@ -190,43 +190,41 @@ Per PRD §FR-MB-06: Must support both target format (`response: allow|always|den
 
 | Location | Lines | Evidence |
 |----------|-------|----------|
-| `src/types/index.ts` | 356-365 | `PermissionReplyPayloadTarget` with `response: 'allow' \| 'always' \| 'deny'` |
-| `src/types/index.ts` | 374-383 | `PermissionReplyPayloadCompat` with `approved: boolean` |
-| `src/types/index.ts` | 390-392 | `PermissionReplyPayload` union of both |
+| `src/types/index.ts` | current | `PermissionReplyPayload` with `response: 'once' \| 'always' \| 'reject'` |
+| `src/types/index.ts` | current | `PERMISSION_REPLY_RESPONSES` constant drives runtime validation |
 
-#### 6.2 Type Guards
+#### 6.2 Runtime Parsing
 
 | Location | Lines | Evidence |
 |----------|-------|----------|
-| `src/types/index.ts` | 416-418 | `isPermissionReplyTarget()` checks for `response` field presence |
-| `src/types/index.ts` | 427-429 | `mapApprovedToResponse()` maps boolean to response strings |
+| `src/runtime/BridgeRuntime.ts` | current | `normalizePermissionReplyInvokeMessage()` accepts only canonical fields and values |
 
 #### 6.3 Validation
 
 | Location | Lines | Evidence |
 |----------|-------|----------|
-| `src/action/PermissionReplyAction.ts` | 46-67 | validate() branches: if target format, check response enum; else check approved boolean |
+| `src/action/PermissionReplyAction.ts` | current | `normalizePayload()` + `validate()` require permissionId/toolSessionId/response |
 
 #### 6.4 Execution
 
 | Location | Lines | Evidence |
 |----------|-------|----------|
-| `src/action/PermissionReplyAction.ts` | 110-117 | execute() detects format: target used directly, compat mapped via `mapApprovedToResponse()` |
+| `src/action/PermissionReplyAction.ts` | current | `execute()` forwards canonical response directly to SDK |
 
-### Mapping Verification
+### Value Verification
 
 Per PRD §FR-MB-06:
-- `approved=true` -> `allow`: **IMPLEMENTED** (`src/types/index.ts` line 428)
-- `approved=false` -> `deny`: **IMPLEMENTED** (`src/types/index.ts` line 428)
+- `response=once`: **IMPLEMENTED**
+- `response=always`: **IMPLEMENTED**
+- `response=reject`: **IMPLEMENTED**
 
 ### Validation Result: **PASSED**
 
 The implementation correctly:
-1. Defines both formats as TypeScript types
-2. Provides type guards for format detection
-3. Validates both formats
-4. Maps compat format to target format during execution
-5. Uses approved=true->allow, approved=false->deny mapping
+1. Defines canonical protocol payload types
+2. Rejects legacy payload drift during runtime parsing
+3. Validates canonical fields before execution
+4. Forwards canonical response values directly to SDK
 
 ---
 
@@ -339,7 +337,7 @@ The `plugins/message-bridge` implementation aligns with the architecture design 
 2. **Action Routing**: Registry pattern enables extension without core modification
 3. **Fast Fail**: 100ms detection, immediate error return, no queuing
 4. **Close->Abort**: Uses `session.abort()`, no `delete` called
-5. **Permission Dual Format**: Supports both `response` and `approved` fields with correct mapping
+5. **Permission Protocol Alignment**: Uses canonical `response` values and rejects legacy payloads
 6. **Test Framework**: bun test with coverage threshold gate
 
 All core architectural principles have concrete evidence in the codebase.

@@ -67,7 +67,7 @@ describe('downlink -> uplink protocol', () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].error).toBe('bad payload');
+    expect(sent[0].error).toBe('Invalid invoke payload shape');
     expect('code' in sent[0]).toBe(false);
   });
 
@@ -84,5 +84,20 @@ describe('downlink -> uplink protocol', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0].type).toBe('status_response');
     expect(sent[0].opencodeOnline).toBe(true);
+  });
+
+  test('invoke/status_query variant -> tool_error', async () => {
+    const { runtime, sent } = createRuntimeHarness();
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      sessionId: 's-3',
+      action: 'status_query',
+      payload: { sessionId: 's-3' },
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('tool_error');
+    expect(sent[0].sessionId).toBe('s-3');
   });
 });

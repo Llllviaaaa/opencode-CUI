@@ -1,5 +1,6 @@
 import {
   Action,
+  PERMISSION_REPLY_RESPONSES,
   PermissionReplyPayload,
   ValidationResult,
   ActionResult,
@@ -14,54 +15,55 @@ import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
 /**
  * Concrete implementation of permission_reply action.
- * Target format only: { permissionId, toolSessionId, response: 'allow'|'always'|'deny' }
+ * Accepts the gateway protocol shape:
+ * { permissionId, toolSessionId, response: 'once'|'always'|'reject' }
  */
 export class PermissionReplyAction implements Action<PermissionReplyPayload> {
   name: string = 'permission_reply';
 
-  private mapResponseToDecision(response: 'allow' | 'always' | 'deny'): 'once' | 'always' | 'reject' {
-    if (response === 'allow') {
-      return 'once';
+  private normalizePayload(payload: unknown): PermissionReplyPayload | null {
+    if (!payload || typeof payload !== 'object') {
+      return null;
     }
-    if (response === 'deny') {
-      return 'reject';
+
+    const typedPayload = payload as {
+      permissionId?: unknown;
+      toolSessionId?: unknown;
+      response?: unknown;
+    };
+    const permissionId =
+      typeof typedPayload.permissionId === 'string' && typedPayload.permissionId.trim()
+        ? typedPayload.permissionId
+        : null;
+    const toolSessionId =
+      typeof typedPayload.toolSessionId === 'string' && typedPayload.toolSessionId.trim()
+        ? typedPayload.toolSessionId
+        : null;
+    const response =
+      typeof typedPayload.response === 'string' && PERMISSION_REPLY_RESPONSES.includes(typedPayload.response as PermissionReplyPayload['response'])
+        ? (typedPayload.response as PermissionReplyPayload['response'])
+        : null;
+
+    if (!permissionId || !toolSessionId || !response) {
+      return null;
     }
-    return 'always';
+
+    return {
+      permissionId,
+      toolSessionId,
+      response,
+    };
   }
 
   /**
    * Validate permission reply payload.
    */
   validate(payload: unknown): ValidationResult {
-    if (!payload || typeof payload !== 'object') {
+    const normalized = this.normalizePayload(payload);
+    if (!normalized) {
       return {
         valid: false,
-        error: 'Permission reply payload must be an object'
-      };
-    }
-
-    const typedPayload = payload as PermissionReplyPayload;
-
-    if (typeof typedPayload.permissionId !== 'string' || !typedPayload.permissionId.trim()) {
-      return {
-        valid: false,
-        error: 'permissionId is required and must be a non-empty string'
-      };
-    }
-
-    if (typeof typedPayload.toolSessionId !== 'string' || !typedPayload.toolSessionId.trim()) {
-      return {
-        valid: false,
-        error: 'toolSessionId is required and must be a non-empty string'
-      };
-    }
-
-    const allowedResponses = ['allow', 'always', 'deny'] as const;
-    const isValidResponse = allowedResponses.includes(typedPayload.response);
-    if (!isValidResponse) {
-      return {
-        valid: false,
-        error: `response must be one of: '${allowedResponses.join("', '")}'`
+        error: `permission_reply payload requires permissionId, toolSessionId, and response in '${PERMISSION_REPLY_RESPONSES.join("', '")}'`
       };
     }
 
@@ -74,11 +76,20 @@ export class PermissionReplyAction implements Action<PermissionReplyPayload> {
    * Execute permission reply action
    */
   async execute(payload: PermissionReplyPayload, context: ActionContext): Promise<ActionResult> {
+    const normalized = this.normalizePayload(payload);
+    if (!normalized) {
+      return {
+        success: false,
+        errorCode: 'INVALID_PAYLOAD',
+        errorMessage: `permission_reply payload requires permissionId, toolSessionId, and response in '${PERMISSION_REPLY_RESPONSES.join("', '")}'`
+      };
+    }
+
     const startedAt = Date.now();
     context.logger?.info('action.permission_reply.started', {
-      permissionId: payload.permissionId,
-      toolSessionId: payload.toolSessionId,
-      response: payload.response,
+      permissionId: normalized.permissionId,
+      toolSessionId: normalized.toolSessionId,
+      response: normalized.response,
     });
 
     try {
@@ -100,11 +111,10 @@ export class PermissionReplyAction implements Action<PermissionReplyPayload> {
         };
       }
 
-      const decision = this.mapResponseToDecision(payload.response);
       const executionResult = await safeExecute(
         context.client.postSessionIdPermissionsPermissionId({
-          path: { id: payload.toolSessionId, permissionID: payload.permissionId },
-          body: { response: decision },
+          path: { id: normalized.toolSessionId, permissionID: normalized.permissionId },
+          body: { response: normalized.response },
         }),
         (error) => `Permission reply failed: ${getErrorMessage(error)}`
       );
@@ -114,8 +124,8 @@ export class PermissionReplyAction implements Action<PermissionReplyPayload> {
           return {
             success: true,
             data: {
-              permissionId: payload.permissionId,
-              response: payload.response,
+              permissionId: normalized.permissionId,
+              response: normalized.response,
               applied: true
             }
           };
@@ -128,9 +138,9 @@ export class PermissionReplyAction implements Action<PermissionReplyPayload> {
         const errorMessage = errorField !== undefined ? getErrorMessage(errorField) : 'Unknown error';
 
         context.logger?.error('action.permission_reply.sdk_error_payload', {
-          permissionId: payload.permissionId,
-          toolSessionId: payload.toolSessionId,
-          response: payload.response,
+          permissionId: normalized.permissionId,
+          toolSessionId: normalized.toolSessionId,
+          response: normalized.response,
           error: errorMessage,
           ...(errorField !== undefined ? getErrorDetailsForLog(errorField) : {}),
           latencyMs: Date.now() - startedAt,
@@ -143,9 +153,9 @@ export class PermissionReplyAction implements Action<PermissionReplyPayload> {
       }
 
       context.logger?.error('action.permission_reply.failed', {
-        permissionId: payload.permissionId,
-        toolSessionId: payload.toolSessionId,
-        response: payload.response,
+        permissionId: normalized.permissionId,
+        toolSessionId: normalized.toolSessionId,
+        response: normalized.response,
         error: executionResult.error,
         latencyMs: Date.now() - startedAt,
       });
@@ -158,9 +168,9 @@ export class PermissionReplyAction implements Action<PermissionReplyPayload> {
       const errorCode = this.errorMapper(error);
       const errorMessage = getErrorMessage(error);
       context.logger?.error('action.permission_reply.exception', {
-        permissionId: payload.permissionId,
-        toolSessionId: payload.toolSessionId,
-        response: payload.response,
+        permissionId: normalized.permissionId,
+        toolSessionId: normalized.toolSessionId,
+        response: normalized.response,
         error: errorMessage,
         errorCode,
         ...getErrorDetailsForLog(error),

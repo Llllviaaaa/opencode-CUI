@@ -61,13 +61,15 @@ export interface EventConfig {
 // Connection State
 // ---------------------------------------------------------------------------
 
-export type ConnectionState = 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'READY';
+export const CONNECTION_STATES = ['DISCONNECTED', 'CONNECTING', 'CONNECTED', 'READY'] as const;
+export type ConnectionState = typeof CONNECTION_STATES[number];
 
 // ---------------------------------------------------------------------------
 // Envelope / Message Types
 // ---------------------------------------------------------------------------
 
-export type MessageSource = 'OPENCODE' | 'CURSOR' | 'WINDSURF';
+export const MESSAGE_SOURCES = ['OPENCODE', 'CURSOR', 'WINDSURF'] as const;
+export type MessageSource = typeof MESSAGE_SOURCES[number];
 
 export interface Envelope {
   version: string;
@@ -80,16 +82,19 @@ export interface Envelope {
   sequenceScope: 'session' | 'agent';
 }
 
-export type UpstreamMessageType =
-  | 'register'
-  | 'heartbeat'
-  | 'tool_event'
-  | 'tool_done'
-  | 'tool_error'
-  | 'session_created'
-  | 'status_response';
+export const UPSTREAM_MESSAGE_TYPES = [
+  'register',
+  'heartbeat',
+  'tool_event',
+  'tool_done',
+  'tool_error',
+  'session_created',
+  'status_response',
+] as const;
+export type UpstreamMessageType = typeof UPSTREAM_MESSAGE_TYPES[number];
 
-export type DownstreamMessageType = 'invoke' | 'status_query';
+export const DOWNSTREAM_MESSAGE_TYPES = ['invoke', 'status_query'] as const;
+export type DownstreamMessageType = typeof DOWNSTREAM_MESSAGE_TYPES[number];
 
 export interface RegisterMessage {
   type: 'register';
@@ -140,13 +145,37 @@ export interface StatusResponseMessage {
   envelope: Envelope;
 }
 
-export interface InvokeMessage {
+interface BaseInvokeMessage {
   type: 'invoke';
   sessionId?: string;
-  action: InvokeAction;
-  payload: unknown;
   envelope?: Envelope;
 }
+
+export interface ChatInvokeMessage extends BaseInvokeMessage {
+  action: 'chat';
+  payload: ChatPayload;
+}
+
+export interface CreateSessionInvokeMessage extends BaseInvokeMessage {
+  action: 'create_session';
+  payload: CreateSessionPayload;
+}
+
+export interface CloseSessionInvokeMessage extends BaseInvokeMessage {
+  action: 'close_session';
+  payload: CloseSessionPayload;
+}
+
+export interface PermissionReplyInvokeMessage extends BaseInvokeMessage {
+  action: 'permission_reply';
+  payload: PermissionReplyPayload;
+}
+
+export type InvokeMessage =
+  | ChatInvokeMessage
+  | CreateSessionInvokeMessage
+  | CloseSessionInvokeMessage
+  | PermissionReplyInvokeMessage;
 
 export interface StatusQueryMessage {
   type: 'status_query';
@@ -169,12 +198,8 @@ export type DownstreamMessage = InvokeMessage | StatusQueryMessage;
 // Actions
 // ---------------------------------------------------------------------------
 
-export type InvokeAction =
-  | 'chat'
-  | 'create_session'
-  | 'close_session'
-  | 'permission_reply'
-  | 'status_query';
+export const INVOKE_ACTIONS = ['chat', 'create_session', 'close_session', 'permission_reply'] as const;
+export type InvokeAction = typeof INVOKE_ACTIONS[number];
 
 export interface ChatPayload {
   toolSessionId: string;
@@ -190,25 +215,28 @@ export interface CloseSessionPayload {
   toolSessionId: string;
 }
 
-export interface PermissionReplyPayloadTarget {
+export const PERMISSION_REPLY_RESPONSES = ['once', 'always', 'reject'] as const;
+export type PermissionReplyResponse = typeof PERMISSION_REPLY_RESPONSES[number];
+
+export interface PermissionReplyPayload {
   permissionId: string;
   toolSessionId: string;
-  response: 'allow' | 'always' | 'deny';
+  response: PermissionReplyResponse;
 }
-export type PermissionReplyPayload = PermissionReplyPayloadTarget;
 
 export interface StatusQueryPayload {
   sessionId?: string;
 }
 
 export function isPermissionReplyPayload(payload: unknown): payload is PermissionReplyPayload {
-  return typeof payload === 'object' && payload !== null && 'permissionId' in payload;
-}
-
-export function isPermissionReplyTarget(
-  payload: PermissionReplyPayload,
-): payload is PermissionReplyPayloadTarget {
-  return 'response' in payload && typeof payload.response === 'string';
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    typeof (payload as { permissionId?: unknown }).permissionId === 'string' &&
+    typeof (payload as { toolSessionId?: unknown }).toolSessionId === 'string' &&
+    typeof (payload as { response?: unknown }).response === 'string' &&
+    PERMISSION_REPLY_RESPONSES.includes((payload as { response: PermissionReplyResponse }).response)
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -381,9 +409,7 @@ export function isUpstreamMessage(message: unknown): message is UpstreamMessage 
     message !== null &&
     'type' in message &&
     typeof (message as { type: unknown }).type === 'string' &&
-    ['register', 'heartbeat', 'tool_event', 'tool_done', 'tool_error', 'session_created', 'status_response'].includes(
-      (message as { type: string }).type,
-    )
+    UPSTREAM_MESSAGE_TYPES.includes((message as { type: UpstreamMessageType }).type)
   );
 }
 
@@ -393,7 +419,7 @@ export function isDownstreamMessage(message: unknown): message is DownstreamMess
     message !== null &&
     'type' in message &&
     typeof (message as { type: unknown }).type === 'string' &&
-    ['invoke', 'status_query'].includes((message as { type: string }).type)
+    DOWNSTREAM_MESSAGE_TYPES.includes((message as { type: DownstreamMessageType }).type)
   );
 }
 

@@ -75,6 +75,64 @@ describe('runtime protocol strictness', () => {
     expect(sent).toHaveLength(0);
   });
 
+  test('rejects permission_reply payloads with legacy response values', async () => {
+    const runtime = new BridgeRuntime({
+      client: {
+        session: {
+          create: async () => ({}),
+          abort: async () => ({}),
+          prompt: async () => ({}),
+        },
+        postSessionIdPermissionsPermissionId: async () => ({}),
+      },
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      sessionId: 'perm-42',
+      action: 'permission_reply',
+      payload: { toolSessionId: 'tool-42', permissionId: 'perm-1', response: 'allow' },
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('tool_error');
+    expect(sent[0].sessionId).toBe('perm-42');
+  });
+
+  test('rejects invoke status_query variant', async () => {
+    const runtime = new BridgeRuntime({
+      client: {
+        session: {
+          create: async () => ({}),
+          abort: async () => ({}),
+          prompt: async () => ({}),
+        },
+        postSessionIdPermissionsPermissionId: async () => ({}),
+      },
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      sessionId: 'status-42',
+      action: 'status_query',
+      payload: { sessionId: 'status-42' },
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('tool_error');
+    expect(sent[0].sessionId).toBe('status-42');
+  });
+
   test('applies config.debug to runtime fallback logging after config load', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'mb-runtime-'));
     await mkdir(join(workspace, '.opencode'), { recursive: true });
