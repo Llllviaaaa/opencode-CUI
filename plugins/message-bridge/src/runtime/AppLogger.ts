@@ -118,7 +118,7 @@ export class AppLogger implements BridgeLogger {
       ...this.baseExtra,
       ...(extra || {}),
     };
-    const payload = this.debugEnabled ? redact(enriched) : summarize(redact(enriched));
+    const payload = redact(enriched);
 
     if (!this.appLog) {
       if (this.debugEnabled) {
