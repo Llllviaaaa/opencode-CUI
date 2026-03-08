@@ -28,6 +28,10 @@ export async function loadConfig(workspacePath?: string): Promise<BridgeConfig> 
   
   const errors = validateConfig(config);
   if (errors.length > 0) {
+    console.error('[message-bridge] Configuration validation failed:');
+    errors.forEach((err) => {
+      console.error(`  [${err.code}] ${err.path}: ${err.message}`);
+    });
     throw new ConfigValidationAggregateError(errors);
   }
   
