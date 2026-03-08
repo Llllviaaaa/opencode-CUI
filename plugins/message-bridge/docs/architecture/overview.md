@@ -18,11 +18,20 @@ message-bridge 是 OpenCode 原生插件，桥接本地 OpenCode 实例与远端
 1. 插件入口契约：`PluginInput -> Hooks`
 2. 边界：上行事件走 `event` hook，下行 `invoke/status_query` 走后台 runtime 主循环
 
+### 1.1.1 协议对齐更正（2026-03-09）
+
+当前实现已与 `pc-agent` 协议口径对齐，以下规则优先生效：
+
+1. 边界报文不再携带 `envelope`。
+2. 会话字段采用双标识：`welinkSessionId`（技能侧）+ `toolSessionId`（OpenCode 侧）。
+3. `close_session -> session.delete`，并新增 `abort_session -> session.abort`。
+4. `question_reply` 不再走 `session.prompt`，改为 question API 链路（`GET /question` + `POST /question/{requestID}/reply`）。
+
 ### 1.2 设计原则
 
 | 序号 | 原则 | 说明 |
 |---|---|---|
-| 1 | 透明透传优先 | 事件主体不做业务改写，仅添加 envelope 元数据 |
+| 1 | 透明透传优先 | 事件主体不做业务改写，仅补充协议必需路由字段 |
 | 2 | 可扩展优先 | 事件白名单与 action registry 不写死，支持热扩展 |
 | 3 | SDK 对齐优先 | 长期与 `@opencode-ai/sdk` 的 SSE/REST 语义收敛 |
 | 4 | 差异可追踪 | 现网兼容项必须记录收敛计划与版本归属 |
@@ -36,7 +45,7 @@ message-bridge 是 OpenCode 原生插件，桥接本地 OpenCode 实例与远端
 | 组件 | 职责 |
 |---|---|
 | Gateway 连接 | WebSocket 连接、AK/SK 鉴权、心跳、指数退避重连 |
-| 事件上行 | 白名单过滤、envelope 封装、透传 |
+| 事件上行 | 白名单过滤、透传 |
 | action 下行 | registry 路由、执行、错误映射 |
 | 状态管理 | agentId 绑定生命周期、READY 状态机 |
 | 配置管理 | 多源配置发现、JSONC 解析、版本校验 |

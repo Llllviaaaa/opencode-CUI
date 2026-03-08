@@ -1,6 +1,6 @@
 import {
   Action,
-  CloseSessionPayload,
+  AbortSessionPayload,
   ValidationResult,
   ActionResult,
   ActionContext,
@@ -13,10 +13,10 @@ import {
 import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
 /**
- * Concrete implementation of close_session action (maps to session.delete)
+ * Concrete implementation of abort_session action.
  */
-export class CloseSessionAction implements Action<CloseSessionPayload> {
-  name: string = 'close_session';
+export class AbortSessionAction implements Action<AbortSessionPayload> {
+  name: string = 'abort_session';
 
   private normalizePayload(payload: unknown): { toolSessionId: string } | null {
     if (!payload || typeof payload !== 'object') {
@@ -36,43 +36,36 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
     return { toolSessionId };
   }
 
-  /**
-   * Validate close session payload
-   */
   validate(payload: unknown): ValidationResult {
     const normalized = this.normalizePayload(payload);
     if (!normalized) {
       return {
         valid: false,
-        error: 'close_session payload requires toolSessionId'
+        error: 'abort_session payload requires toolSessionId'
       };
     }
 
-    return {
-      valid: true
-    };
+    return { valid: true };
   }
 
-  /**
-   * Execute close session action using delete semantics.
-   */
-  async execute(payload: CloseSessionPayload, context: ActionContext): Promise<ActionResult> {
+  async execute(payload: AbortSessionPayload, context: ActionContext): Promise<ActionResult> {
     const normalized = this.normalizePayload(payload);
     if (!normalized) {
       return {
         success: false,
         errorCode: 'INVALID_PAYLOAD',
-        errorMessage: 'close_session payload requires toolSessionId'
+        errorMessage: 'abort_session payload requires toolSessionId'
       };
     }
 
     const startedAt = Date.now();
-    context.logger?.info('action.close_session.started', {
+    context.logger?.info('action.abort_session.started', {
       toolSessionId: normalized.toolSessionId,
     });
+
     try {
       if (context.connectionState !== 'READY') {
-        context.logger?.warn('action.close_session.rejected_state', { state: context.connectionState });
+        context.logger?.warn('action.abort_session.rejected_state', { state: context.connectionState });
         return {
           success: false,
           errorCode: stateToErrorCode(context.connectionState),
@@ -81,7 +74,7 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
       }
 
       if (!isOpencodeClient(context.client)) {
-        context.logger?.error('action.close_session.invalid_client');
+        context.logger?.error('action.abort_session.invalid_client');
         return {
           success: false,
           errorCode: 'SDK_UNREACHABLE',
@@ -90,26 +83,18 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
       }
 
       const client = context.client;
-      if (typeof client.session.delete !== 'function') {
-        context.logger?.error('action.close_session.delete_unavailable');
-        return {
-          success: false,
-          errorCode: 'SDK_UNREACHABLE',
-          errorMessage: 'session.delete is not available in current OpenCode client'
-        };
-      }
       const executionResult = await safeExecute(
-        client.session.delete({
+        client.session.abort({
           path: { id: normalized.toolSessionId }
         }),
-        (error) => `Close session (delete) failed: ${getErrorMessage(error)}`
+        (error) => `Abort session failed: ${getErrorMessage(error)}`
       );
 
       if (executionResult.success) {
         if (!hasError(executionResult.data)) {
           return {
             success: true,
-            data: { sessionId: normalized.toolSessionId, closed: true }
+            data: { sessionId: normalized.toolSessionId, aborted: true }
           };
         }
 
@@ -119,7 +104,7 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
             : undefined;
         const errorMessage = errorField !== undefined ? getErrorMessage(errorField) : 'Unknown error';
 
-        context.logger?.error('action.close_session.sdk_error_payload', {
+        context.logger?.error('action.abort_session.sdk_error_payload', {
           toolSessionId: normalized.toolSessionId,
           error: errorMessage,
           ...(errorField !== undefined ? getErrorDetailsForLog(errorField) : {}),
@@ -128,11 +113,11 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
         return {
           success: false,
           errorCode: 'SDK_UNREACHABLE',
-          errorMessage: `Failed to close session (delete): ${errorMessage}`
+          errorMessage: `Failed to abort session: ${errorMessage}`
         };
       }
 
-      context.logger?.error('action.close_session.failed', {
+      context.logger?.error('action.abort_session.failed', {
         toolSessionId: normalized.toolSessionId,
         error: executionResult.error,
         latencyMs: Date.now() - startedAt,
@@ -145,7 +130,7 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
     } catch (error) {
       const errorCode = this.errorMapper(error);
       const errorMessage = getErrorMessage(error);
-      context.logger?.error('action.close_session.exception', {
+      context.logger?.error('action.abort_session.exception', {
         toolSessionId: normalized.toolSessionId,
         error: errorMessage,
         errorCode,
@@ -159,13 +144,10 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
         errorMessage
       };
     } finally {
-      context.logger?.debug('action.close_session.finished', { latencyMs: Date.now() - startedAt });
+      context.logger?.debug('action.abort_session.finished', { latencyMs: Date.now() - startedAt });
     }
   }
 
-  /**
-   * Map SDK errors to appropriate error codes
-   */
   errorMapper(error: unknown): ErrorCode {
     if (error instanceof Error) {
       const message = error.message.toLowerCase();

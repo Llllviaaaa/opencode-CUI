@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { BridgeRuntime } from '../../dist/runtime/BridgeRuntime.js';
-import { EnvelopeBuilder } from '../../dist/event/EnvelopeBuilder.js';
 import { EventFilter } from '../../dist/event/EventFilter.js';
 
 describe('runtime protocol strictness', () => {
@@ -22,12 +21,11 @@ describe('runtime protocol strictness', () => {
 
     const sent = [];
     runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
-    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
     runtime.stateManager.setState('READY');
 
     await runtime.handleDownstreamMessage({
       type: 'invoke',
-      sessionId: '42',
+      welinkSessionId: '42',
       payload: {
         action: 'chat',
         payload: { toolSessionId: 'tool-1', text: 'hello' },
@@ -36,7 +34,7 @@ describe('runtime protocol strictness', () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].sessionId).toBe('42');
+    expect(sent[0].welinkSessionId).toBe('42');
     expect('code' in sent[0]).toBe(false);
   });
 
@@ -58,12 +56,11 @@ describe('runtime protocol strictness', () => {
 
     const sent = [];
     runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
-    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
     runtime.stateManager.setState('READY');
 
     await runtime.handleDownstreamMessage({
       type: 'invoke',
-      sessionId: '100',
+      welinkSessionId: '100',
       action: 'chat',
       payload: { toolSessionId: 'tool-100', text: 'hello' },
     });
@@ -90,31 +87,46 @@ describe('runtime protocol strictness', () => {
 
     const sent = [];
     runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
-    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
     runtime.stateManager.setState('READY');
 
     await runtime.handleDownstreamMessage({
       type: 'invoke',
-      sessionId: 'perm-42',
+      welinkSessionId: 'perm-42',
       action: 'permission_reply',
       payload: { toolSessionId: 'tool-42', permissionId: 'perm-1', response: 'allow' },
     });
 
     expect(sent).toHaveLength(1);
     expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].sessionId).toBe('perm-42');
+    expect(sent[0].welinkSessionId).toBe('perm-42');
   });
 
-  test('accepts question_reply invoke shape and routes answer via session.prompt', async () => {
-    const prompts = [];
+  test('accepts question_reply invoke shape and routes answer via question API', async () => {
+    const getCalls = [];
+    const postCalls = [];
     const runtime = new BridgeRuntime({
       client: {
         session: {
           create: async () => ({}),
           abort: async () => ({}),
-          prompt: async (options) => {
-            prompts.push(options);
-            return { data: { ok: true } };
+          prompt: async () => ({ data: { ok: true } }),
+        },
+        _client: {
+          get: async (options) => {
+            getCalls.push(options);
+            return {
+              data: [
+                {
+                  id: 'question-request-42',
+                  sessionID: 'tool-42',
+                  tool: { callID: 'call-42' },
+                },
+              ],
+            };
+          },
+          post: async (options) => {
+            postCalls.push(options);
+            return { data: undefined };
           },
         },
         postSessionIdPermissionsPermissionId: async () => ({}),
@@ -123,25 +135,29 @@ describe('runtime protocol strictness', () => {
 
     const sent = [];
     runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
-    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
     runtime.stateManager.setState('READY');
 
     await runtime.handleDownstreamMessage({
       type: 'invoke',
-      sessionId: 'q-42',
+      welinkSessionId: 'q-42',
       action: 'question_reply',
       payload: { toolSessionId: 'tool-42', toolCallId: 'call-42', answer: 'Vite' },
     });
 
-    expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toEqual({
-      path: { id: 'tool-42' },
-      body: { parts: [{ type: 'text', text: 'Vite' }] },
-    });
+    expect(getCalls).toEqual([{ url: '/question' }]);
+    expect(postCalls).toEqual([
+      {
+        url: '/question/{requestID}/reply',
+        path: { requestID: 'question-request-42' },
+        body: { answers: [['Vite']] },
+        headers: { 'Content-Type': 'application/json' },
+      },
+    ]);
     expect(sent).toHaveLength(0);
   });
 
-  test('rejects question_reply payloads missing toolCallId', async () => {
+  test('accepts question_reply payloads missing toolCallId', async () => {
+    const postCalls = [];
     const runtime = new BridgeRuntime({
       client: {
         session: {
@@ -149,25 +165,37 @@ describe('runtime protocol strictness', () => {
           abort: async () => ({}),
           prompt: async () => ({ data: { ok: true } }),
         },
+        _client: {
+          get: async () => ({
+            data: [
+              {
+                id: 'question-request-43',
+                sessionID: 'tool-43',
+              },
+            ],
+          }),
+          post: async (options) => {
+            postCalls.push(options);
+            return { data: undefined };
+          },
+        },
         postSessionIdPermissionsPermissionId: async () => ({}),
       },
     });
 
     const sent = [];
     runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
-    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
     runtime.stateManager.setState('READY');
 
     await runtime.handleDownstreamMessage({
       type: 'invoke',
-      sessionId: 'q-43',
+      welinkSessionId: 'q-43',
       action: 'question_reply',
       payload: { toolSessionId: 'tool-43', answer: 'Vite' },
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].sessionId).toBe('q-43');
+    expect(postCalls).toHaveLength(1);
+    expect(sent).toHaveLength(0);
   });
 
   test('rejects question_reply payloads missing toolSessionId', async () => {
@@ -184,19 +212,18 @@ describe('runtime protocol strictness', () => {
 
     const sent = [];
     runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
-    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
     runtime.stateManager.setState('READY');
 
     await runtime.handleDownstreamMessage({
       type: 'invoke',
-      sessionId: 'q-44',
+      welinkSessionId: 'q-44',
       action: 'question_reply',
       payload: { toolCallId: 'call-44', answer: 'Vite' },
     });
 
     expect(sent).toHaveLength(1);
     expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].sessionId).toBe('q-44');
+    expect(sent[0].welinkSessionId).toBe('q-44');
   });
 
   test('rejects question_reply payloads missing answer', async () => {
@@ -213,19 +240,18 @@ describe('runtime protocol strictness', () => {
 
     const sent = [];
     runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
-    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
     runtime.stateManager.setState('READY');
 
     await runtime.handleDownstreamMessage({
       type: 'invoke',
-      sessionId: 'q-45',
+      welinkSessionId: 'q-45',
       action: 'question_reply',
       payload: { toolSessionId: 'tool-45', toolCallId: 'call-45' },
     });
 
     expect(sent).toHaveLength(1);
     expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].sessionId).toBe('q-45');
+    expect(sent[0].welinkSessionId).toBe('q-45');
   });
 
   test('rejects invoke status_query variant', async () => {
@@ -242,19 +268,18 @@ describe('runtime protocol strictness', () => {
 
     const sent = [];
     runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
-    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
     runtime.stateManager.setState('READY');
 
     await runtime.handleDownstreamMessage({
       type: 'invoke',
-      sessionId: 'status-42',
+      welinkSessionId: 'status-42',
       action: 'status_query',
       payload: { sessionId: 'status-42' },
     });
 
     expect(sent).toHaveLength(1);
     expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].sessionId).toBe('status-42');
+    expect(sent[0].welinkSessionId).toBe('status-42');
   });
 
   test('applies config.debug to runtime fallback logging after config load', async () => {
@@ -328,10 +353,8 @@ describe('runtime protocol strictness', () => {
     runtime.gatewayConnection = {
       send: (message, context) => sent.push({ message, context }),
     };
-    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
     runtime.eventFilter = new EventFilter(['message.*']);
     runtime.stateManager.setState('READY');
-    runtime.toolToSkillSessionMap.set('tool-1', 'skill-1');
 
     await runtime.handleEvent({
       type: 'message.part.updated',
@@ -359,7 +382,7 @@ describe('runtime protocol strictness', () => {
     expect(receivedLog.extra.partType).toBe('text');
     expect(receivedLog.extra.deltaBytes).toBe(Buffer.byteLength('你好，bridge', 'utf8'));
 
-    expect(forwardingLog.extra.sessionId).toBe('skill-1');
+    expect(forwardingLog.extra.toolSessionId).toBe('tool-1');
     expect(forwardingLog.extra.traceId).toBeDefined();
     expect('bridgeMessageId' in forwardingLog.extra).toBe(false);
     expect(forwardingLog.extra.opencodeMessageId).toBe('op-msg-1');
@@ -369,7 +392,7 @@ describe('runtime protocol strictness', () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0].context.traceId).toBe(forwardingLog.extra.traceId);
-    expect(sent[0].context.bridgeMessageId).toBe(forwardingLog.extra.traceId);
+    expect(sent[0].context.gatewayMessageId).toBe(forwardingLog.extra.traceId);
     expect(sent[0].context.opencodeMessageId).toBe('op-msg-1');
     expect(sent[0].context.opencodePartId).toBe('part-1');
   });
@@ -394,20 +417,16 @@ describe('runtime protocol strictness', () => {
     });
 
     runtime.gatewayConnection = { send: () => {} };
-    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
     runtime.stateManager.setState('READY');
 
     await runtime.handleDownstreamMessage({
       type: 'invoke',
+      messageId: 'gw-msg-1',
       action: 'chat',
-      sessionId: 'skill-42',
+      welinkSessionId: 'skill-42',
       payload: {
         toolSessionId: 'tool-42',
         text: 'hello',
-      },
-      envelope: {
-        messageId: 'gw-msg-1',
-        sessionId: 'skill-42',
       },
     });
     await new Promise((r) => setTimeout(r, 10));
