@@ -42,7 +42,8 @@
 
 | 字段 | 说明 |
 |---|---|
-| `traceId` | 同一 `AppLogger` 生命周期内链路追踪 ID |
+| `traceId` | 消息级追踪 ID；上行优先取 `bridgeMessageId`，下行优先取 `gatewayMessageId`，无消息上下文时退化为 runtime 级 ID |
+| `runtimeTraceId` | 同一 `AppLogger` 生命周期内稳定不变的 runtime 级追踪 ID |
 | `component` | 组件标识（如 `runtime`/`gateway`/`singleton`） |
 | `state` | 连接状态（`DISCONNECTED/CONNECTING/CONNECTED/READY`） |
 | `errorDetail` | 统一错误提取后的明细消息 |
@@ -50,9 +51,18 @@
 | `sourceErrorCode` | 底层错误对象里的 `code` 字段 |
 | `errorType` | 错误或事件类型（如 `Error` / `error`） |
 | `sessionId` | 会话 ID（若可提取） |
+| `toolSessionId` | OpenCode / SDK 侧 session ID |
 | `agentId` | agent 标识，重连后可能重新绑定 |
 | `action` | 下行调用动作名（chat/create_session/...） |
 | `eventType` | OpenCode 事件类型 |
+| `bridgeMessageId` | bridge 上行消息 envelope.messageId；主要用于内部发送上下文，日志中通常直接复用到 `traceId`，不再单独输出 |
+| `gatewayMessageId` | gateway 下行消息 envelope.messageId |
+| `opencodeMessageId` | OpenCode 事件 message ID |
+| `opencodePartId` | OpenCode 事件 part ID |
+| `payloadBytes` | 出站 JSON 消息 UTF-8 字节数 |
+| `frameBytes` | 入站 WebSocket 帧 UTF-8 字节数 |
+| `deltaBytes` | 事件 delta 字段 UTF-8 字节数 |
+| `diffCount` | `session.diff` 中 diff 项数量 |
 | `latencyMs` | 单次动作耗时 |
 | `attempt`/`delayMs` | 重连次数与重连延迟 |
 
@@ -157,12 +167,12 @@ sequenceDiagram
 | `runtime.stop.requested` | info | stop 入口 | - | `src/runtime/BridgeRuntime.ts:141` |
 | `runtime.stop.completed` | info | stop 完成 | - | `src/runtime/BridgeRuntime.ts:148` |
 | `runtime.downstream_ignored_no_connection` | warn | 下行处理时无连接/无 envelopeBuilder | - | `src/runtime/BridgeRuntime.ts:198` |
-| `runtime.status_query.received` | info | 收到 status_query | `sessionId` | `src/runtime/BridgeRuntime.ts:204` |
-| `runtime.status_query.responded` | info | status_response 已发送 | `sessionId`,`latencyMs` | `src/runtime/BridgeRuntime.ts:217` |
-| `runtime.invoke.received` | info | 收到 invoke | `action` | `src/runtime/BridgeRuntime.ts:224` |
-| `runtime.invoke.completed` | info | invoke 成功回传后记录完成态（`create_session` 与其他 action 分支各一处） | `action`,`sessionId`,`latencyMs` | `src/runtime/BridgeRuntime.ts:254,268` |
+| `runtime.status_query.received` | info | 收到 status_query | `traceId`,`runtimeTraceId`,`gatewayMessageId`,`sessionId` | `src/runtime/BridgeRuntime.ts` |
+| `runtime.status_query.responded` | info | status_response 已发送 | `traceId`,`runtimeTraceId`,`gatewayMessageId`,`sessionId`,`latencyMs` | `src/runtime/BridgeRuntime.ts` |
+| `runtime.invoke.received` | info | 收到 invoke | `traceId`,`runtimeTraceId`,`gatewayMessageId`,`action`,`sessionId`,`toolSessionId` | `src/runtime/BridgeRuntime.ts` |
+| `runtime.invoke.completed` | info | invoke 成功完成（包括 `create_session` 回包后） | `traceId`,`runtimeTraceId`,`gatewayMessageId`,`action`,`sessionId`,`toolSessionId`,`latencyMs` | `src/runtime/BridgeRuntime.ts` |
 | `runtime.tool_error.skipped_no_connection` | warn | 需回传 tool_error 但无连接 | `sessionId` | `src/runtime/BridgeRuntime.ts:317` |
-| `runtime.tool_error.sending` | error | 发送 tool_error 前记录 | `sessionId`,`code`,`error` | `src/runtime/BridgeRuntime.ts:323` |
+| `runtime.tool_error.sending` | error | 发送 tool_error 前记录 | `traceId`,`runtimeTraceId`,`gatewayMessageId`,`sessionId`,`action`,`error` | `src/runtime/BridgeRuntime.ts` |
 | `runtime.singleton.reuse_existing` | debug | 复用已存在 runtime | - | `src/runtime/singleton.ts:13` |
 | `runtime.singleton.await_initializing` | debug | 等待初始化中的 runtime | - | `src/runtime/singleton.ts:18` |
 | `runtime.singleton.initialization_cancelled` | warn | 初始化过程被取消 | - | `src/runtime/singleton.ts:34` |
@@ -179,35 +189,35 @@ sequenceDiagram
 | `gateway.open` | info | WebSocket onopen | - | `src/connection/GatewayConnection.ts:115` |
 | `gateway.register.sent` | info | register 消息发送后 | `toolType`,`toolVersion` | `src/connection/GatewayConnection.ts:119` |
 | `gateway.ready` | info | 状态切到 READY | - | `src/connection/GatewayConnection.ts:124` |
-| `gateway.close` | warn | WebSocket onclose | `opened`,`manuallyDisconnected`,`aborted` | `src/connection/GatewayConnection.ts:130` |
+| `gateway.close` | warn | WebSocket onclose | `opened`,`manuallyDisconnected`,`aborted`,`lastMessageDirection`,`lastMessageType`,`lastMessageId`,`lastPayloadBytes`,`lastEventType`,`lastOpencodeMessageId` | `src/connection/GatewayConnection.ts` |
 | `gateway.error` | error | WebSocket onerror | `error`,`errorDetail`,`errorName?`,`errorType?`,`eventType?`,`readyState?` | `src/connection/GatewayConnection.ts:148` |
 | `gateway.connect.failed` | error | connect 抛异常（URL/构造等） | `error`,`errorDetail`,`errorName?`,`sourceErrorCode?` | `src/connection/GatewayConnection.ts:162` |
 | `gateway.disconnect.requested` | info | 主动 disconnect | `state` | `src/connection/GatewayConnection.ts:171` |
 | `gateway.send.rejected_not_connected` | warn | 非连接态发送消息 | - | `src/connection/GatewayConnection.ts:190` |
-| `gateway.send` | debug | send 前记录消息类型 | `messageType` | `src/connection/GatewayConnection.ts:198` |
+| `gateway.send` | debug | send 前记录消息类型与大小 | `traceId`,`runtimeTraceId`,`messageType`,`payloadBytes`,`gatewayMessageId`,`eventType`,`action`,`opencodeMessageId`,`opencodePartId` | `src/connection/GatewayConnection.ts` |
 | `gateway.heartbeat.sent` | debug | 心跳发送 | - | `src/connection/GatewayConnection.ts:225` |
 | `gateway.reconnect.scheduled` | warn | 安排重连 | `attempt`,`delayMs` | `src/connection/GatewayConnection.ts:250` |
 | `gateway.reconnect.attempt` | info | 执行一次重连 | `attempt` | `src/connection/GatewayConnection.ts:261` |
-| `gateway.message.received` | debug | 连接层解析到 JSON 消息 | `messageType` | `src/connection/GatewayConnection.ts:292` |
-| `gateway.message.ignored_non_json` | debug | 收到非 JSON 消息被忽略 | - | `src/connection/GatewayConnection.ts:295` |
+| `gateway.message.received` | debug | 连接层解析到 JSON 消息 | `messageType`,`frameBytes`,`gatewayMessageId` | `src/connection/GatewayConnection.ts` |
+| `gateway.message.ignored_non_json` | debug | 收到非 JSON 消息被忽略 | `payloadLength`,`frameBytes` | `src/connection/GatewayConnection.ts` |
 | `gateway.state.changed` | info | runtime 监听到连接状态变化 | `state` | `src/runtime/BridgeRuntime.ts:99` |
-| `gateway.message.received` | debug | runtime 收到下行消息入口 | `messageType` | `src/runtime/BridgeRuntime.ts:112` |
+| `gateway.message.received` | debug | runtime 收到下行消息入口 | `traceId`,`runtimeTraceId`,`messageType`,`gatewayMessageId`,`action`,`sessionId`,`toolSessionId` | `src/runtime/BridgeRuntime.ts` |
 
 ### 4.3 event.* 与 event.relay.*
 
 | message | level | 触发时机 | 关键 extra | 源码位置 |
 |---|---|---|---|---|
-| `event.received` | debug | runtime handleEvent 收到事件 | `eventType` | `src/runtime/BridgeRuntime.ts:152` |
-| `event.ignored_not_ready` | debug | runtime 未就绪时忽略事件 | `state` | `src/runtime/BridgeRuntime.ts:156` |
-| `event.rejected_allowlist` | warn | runtime allowlist 拒绝事件 | `eventType` | `src/runtime/BridgeRuntime.ts:163` |
-| `event.forwarding` | info | runtime 上行发送前 | `eventType`,`sessionId` | `src/runtime/BridgeRuntime.ts:168` |
-| `event.forwarded` | debug | runtime 上行发送后 | `eventType`,`sessionId` | `src/runtime/BridgeRuntime.ts:175` |
+| `event.received` | debug | runtime handleEvent 收到事件 | `traceId`,`runtimeTraceId`,`eventType`,`toolSessionId`,`opencodeMessageId`,`opencodePartId`,`partType`,`deltaBytes`,`diffCount` | `src/runtime/BridgeRuntime.ts` |
+| `event.ignored_not_ready` | debug | runtime 未就绪时忽略事件 | `traceId`,`runtimeTraceId`,`eventType`,`toolSessionId`,`opencodeMessageId`,`opencodePartId`,`state` | `src/runtime/BridgeRuntime.ts` |
+| `event.rejected_allowlist` | warn | runtime allowlist 拒绝事件 | `traceId`,`runtimeTraceId`,`eventType`,`toolSessionId`,`opencodeMessageId`,`opencodePartId` | `src/runtime/BridgeRuntime.ts` |
+| `event.forwarding` | info | runtime 上行发送前 | `traceId`,`runtimeTraceId`,`eventType`,`sessionId`,`toolSessionId`,`opencodeMessageId`,`opencodePartId` | `src/runtime/BridgeRuntime.ts` |
+| `event.forwarded` | debug | runtime 上行发送后 | `traceId`,`runtimeTraceId`,`eventType`,`sessionId`,`toolSessionId`,`opencodeMessageId`,`opencodePartId` | `src/runtime/BridgeRuntime.ts` |
 | `event.relay.started` | info | EventRelay 启动 | - | `src/event/EventRelay.ts:44` |
 | `event.relay.error` | error | EventRelay 处理事件异常 | `error`,`errorDetail`,`errorName`,`sourceErrorCode?` | `src/event/EventRelay.ts:47` |
 | `event.relay.stopped` | info | EventRelay 停止 | - | `src/event/EventRelay.ts:58` |
-| `event.relay.ignored_not_ready` | debug | EventRelay 未就绪时忽略 | `eventType` | `src/event/EventRelay.ts:67` |
-| `event.relay.rejected_allowlist` | warn | EventRelay allowlist 拒绝 | `eventType` | `src/event/EventRelay.ts:72` |
-| `event.relay.forwarding` | debug | EventRelay 转发前 | `eventType`,`sessionId` | `src/event/EventRelay.ts:78` |
+| `event.relay.ignored_not_ready` | debug | EventRelay 未就绪时忽略 | `traceId`,`runtimeTraceId`,`eventType`,`toolSessionId`,`opencodeMessageId`,`opencodePartId` | `src/event/EventRelay.ts` |
+| `event.relay.rejected_allowlist` | warn | EventRelay allowlist 拒绝 | `traceId`,`runtimeTraceId`,`eventType`,`toolSessionId`,`opencodeMessageId`,`opencodePartId` | `src/event/EventRelay.ts` |
+| `event.relay.forwarding` | debug | EventRelay 转发前 | `traceId`,`runtimeTraceId`,`eventType`,`sessionId`,`toolSessionId`,`opencodeMessageId`,`opencodePartId` | `src/event/EventRelay.ts` |
 
 ### 4.4 router.*
 
