@@ -21,6 +21,34 @@
 - 环境变量与本地配置文件源
 - `jsonc-parser`（JSONC 解析）
 
+## 配置加载优先级
+
+配置从多个源加载，**后加载的覆盖先加载的**（优先级从高到低）：
+
+```
+env (BRIDGE_*) > project (.opencode/message-bridge.jsonc) > user (~/.config/opencode/message-bridge.jsonc) > default
+```
+
+### 项目配置查找机制
+
+项目配置支持**向上查找**，从当前工作目录（或指定 workspace）向上查找到文件系统根：
+
+1. 从起始目录开始
+2. 检查 `.opencode/message-bridge.jsonc` 是否存在
+3. 如不存在，进入父目录继续查找
+4. 直到找到配置文件或到达文件系统根
+
+**示例场景**：
+```
+/workspace/project/
+  ├── .opencode/
+  │   └── message-bridge.jsonc  ← 配置在这里
+  ├── src/
+  │   └── components/
+  │       └── Button.tsx        ← 在这里运行也能找到配置
+  └── .git/
+```
+
 ## 核心结构
 
 | Key | Required | Default | Unit | Configurable |

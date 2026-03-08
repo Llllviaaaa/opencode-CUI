@@ -147,8 +147,27 @@ message-bridge 是 OpenCode 原生插件，桥接本地 OpenCode 实例与远端
 
 #### 3.1.2 配置源优先级
 
+配置从多个源加载，优先级从高到低：
+
 ```
 env (BRIDGE_*) > project (.opencode/message-bridge.jsonc) > user (~/.config/opencode/message-bridge.jsonc) > default
+```
+
+**项目配置查找机制**：
+- 从当前工作目录（或指定 workspace）向上查找到文件系统根
+- 在每个目录中查找 `.opencode/message-bridge.jsonc`
+- 使用第一个找到的匹配文件
+- 这允许在子目录中运行时也能正确加载项目配置
+
+**示例场景**：
+```
+/workspace/project/
+  ├── .opencode/
+  │   └── message-bridge.jsonc  ← 配置在这里
+  ├── src/
+  │   └── components/
+  │       └── Button.tsx        ← 在这里运行也能找到配置
+  └── .git/
 ```
 
 #### 3.1.3 配置示例

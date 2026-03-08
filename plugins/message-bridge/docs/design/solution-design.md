@@ -746,12 +746,21 @@ interface LogEntry {
 
 2. 项目级配置
    路径: <workspace>/.opencode/message-bridge.jsonc
+   查找方式: 从起始目录向上查找到文件系统根，使用第一个找到的匹配文件
 
 3. 用户级配置
    路径: ~/.config/opencode/message-bridge.jsonc
 
 4. 默认配置
    内置在代码中
+```
+
+**项目配置向上查找示例**：
+```
+/workspace/project/src/components/  ← 在此目录运行
+  ├── 检查 .opencode/message-bridge.jsonc (不存在)
+  ├── 检查 ../.opencode/message-bridge.jsonc (不存在)
+  └── 检查 ../../.opencode/message-bridge.jsonc (找到!) ✓
 ```
 
 #### 4.1.2 Workspace 确定规则
