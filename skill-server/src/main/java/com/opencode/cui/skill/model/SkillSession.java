@@ -15,7 +15,6 @@ public class SkillSession {
 
     private Long id;
     private Long userId;
-    private Long skillDefinitionId;
     private String ak;
     private String toolSessionId;
     private String title;

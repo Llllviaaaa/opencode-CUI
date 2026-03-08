@@ -7,21 +7,20 @@
     <resultMap id="SkillSessionResultMap" type="com.opencode.cui.skill.model.SkillSession">
         <id     property="id"                column="id"/>
         <result property="userId"            column="user_id"/>
-        <result property="skillDefinitionId" column="skill_definition_id"/>
-        <result property="ak"                column="agent_id"/>
+        <result property="ak"                column="ak"/>
         <result property="toolSessionId"     column="tool_session_id"/>
         <result property="title"             column="title"/>
         <result property="status"            column="status"
                 typeHandler="org.apache.ibatis.type.EnumTypeHandler"
                 javaType="com.opencode.cui.skill.model.SkillSession$Status"/>
-        <result property="imGroupId"         column="im_chat_id"/>
+        <result property="imGroupId"         column="im_group_id"/>
         <result property="createdAt"         column="created_at"/>
         <result property="lastActiveAt"      column="last_active_at"/>
     </resultMap>
 
     <sql id="selectAllColumns">
-        SELECT id, user_id, skill_definition_id, agent_id, tool_session_id,
-               title, status, im_chat_id, created_at, last_active_at
+        SELECT id, user_id, ak, tool_session_id,
+               title, status, im_group_id, created_at, last_active_at
         FROM skill_session
     </sql>
 
@@ -63,7 +62,7 @@
 
     <select id="findByAk" resultMap="SkillSessionResultMap">
         <include refid="selectAllColumns"/>
-        WHERE agent_id = #{ak}
+        WHERE ak = #{ak}
     </select>
 
     <select id="findByToolSessionId" resultMap="SkillSessionResultMap">
@@ -78,9 +77,9 @@
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO skill_session
-            (user_id, skill_definition_id, agent_id, tool_session_id, title, status, im_chat_id, created_at, last_active_at)
+            (user_id, ak, tool_session_id, title, status, im_group_id, created_at, last_active_at)
         VALUES
-            (#{userId}, #{skillDefinitionId}, #{ak}, #{toolSessionId}, #{title},
+            (#{userId}, #{ak}, #{toolSessionId}, #{title},
              #{status}, #{imGroupId}, NOW(), NOW())
     </insert>
 
@@ -105,7 +104,7 @@
 
     <update id="updateAk">
         UPDATE skill_session
-        SET agent_id = #{ak}
+        SET ak = #{ak}
         WHERE id = #{id}
     </update>
 
