@@ -213,9 +213,10 @@ env (BRIDGE_*) > project (.opencode/message-bridge.jsonc) > user (~/.config/open
     "sk": "${BRIDGE_SK}"
   },
   "events": {
-    "allowlist": [                  // 默认: ['message.*', 'permission.*', ...]
+    "allowlist": [                  // 默认: ['message.*', 'permission.*', 'requestion.*', ...]
       "message.*",
       "permission.*",
+      "requestion.*",
       "session.*",
       "file.edited",
       "todo.updated",
@@ -314,6 +315,7 @@ baseMs = 1000, maxMs = 30000
 allowlist = [
   "message.*",      // 匹配 message.created, message.updated...
   "permission.*",   // 匹配 permission.request...
+  "requestion.*",   // 匹配 requestion.created...
   "session.*",      // 匹配 session.created...
   "file.edited",    // 精确匹配
   "todo.updated",

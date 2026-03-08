@@ -4,7 +4,8 @@ export class EventFilter {
 
   constructor(allowlist: readonly string[] = [
     'message.*',
-    'permission.*', 
+    'permission.*',
+    'requestion.*',
     'session.*',
     'file.edited',
     'todo.updated',

@@ -89,6 +89,7 @@
 - 默认允许：
 - `message.*`
 - `permission.*`
+- `requestion.*`
 - `session.*`
 - `file.edited`
 - `todo.updated`

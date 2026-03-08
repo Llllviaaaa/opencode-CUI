@@ -50,7 +50,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 | PRD Ref | Requirement | Status | Code Reference | Notes |
 |---------|-------------|--------|----------------|-------|
 | FR-MB-02 | Event allowlist with prefix matching | **Implemented** | `src/event/EventFilter.ts` (lines 1-35): `EventFilter` class with prefix and exact matching | Supports `message.*`, `permission.*`, etc. Default allowlist matches PRD. |
-| FR-MB-02 | Default allowlist: message.*, permission.*, session.*, file.edited, todo.updated, command.executed | **Implemented** | `src/event/EventFilter.ts` (lines 5-12): default constructor values; `src/types/index.ts` (lines 761-768): `DEFAULT_EVENT_ALLOWLIST` | Exact match to PRD §FR-MB-02. |
+| FR-MB-02 | Default allowlist: message.*, permission.*, requestion.*, session.*, file.edited, todo.updated, command.executed | **Implemented** | `src/event/EventFilter.ts` (lines 5-13): default constructor values; `src/types/index.ts` (lines 761-769): `DEFAULT_EVENT_ALLOWLIST` | Exact match to PRD §FR-MB-02. |
 | §4.4 | Envelope with all required fields | **Implemented** | `src/types/index.ts` (lines 146-170): `Envelope` interface with version, messageId, timestamp, source, agentId, sessionId, sequenceNumber, sequenceScope | All 9 fields defined per PRD. |
 | §4.4 | Envelope version field | **Implemented** | `src/event/EnvelopeBuilder.ts` (line 22): hardcoded `'1.0'` | Matches PRD format. |
 | §4.4 | Envelope sequenceNumber per scope | **Implemented** | `src/event/EnvelopeBuilder.ts` (lines 36-42): `nextSequence()` with per-scope counters | Separate counters per sessionId plus global scope. |
