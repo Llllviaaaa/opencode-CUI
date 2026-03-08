@@ -1,4 +1,7 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { MessageBridgePlugin, default as DefaultPlugin } from '../../dist/index.js';
 import { __resetRuntimeForTests, getOrCreateRuntime, getRuntime, stopRuntime } from '../../dist/runtime/singleton.js';
@@ -61,17 +64,69 @@ describe('plugin contract', () => {
   });
 
   test('failed initialization does not poison singleton and can recover on next init', async () => {
+    const originalHome = process.env.HOME;
+    const originalGatewayUrl = process.env.BRIDGE_GATEWAY_URL;
+    const originalBridgeAuthAk = process.env.BRIDGE_AUTH_AK;
+    const originalBridgeAuthSk = process.env.BRIDGE_AUTH_SK;
+    const originalBridgeAk = process.env.BRIDGE_AK;
+    const originalBridgeSk = process.env.BRIDGE_SK;
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-it-home-'));
+    const fakeWorkspace = await mkdtemp(join(tmpdir(), 'mb-it-workspace-'));
+    process.env.HOME = fakeHome;
     process.env.BRIDGE_ENABLED = 'true';
     delete process.env.BRIDGE_AUTH_AK;
     delete process.env.BRIDGE_AUTH_SK;
+    delete process.env.BRIDGE_AK;
+    delete process.env.BRIDGE_SK;
+    process.env.BRIDGE_GATEWAY_URL = 'not-a-valid-url';
 
-    await expect(MessageBridgePlugin(mockInput())).rejects.toBeDefined();
-    expect(getRuntime()).toBeNull();
+    try {
+      const isolatedInput = mockInput({
+        directory: fakeWorkspace,
+        worktree: fakeWorkspace,
+      });
+      await expect(MessageBridgePlugin(isolatedInput)).rejects.toBeDefined();
+      expect(getRuntime()).toBeNull();
 
-    process.env.BRIDGE_ENABLED = 'false';
-    const hooks = await MessageBridgePlugin(mockInput());
-    expect(typeof hooks.event).toBe('function');
-    expect(getRuntime()).toBeDefined();
+      process.env.BRIDGE_ENABLED = 'false';
+      delete process.env.BRIDGE_GATEWAY_URL;
+      const hooks = await MessageBridgePlugin(isolatedInput);
+      expect(typeof hooks.event).toBe('function');
+      expect(getRuntime()).toBeDefined();
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      if (originalBridgeAuthAk === undefined) {
+        delete process.env.BRIDGE_AUTH_AK;
+      } else {
+        process.env.BRIDGE_AUTH_AK = originalBridgeAuthAk;
+      }
+      if (originalBridgeAuthSk === undefined) {
+        delete process.env.BRIDGE_AUTH_SK;
+      } else {
+        process.env.BRIDGE_AUTH_SK = originalBridgeAuthSk;
+      }
+      if (originalBridgeAk === undefined) {
+        delete process.env.BRIDGE_AK;
+      } else {
+        process.env.BRIDGE_AK = originalBridgeAk;
+      }
+      if (originalBridgeSk === undefined) {
+        delete process.env.BRIDGE_SK;
+      } else {
+        process.env.BRIDGE_SK = originalBridgeSk;
+      }
+      if (originalGatewayUrl === undefined) {
+        delete process.env.BRIDGE_GATEWAY_URL;
+      } else {
+        process.env.BRIDGE_GATEWAY_URL = originalGatewayUrl;
+      }
+      await rm(fakeHome, { recursive: true, force: true });
+      await rm(fakeWorkspace, { recursive: true, force: true });
+    }
   });
 
   test('stop during initialization does not resurrect runtime', async () => {
