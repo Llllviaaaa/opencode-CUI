@@ -55,6 +55,7 @@ env (BRIDGE_*) > project (.opencode/message-bridge.jsonc) > user (~/.config/open
 |---|---|---|---|---|
 | `config_version` | no | `1` | n/a | yes |
 | `enabled` | no | `true` | bool | yes |
+| `debug` | no | `false` | bool | yes |
 | `gateway.url` | no | `ws://localhost:8081/ws/agent` | url | yes |
 | `gateway.deviceName` | no | `Local Machine` | string | yes |
 | `gateway.toolType` | no | `opencode` | string | yes |
@@ -71,6 +72,14 @@ env (BRIDGE_*) > project (.opencode/message-bridge.jsonc) > user (~/.config/open
 | `events.allowlist` | no | PRD defaults | list | yes |
 
 \* `auth.ak` 和 `auth.sk` 仅在 `enabled !== false` 时为必填字段。
+
+### Debug 模式
+
+`debug` 字段控制是否启用详细日志输出：
+
+- 设为 `true` 时，日志会包含更详细的 `extra` 字段（敏感信息会被脱敏）
+- 可通过配置文件设置 `debug: true`，或环境变量 `BRIDGE_DEBUG=true`
+- `BRIDGE_DEBUG` 为旧版环境变量，仍支持用于向后兼容
 
 ## 最小配置示例
 
