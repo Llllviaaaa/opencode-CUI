@@ -31,7 +31,6 @@ export class ConfigResolver {
         },
       },
       sdk: {
-        baseUrl: 'http://localhost:54321',
         timeoutMs: 10000,
       },
       auth: {
@@ -44,11 +43,13 @@ export class ConfigResolver {
     };
 
     let config: Partial<BridgeConfig> = { ...defaultConfig };
+    const sources: string[] = ['default'];
 
     const userConfigPath = join(homedir(), '.config', 'opencode', 'message-bridge.jsonc');
     const userConfig = await this.loadConfigFile(userConfigPath);
     if (userConfig) {
       config = this.mergeConfig(config, userConfig);
+      sources.push(`user:${userConfigPath}`);
     }
 
     const workspaceRoot = workspacePath ?? process.cwd();
@@ -56,9 +57,16 @@ export class ConfigResolver {
     const projectConfig = await this.loadConfigFile(projectConfigPath);
     if (projectConfig) {
       config = this.mergeConfig(config, projectConfig);
+      sources.push(`project:${projectConfigPath}`);
     }
 
-    config = this.mergeConfig(config, this.loadEnvConfig());
+    const envConfig = this.loadEnvConfig();
+    if (Object.keys(envConfig).length > 0) {
+      config = this.mergeConfig(config, envConfig);
+      sources.push('env');
+    }
+
+    console.log(`[message-bridge] Config sources: ${sources.join(' -> ')}`);
 
     return this.normalizeConfig(config as BridgeConfig);
   }
@@ -100,12 +108,9 @@ export class ConfigResolver {
     }
 
     const reconnect: Record<string, unknown> = {};
-    const reconnectBase = process.env.BRIDGE_GATEWAY_RECONNECT_BASE_MS ?? process.env.BRIDGE_RECONNECT_BASE_MS;
-    const reconnectMax = process.env.BRIDGE_GATEWAY_RECONNECT_MAX_MS ?? process.env.BRIDGE_RECONNECT_MAX_MS;
-    const reconnectExp = process.env.BRIDGE_GATEWAY_RECONNECT_EXPONENTIAL ?? process.env.BRIDGE_RECONNECT_EXPONENTIAL;
-    if (reconnectBase) reconnect.baseMs = parseInt(reconnectBase, 10);
-    if (reconnectMax) reconnect.maxMs = parseInt(reconnectMax, 10);
-    if (reconnectExp !== undefined) reconnect.exponential = reconnectExp.toLowerCase() === 'true';
+    if (process.env.BRIDGE_GATEWAY_RECONNECT_BASE_MS) reconnect.baseMs = parseInt(process.env.BRIDGE_GATEWAY_RECONNECT_BASE_MS, 10);
+    if (process.env.BRIDGE_GATEWAY_RECONNECT_MAX_MS) reconnect.maxMs = parseInt(process.env.BRIDGE_GATEWAY_RECONNECT_MAX_MS, 10);
+    if (process.env.BRIDGE_GATEWAY_RECONNECT_EXPONENTIAL !== undefined) reconnect.exponential = process.env.BRIDGE_GATEWAY_RECONNECT_EXPONENTIAL.toLowerCase() === 'true';
     if (Object.keys(reconnect).length > 0) gateway.reconnect = reconnect;
 
     const hb = process.env.BRIDGE_GATEWAY_HEARTBEAT_INTERVAL_MS ?? process.env.BRIDGE_EVENT_HEARTBEAT_INTERVAL_MS;
@@ -136,9 +141,6 @@ export class ConfigResolver {
     }
 
     const sdk: Record<string, unknown> = {};
-    if (process.env.BRIDGE_SDK_BASE_URL) {
-      sdk.baseUrl = this.substituteEnvVars(process.env.BRIDGE_SDK_BASE_URL);
-    }
     if (process.env.BRIDGE_SDK_TIMEOUT_MS) {
       sdk.timeoutMs = parseInt(process.env.BRIDGE_SDK_TIMEOUT_MS, 10);
     }
@@ -146,10 +148,9 @@ export class ConfigResolver {
       envConfig.sdk = sdk as unknown as BridgeConfig['sdk'];
     }
 
-    const allowlistRaw = process.env.BRIDGE_EVENTS_ALLOWLIST ?? process.env.BRIDGE_EVENT_ALLOWLIST;
-    if (allowlistRaw) {
+    if (process.env.BRIDGE_EVENTS_ALLOWLIST) {
       envConfig.events = {
-        allowlist: allowlistRaw.split(',').map((item) => this.substituteEnvVars(item.trim())),
+        allowlist: process.env.BRIDGE_EVENTS_ALLOWLIST.split(',').map((item) => this.substituteEnvVars(item.trim())),
       };
     }
 
@@ -161,17 +162,26 @@ export class ConfigResolver {
   }
 
   private normalizeConfig(config: BridgeConfig): BridgeConfig {
-    const normalized = { ...config } as BridgeConfig & {
-      reconnect?: BridgeConfig['gateway']['reconnect'];
-      event?: BridgeConfig['events'];
-    };
+    const normalized = { ...config };
 
-    if (!normalized.events && normalized.event) {
-      normalized.events = normalized.event;
+    if (!normalized.gateway) {
+      normalized.gateway = {} as BridgeConfig['gateway'];
     }
 
-    if (!normalized.gateway.reconnect && normalized.reconnect) {
-      normalized.gateway.reconnect = normalized.reconnect;
+    if (!normalized.gateway.url) {
+      normalized.gateway.url = 'ws://localhost:8081/ws/agent';
+    }
+
+    if (!normalized.gateway.deviceName) {
+      normalized.gateway.deviceName = 'Local Machine';
+    }
+
+    if (!normalized.gateway.toolType) {
+      normalized.gateway.toolType = 'opencode';
+    }
+
+    if (!normalized.gateway.toolVersion) {
+      normalized.gateway.toolVersion = '1.0.0';
     }
 
     if (!normalized.gateway.heartbeatIntervalMs) {
@@ -184,12 +194,47 @@ export class ConfigResolver {
         maxMs: 30000,
         exponential: true,
       };
+    } else {
+      if (!normalized.gateway.reconnect.baseMs) {
+        normalized.gateway.reconnect.baseMs = 1000;
+      }
+      if (!normalized.gateway.reconnect.maxMs) {
+        normalized.gateway.reconnect.maxMs = 30000;
+      }
+      if (normalized.gateway.reconnect.exponential === undefined) {
+        normalized.gateway.reconnect.exponential = true;
+      }
     }
 
-    if (!normalized.events) {
+    if (!normalized.gateway.ping) {
+      normalized.gateway.ping = {
+        intervalMs: 30000,
+        pongTimeoutMs: 10000,
+      };
+    }
+
+    if (!normalized.sdk) {
+      normalized.sdk = { timeoutMs: 10000 };
+    } else if (!normalized.sdk.timeoutMs) {
+      normalized.sdk.timeoutMs = 10000;
+    }
+
+    if (!normalized.auth) {
+      normalized.auth = { ak: '', sk: '' };
+    }
+
+    if (!normalized.events || !normalized.events.allowlist || normalized.events.allowlist.length === 0) {
       normalized.events = {
         allowlist: [...DEFAULT_EVENT_ALLOWLIST],
       };
+    }
+
+    if (!normalized.config_version) {
+      normalized.config_version = 1;
+    }
+
+    if (normalized.enabled === undefined) {
+      normalized.enabled = true;
     }
 
     return normalized;
