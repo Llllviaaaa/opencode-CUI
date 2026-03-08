@@ -6,7 +6,7 @@
 
 ```
 Phase: 5 — 协议规范化
-Status: ✅ Complete — 3 plans, 3 atomic commits
+Status: ✅ Complete and verified (4/4 must-haves PASS)
 Milestone: v1.0
 Next: /verify 5 or /plan 6
 ```
