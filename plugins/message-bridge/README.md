@@ -86,21 +86,41 @@ Configuration loads from multiple sources with this priority (highest first):
 3. User config (`~/.config/opencode/message-bridge.jsonc`)
 4. Built-in defaults
 
+### Minimal Configuration
+
+Only `auth.ak` and `auth.sk` are required fields (when `enabled` is not `false`):
+
+```jsonc
+{
+  "auth": {
+    "ak": "your-access-key",
+    "sk": "your-secret-key"
+  }
+}
+```
+
 ### Key Configuration Options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `gateway.url` | `ws://localhost:8081/ws/agent` | Gateway WebSocket endpoint |
-| `gateway.deviceName` | `Local Machine` | Device identifier |
-| `gateway.toolType` | `opencode` | Tool type identifier |
-| `sdk.baseUrl` | `http://localhost:54321` | OpenCode SDK URL |
-| `sdk.timeoutMs` | `10000` | SDK call timeout |
-| `reconnect.baseMs` | `1000` | Initial reconnect delay |
-| `reconnect.maxMs` | `30000` | Max reconnect delay |
-| `reconnect.exponential` | `true` | Use exponential backoff |
-| `event.heartbeatIntervalMs` | `30000` | Heartbeat frequency |
-| `event.healthCheckIntervalMs` | `30000` | Health check frequency |
-| `event.allowlist` | `['message.*', 'permission.*', ...]` | Allowed event patterns |
+| Option | Required | Default | Description |
+|--------|----------|---------|-------------|
+| `auth.ak` | yes* | none | Access Key |
+| `auth.sk` | yes* | none | Secret Key |
+| `gateway.url` | no | `ws://localhost:8081/ws/agent` | Gateway WebSocket endpoint |
+| `gateway.deviceName` | no | `Local Machine` | Device identifier |
+| `gateway.toolType` | no | `opencode` | Tool type identifier |
+| `gateway.toolVersion` | no | `1.0.0` | Tool version |
+| `gateway.heartbeatIntervalMs` | no | `30000` | Heartbeat frequency (ms) |
+| `gateway.reconnect.baseMs` | no | `1000` | Initial reconnect delay (ms) |
+| `gateway.reconnect.maxMs` | no | `30000` | Max reconnect delay (ms) |
+| `gateway.reconnect.exponential` | no | `true` | Use exponential backoff |
+| `gateway.ping.intervalMs` | no | `30000` | Ping interval (ms) |
+| `gateway.ping.pongTimeoutMs` | no | `10000` | Pong timeout (ms) |
+| `sdk.timeoutMs` | no | `10000` | SDK call timeout (ms) |
+| `events.allowlist` | no | `['message.*', 'permission.*', ...]` | Allowed event patterns |
+| `enabled` | no | `true` | Enable/disable plugin |
+| `config_version` | no | `1` | Config version |
+
+\* Required when `enabled !== false`
 
 ### Environment Variables
 
@@ -108,10 +128,22 @@ All config values can be set via environment variables using the `BRIDGE_` prefi
 
 ```bash
 BRIDGE_GATEWAY_URL=ws://gateway.example.com/ws/agent
-BRIDGE_SDK_BASE_URL=http://localhost:54321
+BRIDGE_SDK_TIMEOUT_MS=10000
 BRIDGE_AUTH_AK=your-access-key
 BRIDGE_AUTH_SK=your-secret-key
 BRIDGE_ENABLED=true
+```
+
+The plugin uses the injected OpenCode `client` from the plugin runtime and does not accept `sdk.baseUrl`.
+
+### Configuration Loading Logs
+
+The plugin outputs configuration loading information to help diagnose issues:
+
+```
+[message-bridge] Config sources: default -> user:/path -> project:/path -> env
+[message-bridge] Configuration validation failed:
+  [MISSING_REQUIRED] auth.ak: auth.ak is required
 ```
 
 ### Structured Logging

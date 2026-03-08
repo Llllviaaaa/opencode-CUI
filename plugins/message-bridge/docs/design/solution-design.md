@@ -78,48 +78,52 @@
 // src/config/types.ts
 
 export interface BridgeConfig {
-  config_version: number;           // 必填，当前仅支持 1
-  enabled: boolean;                 // false 时安全禁用插件
-  gateway: GatewayConfig;
-  sdk: SDKConfig;
-  auth: AuthConfig;
-  events: EventConfig;
+  config_version?: number;          // 默认: 1
+  enabled?: boolean;                // 默认: true，false 时安全禁用插件
+  gateway?: GatewayConfig;          // 默认见 GatewayConfig
+  sdk?: SDKConfig;                  // 默认见 SDKConfig
+  auth: AuthConfig;                 // 必填（仅 auth.ak 和 auth.sk 为必填字段）
+  events?: EventConfig;             // 默认: PRD 默认白名单
   logging?: LoggingConfig;          // 可选
 }
 
 export interface GatewayConfig {
-  url: string;                      // WebSocket 网关地址
-  heartbeatIntervalMs: number;      // 默认: 30000
-  reconnect: ReconnectConfig;
-  ping?: PingConfig;                // 可选，WebSocket ping/pong 配置
+  url?: string;                     // 默认: ws://localhost:8081/ws/agent
+  deviceName?: string;              // 默认: Local Machine
+  toolType?: string;                // 默认: opencode
+  toolVersion?: string;             // 默认: 1.0.0
+  heartbeatIntervalMs?: number;     // 默认: 30000
+  reconnect?: ReconnectConfig;      // 默认见 ReconnectConfig
+  ping?: PingConfig;                // 默认见 PingConfig
 }
 
 export interface ReconnectConfig {
-  baseMs: number;                   // 指数退避起始值，默认: 1000
-  maxMs: number;                    // 指数退避上限，默认: 30000
+  baseMs?: number;                  // 默认: 1000
+  maxMs?: number;                   // 默认: 30000
+  exponential?: boolean;            // 默认: true
 }
 
 export interface PingConfig {
-  intervalMs: number;               // ping 发送间隔，默认: 30000
-  pongTimeoutMs: number;            // pong 等待超时，默认: 10000
+  intervalMs?: number;              // 默认: 30000
+  pongTimeoutMs?: number;           // 默认: 10000
 }
 
 export interface SDKConfig {
-  timeoutMs: number;                // SDK 调用超时，默认: 10000
+  timeoutMs?: number;               // 默认: 10000
 }
 
 export interface AuthConfig {
-  ak: string;                       // Access Key
-  sk: string;                       // Secret Key
+  ak: string;                       // 必填（当 enabled !== false 时）
+  sk: string;                       // 必填（当 enabled !== false 时）
 }
 
 export interface EventConfig {
-  allowlist: string[];              // 事件白名单，支持前缀通配符
+  allowlist?: string[];             // 默认: ['message.*', 'permission.*', ...]
 }
 
 export interface LoggingConfig {
-  level: 'debug' | 'info' | 'warn' | 'error';  // 默认: info
-  structured: boolean;              // 是否输出结构化日志，默认: true
+  level?: 'debug' | 'info' | 'warn' | 'error';  // 默认: info
+  structured?: boolean;             // 默认: true
 }
 ```
 
@@ -784,16 +788,28 @@ interface ConfigError {
 
 // 校验项
 const validationRules = [
-  { path: 'config_version', required: true, type: 'number', enum: [1] },
-  { path: 'enabled', required: false, type: 'boolean', default: true },
-  { path: 'gateway.url', required: true, type: 'string', format: 'websocket-url' },
-  { path: 'gateway.heartbeatIntervalMs', required: false, type: 'number', min: 5000, default: 30000 },
-  { path: 'gateway.reconnect.baseMs', required: false, type: 'number', min: 100, default: 1000 },
-  { path: 'gateway.reconnect.maxMs', required: false, type: 'number', min: 1000, default: 30000 },
-  { path: 'sdk.timeoutMs', required: false, type: 'number', min: 1000, default: 10000 },
+  // 必填字段（仅 auth.ak 和 auth.sk 在 enabled !== false 时为必填）
   { path: 'auth.ak', required: true, type: 'string' },
   { path: 'auth.sk', required: true, type: 'string' },
-  { path: 'events.allowlist', required: true, type: 'array', minItems: 1 },
+  
+  // 可选字段（使用默认值）
+  { path: 'config_version', required: false, type: 'number', enum: [1], default: 1 },
+  { path: 'enabled', required: false, type: 'boolean', default: true },
+  { path: 'gateway.url', required: false, type: 'string', format: 'websocket-url', default: 'ws://localhost:8081/ws/agent' },
+  { path: 'gateway.deviceName', required: false, type: 'string', default: 'Local Machine' },
+  { path: 'gateway.toolType', required: false, type: 'string', default: 'opencode' },
+  { path: 'gateway.toolVersion', required: false, type: 'string', default: '1.0.0' },
+  { path: 'gateway.heartbeatIntervalMs', required: false, type: 'number', min: 1, default: 30000 },
+  { path: 'gateway.reconnect.baseMs', required: false, type: 'number', min: 1, default: 1000 },
+  { path: 'gateway.reconnect.maxMs', required: false, type: 'number', min: 1, default: 30000 },
+  { path: 'gateway.reconnect.exponential', required: false, type: 'boolean', default: true },
+  { path: 'gateway.ping.intervalMs', required: false, type: 'number', min: 1, default: 30000 },
+  { path: 'gateway.ping.pongTimeoutMs', required: false, type: 'number', min: 1, default: 10000 },
+  { path: 'sdk.timeoutMs', required: false, type: 'number', min: 1, default: 10000 },
+  { path: 'events.allowlist', required: false, type: 'array', default: ['message.*', 'permission.*', 'session.*', 'file.edited', 'todo.updated', 'command.executed'] },
+  
+  // 废弃字段
+  { path: 'sdk.baseUrl', deprecated: true },
 ];
 ```
 
