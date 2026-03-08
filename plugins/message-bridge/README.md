@@ -203,6 +203,10 @@ npm run test:coverage
 
 # One-click local debug flow (mock gateway + opencode + plugin)
 npm run debug:e2e
+
+# Fetch logs from OpenCode database for troubleshooting
+# Note: use -- before script arguments
+npm run logs:fetch -- --since "1 hour ago" --level error
 ```
 
 ## Developer Debug Flow
