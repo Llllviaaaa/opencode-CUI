@@ -87,18 +87,30 @@ public class SkillMessageController {
         messagePersistenceService.finalizeActiveAssistantTurn(sessionId);
         SkillMessage message = messageService.saveUserMessage(sessionId, request.getContent());
 
-        // Send chat invoke to AI-Gateway to trigger OpenCode processing
+        // Send invoke to AI-Gateway to trigger OpenCode processing
         if (session.getAgentId() != null) {
             if (session.getToolSessionId() == null) {
                 log.warn("Session {} has no toolSessionId, cannot invoke AI", sessionId);
                 return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                         .body(message);
             }
-            String payload = buildChatPayload(request.getContent(), session.getToolSessionId());
+
+            // Route: toolCallId present → question_reply, otherwise → chat
+            String action;
+            String payload;
+            if (request.getToolCallId() != null && !request.getToolCallId().isBlank()) {
+                action = "question_reply";
+                payload = buildQuestionReplyPayload(
+                        request.getContent(), request.getToolCallId(), session.getToolSessionId());
+            } else {
+                action = "chat";
+                payload = buildChatPayload(request.getContent(), session.getToolSessionId());
+            }
+
             gatewayRelayService.sendInvokeToGateway(
                     session.getAgentId().toString(),
                     sessionId.toString(),
-                    "chat",
+                    action,
                     payload);
         } else {
             log.warn("No agent associated with session {}, cannot invoke AI", sessionId);
@@ -259,6 +271,24 @@ public class SkillMessageController {
     }
 
     /**
+     * Build the JSON payload for a question_reply invoke command.
+     */
+    private String buildQuestionReplyPayload(String text, String toolCallId, String toolSessionId) {
+        var node = objectMapper.createObjectNode();
+        node.put("text", text);
+        node.put("toolCallId", toolCallId);
+        if (toolSessionId != null) {
+            node.put("toolSessionId", toolSessionId);
+        }
+        try {
+            return objectMapper.writeValueAsString(node);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to serialize question_reply payload", e);
+            return "{}";
+        }
+    }
+
+    /**
      * Build the JSON payload for a permission_reply invoke command.
      */
     private String buildPermissionReplyPayload(String permissionId, boolean approved,
@@ -280,6 +310,8 @@ public class SkillMessageController {
     @Data
     public static class SendMessageRequest {
         private String content;
+        /** Optional: when present, routes to question_reply instead of chat */
+        private String toolCallId;
     }
 
     @Data

@@ -80,6 +80,29 @@ class SkillMessageControllerTest {
     }
 
     @Test
+    @DisplayName("sendMessage with toolCallId routes to question_reply")
+    void sendMessageWithToolCallIdSendsQuestionReply() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAgentId(99L);
+        session.setToolSessionId("tool-session-1");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(sessionService.getSession(1L)).thenReturn(session);
+
+        SkillMessage msg = SkillMessage.builder()
+                .id(2L).role(SkillMessage.Role.USER).content("yes").build();
+        when(messageService.saveUserMessage(eq(1L), eq("yes"))).thenReturn(msg);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("yes");
+        request.setToolCallId("tc-001");
+
+        ResponseEntity<?> response = controller.sendMessage(1L, request);
+        assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("question_reply"), any());
+    }
+
+    @Test
     @DisplayName("sendMessage returns 400 for empty content")
     void sendMessageEmptyContent400() {
         var request = new SkillMessageController.SendMessageRequest();
@@ -111,8 +134,7 @@ class SkillMessageControllerTest {
         when(messageService.getMessageHistory(1L, 0, 50))
                 .thenReturn(new PageResult<>(List.of(), 0, 0, 50));
 
-        ResponseEntity<PageResult<SkillMessageView>> response =
-                controller.getMessages(1L, 0, 50);
+        ResponseEntity<PageResult<SkillMessageView>> response = controller.getMessages(1L, 0, 50);
         assertEquals(HttpStatus.OK, response.getStatusCode());
     }
 
