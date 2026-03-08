@@ -113,4 +113,31 @@ class SkillSessionControllerTest {
         controller.closeSession(42L);
         verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("42"), eq("close_session"), any());
     }
+
+    @Test
+    @DisplayName("abortSession returns 200 and sends abort_session invoke")
+    void abortSession200() {
+        SkillSession session = new SkillSession();
+        session.setId(42L);
+        session.setAgentId(99L);
+        session.setToolSessionId("ts-abc");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(sessionService.getSession(42L)).thenReturn(session);
+
+        var response = controller.abortSession(42L);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals("aborted", response.getBody().get("status"));
+        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("42"), eq("abort_session"), any());
+        verify(sessionService).closeSession(42L);
+        verify(gatewayRelayService).unsubscribeFromSession("42");
+    }
+
+    @Test
+    @DisplayName("abortSession returns 404 when session not found")
+    void abortSession404() {
+        when(sessionService.getSession(999L)).thenThrow(new IllegalArgumentException("Not found"));
+
+        var response = controller.abortSession(999L);
+        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+    }
 }

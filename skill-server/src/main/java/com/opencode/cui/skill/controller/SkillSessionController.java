@@ -32,8 +32,8 @@ public class SkillSessionController {
     private final ObjectMapper objectMapper;
 
     public SkillSessionController(SkillSessionService sessionService,
-                                  GatewayRelayService gatewayRelayService,
-                                  ObjectMapper objectMapper) {
+            GatewayRelayService gatewayRelayService,
+            ObjectMapper objectMapper) {
         this.sessionService = sessionService;
         this.gatewayRelayService = gatewayRelayService;
         this.objectMapper = objectMapper;
@@ -41,7 +41,8 @@ public class SkillSessionController {
 
     /**
      * POST /api/skill/sessions
-     * Create a new skill session. Also instructs AI-Gateway to create an OpenCode session.
+     * Create a new skill session. Also instructs AI-Gateway to create an OpenCode
+     * session.
      */
     @PostMapping
     public ResponseEntity<SkillSession> createSession(@RequestBody CreateSessionRequest request) {
@@ -54,8 +55,7 @@ public class SkillSessionController {
                 request.getSkillDefinitionId(),
                 request.getAgentId(),
                 request.getTitle(),
-                request.getImChatId()
-        );
+                request.getImChatId());
 
         gatewayRelayService.subscribeToSessionBroadcast(session.getId().toString());
 
@@ -65,8 +65,7 @@ public class SkillSessionController {
                     request.getAgentId().toString(),
                     session.getId().toString(),
                     "create_session",
-                    null
-            );
+                    null);
         }
 
         return ResponseEntity.status(HttpStatus.CREATED).body(session);
@@ -103,7 +102,8 @@ public class SkillSessionController {
 
     /**
      * DELETE /api/skill/sessions/{id}
-     * Close a session. Also sends close_session to AI-Gateway if a tool session exists.
+     * Close a session. Also sends close_session to AI-Gateway if a tool session
+     * exists.
      */
     @DeleteMapping("/{id}")
     public ResponseEntity<Map<String, String>> closeSession(@PathVariable Long id) {
@@ -124,13 +124,53 @@ public class SkillSessionController {
                         session.getAgentId().toString(),
                         session.getId().toString(),
                         "close_session",
-                        payload
-                );
+                        payload);
             }
 
             sessionService.closeSession(id);
             gatewayRelayService.unsubscribeFromSession(id.toString());
             return ResponseEntity.ok(Map.of("status", "closed", "sessionId", id.toString()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    /**
+     * POST /api/skill/sessions/{id}/abort
+     * Abort a session. Sends abort_session to AI-Gateway to stop ongoing AI
+     * operations,
+     * then marks the session as CLOSED.
+     */
+    @PostMapping("/{id}/abort")
+    public ResponseEntity<Map<String, String>> abortSession(@PathVariable Long id) {
+        try {
+            SkillSession session = sessionService.getSession(id);
+
+            if (session.getStatus() == SkillSession.Status.CLOSED) {
+                return ResponseEntity.status(HttpStatus.CONFLICT)
+                        .body(Map.of("error", "Session is already closed"));
+            }
+
+            // Send abort_session to AI-Gateway if toolSessionId and agentId exist
+            if (session.getAgentId() != null && session.getToolSessionId() != null) {
+                var node = objectMapper.createObjectNode();
+                node.put("toolSessionId", session.getToolSessionId());
+                String payload;
+                try {
+                    payload = objectMapper.writeValueAsString(node);
+                } catch (JsonProcessingException e) {
+                    payload = "{}";
+                }
+                gatewayRelayService.sendInvokeToGateway(
+                        session.getAgentId().toString(),
+                        session.getId().toString(),
+                        "abort_session",
+                        payload);
+            }
+
+            sessionService.closeSession(id);
+            gatewayRelayService.unsubscribeFromSession(id.toString());
+            return ResponseEntity.ok(Map.of("status", "aborted", "sessionId", id.toString()));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.notFound().build();
         }
