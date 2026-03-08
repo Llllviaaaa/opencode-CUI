@@ -37,6 +37,7 @@ import java.util.Set;
 @RestController
 @RequestMapping("/api/skill/sessions/{sessionId}")
 public class SkillMessageController {
+    private static final List<String> PERMISSION_REPLY_RESPONSES = List.of("once", "always", "reject");
 
     private static final Set<String> VALID_PERMISSION_RESPONSES = Set.of("once", "always", "reject");
 
@@ -282,7 +283,6 @@ public class SkillMessageController {
         if (session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
             return ResponseEntity.ok(ApiResponse.error(500, "No toolSessionId available"));
         }
-
         String payload = buildPermissionReplyPayload(permId, request.getResponse(),
                 session.getToolSessionId());
 
