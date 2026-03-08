@@ -10,7 +10,7 @@
 
 - 插件边界的上下行消息类型契约
 - Envelope 字段及语义约束
-- `permission_reply` 兼容字段定义
+- `permission_reply` 的标准字段定义
 
 ## Out of Scope
 
@@ -40,19 +40,12 @@
 | `sequenceNumber` | yes | scope 内单调递增 |
 | `sequenceScope` | yes | `session` 或 `global` |
 
-## 兼容字段
-
-| Action | 目标字段 | 兼容字段 | 映射 |
-|---|---|---|---|
-| `permission_reply` | `response` | `approved` | `true -> allow`, `false -> deny` |
-
 ## 插件与 AI-Gateway 报文示例（上下行全量）
 
 以下示例仅覆盖插件与 AI-Gateway 边界消息。`tool_event.event` 为透传字段，本文件不展开 `opencode-server` 原始完整报文。
 
 ### 下行消息（Gateway -> 插件）
 
-sessionb
 #### `invoke`（通用外层）
 
 ```json
@@ -60,8 +53,8 @@ sessionb
   "type": "invoke",
   "action": "chat",
   "payload": {
-    "sessionId": "sess-001",
-    "message": "请总结最近变更"
+    "toolSessionId": "tool-001",
+    "text": "请总结最近变更"
   },
   "envelope": {
     "version": "1.0",
@@ -82,8 +75,8 @@ sessionb
 
 ```json
 {
-  "sessionId": "sess-001",
-  "message": "继续上一条任务"
+  "toolSessionId": "tool-001",
+  "text": "继续上一条任务"
 }
 ```
 
@@ -102,35 +95,17 @@ sessionb
 
 ```json
 {
-  "sessionId": "sess-001"
+  "toolSessionId": "tool-001"
 }
 ```
 
-`permission_reply`（target）
+`permission_reply`
 
 ```json
 {
   "permissionId": "perm-100",
-  "toolSessionId": "sess-001",
-  "response": "allow"
-}
-```
-
-`permission_reply`（compat）
-
-```json
-{
-  "permissionId": "perm-100",
-  "toolSessionId": "sess-001",
-  "approved": true
-}
-```
-
-`status_query`（invoke action 变体）
-
-```json
-{
-  "sessionId": "sess-001"
+  "toolSessionId": "tool-001",
+  "response": "once"
 }
 ```
 
@@ -227,7 +202,6 @@ sessionb
 {
   "type": "tool_error",
   "sessionId": "sess-001",
-  "code": "SDK_TIMEOUT",
   "error": "OpenCode SDK request timeout",
   "envelope": {
     "version": "1.0",

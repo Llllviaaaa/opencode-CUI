@@ -104,7 +104,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 | FR-MB-07 | No queuing, no buffering | **Implemented** | `src/event/EventRelay.ts` (lines 64-67): events dropped if not ready; no queue | Architecture confirms no buffering per PRD Fast Fail. |
 | §7 | Error codes: GATEWAY_UNREACHABLE, SDK_TIMEOUT, SDK_UNREACHABLE, AGENT_NOT_READY, INVALID_PAYLOAD, UNSUPPORTED_ACTION | **Implemented** | `src/types/index.ts` (lines 440-446): `ErrorCode` union type with all 6 codes | Minimum set from PRD §7 complete. |
 | §7 | Error mapping from connection state | **Implemented** | `src/types/index.ts` (lines 455-465): `stateToErrorCode()` function | Maps all states to appropriate error codes. |
-| §7 | tool_error structure with code/error/envelope | **Implemented** | `src/types/index.ts` (lines 472-487): `ToolErrorPayload` interface with type, sessionId, code, error, envelope | Matches PRD §7 definition. |
+| §7 | tool_error structure with error/envelope | **Implemented** | `src/types/index.ts`: `ToolErrorPayload` interface | Plugin wire payload uses type, sessionId, error, and envelope. |
 | FR-MB-07 | Best effort send, local log on failure | **Partial** | Architecture describes behavior; implementation in actions uses try-catch | Error logging present but structured logging not fully standardized. |
 
 ### Fast Fail Gaps
@@ -119,14 +119,11 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 
 | PRD Ref | Requirement | Status | Code Reference | Notes |
 |---------|-------------|--------|----------------|-------|
-| FR-MB-06 | Target format: response field (allow/always/deny) | **Implemented** | `src/types/index.ts` (lines 356-365): `PermissionReplyPayloadTarget` interface | Structure defined with response enum. |
-| FR-MB-06 | Compat format: approved field (boolean) | **Implemented** | `src/types/index.ts` (lines 374-383): `PermissionReplyPayloadCompat` interface | Structure defined with approved boolean. |
-| FR-MB-06 | Union type for both formats | **Implemented** | `src/types/index.ts` (lines 390-392): `PermissionReplyPayload` union | Allows either format. |
-| FR-MB-06 | Type guard for target format | **Implemented** | `src/types/index.ts` (lines 416-418): `isPermissionReplyTarget()` | Checks for response field. |
-| FR-MB-06 | Map approved to response | **Implemented** | `src/types/index.ts` (lines 427-429): `mapApprovedToResponse()` | approved=true -> allow, approved=false -> deny. |
-| FR-MB-06 | Validation for both formats | **Implemented** | `src/action/PermissionReplyAction.ts` (lines 28-81): validate() checks both formats | Validates permissionId, then branches on format. |
-| FR-MB-06 | Execution with format detection | **Implemented** | `src/action/PermissionReplyAction.ts` (lines 108-117): detects format and maps accordingly | Target format used directly, compat format mapped. |
-| §6.1.1 | SDK mapping: allow->once, always->always, deny->reject | **Implemented** | `src/action/PermissionReplyAction.ts` (lines 127): passes response value to SDK | Note: SDK expects 'once'/'always'/'reject'; code passes 'allow'/'always'/'deny'. Verify SDK compatibility. |
+| FR-MB-06 | Canonical format: response field (once/always/reject) | **Implemented** | `src/types/index.ts`: `PermissionReplyPayload` + `PERMISSION_REPLY_RESPONSES` | Structure defined with protocol-aligned response enum. |
+| FR-MB-06 | Runtime rejects legacy approved payloads | **Implemented** | `src/runtime/BridgeRuntime.ts`: `normalizePermissionReplyInvokeMessage()` | Invalid upstream drift is rejected before routing. |
+| FR-MB-06 | Validation for canonical format | **Implemented** | `src/action/PermissionReplyAction.ts`: `normalizePayload()` + `validate()` | Requires permissionId, toolSessionId, and response. |
+| FR-MB-06 | Direct execution with canonical format | **Implemented** | `src/action/PermissionReplyAction.ts`: `execute()` | Canonical protocol value is forwarded directly to SDK. |
+| §6.1.1 | SDK mapping: once/always/reject passthrough | **Implemented** | `src/action/PermissionReplyAction.ts`: `execute()` | Protocol and SDK values now match. |
 
 ---
 
@@ -175,7 +172,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 | §9.3 | Lines coverage >= 80% | **Implemented** | `scripts/check-coverage.mjs` | Threshold enforced by coverage gate script. |
 | §9.3 | Branches coverage >= 70% | **Planned / Observable** | `scripts/check-coverage.mjs` | Bun coverage 在当前环境可能出现 `BRF=0`，暂不作为硬门禁。 |
 | §9.2 | 5 action normal paths tested | **Implemented** | `tests/unit/example.test.mjs` (lines 51-291): tests for all actions | Each action has validation and execution tests. |
-| §9.2 | approved/response dual format tested | **Implemented** | `tests/unit/example.test.mjs` (lines 194-256): PermissionReplyAction tests | Tests both target and compat formats. |
+| §9.2 | response-only permission_reply tested | **Implemented** | `tests/unit/actions-coverage.test.mjs`, `tests/unit/runtime-protocol.test.mjs` | Covers valid once/always/reject paths and rejects legacy values. |
 | §9.2 | close_session -> abort tested | **Implemented** | `tests/unit/example.test.mjs` (lines 165-177): tests abort semantics | Verified in test. |
 | §9.2 | Fast Fail returns tool_error tested | **Implemented** | `tests/unit/example.test.mjs` (lines 76-110): AGENT_NOT_READY tests; lines 294-310: FastFailDetector tests | State checking tested. |
 | §9.2 | envelope/sequence tested | **Implemented** | `tests/unit/example.test.mjs` (lines 357-404): EnvelopeBuilder tests | Sequence per scope verified. |
@@ -194,7 +191,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 
 | PRD Ref | Requirement | Status | Code Reference | Notes |
 |---------|-------------|--------|----------------|-------|
-| §2.2 | In Scope items | **Implemented** | All items have corresponding implementations | WS auth, heartbeat, invoke/status_query, allowlist, permission_reply compat, close_session->abort, config, tests. |
+| §2.2 | In Scope items | **Implemented** | All items have corresponding implementations | WS auth, heartbeat, invoke/status_query, allowlist, permission_reply response-only, close_session->abort, config, tests. |
 | §2.3 | Out of Scope respected | **Implemented** | No Gateway/Skill-Server modifications | Plugin-only implementation confirmed. |
 | §3 | Design principles: transparent pass-through, extensible, SDK-aligned | **Implemented** | Architecture and implementation follow principles | EventRelay passes through; ActionRegistry is extensible; types align with SDK. |
 | §4.3 | Downstream types: invoke, status_query | **Implemented** | `src/types/index.ts` (lines 191-193, 267-281): `DownstreamMessageType`, `InvokeMessage`, `StatusQueryMessage` | Both message types defined. |

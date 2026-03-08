@@ -102,7 +102,7 @@ message-bridge 是 OpenCode 原生插件，桥接本地 OpenCode 实例与远端
 │  │    - chat                                                         │  │
 │  │    - create_session                                               │  │
 │  │    - close_session → session.abort                                │  │
-│  │    - permission_reply (approved/response 双字段兼容)                │  │
+│  │    - permission_reply (response: once|always|reject)              │  │
 │  │    - status_query                                                 │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 │                              │                                         │
@@ -395,37 +395,17 @@ interface ActionContext {
 | `chat` | `session.chat(toolSessionId, { text })` |
 | `create_session` | `session.create(payload)` |
 | `close_session` | `session.abort(toolSessionId)` ⚠️ **不执行 delete** |
-| `permission_reply` | 兼容 `approved` + 目标 `response` 双字段 |
+| `permission_reply` | 标准协议字段 `response` |
 | `status_query` | 返回 `status_response` |
 
-#### 3.4.4 Permission Reply 兼容
+#### 3.4.4 Permission Reply
 
 ```typescript
-// 目标字段 (SDK 对齐)
-interface PermissionReplyTarget {
+interface PermissionReplyPayload {
   permissionId: string;
-  toolSessionId?: string;
-  response: 'allow' | 'always' | 'deny';
+  toolSessionId: string;
+  response: 'once' | 'always' | 'reject';
 }
-
-// 兼容字段 (现网)
-interface PermissionReplyCompat {
-  permissionId: string;
-  toolSessionId?: string;
-  approved: boolean;
-}
-
-// 映射规则
-const responseMap = {
-  'approved=true': 'allow',
-  'approved=false': 'deny'
-};
-
-const sdkMap = {
-  'allow': 'once',
-  'always': 'always',
-  'deny': 'reject'
-};
 ```
 
 ### 3.5 错误层 (Error Layer)
@@ -673,7 +653,6 @@ ws://{gateway-host}/ws/agent?ak={ak}&ts={timestamp}&nonce={nonce}&sign={signatur
 {
   "type": "tool_error",
   "sessionId": "sess_123",
-  "code": "SDK_TIMEOUT",
   "error": "SDK call timeout after 10000ms",
   "envelope": { ... }
 }
@@ -805,7 +784,7 @@ plugins/message-bridge/
 
 | 差异项 | 当前行为 | 目标行为 | 收敛版本 |
 |---|---|---|---|
-| permission_reply | 支持 approved + response | 仅 response | v1.5 |
+| permission_reply | 历史存在 approved 偏差 | 仅 response | v1.5 |
 | close_session | 映射到 abort | SDK 原生支持 | 待定 |
 | agentId 绑定 | 插件本地生成 agentId | Gateway 分配 gatewayAgentId | 待定 |
 
@@ -837,7 +816,7 @@ plugins/message-bridge/
 
 1. 五类 action 正常链路
 2. 白名单允许/拒绝路径
-3. `approved/response` 双字段兼容
+3. `permission_reply.response` 使用 `once|always|reject`
 4. `close_session -> abort` 且不 delete
 5. Fast Fail 返回 `tool_error`
 6. envelope 完整与 sequence 递增
@@ -865,7 +844,7 @@ plugins/message-bridge/
 **PRD §4.5 原文：**
 > 2. 仅当收到 Gateway 注册成功确认并获得连接绑定标识 `gatewayAgentId` 后，插件进入 `READY`。
 > 3. `READY` 前不发送带 envelope 的业务消息。
-> 4. `READY` 前若收到 `invoke`，返回 `tool_error(code=AGENT_NOT_READY)`。
+> 4. `READY` 前若收到 `invoke`，返回 `tool_error(error=Agent not ready)`。
 > 5. `READY` 后所有上行业务消息 `envelope.agentId` 必须等于 `gatewayAgentId`。
 
 注：以上为 PRD 原文。当前实现口径已收敛为状态映射：

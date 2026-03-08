@@ -75,7 +75,7 @@
 1. 插件建立 WS 后发送 `register`。  
 2. 当前实现中，Gateway 无显式 `register_success` 响应；发送 `register` 后进入 `READY`。  
 3. `READY` 前不发送带 envelope 的业务消息。  
-4. 当前实现状态映射：`DISCONNECTED/CONNECTING -> tool_error(code=GATEWAY_UNREACHABLE)`，`CONNECTED -> tool_error(code=AGENT_NOT_READY)`。  
+4. 当前实现状态映射：`DISCONNECTED/CONNECTING -> tool_error(error=Gateway unreachable)`，`CONNECTED -> tool_error(error=Agent not ready)`。  
 5. 当前实现 `envelope.agentId` 使用插件本地生成的 `localAgentId`（如 `bridge-{uuid}`）。  
 6. 连接重建后必须重新注册并重新生成 `agentId`，不复用旧值。  
 7. 目标态为服务端分配 `gatewayAgentId` 并显式确认，作为后续收敛项（见 `TODO-MB-001`）。  
@@ -112,15 +112,9 @@
 `close_session` 固定映射 `session.abort`，不执行 `session.delete`。
 
 ### FR-MB-06（P0）权限回复兼容
-- 目标字段：`response: allow|always|deny`
-- 兼容字段：`approved: boolean`
-- 兼容映射：
-- `approved=true -> allow`
-- `approved=false -> deny`
-- SDK 映射：
-- `allow -> once`
-- `always -> always`
-- `deny -> reject`
+- 协议字段：`response: once|always|reject`
+- `toolSessionId` 必填
+- 插件按标准协议字段透传到 SDK，不做中间语义映射
 
 ### FR-MB-07（P0）Fast Fail（量化）
 不可达定义：
@@ -132,7 +126,7 @@
 
 行为：
 1. 对每个 invoke，在 `<=100ms` 内完成连接态判定。  
-2. 不可达时立即回传 `tool_error`（含 `code/error/sessionId/envelope`），采用 best effort 发送。  
+2. 不可达时立即回传 `tool_error`（含 `error/sessionId/envelope`），采用 best effort 发送。  
 3. 若发送失败，记录本地结构化日志并累计错误计数。  
 4. 不排队、不缓冲 invoke。  
 5. 连接层继续重连，不退出进程。  
@@ -189,11 +183,10 @@
 - 5 分钟失败率 > 5% 告警（平台接入为后续任务）
 
 ## 七、类型与错误模型冻结
-- `InvokeAction = chat | create_session | close_session | permission_reply | status_query`
-- `PermissionReplyPayload(target) = { permissionId, toolSessionId?, response }`
-- `PermissionReplyPayload(compat) = { permissionId, toolSessionId?, approved }`
+- `InvokeAction = chat | create_session | close_session | permission_reply`
+- `PermissionReplyPayload = { permissionId, toolSessionId, response }`
 - `StatusResponse = { type: 'status_response', opencodeOnline: boolean, sessionId?: string, envelope }`
-- `tool_error = { type, sessionId?, code, error, envelope }`
+- `tool_error = { type, sessionId?, error, envelope }`
 
 错误码最小集：
 - `GATEWAY_UNREACHABLE`
@@ -208,7 +201,7 @@
 与 `@opencode-ai/sdk` SSE/REST 定义逐步收敛。
 
 ### 8.2 现状兼容
-允许保留现网别名与兼容字段（如 `approved`）。
+不再为插件协议保留 `approved` 别名；上游统一为 `response`。
 
 ### 8.3 收敛机制
 每个差异项必须记录：
@@ -239,7 +232,7 @@
 ### 9.2 必测场景
 1. 五类 action 正常链路。  
 2. 白名单允许/拒绝路径。  
-3. `approved/response` 双字段兼容。  
+3. `permission_reply.response` 仅接受 `once|always|reject`。  
 4. `close_session -> abort` 且不 delete。  
 5. Fast Fail 返回 `tool_error`。  
 6. envelope 完整与 sequence 递增。  

@@ -2,8 +2,13 @@ import os from 'os';
 import {
   Action,
   ActionResult,
+  ChatInvokeMessage,
+  CloseSessionInvokeMessage,
+  CreateSessionInvokeMessage,
   DownstreamMessage,
-  InvokeAction,
+  PERMISSION_REPLY_RESPONSES,
+  PermissionReplyInvokeMessage,
+  StatusQueryMessage,
   hasEnvelope,
 } from '../types';
 import { ChatAction } from '../action/ChatAction';
@@ -420,53 +425,195 @@ export class BridgeRuntime {
   }
 
   private normalizeDownstreamMessage(raw: unknown): DownstreamMessage | null {
-    if (!raw || typeof raw !== 'object') {
+    const normalized = this.extractDownstreamRecord(raw);
+    if (!normalized) {
       return null;
     }
 
-    let msg = raw as Record<string, unknown>;
-    if (hasEnvelope(raw)) {
-      const envelopeMsg = raw as Record<string, unknown>;
-      msg = {
-        type: envelopeMsg.type,
-        ...(typeof envelopeMsg.payload === 'object' && envelopeMsg.payload !== null
-          ? (envelopeMsg.payload as Record<string, unknown>)
-          : { payload: envelopeMsg.payload }),
-      };
-    }
+    const { msg, envelope } = normalized;
     const type = typeof msg.type === 'string' ? msg.type : undefined;
     if (!type) {
       return null;
     }
 
     if (type === 'status_query') {
-      return {
-        type: 'status_query',
-        sessionId: typeof msg.sessionId === 'string' ? msg.sessionId : undefined,
-        envelope: msg.envelope as DownstreamMessage['envelope'],
-      };
+      return this.normalizeStatusQueryMessage(msg, envelope);
     }
 
     if (type !== 'invoke') {
       return null;
     }
 
+    return this.normalizeInvokeMessage(msg, envelope);
+  }
+
+  private extractDownstreamRecord(
+    raw: unknown,
+  ): { msg: Record<string, unknown>; envelope?: DownstreamMessage['envelope'] } | null {
+    if (!raw || typeof raw !== 'object') {
+      return null;
+    }
+
+    if (hasEnvelope(raw)) {
+      const envelopeMsg = raw as Record<string, unknown>;
+      const payload =
+        typeof envelopeMsg.payload === 'object' && envelopeMsg.payload !== null
+          ? (envelopeMsg.payload as Record<string, unknown>)
+          : null;
+
+      return {
+        msg: {
+          ...(payload ?? {}),
+          type: envelopeMsg.type,
+          action: envelopeMsg.action ?? payload?.action,
+          sessionId: envelopeMsg.sessionId ?? payload?.sessionId,
+        },
+        envelope: envelopeMsg.envelope as DownstreamMessage['envelope'],
+      };
+    }
+
+    return {
+      msg: raw as Record<string, unknown>,
+    };
+  }
+
+  private normalizeStatusQueryMessage(
+    msg: Record<string, unknown>,
+    envelope?: DownstreamMessage['envelope'],
+  ): StatusQueryMessage {
+    return {
+      type: 'status_query',
+      sessionId: typeof msg.sessionId === 'string' ? msg.sessionId : undefined,
+      envelope,
+    };
+  }
+
+  private normalizeInvokeMessage(
+    msg: Record<string, unknown>,
+    envelope?: DownstreamMessage['envelope'],
+  ): DownstreamMessage | null {
     const action = typeof msg.action === 'string' ? msg.action : undefined;
-    const payload = msg.payload;
     if (!action) {
       return null;
     }
-    if (!payload || typeof payload !== 'object') {
+
+    switch (action) {
+      case 'chat':
+        return this.normalizeChatInvokeMessage(msg, envelope);
+      case 'create_session':
+        return this.normalizeCreateSessionInvokeMessage(msg, envelope);
+      case 'close_session':
+        return this.normalizeCloseSessionInvokeMessage(msg, envelope);
+      case 'permission_reply':
+        return this.normalizePermissionReplyInvokeMessage(msg, envelope);
+      default:
+        return null;
+    }
+  }
+
+  private normalizeChatInvokeMessage(
+    msg: Record<string, unknown>,
+    envelope?: DownstreamMessage['envelope'],
+  ): ChatInvokeMessage | null {
+    const payload = this.extractInvokePayload(msg);
+    const toolSessionId = this.readNonEmptyString(payload?.toolSessionId);
+    const text = this.readNonEmptyString(payload?.text);
+    if (!payload || !toolSessionId || !text) {
       return null;
     }
 
     return {
       type: 'invoke',
-      action: action as InvokeAction,
-      payload,
-      sessionId: typeof msg.sessionId === 'string' ? msg.sessionId : undefined,
-      envelope: msg.envelope as DownstreamMessage['envelope'],
+      action: 'chat',
+      payload: { toolSessionId, text },
+      sessionId: this.readNonEmptyString(msg.sessionId),
+      envelope,
     };
+  }
+
+  private normalizeCreateSessionInvokeMessage(
+    msg: Record<string, unknown>,
+    envelope?: DownstreamMessage['envelope'],
+  ): CreateSessionInvokeMessage | null {
+    const payload = this.extractInvokePayload(msg);
+    if (!payload) {
+      return null;
+    }
+
+    const metadata =
+      typeof payload.metadata === 'object' && payload.metadata !== null
+        ? (payload.metadata as Record<string, unknown>)
+        : undefined;
+
+    return {
+      type: 'invoke',
+      action: 'create_session',
+      payload: {
+        sessionId: this.readNonEmptyString(payload.sessionId),
+        metadata,
+      },
+      sessionId: this.readNonEmptyString(msg.sessionId),
+      envelope,
+    };
+  }
+
+  private normalizeCloseSessionInvokeMessage(
+    msg: Record<string, unknown>,
+    envelope?: DownstreamMessage['envelope'],
+  ): CloseSessionInvokeMessage | null {
+    const payload = this.extractInvokePayload(msg);
+    const toolSessionId = this.readNonEmptyString(payload?.toolSessionId);
+    if (!payload || !toolSessionId) {
+      return null;
+    }
+
+    return {
+      type: 'invoke',
+      action: 'close_session',
+      payload: { toolSessionId },
+      sessionId: this.readNonEmptyString(msg.sessionId),
+      envelope,
+    };
+  }
+
+  private normalizePermissionReplyInvokeMessage(
+    msg: Record<string, unknown>,
+    envelope?: DownstreamMessage['envelope'],
+  ): PermissionReplyInvokeMessage | null {
+    const payload = this.extractInvokePayload(msg);
+    const toolSessionId = this.readNonEmptyString(payload?.toolSessionId);
+    const permissionId = this.readNonEmptyString(payload?.permissionId);
+    const response = this.readNonEmptyString(payload?.response);
+    if (!payload || !toolSessionId || !permissionId || !response) {
+      return null;
+    }
+    const normalizedResponse = PERMISSION_REPLY_RESPONSES.find((candidate) => candidate === response);
+    if (!normalizedResponse) {
+      return null;
+    }
+
+    return {
+      type: 'invoke',
+      action: 'permission_reply',
+      payload: { toolSessionId, permissionId, response: normalizedResponse },
+      sessionId: this.readNonEmptyString(msg.sessionId),
+      envelope,
+    };
+  }
+
+  private extractInvokePayload(msg: Record<string, unknown>): Record<string, unknown> | null {
+    if ('payload' in msg) {
+      if (!msg.payload || typeof msg.payload !== 'object') {
+        return null;
+      }
+      return msg.payload as Record<string, unknown>;
+    }
+
+    return msg;
+  }
+
+  private readNonEmptyString(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim() ? value : undefined;
   }
 
   private extractRawDownstreamType(raw: unknown): string | undefined {
