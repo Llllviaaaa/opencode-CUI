@@ -26,6 +26,7 @@ import { AppLogger, type BridgeLogger } from './AppLogger';
 export interface BridgeRuntimeOptions {
   workspacePath?: string;
   client: unknown;
+  debug?: boolean;
 }
 
 export interface BridgeRuntimeStartOptions {
@@ -47,7 +48,7 @@ export class BridgeRuntime {
   private lastSkillSessionId: string | null = null;
 
   constructor(private readonly options: BridgeRuntimeOptions) {
-    this.logger = new AppLogger(options.client, { component: 'runtime' });
+    this.logger = new AppLogger(options.client, { component: 'runtime' }, undefined, undefined, options.debug);
     this.sdkClient = createSdkAdapter(options.client);
     this.registerActions();
     this.actionRouter.setRegistry(this.registry);

@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 
 export interface BridgeConfig {
   enabled: boolean;
+  debug?: boolean;
   config_version: number;
   gateway: GatewayConfig;
   sdk: SDKConfig;

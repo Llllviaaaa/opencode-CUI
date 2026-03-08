@@ -80,14 +80,16 @@ export class AppLogger implements BridgeLogger {
     private readonly baseExtra: Record<string, unknown> = {},
     traceId?: string,
     appLog?: AppLogFn | null,
+    debug?: boolean,
   ) {
     this.appLog = appLog ?? getAppLog(client);
-    this.debugEnabled = ['1', 'true', 'yes', 'on'].includes(String(process.env.BRIDGE_DEBUG || '').toLowerCase());
+    const envDebugEnabled = ['1', 'true', 'yes', 'on'].includes(String(process.env.BRIDGE_DEBUG || '').toLowerCase());
+    this.debugEnabled = debug ?? envDebugEnabled;
     this.traceId = traceId ?? randomUUID();
   }
 
   child(extra: Record<string, unknown>): BridgeLogger {
-    return new AppLogger({}, { ...this.baseExtra, ...extra }, this.traceId, this.appLog);
+    return new AppLogger({}, { ...this.baseExtra, ...extra }, this.traceId, this.appLog, this.debugEnabled);
   }
 
   getTraceId(): string {
