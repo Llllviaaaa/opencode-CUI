@@ -104,6 +104,129 @@ describe('runtime protocol strictness', () => {
     expect(sent[0].sessionId).toBe('perm-42');
   });
 
+  test('accepts question_reply invoke shape and routes answer via session.prompt', async () => {
+    const prompts = [];
+    const runtime = new BridgeRuntime({
+      client: {
+        session: {
+          create: async () => ({}),
+          abort: async () => ({}),
+          prompt: async (options) => {
+            prompts.push(options);
+            return { data: { ok: true } };
+          },
+        },
+        postSessionIdPermissionsPermissionId: async () => ({}),
+      },
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      sessionId: 'q-42',
+      action: 'question_reply',
+      payload: { toolSessionId: 'tool-42', toolCallId: 'call-42', answer: 'Vite' },
+    });
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toEqual({
+      path: { id: 'tool-42' },
+      body: { parts: [{ type: 'text', text: 'Vite' }] },
+    });
+    expect(sent).toHaveLength(0);
+  });
+
+  test('rejects question_reply payloads missing toolCallId', async () => {
+    const runtime = new BridgeRuntime({
+      client: {
+        session: {
+          create: async () => ({}),
+          abort: async () => ({}),
+          prompt: async () => ({ data: { ok: true } }),
+        },
+        postSessionIdPermissionsPermissionId: async () => ({}),
+      },
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      sessionId: 'q-43',
+      action: 'question_reply',
+      payload: { toolSessionId: 'tool-43', answer: 'Vite' },
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('tool_error');
+    expect(sent[0].sessionId).toBe('q-43');
+  });
+
+  test('rejects question_reply payloads missing toolSessionId', async () => {
+    const runtime = new BridgeRuntime({
+      client: {
+        session: {
+          create: async () => ({}),
+          abort: async () => ({}),
+          prompt: async () => ({ data: { ok: true } }),
+        },
+        postSessionIdPermissionsPermissionId: async () => ({}),
+      },
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      sessionId: 'q-44',
+      action: 'question_reply',
+      payload: { toolCallId: 'call-44', answer: 'Vite' },
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('tool_error');
+    expect(sent[0].sessionId).toBe('q-44');
+  });
+
+  test('rejects question_reply payloads missing answer', async () => {
+    const runtime = new BridgeRuntime({
+      client: {
+        session: {
+          create: async () => ({}),
+          abort: async () => ({}),
+          prompt: async () => ({ data: { ok: true } }),
+        },
+        postSessionIdPermissionsPermissionId: async () => ({}),
+      },
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      sessionId: 'q-45',
+      action: 'question_reply',
+      payload: { toolSessionId: 'tool-45', toolCallId: 'call-45' },
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('tool_error');
+    expect(sent[0].sessionId).toBe('q-45');
+  });
+
   test('rejects invoke status_query variant', async () => {
     const runtime = new BridgeRuntime({
       client: {

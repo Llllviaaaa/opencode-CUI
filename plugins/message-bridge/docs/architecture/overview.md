@@ -103,6 +103,7 @@ message-bridge 是 OpenCode 原生插件，桥接本地 OpenCode 实例与远端
 │  │    - create_session                                               │  │
 │  │    - close_session → session.abort                                │  │
 │  │    - permission_reply (response: once|always|reject)              │  │
+│  │    - question_reply (toolSessionId + toolCallId + answer)         │  │
 │  │    - status_query                                                 │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 │                              │                                         │
@@ -213,10 +214,10 @@ env (BRIDGE_*) > project (.opencode/message-bridge.jsonc) > user (~/.config/open
     "sk": "${BRIDGE_SK}"
   },
   "events": {
-    "allowlist": [                  // 默认: ['message.*', 'permission.*', 'requestion.*', ...]
+    "allowlist": [                  // 默认: ['message.*', 'permission.*', 'question.*', ...]
       "message.*",
       "permission.*",
-      "requestion.*",
+      "question.*",
       "session.*",
       "file.edited",
       "todo.updated",
@@ -315,7 +316,7 @@ baseMs = 1000, maxMs = 30000
 allowlist = [
   "message.*",      // 匹配 message.created, message.updated...
   "permission.*",   // 匹配 permission.request...
-  "requestion.*",   // 匹配 requestion.created...
+  "question.*",     // 匹配 question.asked...
   "session.*",      // 匹配 session.created...
   "file.edited",    // 精确匹配
   "todo.updated",
@@ -363,6 +364,7 @@ interface Envelope {
 | Create Session Action | `action/CreateSessionAction.ts` | create_session 实现 |
 | Close Session Action | `action/CloseSessionAction.ts` | close_session → abort 实现 |
 | Permission Reply Action | `action/PermissionReplyAction.ts` | permission_reply 实现 |
+| Question Reply Action | `action/QuestionReplyAction.ts` | question_reply 实现 |
 | Status Query Action | `action/StatusQueryAction.ts` | status_query 实现 |
 
 #### 3.4.2 Action 接口
@@ -396,6 +398,7 @@ interface ActionContext {
 | `create_session` | `session.create(payload)` |
 | `close_session` | `session.abort(toolSessionId)` ⚠️ **不执行 delete** |
 | `permission_reply` | 标准协议字段 `response` |
+| `question_reply` | `session.prompt(parts[0].text = answer)`（`toolCallId` 仅用于协议校验） |
 | `status_query` | 返回 `status_response` |
 
 #### 3.4.4 Permission Reply
@@ -798,7 +801,7 @@ plugins/message-bridge/
 |---|---|
 | Unit | 白名单、映射、路由、错误分支、envelope/sequence |
 | Integration | Mock Gateway WS + Mock SDK Client |
-| E2E Smoke | 注册、心跳、create+chat+close、permission_reply、断连重连、不可达启动失败 |
+| E2E Smoke | 注册、心跳、create+chat+close、permission_reply、question_reply、断连重连、不可达启动失败 |
 
 **测试框架基线（与测试验证文档一致）**：
 - Unit / Integration：`bun test`（主框架）
@@ -814,7 +817,7 @@ plugins/message-bridge/
 
 ### 8.3 必测场景
 
-1. 五类 action 正常链路
+1. 六类 action 正常链路
 2. 白名单允许/拒绝路径
 3. `permission_reply.response` 使用 `once|always|reject`
 4. `close_session -> abort` 且不 delete

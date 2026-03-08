@@ -54,7 +54,9 @@ export function createInvokeMessage(overrides = {}) {
         ? {}
         : action === 'close_session'
           ? { toolSessionId: generateTestId('oc-sess') }
-          : { permissionId: generateTestId('perm'), toolSessionId: generateTestId('oc-sess'), response: 'once' });
+          : action === 'question_reply'
+            ? { toolSessionId: generateTestId('oc-sess'), toolCallId: generateTestId('call'), answer: 'answer' }
+            : { permissionId: generateTestId('perm'), toolSessionId: generateTestId('oc-sess'), response: 'once' });
 
   return {
     type: 'invoke',
@@ -238,6 +240,7 @@ export function createTestConfig(overrides = {}) {
       allowlist: [
         'message.*',
         'permission.*',
+        'question.*',
         'session.*',
         'file.edited',
         'todo.updated',

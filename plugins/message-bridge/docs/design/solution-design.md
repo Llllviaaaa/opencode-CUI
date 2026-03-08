@@ -118,7 +118,7 @@ export interface AuthConfig {
 }
 
 export interface EventConfig {
-  allowlist?: string[];             // 默认: ['message.*', 'permission.*', 'requestion.*', ...]
+  allowlist?: string[];             // 默认: ['message.*', 'permission.*', 'question.*', ...]
 }
 
 export interface LoggingConfig {
@@ -444,17 +444,11 @@ export class CloseSessionAction extends BaseAction {
 
 export interface PermissionReplyTarget {
   permissionId: string;
-  toolSessionId?: string;
-  response: 'allow' | 'always' | 'deny';
+  toolSessionId: string;
+  response: 'once' | 'always' | 'reject';
 }
 
-export interface PermissionReplyCompat {
-  permissionId: string;
-  toolSessionId?: string;
-  approved: boolean;
-}
-
-export type PermissionReplyPayload = PermissionReplyTarget | PermissionReplyCompat;
+export type PermissionReplyPayload = PermissionReplyTarget;
 
 export class PermissionReplyAction extends BaseAction {
   readonly name = 'permission_reply';
@@ -462,18 +456,24 @@ export class PermissionReplyAction extends BaseAction {
   validate(payload: unknown): ValidationResult;
   async execute(payload: PermissionReplyPayload, context: ActionContext): Promise<ActionResult>;
   mapError(error: Error, context: ActionContext): ToolErrorPayload;
-  
-  /**
-   * 兼容字段映射
-   * approved=true -> allow
-   * approved=false -> deny
-   * 
-   * SDK 映射
-   * allow -> once
-   * always -> always
-   * deny -> reject
-   */
-  private normalizePayload(payload: PermissionReplyPayload): PermissionReplyTarget;
+}
+```
+
+```typescript
+// src/action/QuestionReplyAction.ts
+
+export interface QuestionReplyPayload {
+  toolSessionId: string;
+  toolCallId: string;
+  answer: string;
+}
+
+export class QuestionReplyAction extends BaseAction {
+  readonly name = 'question_reply';
+
+  validate(payload: unknown): ValidationResult;
+  async execute(payload: QuestionReplyPayload, context: ActionContext): Promise<ActionResult>;
+  mapError(error: Error, context: ActionContext): ToolErrorPayload;
 }
 ```
 
@@ -815,7 +815,7 @@ const validationRules = [
   { path: 'gateway.ping.intervalMs', required: false, type: 'number', min: 1, default: 30000 },
   { path: 'gateway.ping.pongTimeoutMs', required: false, type: 'number', min: 1, default: 10000 },
   { path: 'sdk.timeoutMs', required: false, type: 'number', min: 1, default: 10000 },
-  { path: 'events.allowlist', required: false, type: 'array', default: ['message.*', 'permission.*', 'requestion.*', 'session.*', 'file.edited', 'todo.updated', 'command.executed'] },
+  { path: 'events.allowlist', required: false, type: 'array', default: ['message.*', 'permission.*', 'question.*', 'session.*', 'file.edited', 'todo.updated', 'command.executed'] },
   
   // 废弃字段
   { path: 'sdk.baseUrl', deprecated: true },
@@ -1048,7 +1048,7 @@ export class ActionRouter {
 
 ### 6.1 当前兼容层
 
-#### 6.1.1 permission_reply 双字段兼容
+#### 6.1.1 permission_reply response-only
 
 ```typescript
 // src/action/PermissionReplyAction.ts
@@ -1057,41 +1057,17 @@ export class PermissionReplyAction extends BaseAction {
   readonly name = 'permission_reply';
   
   async execute(payload: PermissionReplyPayload, context: ActionContext): Promise<ActionResult> {
-    // 1. 规范化 payload（兼容 approved 字段）
-    const normalized = this.normalizePayload(payload);
-    
-    // 2. 映射到 SDK 语义
-    const sdkResponse = this.mapToSDK(normalized.response);
-    
-    // 3. 调用 SDK
+    // 1. 严格校验 payload（permissionId/toolSessionId/response）
+    this.validate(payload);
+
+    // 2. 直接透传标准 response 到 SDK
     await context.opencode.permission.reply({
-      permissionId: normalized.permissionId,
-      toolSessionId: normalized.toolSessionId,
-      response: sdkResponse
+      permissionId: payload.permissionId,
+      toolSessionId: payload.toolSessionId,
+      response: payload.response
     });
     
     return { success: true };
-  }
-  
-  private normalizePayload(payload: PermissionReplyPayload): PermissionReplyTarget {
-    // 如果包含 approved 字段，转换为 response
-    if ('approved' in payload) {
-      return {
-        permissionId: payload.permissionId,
-        toolSessionId: payload.toolSessionId,
-        response: payload.approved ? 'allow' : 'deny'
-      };
-    }
-    return payload as PermissionReplyTarget;
-  }
-  
-  private mapToSDK(response: 'allow' | 'always' | 'deny'): string {
-    const mapping: Record<string, string> = {
-      'allow': 'once',
-      'always': 'always',
-      'deny': 'reject'
-    };
-    return mapping[response];
   }
 }
 ```
@@ -1117,7 +1093,7 @@ export class CloseSessionAction extends BaseAction {
 
 | 差异项 | 当前行为 | 目标行为 | 收敛版本 | 退场条件 |
 |--------|----------|----------|----------|----------|
-| permission_reply | 支持 approved + response 双字段 | 仅 response 字段 | v1.5 | Skill-Server 完成 approved -> response 统一迁移 |
+| permission_reply | 仅 response 字段 | 与协议保持一致 | 已完成 | 无 |
 | close_session | 映射到 abort | SDK 原生支持 | 待定 | SDK 提供原生 close_session 语义 |
 | agentId 绑定 | 插件本地生成 agentId | Gateway 分配 gatewayAgentId | 待定 | Gateway 新增 register_success 响应 |
 
@@ -1139,7 +1115,7 @@ export class CloseSessionAction extends BaseAction {
 ┌─────────────────────────────────────────────────────────────────┐
 │                        E2E Smoke                                │
 │  • 注册、心跳、create+chat+close 完整链路                        │
-│  • permission_reply 双字段兼容验证                               │
+│  • permission_reply / question_reply 协议校验                     │
 │  • 断连重连场景                                                  │
 │  • 不可达启动失败场景                                            │
 └────────────────────────────┬────────────────────────────────────┘
@@ -1168,17 +1144,18 @@ export class CloseSessionAction extends BaseAction {
 | 1 | chat action 正常链路 | E2E | invoke -> SDK.chat -> tool_done |
 | 2 | create_session action | E2E | invoke -> SDK.create -> session_created |
 | 3 | close_session -> abort | E2E | 验证调用 abort 而非 delete |
-| 4 | permission_reply 双字段 | E2E | approved=true/false 正确映射到 allow/deny |
-| 5 | status_query/response | E2E | 可选 sessionId 透传 |
-| 6 | 白名单允许路径 | Unit | 匹配白名单的事件正常上行 |
-| 7 | 白名单拒绝路径 | Unit | 不匹配白名单的事件被丢弃并记录 |
-| 8 | Fast Fail 触发 | Unit | 连接异常时立即返回 tool_error |
-| 9 | envelope 完整性 | Unit | 所有字段正确填充 |
-| 10 | sequence 递增 | Unit | 同 session 内 sequenceNumber 递增 |
-| 11 | READY 前 invoke | Unit | 返回 AGENT_NOT_READY |
-| 12 | 配置发现优先级 | Integration | env > project > user > default |
-| 13 | JSONC 解析 | Unit | 支持注释与尾逗号 |
-| 14 | 扩展性验证 | Unit | 新增 action 不改核心引擎 |
+| 4 | permission_reply response-only | E2E | `response=once|always|reject` 严格校验 |
+| 5 | question_reply 协议链路 | E2E | `toolSessionId + toolCallId + answer` 必填 |
+| 6 | status_query/response | E2E | 可选 sessionId 透传 |
+| 7 | 白名单允许路径 | Unit | 匹配白名单的事件正常上行 |
+| 8 | 白名单拒绝路径 | Unit | 不匹配白名单的事件被丢弃并记录 |
+| 9 | Fast Fail 触发 | Unit | 连接异常时立即返回 tool_error |
+| 10 | envelope 完整性 | Unit | 所有字段正确填充 |
+| 11 | sequence 递增 | Unit | 同 session 内 sequenceNumber 递增 |
+| 12 | READY 前 invoke | Unit | 返回 AGENT_NOT_READY |
+| 13 | 配置发现优先级 | Integration | env > project > user > default |
+| 14 | JSONC 解析 | Unit | 支持注释与尾逗号 |
+| 15 | 扩展性验证 | Unit | 新增 action 不改核心引擎 |
 
 ### 7.3 质量门槛
 
@@ -1202,7 +1179,7 @@ export class CloseSessionAction extends BaseAction {
 | **M1: 基础设施** | Week 1 | • 项目脚手架<br>• 配置层实现<br>• 错误类型定义 | • typecheck 通过<br>• 配置发现单元测试通过 |
 | **M2: 连接层** | Week 2 | • WebSocket 连接<br>• AK/SK 鉴权<br>• 状态机实现<br>• 指数退避重连 | • 连接建立/断开测试通过<br>• 重连 5 次无异常 |
 | **M3: 事件层** | Week 3 | • 事件订阅<br>• 白名单过滤<br>• Envelope 构建<br>• 事件透传 | • 白名单单元测试通过<br>• Sequence 递增验证通过 |
-| **M4: Action 层** | Week 4 | • Action Registry<br>• 5 个基础 Action<br>• Permission Reply 兼容 | • 所有 action 单元测试通过<br>• 双字段兼容测试通过 |
+| **M4: Action 层** | Week 4 | • Action Registry<br>• 6 个基础 Action<br>• Permission/Question Reply 对齐 | • 所有 action 单元测试通过<br>• 协议字段校验测试通过 |
 | **M5: 集成与 E2E** | Week 5 | • 模块集成<br>• E2E 测试<br>• 性能基准 | • E2E 冒烟全通过<br>• 覆盖率达标 |
 | **M6: 文档与交付** | Week 6 | • API 文档<br>• 使用指南<br>• 运维手册 | • 文档评审通过 |
 
@@ -1214,7 +1191,7 @@ export class CloseSessionAction extends BaseAction {
 - [ ] 心跳机制：30s 间隔发送，连接保持稳定
 - [ ] 重连机制：断线后指数退避重连成功
 - [ ] 事件上行：白名单事件正确封装并透传
-- [ ] Action 下行：5 个基础 action 正常执行
+- [ ] Action 下行：6 个基础 action 正常执行
 - [ ] Fast Fail：异常场景 100ms 内返回错误
 - [ ] 配置管理：多源配置发现与优先级正确
 

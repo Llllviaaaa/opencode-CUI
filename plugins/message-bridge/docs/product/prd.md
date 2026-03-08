@@ -22,7 +22,7 @@
 1. WS 鉴权连接、心跳、重连。
 2. 下行 `invoke/status_query` 与上行协议消息。
 3. 可配置白名单与 action 注册表。
-4. `permission_reply` 双字段兼容。
+4. `permission_reply` 使用 `response` 标准字段，补齐 `question_reply`。
 5. `close_session -> session.abort` 固化。
 6. 配置文件获取与校验（参考 bridge）。
 7. 插件级单测/集成/最小 E2E。
@@ -89,7 +89,7 @@
 - 默认允许：
 - `message.*`
 - `permission.*`
-- `requestion.*`
+- `question.*`
 - `session.*`
 - `file.edited`
 - `todo.updated`
@@ -106,6 +106,7 @@
 - `create_session`
 - `close_session`
 - `permission_reply`
+- `question_reply`
 - `status_query`
 
 ### FR-MB-05（P0）关闭语义
@@ -183,7 +184,7 @@
 - 5 分钟失败率 > 5% 告警（平台接入为后续任务）
 
 ## 七、类型与错误模型冻结
-- `InvokeAction = chat | create_session | close_session | permission_reply`
+- `InvokeAction = chat | create_session | close_session | permission_reply | question_reply`
 - `PermissionReplyPayload = { permissionId, toolSessionId, response }`
 - `StatusResponse = { type: 'status_response', opencodeOnline: boolean, sessionId?: string, envelope }`
 - `tool_error = { type, sessionId?, error, envelope }`
@@ -227,10 +228,10 @@
 ### 9.1 测试分层
 1. Unit：白名单、映射、路由、错误分支、envelope/sequence  
 2. Integration：Mock Gateway WS + Mock SDK Client  
-3. E2E Smoke：注册、心跳、create+chat+close、permission_reply、断连重连、不可达启动失败  
+3. E2E Smoke：注册、心跳、create+chat+close、permission_reply、question_reply、断连重连、不可达启动失败  
 
 ### 9.2 必测场景
-1. 五类 action 正常链路。  
+1. 六类 action 正常链路。  
 2. 白名单允许/拒绝路径。  
 3. `permission_reply.response` 仅接受 `once|always|reject`。  
 4. `close_session -> abort` 且不 delete。  

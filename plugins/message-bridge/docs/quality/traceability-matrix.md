@@ -50,7 +50,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 | PRD Ref | Requirement | Status | Code Reference | Notes |
 |---------|-------------|--------|----------------|-------|
 | FR-MB-02 | Event allowlist with prefix matching | **Implemented** | `src/event/EventFilter.ts` (lines 1-35): `EventFilter` class with prefix and exact matching | Supports `message.*`, `permission.*`, etc. Default allowlist matches PRD. |
-| FR-MB-02 | Default allowlist: message.*, permission.*, requestion.*, session.*, file.edited, todo.updated, command.executed | **Implemented** | `src/event/EventFilter.ts` (lines 5-13): default constructor values; `src/types/index.ts` (lines 761-769): `DEFAULT_EVENT_ALLOWLIST` | Exact match to PRD §FR-MB-02. |
+| FR-MB-02 | Default allowlist: message.*, permission.*, question.*, session.*, file.edited, todo.updated, command.executed | **Implemented** | `src/event/EventFilter.ts` (default constructor values); `src/types/index.ts` (`DEFAULT_EVENT_ALLOWLIST`) | Exact match to PRD §FR-MB-02. |
 | §4.4 | Envelope with all required fields | **Implemented** | `src/types/index.ts` (lines 146-170): `Envelope` interface with version, messageId, timestamp, source, agentId, sessionId, sequenceNumber, sequenceScope | All 9 fields defined per PRD. |
 | §4.4 | Envelope version field | **Implemented** | `src/event/EnvelopeBuilder.ts` (line 22): hardcoded `'1.0'` | Matches PRD format. |
 | §4.4 | Envelope sequenceNumber per scope | **Implemented** | `src/event/EnvelopeBuilder.ts` (lines 36-42): `nextSequence()` with per-scope counters | Separate counters per sessionId plus global scope. |
@@ -67,14 +67,15 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 
 ---
 
-## 3. Actions (5 Required)
+## 3. Actions (6 Required)
 
 | PRD Ref | Requirement | Status | Code Reference | Notes |
 |---------|-------------|--------|----------------|-------|
 | FR-MB-04 | chat action | **Implemented** | `src/action/ChatAction.ts` (lines 1-160): full implementation with validation, execution, error mapping | Validates sessionId/message, calls `session.prompt()`, handles errors. |
 | FR-MB-04 | create_session action | **Implemented** | `src/action/CreateSessionAction.ts` (lines 1-168): full implementation | Validates optional sessionId/metadata, calls `session.create()`. |
 | FR-MB-04 | close_session action | **Implemented** | `src/action/CloseSessionAction.ts` (lines 1-144): full implementation | Validates sessionId, calls `session.abort()`. |
-| FR-MB-04 | permission_reply action | **Implemented** | `src/action/PermissionReplyAction.ts` (lines 1-204): full implementation with dual format support | Validates both formats, executes permission reply. |
+| FR-MB-04 | permission_reply action | **Implemented** | `src/action/PermissionReplyAction.ts` | Strict response-only validation and execution. |
+| FR-MB-04 | question_reply action | **Implemented** | `src/action/QuestionReplyAction.ts` | Validates `toolSessionId/toolCallId/answer`, executes via `session.prompt`. |
 | FR-MB-04 | status_query action | **Implemented** | `src/action/StatusQueryAction.ts` (lines 1-91): full implementation | Validates optional sessionId, returns opencodeOnline status. |
 | FR-MB-03 | Action Registry pattern | **Implemented** | `src/action/ActionRegistry.ts` (lines 1-41): `DefaultActionRegistry` with register/get/has/list | New actions can be registered without modifying core. |
 | FR-MB-03 | Action validator/executor/errorMapper | **Implemented** | `src/types/index.ts` (lines 639-651): `Action` interface with validate/execute/errorMapper | All actions implement the interface. |
@@ -88,6 +89,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 | create_session | `src/action/CreateSessionAction.ts` | 1-168 | validate(), execute(), errorMapper() |
 | close_session | `src/action/CloseSessionAction.ts` | 1-144 | validate(), execute(), errorMapper() |
 | permission_reply | `src/action/PermissionReplyAction.ts` | 1-204 | validate(), execute(), errorMapper() |
+| question_reply | `src/action/QuestionReplyAction.ts` | 1-220 | validate(), execute(), errorMapper() |
 | status_query | `src/action/StatusQueryAction.ts` | 1-91 | validate(), execute(), errorMapper() |
 
 ---
@@ -115,7 +117,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 
 ---
 
-## 5. Permission Reply Dual Format (FR-MB-06)
+## 5. Permission Reply Protocol (FR-MB-06)
 
 | PRD Ref | Requirement | Status | Code Reference | Notes |
 |---------|-------------|--------|----------------|-------|
@@ -171,7 +173,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 | §9.3 | Coverage gate | **Implemented** | `package.json` + `scripts/check-coverage.mjs` | Bun coverage + threshold validation script. |
 | §9.3 | Lines coverage >= 80% | **Implemented** | `scripts/check-coverage.mjs` | Threshold enforced by coverage gate script. |
 | §9.3 | Branches coverage >= 70% | **Planned / Observable** | `scripts/check-coverage.mjs` | Bun coverage 在当前环境可能出现 `BRF=0`，暂不作为硬门禁。 |
-| §9.2 | 5 action normal paths tested | **Implemented** | `tests/unit/example.test.mjs` (lines 51-291): tests for all actions | Each action has validation and execution tests. |
+| §9.2 | 6 action normal paths tested | **Implemented** | `tests/unit/actions-coverage.test.mjs`, `tests/unit/runtime-protocol.test.mjs` | Includes `question_reply` success/invalid paths. |
 | §9.2 | response-only permission_reply tested | **Implemented** | `tests/unit/actions-coverage.test.mjs`, `tests/unit/runtime-protocol.test.mjs` | Covers valid once/always/reject paths and rejects legacy values. |
 | §9.2 | close_session -> abort tested | **Implemented** | `tests/unit/example.test.mjs` (lines 165-177): tests abort semantics | Verified in test. |
 | §9.2 | Fast Fail returns tool_error tested | **Implemented** | `tests/unit/example.test.mjs` (lines 76-110): AGENT_NOT_READY tests; lines 294-310: FastFailDetector tests | State checking tested. |
@@ -216,7 +218,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 |-----------|-----------|
 | Connection | `src/connection/GatewayConnection.ts`, `StateManager.ts`, `AkSkAuth.ts` |
 | Event | `src/event/EventRelay.ts`, `EventFilter.ts`, `EnvelopeBuilder.ts` |
-| Action | `src/action/ActionRouter.ts`, `ActionRegistry.ts`, `*Action.ts` (5 files) |
+| Action | `src/action/ActionRouter.ts`, `ActionRegistry.ts`, `*Action.ts` (6 files) |
 | Error | `src/error/FastFailDetector.ts`, `ErrorMapper.ts` |
 | Config | `src/config/ConfigResolver.ts`, `ConfigValidator.ts`, `JsoncParser.ts` |
 | Types | `src/types/index.ts` |
