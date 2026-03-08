@@ -116,6 +116,7 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
         }
 
         context.logger?.error('action.close_session.sdk_error_payload', {
+          toolSessionId: normalized.toolSessionId,
           error: errorMessage,
           latencyMs: Date.now() - startedAt,
         });
@@ -127,6 +128,7 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
       }
 
       context.logger?.error('action.close_session.failed', {
+        toolSessionId: normalized.toolSessionId,
         error: executionResult.error,
         latencyMs: Date.now() - startedAt,
       });
@@ -139,6 +141,7 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
       const errorCode = this.errorMapper(error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       context.logger?.error('action.close_session.exception', {
+        toolSessionId: normalized.toolSessionId,
         error: errorMessage,
         errorCode,
         latencyMs: Date.now() - startedAt,

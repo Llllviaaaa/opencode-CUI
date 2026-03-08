@@ -127,11 +127,14 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
           finalizeResolve();
         };
 
-        ws.onclose = () => {
+        ws.onclose = (event?: CloseEvent) => {
           this.options.logger?.warn('gateway.close', {
             opened,
             manuallyDisconnected: this.manuallyDisconnected,
             aborted: !!this.options.abortSignal?.aborted,
+            code: event?.code,
+            reason: event?.reason,
+            wasClean: event?.wasClean,
           });
           if (!opened) {
             finalizeReject(new Error('gateway_websocket_closed_before_open'));
@@ -146,7 +149,10 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
 
         ws.onerror = () => {
           const error = new Error('gateway_websocket_error');
-          this.options.logger?.error('gateway.error', { error: error.message });
+          this.options.logger?.error('gateway.error', {
+            error: error.message,
+            state: this.state,
+          });
           this.emit('error', error);
           if (this.state !== 'DISCONNECTED') {
             this.setState('DISCONNECTED');
@@ -188,7 +194,13 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
 
   send(message: unknown): void {
     if (!this.isConnected() || !this.ws) {
-      this.options.logger?.warn('gateway.send.rejected_not_connected');
+      this.options.logger?.warn('gateway.send.rejected_not_connected', {
+        state: this.state,
+        messageType:
+          message && typeof message === 'object' && 'type' in (message as { type?: unknown })
+            ? String((message as { type?: unknown }).type ?? '')
+            : 'unknown',
+      });
       throw new Error('WebSocket is not connected. Cannot send message.');
     }
 
@@ -263,7 +275,11 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
           attempt: this.reconnectAttempts,
         });
         await this.connect();
-      } catch {
+      } catch (error) {
+        this.options.logger?.warn('gateway.reconnect.failed', {
+          attempt: this.reconnectAttempts,
+          error: error instanceof Error ? error.message : String(error),
+        });
         if (!this.manuallyDisconnected) {
           this.attemptReconnect();
         }
@@ -293,7 +309,9 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
       this.options.logger?.debug('gateway.message.received', { messageType });
       this.emit('message', message);
     } catch {
-      this.options.logger?.debug('gateway.message.ignored_non_json');
+      this.options.logger?.debug('gateway.message.ignored_non_json', {
+        payloadLength: text.length,
+      });
       // Ignore non-json messages from gateway.
     }
   }

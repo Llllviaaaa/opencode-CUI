@@ -132,6 +132,9 @@ export class PermissionReplyAction implements Action<PermissionReplyPayload> {
         }
 
         context.logger?.error('action.permission_reply.sdk_error_payload', {
+          permissionId: payload.permissionId,
+          toolSessionId: payload.toolSessionId,
+          response: payload.response,
           error: errorMessage,
           latencyMs: Date.now() - startedAt,
         });
@@ -143,6 +146,9 @@ export class PermissionReplyAction implements Action<PermissionReplyPayload> {
       }
 
       context.logger?.error('action.permission_reply.failed', {
+        permissionId: payload.permissionId,
+        toolSessionId: payload.toolSessionId,
+        response: payload.response,
         error: executionResult.error,
         latencyMs: Date.now() - startedAt,
       });
@@ -155,6 +161,9 @@ export class PermissionReplyAction implements Action<PermissionReplyPayload> {
       const errorCode = this.errorMapper(error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       context.logger?.error('action.permission_reply.exception', {
+        permissionId: payload.permissionId,
+        toolSessionId: payload.toolSessionId,
+        response: payload.response,
         error: errorMessage,
         errorCode,
         latencyMs: Date.now() - startedAt,

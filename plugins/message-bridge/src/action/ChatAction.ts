@@ -163,6 +163,7 @@ export class ChatAction implements Action<ChatPayload> {
       }
 
       context.logger?.error('action.chat.failed', {
+        toolSessionId: normalized.toolSessionId,
         error: executionResult.error,
         latencyMs: Date.now() - startedAt,
       });
@@ -175,6 +176,7 @@ export class ChatAction implements Action<ChatPayload> {
       const errorCode = this.errorMapper(error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       context.logger?.error('action.chat.exception', {
+        toolSessionId: normalized.toolSessionId,
         error: errorMessage,
         errorCode,
         latencyMs: Date.now() - startedAt,

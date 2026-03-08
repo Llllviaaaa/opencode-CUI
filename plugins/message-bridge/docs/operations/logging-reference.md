@@ -26,14 +26,14 @@
 | `service` | `string` | 固定为 `message-bridge` |
 | `level` | `'debug' \| 'info' \| 'warn' \| 'error'` | 日志级别 |
 | `message` | `string` | 事件名（如 `gateway.ready`） |
-| `extra` | `Record<string, unknown>` | 链路上下文与摘要信息 |
+| `extra` | `Record<string, unknown>` | 链路上下文（敏感字段已脱敏） |
 
 `extra` 生成规则（`src/runtime/AppLogger.ts`）：
 
 | 场景 | 行为 |
 |---|---|
-| 默认（`BRIDGE_DEBUG` 未开启） | 对对象/数组做摘要：对象输出 `type/keys/size`，数组输出 `type/length` |
-| `BRIDGE_DEBUG=true` | 输出脱敏后的详细字段 |
+| 默认（`BRIDGE_DEBUG` 未开启） | 输出脱敏后的完整字段 |
+| `BRIDGE_DEBUG=true` | 不改变 `extra` 内容；仅在 fallback / send-failed 时输出 `console.debug` 提示 |
 | 脱敏键 | key 包含 `ak/sk/token/authorization/cookie/secret/password` 时值替换为 `***` |
 | 无 `client.app.log` 能力 | 不抛错；仅在 `BRIDGE_DEBUG=true` 时 `console.debug` 提示 `log-fallback` |
 | `client.app.log` 抛错 | 吞错不影响主流程；仅在 `BRIDGE_DEBUG=true` 时 `console.debug` 提示 `log-send-failed` |
@@ -300,4 +300,4 @@ sequenceDiagram
 - 按会话：筛 `sessionId`
 - 按链路：筛 `traceId`
 - 按动作：筛 `action`
-- 明细调试：启用 `BRIDGE_DEBUG=true` 查看脱敏后的完整 `extra`
+- 明细调试：默认日志已包含脱敏后的完整 `extra`；启用 `BRIDGE_DEBUG=true` 可额外查看 fallback / send-failed 调试提示
