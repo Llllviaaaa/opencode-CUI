@@ -65,7 +65,23 @@ export class BridgeRuntime {
       throw new Error('runtime_start_aborted');
     }
 
-    const config = await loadConfig(this.options.workspacePath);
+    let config;
+    try {
+      this.logger.info('runtime.config.loading', { workspacePath: this.options.workspacePath });
+      config = await loadConfig(this.options.workspacePath);
+      this.logger.info('runtime.config.loaded_successfully', {
+        config_version: config.config_version,
+        enabled: config.enabled,
+        gateway_url: config.gateway.url,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error('runtime.config.loading_failed', {
+        error: errorMessage,
+        workspacePath: this.options.workspacePath,
+      });
+      throw error;
+    }
     if (!config.enabled) {
       this.logger.info('runtime.start.disabled_by_config');
       this.started = true;
