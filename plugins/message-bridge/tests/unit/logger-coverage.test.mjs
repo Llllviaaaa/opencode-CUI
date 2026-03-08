@@ -16,7 +16,7 @@ describe('AppLogger coverage', () => {
     }
   });
 
-  test('writes logs via client.app.log with summarized payload by default', async () => {
+  test('writes logs via client.app.log with scalar fields preserved by default', async () => {
     const calls = [];
     const logger = new AppLogger({
       app: {
@@ -34,10 +34,37 @@ describe('AppLogger coverage', () => {
     expect(calls[0].body.service).toBe('message-bridge');
     expect(calls[0].body.level).toBe('info');
     expect(calls[0].body.message).toBe('runtime.start.completed');
-    expect(calls[0].body.extra.type).toBe('object');
+    expect(calls[0].body.extra.sessionId).toBe('s-1');
+    expect(calls[0].body.extra.token).toBe('***');
+    expect(typeof calls[0].body.extra.traceId).toBe('string');
   });
 
-  test('debug mode includes redacted payload fields', async () => {
+  test('preserves nested objects and arrays with redaction when debug mode is disabled', async () => {
+    const calls = [];
+    const logger = new AppLogger({
+      app: {
+        log: async (options) => {
+          calls.push(options);
+          return true;
+        },
+      },
+    });
+
+    logger.info('runtime.start.completed', {
+      nested: { foo: 'bar', token: 'secret' },
+      items: ['a', 'b'],
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].body.extra.nested).toEqual({
+      foo: 'bar',
+      token: '***',
+    });
+    expect(calls[0].body.extra.items).toEqual(['a', 'b']);
+  });
+
+  test('debug mode keeps the same full redacted payload shape', async () => {
     process.env.BRIDGE_DEBUG = 'true';
     const calls = [];
     const logger = new AppLogger({
@@ -49,12 +76,17 @@ describe('AppLogger coverage', () => {
       },
     });
 
-    logger.warn('gateway.connect.started', { token: 'abc', nested: { authorization: 'x' } });
+    logger.warn('gateway.connect.started', {
+      token: 'abc',
+      nested: { authorization: 'x' },
+      items: ['x', 'y'],
+    });
     await new Promise((r) => setTimeout(r, 10));
 
     expect(calls.length).toBe(1);
     expect(calls[0].body.extra.token).toBe('***');
-    expect(calls[0].body.extra.nested.authorization).toBe('***');
+    expect(calls[0].body.extra.nested).toEqual({ authorization: '***' });
+    expect(calls[0].body.extra.items).toEqual(['x', 'y']);
   });
 
   test('swallows app.log errors and falls back to console.debug in debug mode', async () => {

@@ -43,7 +43,7 @@ export class BridgeRuntime {
   private eventFilter: EventFilter | null = null;
   private started = false;
   private readonly sdkClient: unknown;
-  private readonly logger: BridgeLogger;
+  private logger: BridgeLogger;
   private readonly toolToSkillSessionMap = new Map<string, string>();
   private lastSkillSessionId: string | null = null;
 
@@ -69,7 +69,16 @@ export class BridgeRuntime {
     let config;
     try {
       this.logger.info('runtime.config.loading', { workspacePath: this.options.workspacePath });
-      config = await loadConfig(this.options.workspacePath);
+      config = await loadConfig(this.options.workspacePath, this.logger);
+      if (this.options.debug === undefined && typeof config.debug === 'boolean') {
+        this.logger = new AppLogger(
+          this.options.client,
+          { component: 'runtime' },
+          this.logger.getTraceId(),
+          undefined,
+          config.debug,
+        );
+      }
       this.logger.info('runtime.config.loaded_successfully', {
         config_version: config.config_version,
         enabled: config.enabled,
@@ -234,6 +243,7 @@ export class BridgeRuntime {
       this.logger.warn('runtime.downstream_ignored_non_protocol', {
         messageType: rawType ?? 'unknown',
         hasSessionId: !!fallbackSessionId,
+        hasEnvelope: hasEnvelope(raw),
       });
 
       if (rawType === 'invoke') {
@@ -266,11 +276,16 @@ export class BridgeRuntime {
       return;
     }
 
-    this.logger.info('runtime.invoke.received', { action: message.action });
     const skillSessionId =
       message.sessionId ??
       (message.envelope as { sessionId?: string } | undefined)?.sessionId;
     const toolSessionId = this.extractToolSessionId(message.payload);
+    this.logger.info('runtime.invoke.received', {
+      action: message.action,
+      sessionId: skillSessionId,
+      toolSessionId,
+      hasEnvelope: !!message.envelope,
+    });
     if (toolSessionId && skillSessionId) {
       this.rememberSessionMapping(toolSessionId, skillSessionId);
     }
@@ -332,6 +347,7 @@ export class BridgeRuntime {
     this.logger.info('runtime.invoke.completed', {
       action: message.action,
       sessionId: skillSessionId,
+      toolSessionId,
       latencyMs: Date.now() - startedAt,
     });
   }
@@ -386,6 +402,11 @@ export class BridgeRuntime {
   private rememberSessionMapping(toolSessionId: string, skillSessionId: string): void {
     this.toolToSkillSessionMap.set(toolSessionId, skillSessionId);
     this.lastSkillSessionId = skillSessionId;
+    this.logger.debug('runtime.session_mapping.updated', {
+      toolSessionId,
+      sessionId: skillSessionId,
+      mappingSize: this.toolToSkillSessionMap.size,
+    });
   }
 
   private resolveSkillSessionId(toolSessionId?: string): string | undefined {
@@ -466,7 +487,12 @@ export class BridgeRuntime {
     }
 
     const error = result.errorMessage ?? 'Unknown error';
-    this.logger.error('runtime.tool_error.sending', { sessionId, error });
+    this.logger.error('runtime.tool_error.sending', {
+      sessionId,
+      error,
+      errorCode: result.errorCode,
+      state: this.stateManager.getState(),
+    });
 
     this.gatewayConnection.send({
       type: 'tool_error',

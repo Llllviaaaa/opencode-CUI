@@ -75,9 +75,10 @@ env (BRIDGE_*) > project (.opencode/message-bridge.jsonc) > user (~/.config/open
 
 ### Debug 模式
 
-`debug` 字段控制是否启用详细日志输出：
+`debug` 字段控制是否输出本地调试提示：
 
-- 设为 `true` 时，日志会包含更详细的 `extra` 字段（敏感信息会被脱敏）
+- 所有模式下，结构化日志都会包含脱敏后的完整 `extra` 字段
+- 设为 `true` 时，当 `client.app.log` 不可用或上报失败，会额外输出 `console.debug` 调试提示
 - 可通过配置文件设置 `debug: true`，或环境变量 `BRIDGE_DEBUG=true`
 - `BRIDGE_DEBUG` 为旧版环境变量，仍支持用于向后兼容
 
@@ -106,7 +107,6 @@ env (BRIDGE_*) > project (.opencode/message-bridge.jsonc) > user (~/.config/open
 插件启动时会输出配置加载信息：
 
 ```
-[message-bridge] Config sources: default -> user:/path -> project:/path -> env
-[message-bridge] Configuration validation failed:
-  [MISSING_REQUIRED] auth.ak: auth.ak is required
+[message-bridge] config.resolve.completed { sources: ['default', 'project:/path', 'env'], ... }
+[message-bridge] config.validation.failed { errorCount: 1, errors: [{ path: 'auth.ak', code: 'MISSING_REQUIRED', ... }] }
 ```

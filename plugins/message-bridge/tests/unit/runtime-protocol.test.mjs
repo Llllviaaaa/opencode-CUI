@@ -1,4 +1,7 @@
 import { describe, test, expect } from 'bun:test';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { BridgeRuntime } from '../../dist/runtime/BridgeRuntime.js';
 import { EnvelopeBuilder } from '../../dist/event/EnvelopeBuilder.js';
@@ -70,5 +73,59 @@ describe('runtime protocol strictness', () => {
       body: { parts: [{ type: 'text', text: 'hello' }] },
     });
     expect(sent).toHaveLength(0);
+  });
+
+  test('applies config.debug to runtime fallback logging after config load', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-runtime-'));
+    await mkdir(join(workspace, '.opencode'), { recursive: true });
+    await writeFile(
+      join(workspace, '.opencode', 'message-bridge.jsonc'),
+      JSON.stringify({
+        config_version: 1,
+        enabled: false,
+        debug: true,
+        gateway: {
+          url: 'ws://localhost:8081/ws/agent',
+          heartbeatIntervalMs: 30000,
+          reconnect: {
+            baseMs: 1000,
+            maxMs: 30000,
+            exponential: true,
+          },
+        },
+        sdk: {
+          timeoutMs: 10000,
+        },
+        auth: {
+          ak: '',
+          sk: '',
+        },
+        events: {
+          allowlist: ['message.*'],
+        },
+      }),
+      'utf8',
+    );
+
+    const debugCalls = [];
+    const originalDebug = console.debug;
+    console.debug = (...args) => {
+      debugCalls.push(args);
+    };
+
+    try {
+      const runtime = new BridgeRuntime({
+        workspacePath: workspace,
+        client: {},
+      });
+
+      await runtime.start();
+
+      expect(runtime.getStarted()).toBe(true);
+      expect(debugCalls.some((args) => args.includes('runtime.start.disabled_by_config'))).toBe(true);
+    } finally {
+      console.debug = originalDebug;
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 });

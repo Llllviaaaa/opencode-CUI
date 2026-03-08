@@ -98,6 +98,8 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
         }
 
         context.logger?.error('action.create_session.sdk_error_payload', {
+          requestedSessionId: payload.sessionId,
+          payloadKeys: Object.keys(payload ?? {}),
           error: errorMessage,
           latencyMs: Date.now() - startedAt,
         });
@@ -109,6 +111,8 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
       }
 
       context.logger?.error('action.create_session.failed', {
+        requestedSessionId: payload.sessionId,
+        payloadKeys: Object.keys(payload ?? {}),
         error: executionResult.error,
         latencyMs: Date.now() - startedAt,
       });
@@ -121,6 +125,8 @@ export class CreateSessionAction implements Action<CreateSessionPayload> {
       const errorCode = this.errorMapper(error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       context.logger?.error('action.create_session.exception', {
+        requestedSessionId: payload.sessionId,
+        payloadKeys: Object.keys(payload ?? {}),
         error: errorMessage,
         errorCode,
         latencyMs: Date.now() - startedAt,

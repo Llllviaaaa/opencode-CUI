@@ -44,21 +44,6 @@ function redact(value: unknown): unknown {
   return output;
 }
 
-function summarize(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return { type: 'array', length: value.length };
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  const keys = Object.keys(value);
-  return {
-    type: 'object',
-    keys,
-    size: keys.length,
-  };
-}
-
 function getAppLog(client: unknown): AppLogFn | null {
   if (!isRecord(client)) {
     return null;
@@ -118,7 +103,7 @@ export class AppLogger implements BridgeLogger {
       ...this.baseExtra,
       ...(extra || {}),
     };
-    const payload = redact(enriched);
+    const payload = redact(enriched) as Record<string, unknown>;
 
     if (!this.appLog) {
       if (this.debugEnabled) {

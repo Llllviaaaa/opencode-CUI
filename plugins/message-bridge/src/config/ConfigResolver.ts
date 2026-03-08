@@ -2,13 +2,16 @@ import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { promises } from 'fs';
 import { BridgeConfig, DEFAULT_EVENT_ALLOWLIST } from '../types';
+import type { BridgeLogger } from '../runtime/AppLogger';
 import { JsoncParser } from './JsoncParser';
 
 export class ConfigResolver {
   private readonly jsoncParser: JsoncParser;
+  private readonly logger?: BridgeLogger;
 
-  constructor() {
+  constructor(logger?: BridgeLogger) {
     this.jsoncParser = new JsoncParser();
+    this.logger = logger;
   }
 
   async resolveConfig(workspacePath?: string): Promise<BridgeConfig> {
@@ -45,21 +48,30 @@ export class ConfigResolver {
 
     let config: Partial<BridgeConfig> = { ...defaultConfig };
     const sources: string[] = ['default'];
+    const workspaceRoot = workspacePath ?? process.cwd();
+    this.logger?.info('config.resolve.started', { workspacePath: workspaceRoot });
 
     const userConfigPath = join(homedir(), '.config', 'opencode', 'message-bridge.jsonc');
     const userConfig = await this.loadConfigFile(userConfigPath);
     if (userConfig) {
       config = this.mergeConfig(config, userConfig);
       sources.push(`user:${userConfigPath}`);
+      this.logger?.info('config.source.loaded', {
+        source: 'user',
+        path: userConfigPath,
+      });
     }
 
-    const workspaceRoot = workspacePath ?? process.cwd();
     const projectConfigPath = await this.findProjectConfig(workspaceRoot);
     if (projectConfigPath) {
       const projectConfig = await this.loadConfigFile(projectConfigPath);
       if (projectConfig) {
         config = this.mergeConfig(config, projectConfig);
         sources.push(`project:${projectConfigPath}`);
+        this.logger?.info('config.source.loaded', {
+          source: 'project',
+          path: projectConfigPath,
+        });
       }
     }
 
@@ -67,11 +79,21 @@ export class ConfigResolver {
     if (Object.keys(envConfig).length > 0) {
       config = this.mergeConfig(config, envConfig);
       sources.push('env');
+      this.logger?.info('config.source.loaded', {
+        source: 'env',
+        overrideCount: Object.keys(envConfig).length,
+      });
     }
 
-    console.log(`[message-bridge] Config sources: ${sources.join(' -> ')}`);
-
-    return this.normalizeConfig(config as BridgeConfig);
+    const normalized = this.normalizeConfig(config as BridgeConfig);
+    this.logger?.info('config.resolve.completed', {
+      workspacePath: workspaceRoot,
+      sources,
+      allowlistSize: normalized.events.allowlist.length,
+      debugEnabled: !!normalized.debug,
+      projectConfigPath,
+    });
+    return normalized;
   }
 
   private async loadConfigFile(filePath: string): Promise<Partial<BridgeConfig> | null> {
@@ -81,6 +103,10 @@ export class ConfigResolver {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return null;
       }
+      this.logger?.error('config.source.load_failed', {
+        path: filePath,
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
   }

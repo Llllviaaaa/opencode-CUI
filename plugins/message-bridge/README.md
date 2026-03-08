@@ -159,9 +159,8 @@ The plugin uses the injected OpenCode `client` from the plugin runtime and does 
 The plugin outputs configuration loading information to help diagnose issues:
 
 ```
-[message-bridge] Config sources: default -> user:/path -> project:/path -> env
-[message-bridge] Configuration validation failed:
-  [MISSING_REQUIRED] auth.ak: auth.ak is required
+[message-bridge] config.resolve.completed { sources: ['default', 'project:/path', 'env'], ... }
+[message-bridge] config.validation.failed { errorCount: 1, errors: [{ path: 'auth.ak', code: 'MISSING_REQUIRED', ... }] }
 ```
 
 ### Structured Logging
@@ -170,7 +169,8 @@ This plugin now emits key-chain logs via OpenCode client API `client.app.log()` 
 
 - Service name is fixed as `message-bridge`
 - Levels: `debug`, `info`, `warn`, `error`
-- `BRIDGE_DEBUG=true` adds richer `extra` payload fields (with sensitive keys redacted)
+- Logs always include the full redacted `extra` payload
+- `BRIDGE_DEBUG=true` only enables local debug hints when log delivery is unavailable or fails
 - Log delivery failures never block bridge traffic
 - Detailed reference (levels/fields/triggers/sequence diagrams): `docs/operations/logging-reference.md`
 
@@ -204,7 +204,7 @@ npm run test:coverage
 # One-click local debug flow (mock gateway + opencode + plugin)
 npm run debug:e2e
 
-# Fetch logs from OpenCode database for troubleshooting
+# Fetch logs from OpenCode log files for troubleshooting
 # Note: use -- before script arguments
 npm run logs:fetch -- --since "1 hour ago" --level error
 ```
@@ -233,7 +233,7 @@ Useful environment variables:
 - `MB_OPENCODE_PORT=4096`: override OpenCode port
 - `MB_GATEWAY_PORT=8081`: override mock gateway port
 - `MB_LOG_LEVEL=DEBUG`: OpenCode log level
-- `BRIDGE_DEBUG=true`: include richer bridge log `extra` fields
+- `BRIDGE_DEBUG=true`: enable local debug hints for log fallback / send-failed cases
 
 ### Coverage Requirements
 
