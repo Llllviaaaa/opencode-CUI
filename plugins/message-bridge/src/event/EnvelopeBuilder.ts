@@ -1,14 +1,15 @@
 import { randomUUID } from 'crypto';
+import { PROTOCOL_VERSION, type MessageSource } from '../types';
 
 export interface Envelope {
   version: string;
   messageId: string;
-  timestamp: number;
-  source: string;
+  timestamp: string;
+  source: MessageSource;
   agentId: string;
   sessionId?: string;
   sequenceNumber: number;
-  sequenceScope: 'session' | 'global';
+  sequenceScope: 'session' | 'agent';
 }
 
 export class EnvelopeBuilder {
@@ -18,14 +19,14 @@ export class EnvelopeBuilder {
   
   build(sessionId?: string): Envelope {
     return {
-      version: '1.0',
+      version: PROTOCOL_VERSION,
       messageId: this.generateMessageId(),
-      timestamp: Date.now(),
-      source: 'message-bridge',
+      timestamp: new Date().toISOString(),
+      source: 'OPENCODE',
       agentId: this.agentId,
       sessionId,
       sequenceNumber: this.nextSequence(sessionId),
-      sequenceScope: sessionId ? 'session' : 'global',
+      sequenceScope: sessionId ? 'session' : 'agent',
     };
   }
   
@@ -34,7 +35,7 @@ export class EnvelopeBuilder {
   }
   
   private nextSequence(scope: string | undefined): number {
-    const key = scope ?? 'global';
+    const key = scope ?? 'agent';
     const current = this.sequenceCounters.get(key) ?? 0;
     const next = current + 1;
     this.sequenceCounters.set(key, next);
@@ -42,7 +43,7 @@ export class EnvelopeBuilder {
   }
   
   resetSequence(scope: string | undefined): void {
-    const key = scope ?? 'global';
+    const key = scope ?? 'agent';
     this.sequenceCounters.delete(key);
   }
 }

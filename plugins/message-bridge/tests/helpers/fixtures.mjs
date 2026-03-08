@@ -14,10 +14,10 @@ export function generateTestId(prefix = 'test') {
  */
 export function createEnvelope(overrides = {}) {
   return {
-    version: '1.0',
+    version: '1.0.0',
     messageId: crypto.randomUUID(),
-    timestamp: Date.now(),
-    source: 'message-bridge',
+    timestamp: new Date().toISOString(),
+    source: 'OPENCODE',
     agentId: overrides.agentId || 'bridge-test-001',
     sessionId: overrides.sessionId || null,
     sequenceNumber: overrides.sequenceNumber || 1,
