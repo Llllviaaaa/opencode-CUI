@@ -152,6 +152,26 @@ class GatewayRelayServiceTest {
     }
 
     @Test
+    @DisplayName("tool_event with toolSessionId resolves via DB lookup")
+    void toolEventLooksUpWelinkSessionId() {
+        SkillSession session = new SkillSession();
+        session.setId(42L);
+        when(sessionService.findByToolSessionId("ts-abc")).thenReturn(session);
+        when(translator.translate(any())).thenReturn(StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA)
+                .partId("part-1")
+                .content("hello")
+                .build());
+
+        // Message has toolSessionId but NO sessionId
+        String msg = "{\"type\":\"tool_event\",\"toolSessionId\":\"ts-abc\",\"event\":{\"data\":\"hello\"}}";
+        service.handleGatewayMessage(msg);
+
+        verify(sessionService).findByToolSessionId("ts-abc");
+        verify(redisMessageBroker).publishToSession(eq("42"), contains("text.delta"));
+    }
+
+    @Test
     @DisplayName("unknown type logs warning without errors")
     void unknownTypeLogsWarning() {
         String msg = "{\"type\":\"unknown_type\",\"sessionId\":\"42\"}";

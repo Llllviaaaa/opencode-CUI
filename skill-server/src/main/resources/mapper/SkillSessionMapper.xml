@@ -66,6 +66,11 @@
         WHERE agent_id = #{ak}
     </select>
 
+    <select id="findByToolSessionId" resultMap="SkillSessionResultMap">
+        <include refid="selectAllColumns"/>
+        WHERE tool_session_id = #{toolSessionId}
+    </select>
+
     <select id="findByStatus" resultMap="SkillSessionResultMap">
         <include refid="selectAllColumns"/>
         WHERE status = #{status}

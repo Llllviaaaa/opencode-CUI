@@ -206,34 +206,14 @@ public class GatewayRelayService {
         }
 
         String type = node.path("type").asText("");
-        String sessionId = node.path("sessionId").asText(null);
         String agentId = node.path("agentId").asText(null);
+
+        // Resolve welinkSessionId: prefer explicit sessionId, fallback to toolSessionId
+        // DB lookup
+        String sessionId = resolveSessionId(node);
 
         // Trace: log key fields for full-chain debugging
         log.debug("Gateway message dispatch: type={}, sessionId={}, agentId={}", type, sessionId, agentId);
-
-        // Extract envelope metadata if present
-        JsonNode envelopeNode = node.path("envelope");
-        if (!envelopeNode.isMissingNode()) {
-            Long sequenceNumber = envelopeNode.path("sequenceNumber").asLong(0L);
-            String messageId = envelopeNode.path("messageId").asText(null);
-            String source = envelopeNode.path("source").asText("UNKNOWN");
-            String envelopeSessionId = envelopeNode.path("sessionId").asText(null);
-
-            log.debug("Received enveloped message: type={}, sessionId={}, messageId={}, seq={}, source={}",
-                    type, sessionId, messageId, sequenceNumber, source);
-
-            // Pass sequence number to SequenceTracker for gap detection
-            String effectiveSessionId = envelopeSessionId != null ? envelopeSessionId : sessionId;
-            if (effectiveSessionId != null && sequenceNumber > 0) {
-                String action = sequenceTracker.validateSequence(effectiveSessionId, sequenceNumber);
-                if ("reconnect".equals(action)) {
-                    log.error("Large sequence gap detected for session {}, seq={}", effectiveSessionId, sequenceNumber);
-                } else if ("request_recovery".equals(action)) {
-                    log.warn("Medium sequence gap detected for session {}, seq={}", effectiveSessionId, sequenceNumber);
-                }
-            }
-        }
 
         switch (type) {
             case "tool_event" -> handleToolEvent(sessionId, node);
@@ -245,6 +225,39 @@ public class GatewayRelayService {
             case "permission_request" -> handlePermissionRequest(sessionId, node);
             default -> log.warn("Unknown gateway message type: {}", type);
         }
+    }
+
+    /**
+     * Resolve the welink session ID from a gateway message.
+     * Strategy:
+     * 1. If the message contains a "sessionId" field, use it directly (backward
+     * compatible)
+     * 2. Otherwise, extract "toolSessionId" and look up the DB to find the welink
+     * session
+     */
+    private String resolveSessionId(JsonNode node) {
+        String sessionId = node.path("sessionId").asText(null);
+        if (sessionId != null) {
+            return sessionId;
+        }
+
+        // Fallback: resolve via toolSessionId → DB lookup
+        String toolSessionId = node.path("toolSessionId").asText(null);
+        if (toolSessionId != null) {
+            try {
+                SkillSession session = sessionService.findByToolSessionId(toolSessionId);
+                if (session != null) {
+                    log.debug("Resolved toolSessionId={} → welinkSessionId={}", toolSessionId, session.getId());
+                    return session.getId().toString();
+                } else {
+                    log.warn("No session found for toolSessionId={}", toolSessionId);
+                }
+            } catch (Exception e) {
+                log.error("Failed to resolve toolSessionId={}: {}", toolSessionId, e.getMessage());
+            }
+        }
+
+        return null;
     }
 
     // ==================== Message Handlers ====================

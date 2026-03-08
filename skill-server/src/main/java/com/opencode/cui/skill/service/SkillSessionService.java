@@ -117,6 +117,15 @@ public class SkillSessionService {
     }
 
     /**
+     * Find a session by its OpenCode tool session ID.
+     * Used to route upstream messages from Gateway to the correct welink session.
+     */
+    @Transactional(readOnly = true)
+    public SkillSession findByToolSessionId(String toolSessionId) {
+        return sessionRepository.findByToolSessionId(toolSessionId);
+    }
+
+    /**
      * Find sessions by status (used at startup for Redis channel recovery).
      */
     @Transactional(readOnly = true)

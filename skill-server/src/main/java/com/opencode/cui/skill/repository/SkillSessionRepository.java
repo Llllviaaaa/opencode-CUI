@@ -28,6 +28,8 @@ public interface SkillSessionRepository {
 
         List<SkillSession> findByAk(@Param("ak") String ak);
 
+        SkillSession findByToolSessionId(@Param("toolSessionId") String toolSessionId);
+
         List<SkillSession> findByStatus(@Param("status") String status);
 
         int insert(SkillSession session);
