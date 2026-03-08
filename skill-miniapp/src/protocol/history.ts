@@ -19,6 +19,9 @@ interface BackendMessagePart {
 
 interface BackendMessage {
   id?: string | number | null;
+  messageId?: string | null;
+  seq?: number | null;
+  messageSeq?: number | null;
   role?: string | null;
   content?: string | null;
   contentType?: string | null;
@@ -137,6 +140,7 @@ function normalizePart(raw: BackendMessagePart, index: number): MessagePart | nu
     case 'text':
       return {
         partId,
+        partSeq: raw.seq ?? undefined,
         type: 'text',
         content: raw.content ?? '',
         isStreaming: false,
@@ -145,6 +149,7 @@ function normalizePart(raw: BackendMessagePart, index: number): MessagePart | nu
     case 'reasoning':
       return {
         partId,
+        partSeq: raw.seq ?? undefined,
         type: 'thinking',
         content: raw.content ?? '',
         isStreaming: false,
@@ -155,6 +160,7 @@ function normalizePart(raw: BackendMessagePart, index: number): MessagePart | nu
         const questionFields = extractQuestionFields(toolInput);
         return {
           partId,
+          partSeq: raw.seq ?? undefined,
           type: 'question',
           content: raw.content ?? '',
           isStreaming: false,
@@ -168,6 +174,7 @@ function normalizePart(raw: BackendMessagePart, index: number): MessagePart | nu
 
       return {
         partId,
+        partSeq: raw.seq ?? undefined,
         type: 'tool',
         content: raw.toolError ?? raw.content ?? '',
         isStreaming: false,
@@ -183,6 +190,7 @@ function normalizePart(raw: BackendMessagePart, index: number): MessagePart | nu
     case 'file':
       return {
         partId,
+        partSeq: raw.seq ?? undefined,
         type: 'file',
         content: raw.content ?? '',
         isStreaming: false,
@@ -213,11 +221,14 @@ export function normalizeHistoryMessage(raw: BackendMessage): Message {
     .join('');
 
   return {
-    id: String(raw.id ?? `history_${Math.random().toString(36).slice(2)}`),
+    id: String(raw.messageId ?? raw.id ?? `history_${Math.random().toString(36).slice(2)}`),
     role: normalizeRole(raw.role),
     content: raw.content ?? derivedContent,
     contentType: normalizeContentType(raw.contentType),
     timestamp: normalizeTimestamp(raw.createdAt),
+    messageSeq: typeof raw.messageSeq === 'number'
+      ? raw.messageSeq
+      : (typeof raw.seq === 'number' ? raw.seq : undefined),
     meta: normalizeMeta(raw.meta),
     isStreaming: false,
     parts: parts.length > 0 ? parts : undefined,

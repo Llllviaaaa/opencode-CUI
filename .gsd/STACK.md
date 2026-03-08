@@ -4,129 +4,122 @@
 
 ## Runtime
 
-| Technology    | Version | Purpose                               |
-| ------------- | ------- | ------------------------------------- |
-| Java          | 21      | AI-Gateway + Skill Server 运行时      |
-| Node.js / Bun | —       | PC Agent (OpenCode Plugin 运行时)     |
-| Browser       | —       | Skill Miniapp + Test Simulator 运行时 |
+| Technology  | Version     | Purpose                                 |
+| ----------- | ----------- | --------------------------------------- |
+| Java        | 21          | AI-Gateway + Skill Server 后端          |
+| Spring Boot | 3.4.6       | 后端框架 (Web, WebSocket, Data)         |
+| TypeScript  | ~5.3–5.9    | PC Agent + 前端应用                     |
+| React       | 18.2 / 19.2 | Skill Miniapp / Test Simulator 前端框架 |
+| Vite        | 5.x / 7.x   | 前端构建工具                            |
+| Bun         | latest      | PC Agent TypeScript 运行时              |
+| Node.js     | LTS         | 前端开发与构建                          |
 
-## Frameworks
+## Backend Dependencies (Java/Maven)
 
-| Framework   | Version | Component                | Purpose              |
-| ----------- | ------- | ------------------------ | -------------------- |
-| Spring Boot | 3.4.6   | ai-gateway, skill-server | Web + WebSocket + DI |
-| React       | 18.2.0  | skill-miniapp            | 用户界面             |
-| React       | 19.2.0  | test-simulator           | 测试模拟器界面       |
-| Vite        | 5.0.0   | skill-miniapp            | 前端构建工具         |
-| Vite        | 7.3.1   | test-simulator           | 前端构建工具         |
+### AI-Gateway (`ai-gateway/`)
 
-## Production Dependencies
+| Package                        | Version   | Purpose                          |
+| ------------------------------ | --------- | -------------------------------- |
+| spring-boot-starter-web        | 3.4.6     | REST API 框架                    |
+| spring-boot-starter-websocket  | 3.4.6     | WebSocket 支持                   |
+| mybatis-spring-boot-starter    | 3.0.4     | ORM 数据库访问                   |
+| mysql-connector-j              | (managed) | MySQL JDBC 驱动                  |
+| spring-boot-starter-data-redis | 3.4.6     | Redis 客户端 (Lettuce)           |
+| jackson-databind               | (managed) | JSON 序列化                      |
+| lombok                         | (managed) | 代码生成 (getter/setter/builder) |
+| spring-boot-starter-test       | 3.4.6     | 测试框架 (JUnit 5)               |
 
-### AI-Gateway (Java)
+### Skill Server (`skill-server/`)
 
-| Package                        | Version   | Purpose                |
-| ------------------------------ | --------- | ---------------------- |
-| spring-boot-starter-web        | 3.4.6     | REST API               |
-| spring-boot-starter-websocket  | 3.4.6     | PCAgent WebSocket 端点 |
-| mybatis-spring-boot-starter    | 3.0.4     | MariaDB ORM            |
-| mariadb-java-client            | (managed) | MariaDB JDBC 驱动      |
-| spring-boot-starter-data-redis | 3.4.6     | Redis 多实例路由       |
-| jackson-databind               | (managed) | JSON 序列化            |
-| Java-WebSocket                 | 1.5.6     | Skill Server WS 客户端 |
-| lombok                         | (managed) | 代码生成               |
+| Package                        | Version   | Purpose                         |
+| ------------------------------ | --------- | ------------------------------- |
+| spring-boot-starter-web        | 3.4.6     | REST API 框架                   |
+| spring-boot-starter-websocket  | 3.4.6     | WebSocket 支持 (前端流推送)     |
+| mybatis-spring-boot-starter    | 3.0.4     | ORM 数据库访问                  |
+| mysql-connector-j              | (managed) | MySQL JDBC 驱动                 |
+| spring-boot-starter-data-redis | 3.4.6     | Redis 客户端                    |
+| Java-WebSocket                 | 1.5.6     | WebSocket 客户端 (连接 Gateway) |
+| jackson-databind               | (managed) | JSON 序列化                     |
+| lombok                         | (managed) | 代码生成                        |
+| spring-boot-starter-test       | 3.4.6     | 测试框架                        |
 
-### Skill Server (Java)
+## Frontend Dependencies (TypeScript/npm)
 
-| Package                        | Version   | Purpose               |
-| ------------------------------ | --------- | --------------------- |
-| spring-boot-starter-web        | 3.4.6     | REST API              |
-| spring-boot-starter-websocket  | 3.4.6     | 流推送 + Gateway 连接 |
-| mybatis-spring-boot-starter    | 3.0.4     | MariaDB ORM           |
-| mariadb-java-client            | (managed) | MariaDB JDBC 驱动     |
-| spring-boot-starter-data-redis | 3.4.6     | Redis Pub/Sub         |
-| jackson-databind               | (managed) | JSON 序列化           |
-| lombok                         | (managed) | 代码生成              |
+### Skill Miniapp (`skill-miniapp/`)
 
-### Skill Miniapp (TypeScript)
+| Package              | Version | Purpose                       |
+| -------------------- | ------- | ----------------------------- |
+| react                | ^18.2.0 | UI 框架                       |
+| react-dom            | ^18.2.0 | React DOM 渲染                |
+| react-markdown       | ^9.0.0  | Markdown 渲染                 |
+| remark-gfm           | ^4.0.0  | GitHub Flavored Markdown 支持 |
+| shiki                | ^1.9.0  | 代码语法高亮                  |
+| typescript           | ^5.3.0  | TypeScript 编译               |
+| vite                 | ^5.0.0  | 构建工具                      |
+| @vitejs/plugin-react | ^4.2.0  | Vite React 插件               |
 
-| Package        | Version | Purpose           |
-| -------------- | ------- | ----------------- |
-| react          | ^18.2.0 | UI 框架           |
-| react-dom      | ^18.2.0 | React DOM 渲染    |
-| react-markdown | ^9.0.0  | Markdown 渲染     |
-| remark-gfm     | ^4.0.0  | GFM Markdown 扩展 |
-| shiki          | ^1.9.0  | 代码语法高亮      |
+### PC Agent (`src/main/pc-agent/`)
 
-### PC Agent (TypeScript)
+| Package          | Version | Purpose                 |
+| ---------------- | ------- | ----------------------- |
+| @opencode-ai/sdk | local   | OpenCode API 客户端 SDK |
 
-| Package           | Version | Purpose           |
-| ----------------- | ------- | ----------------- |
-| @opencode-ai/sdk  | (local) | OpenCode 插件 SDK |
-| @opencode-ai/core | (local) | OpenCode 核心类型 |
+### Test Simulator (`test-simulator/`)
 
-### Test Simulator (TypeScript)
-
-| Package                  | Version | Purpose        |
-| ------------------------ | ------- | -------------- |
-| react                    | ^19.2.0 | UI 框架        |
-| react-dom                | ^19.2.0 | React DOM 渲染 |
-| react-markdown           | ^10.1.0 | Markdown 渲染  |
-| react-syntax-highlighter | ^16.1.1 | 代码高亮       |
-
-## Development Dependencies
-
-### Java (共享)
-
-| Package                  | Version   | Purpose                        |
-| ------------------------ | --------- | ------------------------------ |
-| spring-boot-starter-test | 3.4.6     | JUnit 5 + MockMvc              |
-| maven-compiler-plugin    | (managed) | Java 21 编译 + Lombok 注解处理 |
-| spring-boot-maven-plugin | (managed) | Spring Boot 打包               |
-
-### Skill Miniapp
-
-| Package              | Version | Purpose           |
-| -------------------- | ------- | ----------------- |
-| typescript           | ^5.3.0  | 类型检查          |
-| vite                 | ^5.0.0  | 开发服务器 + 构建 |
-| @vitejs/plugin-react | ^4.2.0  | React 支持        |
-| @types/react         | ^18.2.0 | React 类型        |
-
-### Test Simulator
-
-| Package              | Version | Purpose           |
-| -------------------- | ------- | ----------------- |
-| typescript           | ~5.9.3  | 类型检查          |
-| vite                 | ^7.3.1  | 开发服务器 + 构建 |
-| @vitejs/plugin-react | ^5.1.1  | React 支持        |
-| eslint               | ^9.39.1 | 代码检查          |
-| typescript-eslint    | ^8.48.0 | TS ESLint         |
+| Package                  | Version | Purpose         |
+| ------------------------ | ------- | --------------- |
+| react                    | ^19.2.0 | UI 框架         |
+| react-dom                | ^19.2.0 | React DOM 渲染  |
+| react-markdown           | ^10.1.0 | Markdown 渲染   |
+| react-syntax-highlighter | ^16.1.1 | 代码高亮        |
+| typescript               | ~5.9.3  | TypeScript 编译 |
+| vite                     | ^7.3.1  | 构建工具        |
+| eslint                   | ^9.39.1 | 代码检查        |
 
 ## Infrastructure
 
-| Service  | Provider    | Purpose                         |
-| -------- | ----------- | ------------------------------- |
-| MariaDB  | Self-hosted | 认证凭据 + 会话/消息持久化      |
-| Redis    | Self-hosted | 多实例 Pub/Sub 路由 (Pattern 5) |
-| OpenCode | Desktop App | AI 编码助手 (插件宿主)          |
+| Service     | Provider        | Purpose                                     |
+| ----------- | --------------- | ------------------------------------------- |
+| MySQL       | Local/Cloud     | Agent 注册、AK/SK 凭证、会话/消息持久化     |
+| Redis       | Local/Cloud     | 跨实例 Pub/Sub 路由、会话缓存、Nonce 防重放 |
+| OpenCode    | Local (Desktop) | AI 编程助手本地实例                         |
+| IM Platform | External API    | 消息推送至外部 IM 系统                      |
 
 ## Configuration
 
-| Variable                | Purpose                       | Location                                 |
-| ----------------------- | ----------------------------- | ---------------------------------------- |
-| `GATEWAY_WS_URL`        | Gateway WebSocket 地址        | PC Agent AgentConfig                     |
-| `AGENT_AK` / `AGENT_SK` | AK/SK 认证凭据                | PC Agent 环境变量                        |
-| `VITE_GATEWAY_URL`      | Gateway WS 地址 (测试用)      | test-simulator .env                      |
-| `VITE_SKILL_SERVER_URL` | Skill Server WS 地址 (测试用) | test-simulator .env                      |
-| `VITE_AGENT_ID`         | 测试 Agent ID                 | test-simulator .env                      |
-| Spring properties       | DB/Redis/Server 配置          | application.yml / application.properties |
+### AI-Gateway (`:8081`)
 
-## Build & Run
+| Variable                      | Purpose                     | Required                     |
+| ----------------------------- | --------------------------- | ---------------------------- |
+| `MYSQL_HOST`                  | MySQL 主机                  | No (default: localhost)      |
+| `MYSQL_PORT`                  | MySQL 端口                  | No (default: 3306)           |
+| `MYSQL_AI_GATEWAY_DB`         | 数据库名                    | No (default: ai_gateway)     |
+| `GATEWAY_INSTANCE_ID`         | Gateway 实例 ID (多实例)    | No (default: hostname)       |
+| `SKILL_SERVER_INTERNAL_TOKEN` | Skill Server 内部认证 Token | No (default: sk-intl-...)    |
+| `OPENCODE_LOG_DIR`            | 日志根目录                  | No (default: D:/02_Lab/Logs) |
 
-| Component      | Build               | Run                   |
-| -------------- | ------------------- | --------------------- |
-| ai-gateway     | `mvn clean package` | `mvn spring-boot:run` |
-| skill-server   | `mvn clean package` | `mvn spring-boot:run` |
-| skill-miniapp  | `npm run build`     | `npm run dev`         |
-| test-simulator | `npm run build`     | `npm run dev`         |
-| pc-agent       | (OpenCode 自动加载) | (随 OpenCode 启动)    |
+### Skill Server (`:8082`)
+
+| Variable                      | Purpose               | Required                                            |
+| ----------------------------- | --------------------- | --------------------------------------------------- |
+| `MYSQL_HOST`                  | MySQL 主机            | No (default: localhost)                             |
+| `MYSQL_USERNAME`              | MySQL 用户名          | No (default: root)                                  |
+| `MYSQL_PASSWORD`              | MySQL 密码            | No (default: Root@123456)                           |
+| `MYSQL_SKILL_DB`              | 数据库名              | No (default: skill_db)                              |
+| `REDIS_HOST`                  | Redis 主机            | No (default: localhost)                             |
+| `REDIS_PORT`                  | Redis 端口            | No (default: 6379)                                  |
+| `SKILL_GATEWAY_WS_URL`        | Gateway WebSocket URL | No (default: ws://localhost:8081/ws/internal/skill) |
+| `SKILL_SERVER_INTERNAL_TOKEN` | 内部认证 Token        | No (default: sk-intl-...)                           |
+| `CORS_ORIGINS`                | CORS 允许域           | No (default: *)                                     |
+| `IM_API_URL`                  | IM 平台 API URL       | No (default: http://localhost:8080/api/im)          |
+| `OPENCODE_LOG_DIR`            | 日志根目录            | No (default: D:/02_Lab/Logs)                        |
+
+### Test Simulator
+
+| Variable                      | Purpose                    | Required                          |
+| ----------------------------- | -------------------------- | --------------------------------- |
+| `VITE_GATEWAY_URL`            | Gateway WebSocket URL      | No (default: ws://localhost:8080) |
+| `VITE_SKILL_SERVER_URL`       | Skill Server WebSocket URL | No (default: ws://localhost:9090) |
+| `VITE_AGENT_ID`               | 测试 Agent ID              | No (default: test-agent-001)      |
+| `VITE_RECONNECT_DELAY`        | 重连延迟 (ms)              | No (default: 1000)                |
+| `VITE_MAX_RECONNECT_ATTEMPTS` | 最大重连次数               | No (default: 5)                   |

@@ -11,6 +11,9 @@ public interface SkillMessageRepository {
 
     SkillMessage findById(@Param("id") Long id);
 
+    SkillMessage findBySessionIdAndMessageId(@Param("sessionId") Long sessionId,
+            @Param("messageId") String messageId);
+
     List<SkillMessage> findBySessionId(@Param("sessionId") Long sessionId,
             @Param("offset") int offset,
             @Param("limit") int limit);

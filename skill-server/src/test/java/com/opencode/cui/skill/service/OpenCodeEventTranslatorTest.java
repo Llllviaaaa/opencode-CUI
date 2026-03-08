@@ -48,7 +48,12 @@ class OpenCodeEventTranslatorTest {
         assertNotNull(seed);
         assertNotNull(translated);
         assertEquals(StreamMessage.Types.TEXT_DELTA, translated.getType());
+        assertEquals("sess-1", translated.getSessionId());
+        assertEquals("msg-1", translated.getMessageId());
+        assertEquals("msg-1", translated.getSourceMessageId());
         assertEquals("part-1", translated.getPartId());
+        assertEquals(1, translated.getPartSeq());
+        assertEquals("assistant", translated.getRole());
         assertEquals("hello", translated.getContent());
     }
 
@@ -87,7 +92,61 @@ class OpenCodeEventTranslatorTest {
 
         assertNotNull(translated);
         assertEquals(StreamMessage.Types.THINKING_DELTA, translated.getType());
+        assertEquals("sess-2", translated.getSessionId());
+        assertEquals("msg-2", translated.getMessageId());
         assertEquals("thinking", translated.getContent());
+    }
+
+    @Test
+    @DisplayName("user message role from message.updated suppresses echoed text parts")
+    void ignoresUserMessagePartsAfterRoleIsLearned() throws Exception {
+        var messageUpdated = objectMapper.readTree("""
+                {
+                  "type": "message.updated",
+                  "properties": {
+                    "sessionID": "sess-user",
+                    "messageID": "msg-user",
+                    "info": {
+                      "id": "msg-user",
+                      "role": "user"
+                    }
+                  }
+                }
+                """);
+        var partUpdated = objectMapper.readTree("""
+                {
+                  "type": "message.part.updated",
+                  "properties": {
+                    "part": {
+                      "id": "part-user",
+                      "sessionID": "sess-user",
+                      "messageID": "msg-user",
+                      "type": "text",
+                      "text": "user prompt"
+                    }
+                  }
+                }
+                """);
+        var partDelta = objectMapper.readTree("""
+                {
+                  "type": "message.part.delta",
+                  "properties": {
+                    "sessionID": "sess-user",
+                    "messageID": "msg-user",
+                    "partID": "part-user",
+                    "field": "text",
+                    "delta": "user prompt"
+                  }
+                }
+                """);
+
+        StreamMessage roleEvent = translator.translate(messageUpdated);
+        StreamMessage seededPart = translator.translate(partUpdated);
+        StreamMessage deltaEvent = translator.translate(partDelta);
+
+        assertNull(roleEvent);
+        assertNull(seededPart);
+        assertNull(deltaEvent);
     }
 
     @Test
@@ -116,6 +175,8 @@ class OpenCodeEventTranslatorTest {
 
         assertNotNull(translated);
         assertEquals(StreamMessage.Types.QUESTION, translated.getType());
+        assertEquals("question-1", translated.getPartId());
+        assertEquals("assistant", translated.getRole());
         assertEquals("Choose one", translated.getHeader());
         assertEquals("Which option?", translated.getQuestion());
         assertEquals(java.util.List.of("A", "B"), translated.getOptions());

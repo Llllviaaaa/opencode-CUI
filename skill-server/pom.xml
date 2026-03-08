@@ -67,6 +67,13 @@
             <artifactId>jackson-databind</artifactId>
         </dependency>
 
+        <!-- Java WebSocket Client (for GatewayWSClient) -->
+        <dependency>
+            <groupId>org.java-websocket</groupId>
+            <artifactId>Java-WebSocket</artifactId>
+            <version>1.5.6</version>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

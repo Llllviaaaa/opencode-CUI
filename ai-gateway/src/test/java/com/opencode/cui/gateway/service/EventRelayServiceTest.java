@@ -25,7 +25,7 @@ class EventRelayServiceTest {
     @Mock
     private WebSocketSession wsSession;
     @Mock
-    private EventRelayService.SkillServerRelayTarget skillServerRelay;
+    private SkillRelayService skillRelayService;
 
     private ObjectMapper objectMapper;
     private EventRelayService service;
@@ -33,7 +33,7 @@ class EventRelayServiceTest {
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        service = new EventRelayService(objectMapper, redisMessageBroker);
+        service = new EventRelayService(objectMapper, redisMessageBroker, skillRelayService);
     }
 
     // ==================== Agent Session Management ====================
@@ -88,25 +88,25 @@ class EventRelayServiceTest {
     // ==================== Upstream: PCAgent �?Skill Server ====================
 
     @Test
-    @DisplayName("relayToSkillServer attaches agentId and forwards via WS")
-    void relayToSkillServerAttachesAgentIdAndForwards() {
-        service.setSkillServerRelay(skillServerRelay);
+    @DisplayName("relayToSkillServer attaches agentId and routes to skill relay service")
+    void relayToSkillServerAttachesAgentIdAndRoutes() {
+        when(skillRelayService.relayToSkill(any())).thenReturn(true);
         GatewayMessage msg = GatewayMessage.builder().type("tool_event").sessionId("42").build();
 
         service.relayToSkillServer("agent-1", msg);
 
-        verify(skillServerRelay)
-                .sendToSkillServer(argThat(m -> "agent-1".equals(m.getAgentId()) && "tool_event".equals(m.getType())));
+        verify(skillRelayService)
+                .relayToSkill(argThat(m -> "agent-1".equals(m.getAgentId()) && "tool_event".equals(m.getType())));
     }
 
     @Test
-    @DisplayName("relayToSkillServer warns when relay target not set")
-    void relayToSkillServerWarnsWhenNoTarget() {
-        // Don't set relay target
+    @DisplayName("relayToSkillServer tolerates missing skill route")
+    void relayToSkillServerToleratesMissingRoute() {
+        when(skillRelayService.relayToSkill(any())).thenReturn(false);
         GatewayMessage msg = GatewayMessage.builder().type("tool_event").build();
 
-        // Should not throw
         service.relayToSkillServer("agent-1", msg);
+        verify(skillRelayService).relayToSkill(any());
         verifyNoInteractions(redisMessageBroker);
     }
 

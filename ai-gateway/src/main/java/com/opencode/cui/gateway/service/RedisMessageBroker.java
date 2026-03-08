@@ -11,7 +11,10 @@ import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
@@ -30,6 +33,12 @@ import java.util.function.Consumer;
 @Slf4j
 @Service
 public class RedisMessageBroker {
+
+    private static final String AGENT_CHANNEL_PREFIX = "agent:";
+    private static final String RELAY_CHANNEL_PREFIX = "gw:relay:";
+    private static final String SKILL_OWNER_KEY_PREFIX = "gw:skill:owner:";
+    private static final String SESSION_OWNER_KEY_PREFIX = "gw:session:skill-owner:";
+    private static final String SKILL_OWNERS_SET_KEY = "gw:skill:owners";
 
     private final StringRedisTemplate redisTemplate;
     private final RedisMessageListenerContainer listenerContainer;
@@ -53,7 +62,7 @@ public class RedisMessageBroker {
      * @param message the message to publish
      */
     public void publishToAgent(String agentId, GatewayMessage message) {
-        String channel = "agent:" + agentId;
+        String channel = AGENT_CHANNEL_PREFIX + agentId;
         publishMessage(channel, message);
     }
 
@@ -64,7 +73,7 @@ public class RedisMessageBroker {
      * @param handler callback to handle received messages
      */
     public void subscribeToAgent(String agentId, Consumer<GatewayMessage> handler) {
-        String channel = "agent:" + agentId;
+        String channel = AGENT_CHANNEL_PREFIX + agentId;
         subscribe(channel, handler);
     }
 
@@ -74,8 +83,66 @@ public class RedisMessageBroker {
      * @param agentId the agent ID to unsubscribe from
      */
     public void unsubscribeFromAgent(String agentId) {
-        String channel = "agent:" + agentId;
+        String channel = AGENT_CHANNEL_PREFIX + agentId;
         unsubscribe(channel);
+    }
+
+    public void publishToRelay(String instanceId, GatewayMessage message) {
+        publishMessage(relayChannel(instanceId), message);
+    }
+
+    public void subscribeToRelay(String instanceId, Consumer<GatewayMessage> handler) {
+        subscribe(relayChannel(instanceId), handler);
+    }
+
+    public void unsubscribeFromRelay(String instanceId) {
+        unsubscribe(relayChannel(instanceId));
+    }
+
+    public void refreshSkillOwner(String instanceId, Duration ttl) {
+        redisTemplate.opsForValue().set(skillOwnerKey(instanceId), "alive", ttl);
+        redisTemplate.opsForSet().add(SKILL_OWNERS_SET_KEY, instanceId);
+    }
+
+    public void removeSkillOwner(String instanceId) {
+        redisTemplate.delete(skillOwnerKey(instanceId));
+        redisTemplate.opsForSet().remove(SKILL_OWNERS_SET_KEY, instanceId);
+    }
+
+    public void setSessionOwner(String sessionId, String instanceId, Duration ttl) {
+        redisTemplate.opsForValue().set(sessionOwnerKey(sessionId), instanceId, ttl);
+    }
+
+    public String getSessionOwner(String sessionId) {
+        return redisTemplate.opsForValue().get(sessionOwnerKey(sessionId));
+    }
+
+    public void clearSessionOwner(String sessionId) {
+        redisTemplate.delete(sessionOwnerKey(sessionId));
+    }
+
+    public boolean hasActiveSkillOwner(String instanceId) {
+        return Boolean.TRUE.equals(redisTemplate.hasKey(skillOwnerKey(instanceId)));
+    }
+
+    public Set<String> getActiveSkillOwners() {
+        Set<String> owners = redisTemplate.opsForSet().members(SKILL_OWNERS_SET_KEY);
+        if (owners == null || owners.isEmpty()) {
+            return Set.of();
+        }
+
+        Set<String> activeOwners = new LinkedHashSet<>();
+        for (String owner : owners) {
+            if (owner == null || owner.isBlank()) {
+                continue;
+            }
+            if (hasActiveSkillOwner(owner)) {
+                activeOwners.add(owner);
+            } else {
+                redisTemplate.opsForSet().remove(SKILL_OWNERS_SET_KEY, owner);
+            }
+        }
+        return activeOwners;
     }
 
     // ========== Internal methods ==========
@@ -94,6 +161,8 @@ public class RedisMessageBroker {
     }
 
     private void subscribe(String channel, Consumer<GatewayMessage> handler) {
+        unsubscribe(channel);
+
         MessageListener listener = (Message message, byte[] pattern) -> {
             try {
                 String json = new String(message.getBody());
@@ -120,5 +189,17 @@ public class RedisMessageBroker {
             listenerContainer.removeMessageListener(listener);
             log.info("Unsubscribed from Redis channel: {}", channel);
         }
+    }
+
+    private String relayChannel(String instanceId) {
+        return RELAY_CHANNEL_PREFIX + instanceId;
+    }
+
+    private String skillOwnerKey(String instanceId) {
+        return SKILL_OWNER_KEY_PREFIX + instanceId;
+    }
+
+    private String sessionOwnerKey(String sessionId) {
+        return SESSION_OWNER_KEY_PREFIX + sessionId;
     }
 }

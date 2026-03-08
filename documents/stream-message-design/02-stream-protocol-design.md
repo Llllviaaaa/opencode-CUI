@@ -1,304 +1,441 @@
-# 前端 StreamMessage 协议设计
+# 前端 StreamMessage 协议设计（修订版）
 
-> 从 OpenCode 事件到前端友好的协议拆解方案
+> 目标：定义 `Skill Server -> Miniapp` 的实时流协议，使其能稳定支持消息分组、断线恢复、历史对齐和工具交互。
 
-## 一、设计原则
+## 一、设计结论
 
-```
-OpenCode Event (复杂、嵌套)          StreamMessage (扁平、语义化)
-┌─────────────────────────┐        ┌──────────────────────────┐
-│ message.part.updated    │        │ type: "text.delta"       │
-│   properties:           │   →    │ partId: "prt_xxx"        │
-│     part:               │ Skill  │ content: "你好"           │
-│       type: "text"      │ Server │                          │
-│       text: "你好..."   │        │ (前端收到就知道:          │
-│     delta: "你好"       │        │  追加文本到 prt_xxx 块)   │
-└─────────────────────────┘        └──────────────────────────┘
-```
+本协议不应只追踪 `partId`，还必须追踪“消息级身份”。
 
-| 原则            | 说明                                                             |
-| --------------- | ---------------------------------------------------------------- |
-| **语义化 type** | 前端看 type 就知道怎么渲染，不需要理解 OpenCode 内部概念         |
-| **partId 追踪** | 同一个 Part 的多次更新通过 partId 关联，前端按 partId 做增量更新 |
-| **扁平化字段**  | 所有关键信息提升到顶层，前端不需要嵌套解析                       |
-| **raw 透传**    | `raw` 字段可选携带原始事件，高级场景可用                         |
+- 必加：`messageId`
+  说明：同一条 assistant 气泡内的所有 `text/thinking/tool/question/file` 都必须归属到同一个 `messageId`
+- 必加：`messageSeq`
+  说明：表示该消息在当前会话中的稳定顺序，用于历史消息和实时流对齐
+- 建议加：`role`
+  说明：避免前端把所有实时流都硬编码成 `assistant`
+- 保留：`seq`
+  说明：这里的 `seq` 表示“传输序号”，只负责 WebSocket 排序、去重、丢包检测，不等价于消息顺序
+- 建议加：`sessionId`
+  说明：虽然当前是单会话 WebSocket，但日志、抓包、恢复和未来多路复用都需要
+- 建议加：`emittedAt`
+  说明：便于重放、排障、跨端比对
 
----
+最终结论：协议至少应同时有两层顺序字段。
 
-## 二、消息类型一览
-
-### 内容类（渲染到消息气泡内）
-
-| type             | 触发源                       | 关键字段                                                        | 前端行为                 |
-| ---------------- | ---------------------------- | --------------------------------------------------------------- | ------------------------ |
-| `text.delta`     | TextPart + delta             | `partId, content`                                               | 追加文本到指定块（流式） |
-| `text.done`      | TextPart 无 delta            | `partId, content`                                               | 替换/标记块完成          |
-| `thinking.delta` | ReasoningPart + delta        | `partId, content`                                               | 追加到思维链块           |
-| `thinking.done`  | ReasoningPart 无 delta       | `partId, content`                                               | 标记思维链完成           |
-| `tool.update`    | ToolPart (非 question)       | `partId, toolName, toolCallId, status, input?, output?, error?` | 更新工具卡片状态         |
-| `question`       | ToolPart (question, running) | `partId, toolCallId, header, question, options`                 | 渲染问答 UI              |
-| `file`           | FilePart                     | `partId, mime, filename, url`                                   | 展示文件/图片            |
-
-### 状态类（更新状态指示器）
-
-| type             | 触发源                        | 关键字段               | 前端行为             |
-| ---------------- | ----------------------------- | ---------------------- | -------------------- |
-| `step.start`     | StepStartPart                 | —                      | 显示 "思考中..."     |
-| `step.done`      | StepFinishPart                | `tokens, cost, reason` | 隐藏思考中，显示统计 |
-| `session.status` | session.status / session.idle | `status: busy/idle`    | 更新状态指示器       |
-| `session.title`  | session.updated               | `title`                | 更新标题栏           |
-| `session.error`  | session.error                 | `error`                | 显示错误提示         |
-
-### 交互类（需要用户操作）
-
-| type               | 触发源             | 关键字段                                  | 前端行为 |
-| ------------------ | ------------------ | ----------------------------------------- | -------- |
-| `permission.ask`   | permission.updated | `permissionId, permType, title, metadata` | 审批弹窗 |
-| `permission.reply` | permission.replied | `permissionId, response`                  | 关闭弹窗 |
-
-### 系统类
-
-| type            | 触发源        | 前端行为 |
-| --------------- | ------------- | -------- |
-| `agent.online`  | agent_online  | 显示在线 |
-| `agent.offline` | agent_offline | 显示离线 |
-| `error`         | tool_error    | 错误提示 |
+- `seq`: 传输顺序
+- `messageSeq`: 会话内消息顺序
 
 ---
 
-## 三、TypeScript 类型定义
+## 二、字段分层
 
-```typescript
-/** Skill Server → 前端 WebSocket 消息 */
-interface StreamMessage {
-  // ─── 必填 ───
-  type: StreamMessageType
-  seq: number              // 序列号（用于排序和丢失检测）
+### 2.1 传输层公共字段
 
-  // ─── 内容类字段（按 type 选填）───
-  partId?: string          // Part 唯一 ID（text/thinking/tool/question/file）
-  content?: string         // 文本内容（text.delta/text.done/thinking.*）
+所有 StreamMessage 都应具备以下字段：
 
-  // ─── 工具类字段 ───
-  toolName?: string        // 工具名：bash/edit/question...
-  toolCallId?: string      // 工具调用 ID
-  status?: string          // 工具状态：pending/running/completed/error
-  input?: object           // 工具输入参数
-  output?: string          // 工具输出结果
-  title?: string           // 工具/权限标题
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `type` | `StreamMessageType` | 是 | 语义化事件类型 |
+| `seq` | `number` | 是 | 传输序号，按 WebSocket 推送顺序单调递增 |
+| `sessionId` | `string` | 是 | Skill 会话 ID |
+| `emittedAt` | `string` | 是 | 事件发出时间，ISO-8601 |
+| `raw` | `object` | 否 | 原始 OpenCode 事件，用于高级调试 |
 
-  // ─── question 专用 ───
-  header?: string          // 问题标题
-  question?: string        // 问题文本
-  options?: string[]       // 选项列表
+### 2.2 消息层公共字段
 
-  // ─── 权限类字段 ───
-  permissionId?: string
-  permType?: string        // bash/file 等
-  metadata?: object
+所有“属于某条消息气泡”的事件都应具备以下字段：
 
-  // ─── 统计类字段 ───
-  tokens?: { input: number, output: number, reasoning: number,
-             cache: { read: number, write: number } }
-  cost?: number
-  reason?: string          // 完成原因
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `messageId` | `string` | 是 | Skill Server 分配的稳定消息 ID |
+| `messageSeq` | `number` | 是 | 该消息在当前会话中的稳定顺序 |
+| `role` | `'user' \| 'assistant' \| 'system' \| 'tool'` | 是 | 当前消息角色 |
+| `sourceMessageId` | `string` | 否 | 上游 OpenCode `messageID`，用于追踪源事件 |
 
-  // ─── 错误 ───
-  error?: string
+说明：
 
-  // ─── 透传 ───
-  raw?: object             // 原始 OpenCode 事件（可选）
-}
+- `messageId` 不应依赖临时前端状态推断
+- `messageId` 必须在同一条消息生命周期内保持不变
+- 历史消息 API 返回的消息 ID 应与实时流里的 `messageId` 对齐
+
+### 2.3 Part 层字段
+
+所有“属于某条消息中的某个部件”的事件都应具备以下字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `partId` | `string` | 是 | Part 唯一 ID |
+| `partSeq` | `number` | 否 | Part 在消息内的稳定顺序 |
+
+说明：
+
+- `partId` 负责同一 Part 的增量更新
+- `partSeq` 负责恢复、快照、历史回放时的排序稳定性
+
+---
+
+## 三、消息类型
+
+### 3.1 内容类
+
+这些事件会渲染到聊天气泡内部，必须带 `messageId/messageSeq/role`。
+
+| type | 关键字段 | 说明 |
+| --- | --- | --- |
+| `text.delta` | `messageId, messageSeq, role, partId, content` | 文本流式追加 |
+| `text.done` | `messageId, messageSeq, role, partId, content` | 文本完成 |
+| `thinking.delta` | `messageId, messageSeq, role, partId, content` | 思维链流式追加 |
+| `thinking.done` | `messageId, messageSeq, role, partId, content` | 思维链完成 |
+| `tool.update` | `messageId, messageSeq, role, partId, toolName, toolCallId, status` | 工具状态更新 |
+| `question` | `messageId, messageSeq, role, partId, toolCallId, header, question, options` | question 工具的交互问题 |
+| `file` | `messageId, messageSeq, role, partId, fileName, fileUrl, fileMime` | 文件或图片附件 |
+
+### 3.2 状态类
+
+这些事件通常不直接形成一个新气泡，但可能从属于某条消息。
+
+| type | 关键字段 | 说明 |
+| --- | --- | --- |
+| `step.start` | `messageId, messageSeq, role` | 当前消息开始执行某个推理步骤 |
+| `step.done` | `messageId, messageSeq, role, tokens, cost, reason` | 当前消息步骤完成 |
+| `session.status` | `sessionStatus` | 会话状态，统一使用 `sessionStatus`，不要再用通用 `status` |
+| `session.title` | `title` | 会话标题变化 |
+| `session.error` | `error` | 会话级错误 |
+
+### 3.3 交互类
+
+| type | 关键字段 | 说明 |
+| --- | --- | --- |
+| `permission.ask` | `messageId, messageSeq, role, permissionId, permType, title, metadata` | 权限请求 |
+| `permission.reply` | `messageId, messageSeq, role, permissionId, response` | 权限响应结果 |
+
+说明：
+
+- `permission.reply` 是正式协议类型
+- Miniapp 类型定义不得再写成 `permission.result`
+
+### 3.4 系统类
+
+| type | 关键字段 | 说明 |
+| --- | --- | --- |
+| `agent.online` | - | 关联 Agent 在线 |
+| `agent.offline` | - | 关联 Agent 离线 |
+| `error` | `error` | 非会话结构化错误 |
+
+### 3.5 恢复类
+
+这两个类型应被正式纳入协议，而不是只存在于恢复设计文档中。
+
+| type | 关键字段 | 说明 |
+| --- | --- | --- |
+| `snapshot` | `messages` | 当前会话的已完成消息快照 |
+| `streaming` | `sessionStatus, messageId?, messageSeq?, role?, parts` | 当前会话仍在进行中的流式消息 |
+
+---
+
+## 四、TypeScript 类型定义
+
+```ts
+type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
 type StreamMessageType =
-  | 'text.delta' | 'text.done'
-  | 'thinking.delta' | 'thinking.done'
-  | 'tool.update' | 'question' | 'file'
-  | 'step.start' | 'step.done'
-  | 'session.status' | 'session.title' | 'session.error'
-  | 'permission.ask' | 'permission.reply'
-  | 'agent.online' | 'agent.offline' | 'error'
-```
+  | 'text.delta'
+  | 'text.done'
+  | 'thinking.delta'
+  | 'thinking.done'
+  | 'tool.update'
+  | 'question'
+  | 'file'
+  | 'step.start'
+  | 'step.done'
+  | 'session.status'
+  | 'session.title'
+  | 'session.error'
+  | 'permission.ask'
+  | 'permission.reply'
+  | 'agent.online'
+  | 'agent.offline'
+  | 'error'
+  | 'snapshot'
+  | 'streaming';
 
----
-
-## 四、一次完整对话的事件时序
-
-```
-用户发送 "帮我创建一个 React 项目"
-
-时间  OpenCode 事件                              → StreamMessage
-─────────────────────────────────────────────────────────────────
-T1    session.status {busy}                     → { type:"session.status", status:"busy" }
-T2    step-start                                → { type:"step.start" }
-T3    reasoning part (delta="分析需求...")        → { type:"thinking.delta", partId:"prt_1", content:"分析需求..." }
-T4    reasoning part (delta="需要用 create...")   → { type:"thinking.delta", partId:"prt_1", content:"需要用 create..." }
-T5    reasoning part (done)                     → { type:"thinking.done", partId:"prt_1", content:"全部思考文本" }
-T6    text part (delta="好的，")                 → { type:"text.delta", partId:"prt_2", content:"好的，" }
-T7    text part (delta="我来帮你创建")           → { type:"text.delta", partId:"prt_2", content:"我来帮你创建" }
-
-── AI 使用 question 工具提问 ──
-T8    tool part (question, pending)             → { type:"tool.update", partId:"prt_3", toolName:"question", status:"pending" }
-T9    tool part (question, running)             → { type:"question", partId:"prt_3", toolCallId:"call_1",
-                                                     header:"项目配置", question:"选择模板", options:["Vite","CRA","Next.js"] }
-      ← 前端渲染问答 UI，等待用户选择 →
-T10   用户选择 "Vite"                           → (前端发送答案到 Skill Server)
-T11   tool part (question, completed)           → { type:"tool.update", partId:"prt_3", status:"completed", output:"Vite" }
-
-── AI 继续执行 ──
-T12   text part (delta="使用 Vite 模板")        → { type:"text.delta", partId:"prt_4", content:"使用 Vite 模板" }
-
-── 权限请求 ──
-T13   permission.updated                        → { type:"permission.ask", permissionId:"p_1", permType:"bash",
-                                                     title:"Run: npx create-vite", metadata:{command:"npx create-vite"} }
-      ← 前端弹出审批弹窗 →
-T14   用户批准                                  → (前端发送批准到 Skill Server)
-T15   permission.replied                        → { type:"permission.reply", permissionId:"p_1", response:"once" }
-
-── 工具执行 ──
-T16   tool part (bash, pending)                 → { type:"tool.update", partId:"prt_5", toolName:"bash", status:"pending" }
-T17   tool part (bash, running)                 → { type:"tool.update", partId:"prt_5", status:"running", title:"npx create-vite" }
-T18   tool part (bash, completed)               → { type:"tool.update", partId:"prt_5", status:"completed",
-                                                     output:"Done. Now run:\n  cd my-app\n  npm install" }
-── 完成 ──
-T19   text part (完整文本)                       → { type:"text.done", partId:"prt_6", content:"项目创建成功！" }
-T20   step-finish                               → { type:"step.done", tokens:{input:5000,...}, cost:0.01, reason:"stop" }
-T21   session.status {idle}                     → { type:"session.status", status:"idle" }
-T22   session.updated (title)                   → { type:"session.title", title:"Create React Vite project" }
-```
-
----
-
-## 五、Skill Server 拆解伪代码
-
-```java
-void handleToolEvent(String sessionId, JsonNode event) {
-    String eventType = event.path("type").asText();
-    JsonNode props = event.get("properties");
-
-    switch (eventType) {
-        case "message.part.updated" -> {
-            JsonNode part = props.get("part");
-            String delta = props.path("delta").asText(null);
-            String partType = part.path("type").asText();
-            String partId = part.path("id").asText();
-
-            switch (partType) {
-                case "text" -> {
-                    if (delta != null)
-                        broadcast(sessionId, "text.delta", Map.of("partId", partId, "content", delta));
-                    else
-                        broadcast(sessionId, "text.done", Map.of("partId", partId, "content", part.path("text").asText()));
-                }
-                case "reasoning" -> {
-                    if (delta != null)
-                        broadcast(sessionId, "thinking.delta", Map.of("partId", partId, "content", delta));
-                    else
-                        broadcast(sessionId, "thinking.done", Map.of("partId", partId, "content", part.path("text").asText()));
-                }
-                case "tool" -> {
-                    String toolName = part.path("tool").asText();
-                    JsonNode state = part.get("state");
-                    String status = state.path("status").asText();
-
-                    if ("question".equals(toolName) && "running".equals(status)) {
-                        JsonNode input = state.get("input");
-                        broadcast(sessionId, "question", Map.of(
-                            "partId", partId,
-                            "toolCallId", part.path("callID").asText(),
-                            "header", input.path("header").asText(""),
-                            "question", input.path("question").asText(""),
-                            "options", input.get("options")
-                        ));
-                    } else {
-                        broadcast(sessionId, "tool.update", Map.of(
-                            "partId", partId,
-                            "toolName", toolName,
-                            "toolCallId", part.path("callID").asText(),
-                            "status", status,
-                            "input", state.get("input"),
-                            "output", state.path("output").asText(null),
-                            "error", state.path("error").asText(null),
-                            "title", state.path("title").asText(null)
-                        ));
-                    }
-                }
-                case "step-start" -> broadcast(sessionId, "step.start", Map.of());
-                case "step-finish" -> broadcast(sessionId, "step.done", Map.of(
-                    "tokens", part.get("tokens"), "cost", part.path("cost").asDouble(), "reason", part.path("reason").asText()));
-                case "file" -> broadcast(sessionId, "file", Map.of(
-                    "partId", partId, "mime", part.path("mime").asText(), "filename", part.path("filename").asText(), "url", part.path("url").asText()));
-                default -> {} // snapshot/patch/agent/retry/compaction — 暂不处理
-            }
-        }
-        case "message.updated" -> {
-            if (props.path("info").has("finish"))
-                broadcast(sessionId, "step.done", Map.of());
-        }
-        case "session.status" -> broadcast(sessionId, "session.status", Map.of("status", props.path("status").path("type").asText()));
-        case "session.idle" -> broadcast(sessionId, "session.status", Map.of("status", "idle"));
-        case "session.updated" -> broadcast(sessionId, "session.title", Map.of("title", props.path("info").path("title").asText()));
-        case "session.error" -> broadcast(sessionId, "session.error", Map.of("error", props.path("error").toString()));
-        case "permission.updated" -> {
-            broadcast(sessionId, "permission.ask", Map.of(
-                "permissionId", props.path("id").asText(), "permType", props.path("type").asText(),
-                "title", props.path("title").asText(), "metadata", props.get("metadata")));
-        }
-        default -> {} // session.diff, file.edited, todo.updated 等 — 暂不处理
-    }
+interface BaseStreamMessage {
+  type: StreamMessageType;
+  seq: number;
+  sessionId: string;
+  emittedAt: string;
+  raw?: Record<string, unknown>;
 }
+
+interface MessageScopedFields {
+  messageId: string;
+  messageSeq: number;
+  role: MessageRole;
+  sourceMessageId?: string;
+}
+
+interface PartScopedFields extends MessageScopedFields {
+  partId: string;
+  partSeq?: number;
+}
+
+type TextDeltaMessage = BaseStreamMessage & PartScopedFields & {
+  type: 'text.delta';
+  content: string;
+};
+
+type TextDoneMessage = BaseStreamMessage & PartScopedFields & {
+  type: 'text.done';
+  content: string;
+};
+
+type ThinkingDeltaMessage = BaseStreamMessage & PartScopedFields & {
+  type: 'thinking.delta';
+  content: string;
+};
+
+type ThinkingDoneMessage = BaseStreamMessage & PartScopedFields & {
+  type: 'thinking.done';
+  content: string;
+};
+
+type ToolUpdateMessage = BaseStreamMessage & PartScopedFields & {
+  type: 'tool.update';
+  toolName: string;
+  toolCallId?: string;
+  status: 'pending' | 'running' | 'completed' | 'error';
+  input?: Record<string, unknown>;
+  output?: string;
+  error?: string;
+  title?: string;
+  metadata?: Record<string, unknown>;
+};
+
+type QuestionMessage = BaseStreamMessage & PartScopedFields & {
+  type: 'question';
+  toolName: 'question';
+  toolCallId?: string;
+  status: 'running';
+  header?: string;
+  question: string;
+  options?: string[];
+};
+
+type FileMessage = BaseStreamMessage & PartScopedFields & {
+  type: 'file';
+  fileName?: string;
+  fileUrl: string;
+  fileMime?: string;
+};
+
+type StepStartMessage = BaseStreamMessage & MessageScopedFields & {
+  type: 'step.start';
+};
+
+type StepDoneMessage = BaseStreamMessage & MessageScopedFields & {
+  type: 'step.done';
+  tokens?: {
+    input?: number;
+    output?: number;
+    reasoning?: number;
+    cache?: { read?: number; write?: number };
+  };
+  cost?: number;
+  reason?: string;
+};
+
+type SessionStatusMessage = BaseStreamMessage & {
+  type: 'session.status';
+  sessionStatus: 'busy' | 'idle' | 'retry' | 'completed';
+};
+
+type SessionTitleMessage = BaseStreamMessage & {
+  type: 'session.title';
+  title: string;
+};
+
+type SessionErrorMessage = BaseStreamMessage & {
+  type: 'session.error';
+  error: string;
+};
+
+type PermissionAskMessage = BaseStreamMessage & MessageScopedFields & {
+  type: 'permission.ask';
+  permissionId: string;
+  permType?: string;
+  title?: string;
+  metadata?: Record<string, unknown>;
+};
+
+type PermissionReplyMessage = BaseStreamMessage & MessageScopedFields & {
+  type: 'permission.reply';
+  permissionId: string;
+  response: string;
+};
+
+type SnapshotMessage = BaseStreamMessage & {
+  type: 'snapshot';
+  messages: Array<{
+    id: string;
+    seq: number;
+    role: MessageRole;
+    content: string;
+    contentType: 'plain' | 'markdown' | 'code';
+    createdAt?: string;
+    parts?: Array<Record<string, unknown>>;
+    meta?: Record<string, unknown>;
+  }>;
+};
+
+type StreamingMessage = BaseStreamMessage & {
+  type: 'streaming';
+  sessionStatus: 'busy' | 'idle';
+  messageId?: string;
+  messageSeq?: number;
+  role?: Extract<MessageRole, 'assistant' | 'tool' | 'system'>;
+  parts: Array<{
+    partId: string;
+    partSeq?: number;
+    type: 'text' | 'thinking' | 'tool' | 'question' | 'permission' | 'file';
+    content?: string;
+    toolName?: string;
+    toolCallId?: string;
+    status?: 'pending' | 'running' | 'completed' | 'error';
+    header?: string;
+    question?: string;
+    options?: string[];
+    fileName?: string;
+    fileUrl?: string;
+    fileMime?: string;
+    metadata?: Record<string, unknown>;
+  }>;
+};
+
+type StreamMessage =
+  | TextDeltaMessage
+  | TextDoneMessage
+  | ThinkingDeltaMessage
+  | ThinkingDoneMessage
+  | ToolUpdateMessage
+  | QuestionMessage
+  | FileMessage
+  | StepStartMessage
+  | StepDoneMessage
+  | SessionStatusMessage
+  | SessionTitleMessage
+  | SessionErrorMessage
+  | PermissionAskMessage
+  | PermissionReplyMessage
+  | SnapshotMessage
+  | StreamingMessage;
 ```
 
 ---
 
-## 六、前端处理逻辑
+## 五、字段命名约束
 
-```typescript
-function handleStreamMessage(msg: StreamMessage) {
-  switch (msg.type) {
-    case 'text.delta':
-      // 找到或创建 partId 对应的文本块，追加 content
-      appendToBlock(msg.partId, msg.content)
-      break
+### 5.1 `seq` 与 `messageSeq`
 
-    case 'text.done':
-      // 标记文本块完成
-      finalizeBlock(msg.partId, msg.content)
-      break
+- `seq`：传输顺序
+  用于 WebSocket 排序、幂等处理、断线恢复缺口检测
+- `messageSeq`：消息顺序
+  用于会话内消息排序，必须能与历史 API 对齐
 
-    case 'thinking.delta':
-      // 追加到折叠的思维链区域
-      appendToThinking(msg.partId, msg.content)
-      break
+禁止把这两者混用。
 
-    case 'tool.update':
-      // 更新工具卡片：显示工具名、状态、输入/输出
-      updateToolCard(msg.partId, msg.toolName, msg.status, msg.output)
-      break
+### 5.2 `status` 与 `sessionStatus`
 
-    case 'question':
-      // 渲染问答 UI：标题 + 问题 + 选项按钮 + 自由输入
-      showQuestion(msg.partId, msg.toolCallId, msg.header, msg.question, msg.options)
-      break
+- `status` 只用于工具状态，例如 `tool.update.status`
+- `sessionStatus` 只用于会话状态，例如 `session.status.sessionStatus`
 
-    case 'permission.ask':
-      // 弹出权限审批弹窗
-      showPermissionDialog(msg.permissionId, msg.title, msg.metadata)
-      break
+### 5.3 文件字段
 
-    case 'step.done':
-      // 显示 token 统计
-      showUsageStats(msg.tokens, msg.cost)
-      break
+`file` 类型必须使用：
 
-    case 'session.status':
-      // 更新状态指示器
-      updateStatus(msg.status)  // "busy" → 显示思考动画, "idle" → 隐藏
-      break
+- `fileName`
+- `fileUrl`
+- `fileMime`
 
-    case 'session.title':
-      updateTitle(msg.title)
-      break
-  }
-}
+不要再复用：
+
+- `title`
+- `content`
+- `metadata.mime`
+
+### 5.4 权限回复字段
+
+`permission.reply` 必须使用 `response`，例如：
+
+- `approved`
+- `rejected`
+- `once`
+- `always`
+
+---
+
+## 六、一次完整对话的推荐时序
+
+```text
+T1  session.status
+    { type:"session.status", seq:1, sessionId:"42", emittedAt:"...", sessionStatus:"busy" }
+
+T2  step.start
+    { type:"step.start", seq:2, sessionId:"42", emittedAt:"...", messageId:"m_2", messageSeq:2, role:"assistant" }
+
+T3  thinking.delta
+    { type:"thinking.delta", seq:3, sessionId:"42", emittedAt:"...", messageId:"m_2", messageSeq:2, role:"assistant", partId:"p_1", partSeq:1, content:"分析需求..." }
+
+T4  text.delta
+    { type:"text.delta", seq:4, sessionId:"42", emittedAt:"...", messageId:"m_2", messageSeq:2, role:"assistant", partId:"p_2", partSeq:2, content:"好的，" }
+
+T5  question
+    { type:"question", seq:5, sessionId:"42", emittedAt:"...", messageId:"m_2", messageSeq:2, role:"assistant", partId:"p_3", partSeq:3, toolName:"question", toolCallId:"call_1", status:"running", header:"项目配置", question:"选择模板", options:["Vite","CRA"] }
+
+T6  permission.ask
+    { type:"permission.ask", seq:6, sessionId:"42", emittedAt:"...", messageId:"m_2", messageSeq:2, role:"assistant", permissionId:"perm_1", permType:"bash", title:"Run create-vite", metadata:{ command:"npx create-vite" } }
+
+T7  text.done
+    { type:"text.done", seq:7, sessionId:"42", emittedAt:"...", messageId:"m_2", messageSeq:2, role:"assistant", partId:"p_4", partSeq:4, content:"项目创建成功" }
+
+T8  step.done
+    { type:"step.done", seq:8, sessionId:"42", emittedAt:"...", messageId:"m_2", messageSeq:2, role:"assistant", tokens:{ input:5000, output:200 }, cost:0.01, reason:"stop" }
+
+T9  session.status
+    { type:"session.status", seq:9, sessionId:"42", emittedAt:"...", sessionStatus:"idle" }
 ```
+
+---
+
+## 七、与当前实现的收口要求
+
+当前实现和文档至少要收口以下差异：
+
+- Miniapp 类型定义要补上：
+  - `session.title`
+  - `session.error`
+  - `permission.reply`
+- Miniapp 类型定义要移除：
+  - `permission.result`
+- 协议实现要补上：
+  - `messageId`
+  - `messageSeq`
+  - `role`
+  - `sessionId`
+  - `emittedAt`
+- `session.status` 统一使用 `sessionStatus`
+- `snapshot` 和 `streaming` 需要正式建型，不再作为文档外特殊包
+
+---
+
+## 八、最小落地顺序
+
+如果分阶段实施，建议顺序如下：
+
+1. 先补 `messageId/messageSeq/role`
+2. 再补 `sessionId/emittedAt`
+3. 再补 `snapshot/streaming` 的正式 schema
+4. 最后清理命名分叉：
+   - `permission.result -> permission.reply`
+   - `status -> sessionStatus`
+   - `file.title/content/metadata.mime -> fileName/fileUrl/fileMime`
+
+这四步完成后，Skill Server 和 Miniapp 的实时协议才能和历史消息模型稳定对齐。

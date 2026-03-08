@@ -25,14 +25,18 @@ public class SkillMessageService {
      * Also touches the parent session to refresh last_active_at.
      */
     @Transactional
-    public SkillMessage saveMessage(Long sessionId, SkillMessage.Role role, String content,
+    public SkillMessage saveMessage(Long sessionId, String messageId, SkillMessage.Role role, String content,
             SkillMessage.ContentType contentType, String meta) {
-        // Auto-increment seq within the session
         int nextSeq = messageRepository.findMaxSeqBySessionId(sessionId) + 1;
+        String effectiveMessageId = messageId != null && !messageId.isBlank()
+                ? messageId
+                : generateMessageId(sessionId, nextSeq);
 
         SkillMessage message = SkillMessage.builder()
+                .messageId(effectiveMessageId)
                 .sessionId(sessionId)
                 .seq(nextSeq)
+                .messageSeq(nextSeq)
                 .role(role)
                 .content(content)
                 .contentType(contentType != null ? contentType : SkillMessage.ContentType.MARKDOWN)
@@ -40,12 +44,21 @@ public class SkillMessageService {
                 .build();
 
         messageRepository.insert(message);
-
-        // Touch session to update last_active_at
         sessionService.touchSession(sessionId);
 
-        log.debug("Saved message: sessionId={}, seq={}, role={}", sessionId, nextSeq, role);
+        log.debug("Saved message: sessionId={}, messageId={}, seq={}, role={}",
+                sessionId, effectiveMessageId, nextSeq, role);
         return message;
+    }
+
+    /**
+     * Save a message with auto-incrementing seq per session.
+     * Also touches the parent session to refresh last_active_at.
+     */
+    @Transactional
+    public SkillMessage saveMessage(Long sessionId, SkillMessage.Role role, String content,
+            SkillMessage.ContentType contentType, String meta) {
+        return saveMessage(sessionId, null, role, content, contentType, meta);
     }
 
     /**
@@ -103,6 +116,14 @@ public class SkillMessageService {
         return messageRepository.countBySessionId(sessionId);
     }
 
+    @Transactional(readOnly = true)
+    public SkillMessage findBySessionIdAndMessageId(Long sessionId, String messageId) {
+        if (messageId == null || messageId.isBlank()) {
+            return null;
+        }
+        return messageRepository.findBySessionIdAndMessageId(sessionId, messageId);
+    }
+
     /**
      * Update token/cost stats for a message (called on step.done).
      */
@@ -120,5 +141,9 @@ public class SkillMessageService {
     public void markMessageFinished(Long messageId) {
         messageRepository.markFinished(messageId);
         log.debug("Marked message as finished: messageId={}", messageId);
+    }
+
+    private String generateMessageId(Long sessionId, int seq) {
+        return "msg_" + sessionId + "_" + seq;
     }
 }

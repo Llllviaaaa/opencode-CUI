@@ -177,6 +177,21 @@ export function getMessages(
   );
 }
 
+/** POST /api/skill/sessions/{id}/permissions/{permId} */
+export function replyPermission(
+  sessionId: string,
+  permissionId: string,
+  approved: boolean,
+): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(
+    `/api/skill/sessions/${sessionId}/permissions/${permissionId}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ approved }),
+    },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Send to IM
 // ---------------------------------------------------------------------------

@@ -17,8 +17,10 @@ import java.util.List;
 public class SkillMessageView {
 
     private Long id;
+    private String messageId;
     private Long sessionId;
     private Integer seq;
+    private Integer messageSeq;
     private SkillMessage.Role role;
     private String content;
     private SkillMessage.ContentType contentType;
@@ -29,8 +31,10 @@ public class SkillMessageView {
     public static SkillMessageView from(SkillMessage message, List<SkillMessagePart> parts) {
         return SkillMessageView.builder()
                 .id(message.getId())
+                .messageId(message.getMessageId())
                 .sessionId(message.getSessionId())
                 .seq(message.getSeq())
+                .messageSeq(message.getMessageSeq() != null ? message.getMessageSeq() : message.getSeq())
                 .role(message.getRole())
                 .content(message.getContent())
                 .contentType(message.getContentType())

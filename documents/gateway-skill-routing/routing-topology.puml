@@ -1,0 +1,76 @@
+@startuml
+title Gateway-Skill 多实例目标拓扑
+
+left to right direction
+skinparam componentStyle rectangle
+
+actor "终端用户" as User
+node "Browser / Miniapp" as Miniapp
+node "PC Agent" as PCAgent
+cloud "ALB\nwss://skill.gateway.ws-url" as ALB
+database "Redis 5.x" as Redis
+database "MySQL 5.7.x" as MySQL
+
+frame "Skill Server Cluster" {
+  component "Skill Server S1" as S1
+  component "Skill Server S2" as S2
+}
+
+frame "Gateway Cluster" {
+  component "Gateway G1\nagent owner gateway" as G1
+  component "Gateway G2\nskill owner gateway" as G2
+  component "Gateway G3\nskill owner gateway" as G3
+}
+
+User --> Miniapp
+Miniapp --> S1 : REST / WS
+Miniapp --> S2 : REST / WS
+
+PCAgent <--> G1 : WS /ws/agent
+
+S1 --> ALB : WS /ws/internal/skill
+S2 --> ALB : WS /ws/internal/skill
+ALB --> G2 : WebSocket target
+ALB --> G3 : WebSocket target
+
+G1 --> Redis : PUBLISH agent:{agentId}
+G2 --> Redis : SUBSCRIBE gw:relay:G2
+G3 --> Redis : SUBSCRIBE gw:relay:G3
+G1 --> Redis : GET/SET gw:session:skill-owner:{sessionId}
+G2 --> Redis : SETEX gw:skill:owner:G2
+G3 --> Redis : SETEX gw:skill:owner:G3
+
+S1 --> Redis : PUBLISH session:{sessionId}
+S2 --> Redis : SUBSCRIBE session:{sessionId}
+
+S1 --> MySQL : Session / Message 持久化
+S2 --> MySQL : Session / Message 持久化
+G1 --> MySQL : Agent Registry / Auth
+G2 --> MySQL : Agent Registry / Auth
+G3 --> MySQL : Agent Registry / Auth
+
+note right of Redis
+Channels:
+- agent:{agentId}
+- session:{sessionId}
+- gw:relay:{instanceId}
+
+Keys:
+- gw:skill:owner:{instanceId}
+- gw:session:skill-owner:{sessionId}
+- gw:skill:owners
+end note
+
+note bottom of G2
+本地状态：
+- local skill links
+- sessionId -> linkId
+end note
+
+note bottom of G1
+若本地无 skill link：
+通过 Redis 查 owner gateway，
+再 PUBLISH 到 gw:relay:{instanceId}
+end note
+
+@enduml

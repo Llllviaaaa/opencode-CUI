@@ -4,206 +4,183 @@
 
 ## Overview
 
-OpenCode CUI 是一个分布式对话式 AI 界面系统，将 OpenCode AI 编码助手的能力通过 IM 式界面暴露给用户。系统采用三层分布式架构：**PC Agent**（OpenCode 插件）↔ **AI-Gateway**（WebSocket 网关）↔ **Skill Server**（业务服务）↔ **Skill Miniapp**（用户前端），实现 AI 代理事件的实时双向中继与显示。
+OpenCode CUI 是一个**分布式对话式 AI 交互系统**，将本地运行的 AI 编程助手 (OpenCode) 通过 WebSocket 网关暴露为可远程访问的技能服务，并通过 IM 风格的前端界面提供交互能力。
+
+系统采用 **事件驱动 + WebSocket 双向通信** 架构，支持多实例部署和 AK/SK 安全认证。
 
 ## System Diagram
 
 ```
-┌─────────────────┐         ┌─────────────────────┐         ┌──────────────────┐         ┌─────────────────┐
-│  Skill Miniapp  │◄── WS ──┤    Skill Server      │◄── WS ──┤   AI-Gateway      │◄── WS ──┤   PC Agent       │
-│  (React/Vite)   │         │  (Spring Boot)       │         │  (Spring Boot)   │         │  (OpenCode Plugin│
-│                 │         │                      │         │                  │         │   TypeScript)    │
-│ • IM Chat UI    │         │ • Session管理         │         │ • AK/SK 认证      │         │ • 事件中继        │
-│ • Markdown渲染   │         │ • 消息持久化          │         │ • Agent注册       │         │ • 协议适配        │
-│ • 流式消息组装    │         │ • 协议翻译            │         │ • Redis路由       │         │ • 权限映射        │
-│ • 工具/权限卡片   │         │ • WebSocket推流       │         │ • 双向事件中继     │         │ • 健康检查        │
-└─────────────────┘         └──────────────────────┘         └──────────────────┘         └─────────────────┘
-         │                            │                             │                            │
-         │                     ┌──────┴──────┐               ┌─────┴─────┐                      │
-         │                     │  MariaDB    │               │  MariaDB  │                      │
-         │                     │  (持久化)    │               │  (认证)    │               ┌──────┴──────┐
-         │                     └──────┬──────┘               └─────┬─────┘               │  OpenCode   │
-         │                     ┌──────┴──────┐               ┌─────┴─────┐               │  (AI Agent) │
-         │                     │   Redis     │               │   Redis   │               └─────────────┘
-         │                     │  (Pub/Sub)  │               │  (Pub/Sub)│
-         │                     └─────────────┘               └───────────┘
-
-┌─────────────────┐
-│ Test Simulator   │  (独立 E2E 测试工具, React 19 + Vite 7)
-│ • Agent模拟      │
-│ • 场景回放        │
-│ • 指标监控        │
-└─────────────────┘
+┌─────────────────┐     WebSocket      ┌──────────────────┐     WebSocket      ┌─────────────────┐
+│                 │    (AK/SK Auth)     │                  │   (Internal Token) │                 │
+│    PC Agent     │◄──────────────────►│   AI-Gateway     │◄──────────────────►│  Skill Server   │
+│  (TypeScript)   │     :8081/ws/agent  │  (Spring Boot)   │  :8081/ws/skill    │ (Spring Boot)   │
+│                 │                     │     :8081        │                    │    :8082        │
+└────────┬────────┘                     └────────┬─────────┘                    └────────┬────────┘
+         │                                       │                                       │
+         │ OpenCode SDK                          │ MySQL + Redis                         │ MySQL + Redis
+         │                                       │                                       │
+┌────────▼────────┐                     ┌────────▼─────────┐               ┌──────────────▼───────┐
+│    OpenCode     │                     │  Agent Registry   │               │  Skill Miniapp       │
+│  (Local AI IDE) │                     │  AK/SK Store      │               │  (React + Vite)      │
+│                 │                     │  Event Routing     │               │  IM-style Chat UI    │
+└─────────────────┘                     └──────────────────┘               └──────────────────────┘
+                                                                                      │
+                                                                            ┌─────────▼──────────┐
+                                                                            │  Test Simulator     │
+                                                                            │  (React + Vite)     │
+                                                                            │  E2E Testing        │
+                                                                            └────────────────────┘
 ```
 
 ## Components
 
-### 1. PC Agent (`src/main/pc-agent/`)
-- **Purpose:** OpenCode 插件，运行在 OpenCode 桌面端内部，双向中继 AI 代理事件
+### AI-Gateway
+- **Purpose:** PC Agent 与 Skill Server 的 WebSocket 连接管理、AK/SK 认证、双向事件中继
+- **Location:** `ai-gateway/`
+- **Entry Point:** `GatewayApplication.java`
+- **Port:** 8081
+- **Key Classes:**
+  - `AgentWebSocketHandler` — PC Agent WebSocket 端点 (`/ws/agent`)
+  - `SkillWebSocketHandler` — Skill Server WebSocket 端点 (`/ws/internal/skill`)
+  - `AkSkAuthService` — AK/SK HMAC-SHA256 签名认证
+  - `AgentRegistryService` — Agent 连接注册与心跳管理
+  - `EventRelayService` — Agent ↔ Skill 双向事件中继
+  - `SkillRelayService` — Skill 路由与会话绑定
+  - `RedisMessageBroker` — Redis Pub/Sub 跨实例消息分发
+- **Dependencies:** Spring Boot, WebSocket, MyBatis, MySQL, Redis, Jackson, Lombok
+- **Dependents:** PC Agent, Skill Server
+
+---
+
+### Skill Server
+- **Purpose:** 会话管理、消息持久化、OpenCode 协议事件翻译、流式消息缓冲、IM 消息推送
+- **Location:** `skill-server/`
+- **Entry Point:** `SkillServerApplication.java`
+- **Port:** 8082
+- **Key Classes:**
+  - `SkillSessionService` / `SkillSessionController` — 会话 CRUD 与生命周期
+  - `SkillMessageService` / `SkillMessageController` — 消息查询与分页
+  - `MessagePersistenceService` — 消息与 Part 持久化到 MySQL
+  - `OpenCodeEventTranslator` — OpenCode 流式事件 → SkillMessage 结构化转换
+  - `StreamBufferService` — 流式消息实时缓冲与合并
+  - `SequenceTracker` — 消息序列号追踪保证有序
+  - `GatewayWSClient` — 主动连接 AI-Gateway 的 WebSocket 客户端
+  - `GatewayRelayService` — Gateway 上行/下行消息处理
+  - `SkillStreamHandler` — 前端 WebSocket 流式推送 `/ws/stream`
+  - `ImMessageService` — IM 平台消息推送
+  - `RedisMessageBroker` — Redis Pub/Sub 跨实例消息分发
+- **Dependencies:** Spring Boot, WebSocket, MyBatis, MySQL, Redis, Java-WebSocket, Jackson, Lombok
+- **Dependents:** Skill Miniapp, AI-Gateway
+
+---
+
+### PC Agent
+- **Purpose:** OpenCode 本地实例的网络插件，桥接 OpenCode SDK 与 AI-Gateway
 - **Location:** `src/main/pc-agent/`
-- **Technology:** TypeScript, `@opencode-ai/sdk`
-- **Key Files:**
-  - `EventRelay.ts` — 核心双向事件中继（412 行）
-  - `GatewayConnection.ts` — Gateway WebSocket 连接管理
-  - `AkSkAuth.ts` — AK/SK 认证签名
-  - `ProtocolAdapter.ts` — OpenCode 事件协议适配
-  - `EventFilter.ts` — 事件过滤（去噪）
-  - `PermissionMapper.ts` — 权限请求映射
+- **Runtime:** TypeScript (Bun)
+- **Key Modules:**
+  - `GatewayConnection.ts` — WebSocket 连接管理，自动重连
+  - `AkSkAuth.ts` — 客户端 AK/SK HMAC-SHA256 签名生成
+  - `EventRelay.ts` — OpenCode 事件 ↔ Gateway 消息双向转换
+  - `EventFilter.ts` — 敏感事件过滤
+  - `ProtocolAdapter.ts` — OpenCode 内部协议适配
+  - `PermissionMapper.ts` — 权限映射
   - `HealthChecker.ts` — 健康检查
   - `config/AgentConfig.ts` — 配置管理
-- **Dependencies:** `@opencode-ai/sdk`, `@opencode-ai/core`
-- **Dependents:** AI-Gateway (通过 WebSocket)
-- **Loading:** `.opencode/plugins/pc-agent.ts` re-exports plugin, OpenCode 自动加载
+- **Dependencies:** `@opencode-ai/sdk`
+- **Dependents:** AI-Gateway (upstream)
 
-### 2. AI-Gateway (`ai-gateway/`)
-- **Purpose:** WebSocket 网关层，PCAgent 连接管理、AK/SK 认证、双向事件中继
-- **Location:** `ai-gateway/`
-- **Technology:** Spring Boot 3.4.6, Java 21
-- **Key Files:**
-  - `ws/AgentWebSocketHandler.java` — PCAgent WebSocket 端点
-  - `ws/SkillServerWSClient.java` — 到 Skill Server 的 WebSocket 客户端
-  - `service/EventRelayService.java` — 双向事件中继核心（209 行）
-  - `service/AkSkAuthService.java` — AK/SK 认证服务
-  - `service/AgentRegistryService.java` — Agent 注册管理
-  - `service/RedisMessageBroker.java` — Redis Pub/Sub 内部路由
-  - `model/GatewayMessage.java` — 网关消息模型
-  - `model/MessageEnvelope.java` — 消息信封（序号/去重）
-  - `model/AkSkCredential.java` — 认证凭据模型
-  - `model/AgentConnection.java` — Agent 连接模型
-  - `repository/` — MariaDB 数据访问（MyBatis）
-  - `config/` — Gateway 配置 + Redis 配置
-  - `controller/AgentController.java` — REST API
-- **Dependencies:** Skill Server (通过 WebSocket), MariaDB, Redis
-- **Dependents:** PC Agent (通过 WebSocket)
+---
 
-### 3. Skill Server (`skill-server/`)
-- **Purpose:** 业务核心层，会话管理、消息持久化、OpenCode 协议翻译、WebSocket 推流
-- **Location:** `skill-server/`
-- **Technology:** Spring Boot 3.4.6, Java 21
-- **Key Files:**
-  - `service/OpenCodeEventTranslator.java` — OpenCode 事件 → StreamMessage 协议翻译（328 行）
-  - `service/SkillSessionService.java` — 会话生命周期管理
-  - `service/SkillMessageService.java` — 消息 CRUD
-  - `service/MessagePersistenceService.java` — 消息持久化
-  - `service/ImMessageService.java` — IM 消息服务
-  - `service/StreamBufferService.java` — 流缓冲服务
-  - `service/SequenceTracker.java` — 消息序号跟踪
-  - `service/GatewayRelayService.java` — Gateway 中继调度
-  - `service/GatewayApiClient.java` — Gateway HTTP API 客户端
-  - `service/RedisMessageBroker.java` — Redis Pub/Sub
-  - `ws/GatewayWSHandler.java` — Gateway 侧 WebSocket 端点
-  - `ws/SkillStreamHandler.java` — Miniapp 侧 WebSocket 流推送
-  - `model/` — StreamMessage, SkillSession, SkillMessage, SkillMessagePart, SkillDefinition 等
-  - `repository/` — MyBatis 数据访问
-  - `controller/` — REST API（Session, Message, SkillDefinition, AgentQuery）
-- **Dependencies:** MariaDB, Redis
-- **Dependents:** AI-Gateway (通过 WebSocket), Skill Miniapp (通过 WebSocket + REST)
-
-### 4. Skill Miniapp (`skill-miniapp/`)
-- **Purpose:** 用户前端 IM 界面，IM 风格聊天交互, 流式消息渲染
+### Skill Miniapp
+- **Purpose:** IM 风格对话前端，适配 OpenCode 流式协议的渲染层
 - **Location:** `skill-miniapp/`
-- **Technology:** React 18, TypeScript, Vite 5
-- **Key Files:**
-  - `pages/SkillMain.tsx` — 主页面
-  - `pages/SkillMiniBar.tsx` — 迷你状态栏
-  - `components/` — ConversationView, MessageBubble, MessageInput, SessionSidebar, ToolCard, QuestionCard, PermissionCard, ThinkingBlock, CodeBlock, SendToImButton, AgentSelector
+- **Runtime:** React 18 + TypeScript + Vite
+- **Key Modules:**
+  - `pages/SkillMain.tsx` — 主聊天页面
+  - `pages/SkillMiniBar.tsx` — 迷你悬浮入口
+  - `components/` — MessageBubble, ThinkingBlock, ToolCard, QuestionCard, CodeBlock, PermissionCard 等 12 个组件
   - `hooks/` — useSkillSession, useSkillStream, useAgentSelector, useSendToIm
-  - `protocol/types.ts` — StreamMessage 协议类型定义（17 种消息类型）
-  - `protocol/OpenCodeEventParser.ts` — 事件解析器
-  - `protocol/StreamAssembler.ts` — 流消息组装器
-  - `protocol/ToolUseRenderer.ts` — 工具使用渲染
-  - `utils/api.ts` — API 客户端
-- **Dependencies:** react, react-dom, react-markdown, remark-gfm, shiki
-- **Dependents:** 终端用户（浏览器）
+  - `protocol/` — OpenCodeEventParser, StreamAssembler, ToolUseRenderer, types
+  - `utils/api.ts` — Skill Server REST API 客户端
+- **Dependencies:** React, react-markdown, remark-gfm, shiki
+- **Dependents:** 终端用户 (嵌入 IM 客户端)
 
-### 5. Test Simulator (`test-simulator/`)
-- **Purpose:** 独立 E2E 测试工具，模拟 Agent WebSocket 连接，验证端到端消息流
+---
+
+### Test Simulator
+- **Purpose:** 端到端集成测试工具，模拟 Agent 和前端行为
 - **Location:** `test-simulator/`
-- **Technology:** React 19, TypeScript, Vite 7
-- **Key Files:**
-  - `components/` — AgentSimulator, SessionManager, StreamViewer, ScenarioRunner, MetricsPanel, PermissionPanel, ErrorPanel, MessageHistory
-  - `hooks/useAgentWebSocket.ts` — Agent WebSocket Hook
+- **Runtime:** React 19 + TypeScript + Vite
+- **Key Modules:**
+  - `components/` — AgentSimulator, SessionManager, StreamViewer, ScenarioRunner, MetricsPanel 等
   - `services/` — APIClient, WebSocketClient
-  - `protocol/StreamAssembler.ts` — 流组装器
-- **Dependencies:** react 19, react-dom, react-markdown, react-syntax-highlighter
-- **Dependents:** 无（开发/测试工具）
+  - `protocol/StreamAssembler.ts` — 流式协议解析
+  - `hooks/useAgentWebSocket.ts` — WebSocket 连接管理
+- **Dependencies:** React 19, react-markdown, react-syntax-highlighter
+- **Dependents:** 开发团队 (测试用途)
 
 ## Data Flow
 
-### Upstream (User → AI)
-
 ```
-1. [Miniapp] 用户输入消息
-2. [Miniapp] POST /api/sessions/{id}/messages → Skill Server REST API
-3. [Skill Server] 创建 SkillMessage，通过 GatewayRelayService 发送 invoke.chat
-4. [Skill Server] → WebSocket → AI-Gateway
-5. [AI-Gateway] EventRelayService 查找 agentId，通过 Redis 路由到正确实例
-6. [AI-Gateway] → WebSocket → PC Agent
-7. [PC Agent] EventRelay.handleInvoke() → 调用 OpenCode SDK session.prompt()
-8. [OpenCode] AI 开始处理
-```
-
-### Downstream (AI → User)
-
-```
-1. [OpenCode] AI 生成事件流（text.delta, tool.call, permission 等）
-2. [PC Agent] Plugin event hook → EventRelay.relayUpstream() → WebSocket → AI-Gateway
-3. [AI-Gateway] AgentWebSocketHandler → EventRelayService.relayToSkillServer()
-4. [AI-Gateway] → WebSocket → Skill Server
-5. [Skill Server] GatewayWSHandler → OpenCodeEventTranslator.translate()
-6. [Skill Server] 原始 OpenCode 事件 → 语义化 StreamMessage
-7. [Skill Server] StreamBufferService 缓冲 + SkillStreamHandler 推流
-8. [Skill Server] → WebSocket → Miniapp
-9. [Miniapp] StreamAssembler 组装 → React 状态更新 → UI 实时渲染
-```
-
-### Protocol Translation Chain
-
-```
-OpenCode Event (31 types, 12 part types)
-    ↓ [PC Agent: ProtocolAdapter]
-GatewayMessage (with envelope: messageId, seq, source)
-    ↓ [AI-Gateway: EventRelayService]
-GatewayMessage (with agentId routing)
-    ↓ [Skill Server: OpenCodeEventTranslator]
-StreamMessage (17 semantic types: text.delta, tool.update, question, etc.)
-    ↓ [Miniapp: StreamAssembler]
-UI State (MessagePart[], Message[])
+用户消息 (IM/Miniapp)
+    │
+    ▼
+Skill Miniapp ──HTTP REST──► Skill Server ──► 创建/查询 Session
+    │                             │
+    │ WebSocket /ws/stream        │ WebSocket Client
+    │                             ▼
+    │                        AI-Gateway ◄──── Redis Pub/Sub (多实例路由)
+    │                             │
+    │                             │ WebSocket /ws/agent
+    │                             ▼
+    │                         PC Agent
+    │                             │
+    │                             │ OpenCode SDK
+    │                             ▼
+    │                          OpenCode (AI 处理)
+    │                             │
+    │                          响应流
+    │                             │
+    │                         PC Agent (EventRelay)
+    │                             │
+    │                        AI-Gateway (事件中继)
+    │                             │
+    │                        Skill Server
+    │                         ├── OpenCodeEventTranslator (事件解析)
+    │                         ├── MessagePersistenceService (持久化)
+    │                         ├── StreamBufferService (流式缓冲)
+    │                         └── ImMessageService (IM 推送)
+    │                             │
+    ◄─────── WebSocket Stream ────┘
+    │
+    ▼
+用户看到 AI 响应 (实时流式渲染)
 ```
 
 ## Integration Points
 
-| Service                   | Type       | Purpose                                    | Protocol           |
-| ------------------------- | ---------- | ------------------------------------------ | ------------------ |
-| MariaDB                   | DB         | 认证凭据(Gateway) + 会话/消息持久化(Skill) | MyBatis            |
-| Redis                     | Pub/Sub    | 多实例 Agent 路由 (Pattern 5)              | Spring Data Redis  |
-| OpenCode SDK              | Plugin API | AI 代理交互 (session, prompt, permission)  | Plugin Hook + SSE  |
-| WebSocket (GW↔Agent)      | WS         | PCAgent 双向事件流                         | JSON over WS       |
-| WebSocket (GW↔Skill)      | WS         | Gateway-SkillServer 事件流                 | JSON over WS       |
-| WebSocket (Skill↔Miniapp) | WS         | 前端流式消息推送                           | StreamMessage JSON |
-| REST (Skill)              | HTTP       | 会话/消息 CRUD, Agent 查询                 | JSON REST          |
-
-## Routing Pattern
-
-采用 **Pattern 5: Sticky WebSocket + Internal Redis Broadcast**：
-- AI-Gateway 与 Skill Server 通过 Sticky WebSocket 保持持久连接
-- 多 Gateway 实例间通过 Redis Pub/Sub (`agent:{agentId}` channel) 路由消息
-- 确保消息到达持有 Agent WebSocket 连接的 Gateway 实例
+| External Service | Type         | Purpose                                         |
+| ---------------- | ------------ | ----------------------------------------------- |
+| MySQL            | Database     | Agent 连接注册、AK/SK 凭证存储、会话/消息持久化 |
+| Redis            | Cache/PubSub | 跨实例消息路由、会话状态缓存、心跳管理          |
+| OpenCode (Local) | SDK/API      | 本地 AI 编程助手，通过 SDK 交互                 |
+| IM Platform      | REST API     | 外部 IM 消息推送 (`skill.im.api-url`)           |
 
 ## Conventions
 
-- **Naming:** Java 组件使用标准 Spring Boot 分层命名（Controller/Service/Repository/Model）；TS 组件使用 PascalCase 文件名
-- **Structure:** 按职责分层（ws/service/model/repository/controller/config），前端按 pages/components/hooks/protocol/utils 组织
-- **Testing:** 后端使用 Spring Boot Test + JUnit 5；前端 PC Agent 有 `__tests__/` 目录；Skill Miniapp 无测试
-- **Configuration:** 后端使用 Spring application properties；前端使用 Vite 环境变量（VITE_*）
-- **Logging:** 后端 Slf4j (Lombok @Slf4j)；PC Agent 文件日志 (debug log to TEMP)
-- **Error Handling:** 后端 try-catch + log；PC Agent trySendError() 回报 Gateway
+- **Naming:** Java 采用标准 Spring Boot 分层命名（controller/service/repository/model/config/ws）；TypeScript 采用 PascalCase 文件名
+- **Structure:** 每个模块独立 Maven/npm 项目，共享协议定义但无代码依赖
+- **Error Handling:** Spring Boot 标准异常机制 + WebSocket 错误帧
+- **State Management:** 前端使用 React Hooks（自定义 useSkillSession/useSkillStream）
+- **API Patterns:** REST (session/message CRUD) + WebSocket (实时流)
+- **Testing:** Java 使用 JUnit 5 / Spring Boot Test；TypeScript 使用 Bun test
 
 ## Technical Debt
 
-- [ ] `skill-miniapp/` 缺乏单元测试和 E2E 测试
-- [ ] `documents/obsolete/` 存在 25 个过时文档文件需清理
-- [ ] 前端项目 React 版本不统一（miniapp: React 18, test-simulator: React 19）
-- [ ] `skill-miniapp` 和 `test-simulator` 存在 `StreamAssembler.ts` 代码重复
-- [ ] 未发现 TODO/FIXME/HACK 标记，代码库整洁度良好
-- [ ] 无统一的 monorepo 工具管理 (如 turborepo/nx)，各子项目独立管理
+- [ ] `ai-gateway/application.yml` 中硬编码了 MySQL 密码 `Root@123456`（应使用环境变量）
+- [ ] `skill-miniapp` 和 `test-simulator` 各自独立实现了 `StreamAssembler`，存在代码重复
+- [ ] `documents/obsolete/` 目录包含 25 个过时文档文件未清理
+- [ ] PC Agent 使用 `bun.lock`（Bun runtime）但项目其他 TS 模块使用 npm，运行时不一致
+- [ ] `test-simulator` 使用 React 19 而 `skill-miniapp` 使用 React 18，版本不统一

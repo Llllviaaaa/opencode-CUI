@@ -6,35 +6,15 @@ import com.opencode.cui.skill.model.StreamMessage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 /**
- * Translates raw OpenCode SSE events into semantic StreamMessage DTOs.
- * <p>
- * This is the single point of protocol translation from the OpenCode event
- * format to the frontend-friendly StreamMessage format.
- * <p>
- * Key mapping rules:
- * <ul>
- * <li>message.part.updated (TextPart + delta) → text.delta</li>
- * <li>message.part.updated (TextPart, no delta) → text.done</li>
- * <li>message.part.updated (ReasoningPart + delta) → thinking.delta</li>
- * <li>message.part.updated (ToolPart, question, running) → question</li>
- * <li>message.part.updated (ToolPart, other) → tool.update</li>
- * <li>message.part.updated (StepStartPart) → step.start</li>
- * <li>message.part.updated (StepFinishPart) → step.done</li>
- * <li>message.part.updated (FilePart) → file</li>
- * <li>session.status → session.status</li>
- * <li>session.idle → session.status (idle)</li>
- * <li>session.updated → session.title</li>
- * <li>session.error → session.error</li>
- * <li>permission.updated → permission.ask</li>
- * </ul>
+ * Translates raw OpenCode events into frontend-facing StreamMessage DTOs.
  */
 @Slf4j
 @Component
@@ -42,50 +22,43 @@ public class OpenCodeEventTranslator {
 
     private final ObjectMapper objectMapper;
     private final ConcurrentMap<String, String> partTypes = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Integer> partSequences = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Integer> nextPartSequences = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, String> messageRoles = new ConcurrentHashMap<>();
 
     public OpenCodeEventTranslator(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }
 
-    /**
-     * Translate an OpenCode event (the "event" field from tool_event) into a
-     * StreamMessage.
-     *
-     * @param event the raw OpenCode event JSON
-     * @return translated StreamMessage, or null if the event should be ignored
-     */
     public StreamMessage translate(JsonNode event) {
         if (event == null) {
             return null;
         }
 
         String eventType = event.path("type").asText("");
-
         return switch (eventType) {
             case "message.part.updated" -> translatePartUpdated(event);
             case "message.part.delta" -> translatePartDelta(event);
             case "message.part.removed" -> {
-                evictPartType(
-                        event.path("properties").path("sessionID").asText(null),
-                        event.path("properties").path("partID").asText(null));
+                JsonNode props = event.path("properties");
+                evictPart(
+                        props.path("sessionID").asText(null),
+                        props.path("messageID").asText(null),
+                        props.path("partID").asText(null));
                 yield null;
             }
             case "message.updated" -> translateMessageUpdated(event);
             case "session.status" -> translateSessionStatus(event);
             case "session.idle" -> {
-                clearSessionPartTypes(event.path("properties").path("sessionID").asText(null));
-                yield StreamMessage.builder()
-                        .type(StreamMessage.Types.SESSION_STATUS)
+                String sessionId = event.path("properties").path("sessionID").asText(null);
+                clearSessionCaches(sessionId);
+                yield baseBuilder(StreamMessage.Types.SESSION_STATUS, sessionId)
                         .sessionStatus("idle")
                         .build();
             }
             case "session.updated" -> translateSessionUpdated(event);
-            case "session.error" -> StreamMessage.builder()
-                    .type(StreamMessage.Types.SESSION_ERROR)
-                    .error(event.path("properties").path("error").toString())
-                    .build();
-            case "permission.updated" -> translatePermission(event);
-            case "permission.asked" -> translatePermission(event);
+            case "session.error" -> translateSessionError(event);
+            case "permission.updated", "permission.asked" -> translatePermission(event);
             case "question.asked" -> translateQuestionAsked(event);
             default -> {
                 log.debug("Ignoring OpenCode event type: {}", eventType);
@@ -95,13 +68,12 @@ public class OpenCodeEventTranslator {
     }
 
     /**
-     * Translate a raw gateway permission_request message (not an OpenCode event)
-     * into a StreamMessage. This handles the legacy gateway format where
-     * permission info is at the top level of the node.
+     * Translate a raw gateway permission_request message into a StreamMessage.
      */
     public StreamMessage translatePermissionFromGateway(JsonNode node) {
-        return StreamMessage.builder()
-                .type(StreamMessage.Types.PERMISSION_ASK)
+        String sessionId = node.path("sessionId").asText(null);
+        return baseBuilder(StreamMessage.Types.PERMISSION_ASK, sessionId)
+                .role("assistant")
                 .permissionId(node.path("permissionId").asText(null))
                 .permType(node.path("permType").asText(null))
                 .title(node.path("command").asText(null))
@@ -109,35 +81,36 @@ public class OpenCodeEventTranslator {
                 .build();
     }
 
-    // ==================== Internal: Part Updated ====================
-
     private StreamMessage translatePartUpdated(JsonNode event) {
-        JsonNode props = event.get("properties");
-        if (props == null)
+        JsonNode props = event.path("properties");
+        JsonNode part = props.path("part");
+        if (part.isMissingNode() || part.isNull()) {
             return null;
+        }
 
-        JsonNode part = props.get("part");
-        if (part == null)
-            return null;
-
-        String partType = part.path("type").asText("");
+        String sessionId = firstNonBlank(part.path("sessionID").asText(null), props.path("sessionID").asText(null));
+        String messageId = firstNonBlank(part.path("messageID").asText(null), props.path("messageID").asText(null));
         String partId = part.path("id").asText(null);
+        String partType = part.path("type").asText("");
         String delta = props.has("delta") && !props.get("delta").isNull()
                 ? props.path("delta").asText(null)
                 : null;
-        String sessionId = part.path("sessionID").asText(null);
+        Integer partSeq = rememberPartSeq(sessionId, messageId, partId);
+        String role = resolveMessageRole(sessionId, messageId);
 
         rememberPartType(sessionId, partId, partType);
+        if (shouldIgnoreMessage(role)) {
+            return null;
+        }
 
         return switch (partType) {
-            case "text" -> translateTextPart(partId, part, delta);
-            case "reasoning" -> translateReasoningPart(partId, part, delta);
-            case "tool" -> translateToolPart(partId, part);
-            case "step-start" -> StreamMessage.builder()
-                    .type(StreamMessage.Types.STEP_START)
+            case "text" -> translateTextPart(sessionId, messageId, partId, partSeq, part, delta, role);
+            case "reasoning" -> translateReasoningPart(sessionId, messageId, partId, partSeq, part, delta, role);
+            case "tool" -> translateToolPart(sessionId, messageId, partId, partSeq, part, role);
+            case "step-start" -> messageBuilder(StreamMessage.Types.STEP_START, sessionId, messageId, role)
                     .build();
-            case "step-finish" -> translateStepFinish(part);
-            case "file" -> translateFilePart(partId, part);
+            case "step-finish" -> translateStepFinish(sessionId, messageId, part, role);
+            case "file" -> translateFilePart(sessionId, messageId, partId, partSeq, part, role);
             default -> {
                 log.debug("Ignoring part type: {}", partType);
                 yield null;
@@ -146,12 +119,9 @@ public class OpenCodeEventTranslator {
     }
 
     private StreamMessage translatePartDelta(JsonNode event) {
-        JsonNode props = event.get("properties");
-        if (props == null) {
-            return null;
-        }
-
+        JsonNode props = event.path("properties");
         String sessionId = props.path("sessionID").asText(null);
+        String messageId = props.path("messageID").asText(null);
         String partId = props.path("partID").asText(null);
         String delta = props.path("delta").asText(null);
         if (partId == null || delta == null) {
@@ -160,20 +130,20 @@ public class OpenCodeEventTranslator {
 
         String partType = getPartType(sessionId, partId);
         if (partType == null) {
-            log.debug("Ignoring delta for unknown part: sessionId={}, partId={}, field={}",
-                    sessionId, partId, props.path("field").asText(null));
+            log.debug("Ignoring delta for unknown part: sessionId={}, partId={}", sessionId, partId);
             return null;
         }
 
+        Integer partSeq = rememberPartSeq(sessionId, messageId, partId);
+        String role = resolveMessageRole(sessionId, messageId);
+        if (shouldIgnoreMessage(role)) {
+            return null;
+        }
         return switch (partType) {
-            case "text" -> StreamMessage.builder()
-                    .type(StreamMessage.Types.TEXT_DELTA)
-                    .partId(partId)
+            case "text" -> partBuilder(StreamMessage.Types.TEXT_DELTA, sessionId, messageId, partId, partSeq, role)
                     .content(delta)
                     .build();
-            case "reasoning" -> StreamMessage.builder()
-                    .type(StreamMessage.Types.THINKING_DELTA)
-                    .partId(partId)
+            case "reasoning" -> partBuilder(StreamMessage.Types.THINKING_DELTA, sessionId, messageId, partId, partSeq, role)
                     .content(delta)
                     .build();
             default -> {
@@ -184,53 +154,42 @@ public class OpenCodeEventTranslator {
         };
     }
 
-    private StreamMessage translateTextPart(String partId, JsonNode part, String delta) {
-        if (delta != null) {
-            return StreamMessage.builder()
-                    .type(StreamMessage.Types.TEXT_DELTA)
-                    .partId(partId)
-                    .content(delta)
-                    .build();
-        } else {
-            return StreamMessage.builder()
-                    .type(StreamMessage.Types.TEXT_DONE)
-                    .partId(partId)
-                    .content(part.path("text").asText(""))
-                    .build();
-        }
+    private StreamMessage translateTextPart(String sessionId, String messageId, String partId,
+            Integer partSeq, JsonNode part, String delta, String role) {
+        String type = delta != null ? StreamMessage.Types.TEXT_DELTA : StreamMessage.Types.TEXT_DONE;
+        String content = delta != null ? delta : part.path("text").asText("");
+        return partBuilder(type, sessionId, messageId, partId, partSeq, role)
+                .content(content)
+                .build();
     }
 
-    private StreamMessage translateReasoningPart(String partId, JsonNode part, String delta) {
-        if (delta != null) {
-            return StreamMessage.builder()
-                    .type(StreamMessage.Types.THINKING_DELTA)
-                    .partId(partId)
-                    .content(delta)
-                    .build();
-        } else {
-            return StreamMessage.builder()
-                    .type(StreamMessage.Types.THINKING_DONE)
-                    .partId(partId)
-                    .content(part.path("text").asText(""))
-                    .build();
-        }
+    private StreamMessage translateReasoningPart(String sessionId, String messageId, String partId,
+            Integer partSeq, JsonNode part, String delta, String role) {
+        String type = delta != null ? StreamMessage.Types.THINKING_DELTA : StreamMessage.Types.THINKING_DONE;
+        String content = delta != null ? delta : part.path("text").asText("");
+        return partBuilder(type, sessionId, messageId, partId, partSeq, role)
+                .content(content)
+                .build();
     }
 
-    private StreamMessage translateToolPart(String partId, JsonNode part) {
+    private StreamMessage translateToolPart(String sessionId, String messageId, String partId,
+            Integer partSeq, JsonNode part, String role) {
         String toolName = part.path("tool").asText("");
         String callId = part.path("callID").asText(null);
         JsonNode state = part.get("state");
         String status = state != null ? state.path("status").asText("") : "";
 
-        // Special handling for question tool in running state
         if ("question".equals(toolName) && "running".equals(status)) {
-            return translateQuestion(partId, callId, state);
+            return translateQuestion(sessionId, messageId, partId, partSeq, callId, state, role);
         }
 
-        // General tool update
-        StreamMessage.StreamMessageBuilder builder = StreamMessage.builder()
-                .type(StreamMessage.Types.TOOL_UPDATE)
-                .partId(partId)
+        StreamMessage.StreamMessageBuilder builder = partBuilder(
+                StreamMessage.Types.TOOL_UPDATE,
+                sessionId,
+                messageId,
+                partId,
+                partSeq,
+                role)
                 .toolName(toolName)
                 .toolCallId(callId)
                 .status(status);
@@ -257,12 +216,16 @@ public class OpenCodeEventTranslator {
         return builder.build();
     }
 
-    private StreamMessage translateQuestion(String partId, String callId, JsonNode state) {
+    private StreamMessage translateQuestion(String sessionId, String messageId, String partId,
+            Integer partSeq, String callId, JsonNode state, String role) {
         JsonNode input = state != null ? state.get("input") : null;
-
-        StreamMessage.StreamMessageBuilder builder = StreamMessage.builder()
-                .type(StreamMessage.Types.QUESTION)
-                .partId(partId)
+        StreamMessage.StreamMessageBuilder builder = partBuilder(
+                StreamMessage.Types.QUESTION,
+                sessionId,
+                messageId,
+                partId,
+                partSeq,
+                role)
                 .toolCallId(callId)
                 .toolName("question")
                 .status("running");
@@ -274,8 +237,8 @@ public class OpenCodeEventTranslator {
             JsonNode optionsNode = input.get("options");
             if (optionsNode != null && optionsNode.isArray()) {
                 List<String> options = new ArrayList<>();
-                for (JsonNode opt : optionsNode) {
-                    options.add(opt.asText());
+                for (JsonNode optionNode : optionsNode) {
+                    options.add(optionNode.asText());
                 }
                 builder.options(options);
             }
@@ -284,9 +247,12 @@ public class OpenCodeEventTranslator {
         return builder.build();
     }
 
-    private StreamMessage translateStepFinish(JsonNode part) {
-        StreamMessage.StreamMessageBuilder builder = StreamMessage.builder()
-                .type(StreamMessage.Types.STEP_DONE);
+    private StreamMessage translateStepFinish(String sessionId, String messageId, JsonNode part, String role) {
+        StreamMessage.StreamMessageBuilder builder = messageBuilder(
+                StreamMessage.Types.STEP_DONE,
+                sessionId,
+                messageId,
+                role);
 
         JsonNode tokensNode = part.get("tokens");
         if (tokensNode != null) {
@@ -306,79 +272,94 @@ public class OpenCodeEventTranslator {
         return builder.build();
     }
 
-    private StreamMessage translateFilePart(String partId, JsonNode part) {
-        return StreamMessage.builder()
-                .type(StreamMessage.Types.FILE)
-                .partId(partId)
-                .title(part.path("filename").asText(null))
-                .content(part.path("url").asText(null))
-                .metadata(Map.of("mime", part.path("mime").asText("")))
+    private StreamMessage translateFilePart(String sessionId, String messageId, String partId,
+            Integer partSeq, JsonNode part, String role) {
+        return partBuilder(StreamMessage.Types.FILE, sessionId, messageId, partId, partSeq, role)
+                .fileName(part.path("filename").asText(null))
+                .fileUrl(part.path("url").asText(null))
+                .fileMime(part.path("mime").asText(null))
                 .build();
     }
 
-    // ==================== Internal: Top-level Events ====================
-
     private StreamMessage translateSessionStatus(JsonNode event) {
-        String status = event.path("properties").path("status").path("type").asText(
-                event.path("properties").path("status").asText(""));
+        JsonNode props = event.path("properties");
+        String sessionId = props.path("sessionID").asText(null);
+        String status = props.path("status").path("type").asText(props.path("status").asText(""));
         if ("idle".equals(status)) {
-            clearSessionPartTypes(event.path("properties").path("sessionID").asText(null));
+            clearSessionCaches(sessionId);
         }
-        return StreamMessage.builder()
-                .type(StreamMessage.Types.SESSION_STATUS)
+        return baseBuilder(StreamMessage.Types.SESSION_STATUS, sessionId)
                 .sessionStatus(status)
                 .build();
     }
 
     private StreamMessage translateSessionUpdated(JsonNode event) {
-        String title = event.path("properties").path("info").path("title").asText(null);
+        JsonNode props = event.path("properties");
+        String sessionId = props.path("sessionID").asText(null);
+        String title = props.path("info").path("title").asText(null);
         if (title == null) {
-            title = event.path("properties").path("title").asText(null);
+            title = props.path("title").asText(null);
         }
-        return StreamMessage.builder()
-                .type(StreamMessage.Types.SESSION_TITLE)
+        return baseBuilder(StreamMessage.Types.SESSION_TITLE, sessionId)
                 .title(title)
                 .build();
     }
 
+    private StreamMessage translateSessionError(JsonNode event) {
+        JsonNode props = event.path("properties");
+        String sessionId = props.path("sessionID").asText(null);
+        String error = props.path("error").isTextual()
+                ? props.path("error").asText(null)
+                : props.path("error").toString();
+        return baseBuilder(StreamMessage.Types.SESSION_ERROR, sessionId)
+                .error(error)
+                .build();
+    }
+
     private StreamMessage translateMessageUpdated(JsonNode event) {
-        // message.updated with finish info → step.done
-        JsonNode props = event.get("properties");
-        if (props != null && props.has("info")) {
-            JsonNode info = props.get("info");
-            if (info != null && info.has("finish")) {
-                return StreamMessage.builder()
-                        .type(StreamMessage.Types.STEP_DONE)
-                        .reason(info.path("finish").path("reason").asText(null))
-                        .build();
-            }
+        JsonNode props = event.path("properties");
+        JsonNode info = props.path("info");
+        if (info.isMissingNode() || info.isNull()) {
+            return null;
         }
-        // Ignore other message.updated events
-        return null;
+
+        String sessionId = firstNonBlank(props.path("sessionID").asText(null), info.path("sessionID").asText(null));
+        String messageId = firstNonBlank(props.path("messageID").asText(null), info.path("id").asText(null));
+        String role = normalizeRole(info.path("role").asText(null));
+        rememberMessageRole(sessionId, messageId, role);
+
+        if (!info.has("finish") || shouldIgnoreMessage(role)) {
+            return null;
+        }
+
+        return messageBuilder(
+                StreamMessage.Types.STEP_DONE,
+                sessionId,
+                messageId,
+                role)
+                .reason(info.path("finish").path("reason").asText(null))
+                .build();
     }
 
     private StreamMessage translatePermission(JsonNode event) {
-        JsonNode props = event.get("properties");
-        if (props == null)
+        JsonNode props = event.path("properties");
+        if (props.isMissingNode() || props.isNull()) {
             return null;
+        }
 
-        return StreamMessage.builder()
-                .type(StreamMessage.Types.PERMISSION_ASK)
+        return messageBuilder(
+                StreamMessage.Types.PERMISSION_ASK,
+                props.path("sessionID").asText(null),
+                props.path("messageID").asText(null))
                 .permissionId(props.path("id").asText(null))
-                .permType(props.path("type").asText(
-                        props.path("permission").asText(null)))
-                .title(props.path("title").asText(
-                        props.path("permission").asText(null)))
+                .permType(props.path("type").asText(props.path("permission").asText(null)))
+                .title(props.path("title").asText(props.path("permission").asText(null)))
                 .metadata(jsonNodeToMap(props.get("metadata")))
                 .build();
     }
 
     private StreamMessage translateQuestionAsked(JsonNode event) {
-        JsonNode props = event.get("properties");
-        if (props == null) {
-            return null;
-        }
-
+        JsonNode props = event.path("properties");
         JsonNode questionsNode = props.get("questions");
         JsonNode firstQuestion = questionsNode != null && questionsNode.isArray() && !questionsNode.isEmpty()
                 ? questionsNode.get(0)
@@ -390,10 +371,10 @@ public class OpenCodeEventTranslator {
         List<String> options = new ArrayList<>();
         JsonNode optionsNode = firstQuestion.get("options");
         if (optionsNode != null && optionsNode.isArray()) {
-            for (JsonNode opt : optionsNode) {
-                String label = opt.path("label").asText(null);
+            for (JsonNode optionNode : optionsNode) {
+                String label = optionNode.path("label").asText(null);
                 if (label == null || label.isBlank()) {
-                    label = opt.asText(null);
+                    label = optionNode.asText(null);
                 }
                 if (label != null && !label.isBlank()) {
                     options.add(label);
@@ -401,15 +382,58 @@ public class OpenCodeEventTranslator {
             }
         }
 
-        return StreamMessage.builder()
-                .type(StreamMessage.Types.QUESTION)
-                .partId(props.path("id").asText(null))
+        String sessionId = props.path("sessionID").asText(null);
+        String messageId = props.path("messageID").asText(null);
+        String partId = props.path("id").asText(null);
+        Integer partSeq = rememberPartSeq(sessionId, messageId, partId);
+
+        return partBuilder(StreamMessage.Types.QUESTION, sessionId, messageId, partId, partSeq)
                 .toolName("question")
                 .status("running")
                 .header(firstQuestion.path("header").asText(null))
                 .question(firstQuestion.path("question").asText(null))
                 .options(options.isEmpty() ? null : options)
                 .build();
+    }
+
+    private StreamMessage.StreamMessageBuilder baseBuilder(String type, String sessionId) {
+        return StreamMessage.builder()
+                .type(type)
+                .sessionId(sessionId)
+                .emittedAt(Instant.now().toString());
+    }
+
+    private StreamMessage.StreamMessageBuilder messageBuilder(String type, String sessionId, String sourceMessageId) {
+        return messageBuilder(type, sessionId, sourceMessageId, resolveMessageRole(sessionId, sourceMessageId));
+    }
+
+    private StreamMessage.StreamMessageBuilder messageBuilder(
+            String type,
+            String sessionId,
+            String sourceMessageId,
+            String role) {
+        StreamMessage.StreamMessageBuilder builder = baseBuilder(type, sessionId)
+                .role(normalizeRole(role));
+        if (sourceMessageId != null && !sourceMessageId.isBlank()) {
+            builder.messageId(sourceMessageId);
+            builder.sourceMessageId(sourceMessageId);
+        }
+        return builder;
+    }
+
+    private StreamMessage.StreamMessageBuilder partBuilder(String type, String sessionId, String sourceMessageId,
+            String partId, Integer partSeq) {
+        return partBuilder(type, sessionId, sourceMessageId, partId, partSeq, resolveMessageRole(sessionId, sourceMessageId));
+    }
+
+    private StreamMessage.StreamMessageBuilder partBuilder(String type, String sessionId, String sourceMessageId,
+            String partId, Integer partSeq, String role) {
+        StreamMessage.StreamMessageBuilder builder = messageBuilder(type, sessionId, sourceMessageId, role)
+                .partId(partId);
+        if (partSeq != null) {
+            builder.partSeq(partSeq);
+        }
+        return builder;
     }
 
     private void rememberPartType(String sessionId, String partId, String partType) {
@@ -427,31 +451,99 @@ public class OpenCodeEventTranslator {
         return partTypes.get(partCacheKey(sessionId, partId));
     }
 
-    private void evictPartType(String sessionId, String partId) {
+    private Integer rememberPartSeq(String sessionId, String messageId, String partId) {
+        if (sessionId == null || sessionId.isBlank() || messageId == null || messageId.isBlank()
+                || partId == null || partId.isBlank()) {
+            return null;
+        }
+
+        String partKey = partCacheKey(sessionId, partId);
+        Integer existing = partSequences.get(partKey);
+        if (existing != null) {
+            return existing;
+        }
+
+        String messageKey = messageCacheKey(sessionId, messageId);
+        Integer nextSeq = nextPartSequences.compute(messageKey, (key, value) -> value == null ? 1 : value + 1);
+        Integer prior = partSequences.putIfAbsent(partKey, nextSeq);
+        return prior != null ? prior : nextSeq;
+    }
+
+    private void evictPart(String sessionId, String messageId, String partId) {
         if (sessionId == null || sessionId.isBlank() || partId == null || partId.isBlank()) {
             return;
         }
         partTypes.remove(partCacheKey(sessionId, partId));
+        partSequences.remove(partCacheKey(sessionId, partId));
+        if (messageId != null && !messageId.isBlank()) {
+            String messageKey = messageCacheKey(sessionId, messageId);
+            if (partSequences.keySet().stream().noneMatch(key -> key.startsWith(sessionId + ":"))) {
+                nextPartSequences.remove(messageKey);
+            }
+        }
     }
 
-    private void clearSessionPartTypes(String sessionId) {
+    private void clearSessionCaches(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
             return;
         }
+
         String prefix = sessionId + ":";
         partTypes.keySet().removeIf(key -> key.startsWith(prefix));
+        partSequences.keySet().removeIf(key -> key.startsWith(prefix));
+        nextPartSequences.keySet().removeIf(key -> key.startsWith(prefix));
+        messageRoles.keySet().removeIf(key -> key.startsWith(prefix));
     }
 
     private String partCacheKey(String sessionId, String partId) {
         return sessionId + ":" + partId;
     }
 
-    // ==================== Utilities ====================
+    private String messageCacheKey(String sessionId, String messageId) {
+        return sessionId + ":" + messageId;
+    }
+
+    private void rememberMessageRole(String sessionId, String messageId, String role) {
+        if (sessionId == null || sessionId.isBlank() || messageId == null || messageId.isBlank()
+                || role == null || role.isBlank()) {
+            return;
+        }
+        messageRoles.put(messageCacheKey(sessionId, messageId), role);
+    }
+
+    private String resolveMessageRole(String sessionId, String messageId) {
+        if (sessionId == null || sessionId.isBlank() || messageId == null || messageId.isBlank()) {
+            return "assistant";
+        }
+        return normalizeRole(messageRoles.get(messageCacheKey(sessionId, messageId)));
+    }
+
+    private boolean shouldIgnoreMessage(String role) {
+        return "user".equals(normalizeRole(role));
+    }
+
+    private String normalizeRole(String role) {
+        if (role == null || role.isBlank()) {
+            return "assistant";
+        }
+        return role.toLowerCase();
+    }
+
+    private String firstNonBlank(String first, String second) {
+        if (first != null && !first.isBlank()) {
+            return first;
+        }
+        if (second != null && !second.isBlank()) {
+            return second;
+        }
+        return null;
+    }
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> jsonNodeToMap(JsonNode node) {
-        if (node == null || node.isNull())
+        if (node == null || node.isNull()) {
             return null;
+        }
         try {
             return objectMapper.convertValue(node, Map.class);
         } catch (Exception e) {

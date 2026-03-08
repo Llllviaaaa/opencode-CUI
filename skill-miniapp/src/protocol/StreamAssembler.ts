@@ -19,19 +19,56 @@ export class StreamAssembler {
   }
 
   /** Get or create a part by ID */
-  private getOrCreatePart(partId: string, type: MessagePart['type']): MessagePart {
+  private getOrCreatePart(partId: string, type: MessagePart['type'], partSeq?: number): MessagePart {
     let part = this.parts.get(partId);
     if (!part) {
       part = {
         partId,
+        partSeq,
         type,
         content: '',
         isStreaming: true,
       };
       this.parts.set(partId, part);
-      this.partOrder.push(partId);
+      this.insertPartOrder(partId, partSeq);
+    } else if (partSeq !== undefined) {
+      part.partSeq = partSeq;
     }
     return part;
+  }
+
+  private insertPartOrder(partId: string, partSeq?: number): void {
+    if (partSeq === undefined) {
+      this.partOrder.push(partId);
+      return;
+    }
+
+    const index = this.partOrder.findIndex((existingId) => {
+      const existingSeq = this.parts.get(existingId)?.partSeq;
+      return typeof existingSeq === 'number' && existingSeq > partSeq;
+    });
+
+    if (index === -1) {
+      this.partOrder.push(partId);
+      return;
+    }
+
+    this.partOrder.splice(index, 0, partId);
+  }
+
+  private findPermissionPartId(permissionId?: string): string | null {
+    if (!permissionId) {
+      return null;
+    }
+
+    for (const id of this.partOrder) {
+      const part = this.parts.get(id);
+      if (part?.type === 'permission' && part.permissionId === permissionId) {
+        return id;
+      }
+    }
+
+    return null;
   }
 
   /** Handle an incoming StreamMessage and update the appropriate part */
@@ -41,7 +78,7 @@ export class StreamAssembler {
     switch (msg.type) {
       case 'text.delta': {
         const id = msg.partId || this.findActivePartId('text') || this.genPartId('text');
-        const part = this.getOrCreatePart(id, 'text');
+        const part = this.getOrCreatePart(id, 'text', msg.partSeq);
         part.content += msg.content ?? '';
         part.isStreaming = true;
         break;
@@ -58,7 +95,7 @@ export class StreamAssembler {
         } else {
           // Create a completed text part directly
           const newId = this.genPartId('text');
-          const part = this.getOrCreatePart(newId, 'text');
+          const part = this.getOrCreatePart(newId, 'text', msg.partSeq);
           part.content = msg.content ?? '';
           part.isStreaming = false;
         }
@@ -67,7 +104,7 @@ export class StreamAssembler {
 
       case 'thinking.delta': {
         const id = msg.partId || this.findActivePartId('thinking') || this.genPartId('thinking');
-        const part = this.getOrCreatePart(id, 'thinking');
+        const part = this.getOrCreatePart(id, 'thinking', msg.partSeq);
         part.content += msg.content ?? '';
         part.isStreaming = true;
         break;
@@ -83,7 +120,7 @@ export class StreamAssembler {
           }
         } else {
           const newId = this.genPartId('thinking');
-          const part = this.getOrCreatePart(newId, 'thinking');
+          const part = this.getOrCreatePart(newId, 'thinking', msg.partSeq);
           part.content = msg.content ?? '';
           part.isStreaming = false;
         }
@@ -92,7 +129,7 @@ export class StreamAssembler {
 
       case 'tool.update': {
         const id = msg.partId || this.genPartId('tool');
-        const part = this.getOrCreatePart(id, 'tool');
+        const part = this.getOrCreatePart(id, 'tool', msg.partSeq);
         part.toolName = msg.toolName;
         part.toolCallId = msg.toolCallId;
         part.toolStatus = msg.status;
@@ -106,7 +143,7 @@ export class StreamAssembler {
 
       case 'question': {
         const id = msg.partId || this.genPartId('question');
-        const part = this.getOrCreatePart(id, 'question');
+        const part = this.getOrCreatePart(id, 'question', msg.partSeq);
         part.toolName = msg.toolName;
         part.header = msg.header;
         part.question = msg.question;
@@ -117,20 +154,32 @@ export class StreamAssembler {
 
       case 'permission.ask': {
         const id = msg.partId || msg.permissionId || this.genPartId('perm');
-        const part = this.getOrCreatePart(id, 'permission');
+        const part = this.getOrCreatePart(id, 'permission', msg.partSeq);
         part.permissionId = msg.permissionId;
         part.permType = msg.permType;
         part.toolName = msg.toolName;
-        part.content = msg.content ?? '';
+        part.content = msg.title ?? msg.content ?? '';
+        part.permResolved = false;
+        part.isStreaming = false;
+        break;
+      }
+
+      case 'permission.reply': {
+        const id = this.findPermissionPartId(msg.permissionId) || msg.partId || msg.permissionId || this.genPartId('perm');
+        const part = this.getOrCreatePart(id, 'permission', msg.partSeq);
+        part.permissionId = msg.permissionId;
+        part.permResolved = true;
+        part.permissionResponse = msg.response;
         part.isStreaming = false;
         break;
       }
 
       case 'file': {
         const id = msg.partId || this.genPartId('file');
-        const part = this.getOrCreatePart(id, 'file');
-        part.fileName = msg.title;
-        part.fileUrl = msg.content;
+        const part = this.getOrCreatePart(id, 'file', msg.partSeq);
+        part.fileName = msg.fileName;
+        part.fileUrl = msg.fileUrl;
+        part.fileMime = msg.fileMime;
         part.isStreaming = false;
         break;
       }

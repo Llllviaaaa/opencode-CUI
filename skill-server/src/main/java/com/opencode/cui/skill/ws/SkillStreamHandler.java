@@ -12,6 +12,8 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.net.URI;
 import java.util.List;
 import java.util.Set;
@@ -99,18 +101,22 @@ public class SkillStreamHandler extends TextWebSocketHandler {
             boolean isStreaming = bufferService.isSessionStreaming(sessionId);
             List<StreamMessage> parts = bufferService.getStreamingParts(sessionId);
 
-            // Build a 'streaming' envelope with status + parts
             StreamMessage streamingMsg = StreamMessage.builder()
                     .type(StreamMessage.Types.STREAMING)
+                    .seq(nextTransportSeq(sessionId))
+                    .sessionId(sessionId)
+                    .emittedAt(Instant.now().toString())
                     .sessionStatus(isStreaming ? "busy" : "idle")
+                    .parts(new ArrayList<>(parts))
                     .build();
-            // Set streaming parts as a serializable list
-            java.util.Map<String, Object> envelope = new java.util.LinkedHashMap<>();
-            envelope.put("type", "streaming");
-            envelope.put("status", isStreaming ? "busy" : "idle");
-            envelope.put("parts", parts);
+            if (!parts.isEmpty()) {
+                StreamMessage firstPart = parts.get(0);
+                streamingMsg.setMessageId(firstPart.getMessageId());
+                streamingMsg.setMessageSeq(firstPart.getMessageSeq());
+                streamingMsg.setRole(firstPart.getRole());
+            }
 
-            String json = objectMapper.writeValueAsString(envelope);
+            String json = objectMapper.writeValueAsString(streamingMsg);
             session.sendMessage(new TextMessage(json));
 
             log.info("Resume sent for session {}: streaming={}, parts={}",
@@ -168,7 +174,7 @@ public class SkillStreamHandler extends TextWebSocketHandler {
             return;
         }
 
-        long seq = seqCounters.computeIfAbsent(sessionId, k -> new AtomicLong(0)).incrementAndGet();
+        long seq = nextTransportSeq(sessionId);
         msg.setSeq(seq);
 
         String messageText;
@@ -265,6 +271,10 @@ public class SkillStreamHandler extends TextWebSocketHandler {
             log.error("Failed to serialize stream message: type={}", type, e);
             return null;
         }
+    }
+
+    private long nextTransportSeq(String sessionId) {
+        return seqCounters.computeIfAbsent(sessionId, key -> new AtomicLong(0)).incrementAndGet();
     }
 
     /**

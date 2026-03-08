@@ -14,8 +14,10 @@ import java.time.LocalDateTime;
 public class SkillMessage {
 
     private Long id;
+    private String messageId;
     private Long sessionId;
     private Integer seq;
+    private Integer messageSeq;
     private Role role;
     private String content;
 
