@@ -31,10 +31,11 @@ public class SkillSessionService {
      * Create a new skill session.
      */
     @Transactional
-    public SkillSession createSession(Long userId, String ak,
+    public SkillSession createSession(Long userId, Long skillDefinitionId, String ak,
             String title, String imGroupId) {
         SkillSession session = SkillSession.builder()
                 .userId(userId)
+                .skillDefinitionId(skillDefinitionId)
                 .ak(ak)
                 .title(title)
                 .imGroupId(imGroupId)
@@ -42,7 +43,8 @@ public class SkillSessionService {
                 .build();
 
         sessionRepository.insert(session);
-        log.info("Created skill session: id={}, userId={}, ak={}", session.getId(), userId, ak);
+        log.info("Created skill session: id={}, userId={}, ak={}, skillDefId={}", session.getId(), userId, ak,
+                skillDefinitionId);
         return session;
     }
 
