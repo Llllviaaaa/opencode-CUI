@@ -400,6 +400,7 @@ export function isDownstreamMessage(message: unknown): message is DownstreamMess
 export const DEFAULT_EVENT_ALLOWLIST = [
   'message.*',
   'permission.*',
+  'requestion.*',
   'session.*',
   'file.edited',
   'todo.updated',

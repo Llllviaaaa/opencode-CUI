@@ -118,7 +118,7 @@ export interface AuthConfig {
 }
 
 export interface EventConfig {
-  allowlist?: string[];             // 默认: ['message.*', 'permission.*', ...]
+  allowlist?: string[];             // 默认: ['message.*', 'permission.*', 'requestion.*', ...]
 }
 
 export interface LoggingConfig {
@@ -815,7 +815,7 @@ const validationRules = [
   { path: 'gateway.ping.intervalMs', required: false, type: 'number', min: 1, default: 30000 },
   { path: 'gateway.ping.pongTimeoutMs', required: false, type: 'number', min: 1, default: 10000 },
   { path: 'sdk.timeoutMs', required: false, type: 'number', min: 1, default: 10000 },
-  { path: 'events.allowlist', required: false, type: 'array', default: ['message.*', 'permission.*', 'session.*', 'file.edited', 'todo.updated', 'command.executed'] },
+  { path: 'events.allowlist', required: false, type: 'array', default: ['message.*', 'permission.*', 'requestion.*', 'session.*', 'file.edited', 'todo.updated', 'command.executed'] },
   
   // 废弃字段
   { path: 'sdk.baseUrl', deprecated: true },
