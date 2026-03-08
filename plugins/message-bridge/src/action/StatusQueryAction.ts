@@ -1,4 +1,5 @@
 import { Action, StatusQueryPayload, ValidationResult, ActionResult, ActionContext, ErrorCode } from '../types';
+import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
 /**
  * Concrete implementation of status_query action for online status retrieval
@@ -73,10 +74,11 @@ export class StatusQueryAction implements Action<StatusQueryPayload> {
       };
     } catch (error) {
       const errorCode = this.errorMapper(error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = getErrorMessage(error);
       context.logger?.error('action.status_query.exception', {
         error: errorMessage,
         errorCode,
+        ...getErrorDetailsForLog(error),
         latencyMs: Date.now() - startedAt,
       });
 

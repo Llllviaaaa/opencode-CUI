@@ -45,6 +45,10 @@
 | `traceId` | 同一 `AppLogger` 生命周期内链路追踪 ID |
 | `component` | 组件标识（如 `runtime`/`gateway`/`singleton`） |
 | `state` | 连接状态（`DISCONNECTED/CONNECTING/CONNECTED/READY`） |
+| `errorDetail` | 统一错误提取后的明细消息 |
+| `errorName` | 底层错误名（如 `Error`/`TypeError`） |
+| `sourceErrorCode` | 底层错误对象里的 `code` 字段 |
+| `errorType` | 错误或事件类型（如 `Error` / `error`） |
 | `sessionId` | 会话 ID（若可提取） |
 | `agentId` | agent 标识，重连后可能重新绑定 |
 | `action` | 下行调用动作名（chat/create_session/...） |
@@ -146,7 +150,7 @@ sequenceDiagram
 | `runtime.start.aborted_precheck` | warn | start 前检测到 abort | - | `src/runtime/BridgeRuntime.ts:61` |
 | `runtime.start.disabled_by_config` | info | `config.enabled=false` | - | `src/runtime/BridgeRuntime.ts:67` |
 | `runtime.agent.rebound` | info | 连接状态转 `CONNECTING` 后重置 agentId | `agentId` | `src/runtime/BridgeRuntime.ts:103` |
-| `runtime.downstream_message_error` | error | 下行消息处理抛错 | `error` | `src/runtime/BridgeRuntime.ts:114` |
+| `runtime.downstream_message_error` | error | 下行消息处理抛错 | `error`,`errorDetail`,`errorName`,`sourceErrorCode?` | `src/runtime/BridgeRuntime.ts:114` |
 | `runtime.start.aborted_before_connect` | warn | connect 前中止 | - | `src/runtime/BridgeRuntime.ts:124` |
 | `runtime.start.aborted_after_connect` | warn | connect 后中止 | - | `src/runtime/BridgeRuntime.ts:132` |
 | `runtime.start.completed` | info | 启动完成 | `agentId` | `src/runtime/BridgeRuntime.ts:137` |
@@ -163,7 +167,7 @@ sequenceDiagram
 | `runtime.singleton.await_initializing` | debug | 等待初始化中的 runtime | - | `src/runtime/singleton.ts:18` |
 | `runtime.singleton.initialization_cancelled` | warn | 初始化过程被取消 | - | `src/runtime/singleton.ts:34` |
 | `runtime.singleton.initialized` | info | singleton 初始化完成 | - | `src/runtime/singleton.ts:38` |
-| `runtime.singleton.initialization_failed` | error | singleton 初始化失败 | `error` | `src/runtime/singleton.ts:43` |
+| `runtime.singleton.initialization_failed` | error | singleton 初始化失败 | `error`,`errorDetail`,`errorName`,`sourceErrorCode?` | `src/runtime/singleton.ts:43` |
 
 ### 4.2 gateway.*
 
@@ -176,8 +180,8 @@ sequenceDiagram
 | `gateway.register.sent` | info | register 消息发送后 | `toolType`,`toolVersion` | `src/connection/GatewayConnection.ts:119` |
 | `gateway.ready` | info | 状态切到 READY | - | `src/connection/GatewayConnection.ts:124` |
 | `gateway.close` | warn | WebSocket onclose | `opened`,`manuallyDisconnected`,`aborted` | `src/connection/GatewayConnection.ts:130` |
-| `gateway.error` | error | WebSocket onerror | `error` | `src/connection/GatewayConnection.ts:148` |
-| `gateway.connect.failed` | error | connect 抛异常（URL/构造等） | `error` | `src/connection/GatewayConnection.ts:162` |
+| `gateway.error` | error | WebSocket onerror | `error`,`errorDetail`,`errorName?`,`errorType?`,`eventType?`,`readyState?` | `src/connection/GatewayConnection.ts:148` |
+| `gateway.connect.failed` | error | connect 抛异常（URL/构造等） | `error`,`errorDetail`,`errorName?`,`sourceErrorCode?` | `src/connection/GatewayConnection.ts:162` |
 | `gateway.disconnect.requested` | info | 主动 disconnect | `state` | `src/connection/GatewayConnection.ts:171` |
 | `gateway.send.rejected_not_connected` | warn | 非连接态发送消息 | - | `src/connection/GatewayConnection.ts:190` |
 | `gateway.send` | debug | send 前记录消息类型 | `messageType` | `src/connection/GatewayConnection.ts:198` |
@@ -199,7 +203,7 @@ sequenceDiagram
 | `event.forwarding` | info | runtime 上行发送前 | `eventType`,`sessionId` | `src/runtime/BridgeRuntime.ts:168` |
 | `event.forwarded` | debug | runtime 上行发送后 | `eventType`,`sessionId` | `src/runtime/BridgeRuntime.ts:175` |
 | `event.relay.started` | info | EventRelay 启动 | - | `src/event/EventRelay.ts:44` |
-| `event.relay.error` | error | EventRelay 处理事件异常 | `error` | `src/event/EventRelay.ts:47` |
+| `event.relay.error` | error | EventRelay 处理事件异常 | `error`,`errorDetail`,`errorName`,`sourceErrorCode?` | `src/event/EventRelay.ts:47` |
 | `event.relay.stopped` | info | EventRelay 停止 | - | `src/event/EventRelay.ts:58` |
 | `event.relay.ignored_not_ready` | debug | EventRelay 未就绪时忽略 | `eventType` | `src/event/EventRelay.ts:67` |
 | `event.relay.rejected_allowlist` | warn | EventRelay allowlist 拒绝 | `eventType` | `src/event/EventRelay.ts:72` |
@@ -284,7 +288,7 @@ sequenceDiagram
 3. `router.route.completed`
 4. `runtime.invoke.completed`
 
-重点查看 `error`、`errorCode`、`latencyMs`。
+重点查看 `error`、`errorDetail`、`errorName`、`sourceErrorCode`、`errorCode`、`latencyMs`。
 
 ### 5.4 tool_error 回传失败
 

@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'path';
 import { promises } from 'fs';
 import { BridgeConfig, DEFAULT_EVENT_ALLOWLIST } from '../types';
 import type { BridgeLogger } from '../runtime/AppLogger';
+import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 import { JsoncParser } from './JsoncParser';
 
 export class ConfigResolver {
@@ -105,7 +106,8 @@ export class ConfigResolver {
       }
       this.logger?.error('config.source.load_failed', {
         path: filePath,
-        error: error instanceof Error ? error.message : String(error),
+        error: getErrorMessage(error),
+        ...getErrorDetailsForLog(error),
       });
       throw error;
     }

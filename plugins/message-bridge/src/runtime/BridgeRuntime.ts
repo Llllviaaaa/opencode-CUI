@@ -22,6 +22,7 @@ import { EventFilter } from '../event/EventFilter';
 import { BridgeEvent } from './types';
 import { createSdkAdapter } from './SdkAdapter';
 import { AppLogger, type BridgeLogger } from './AppLogger';
+import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
 export interface BridgeRuntimeOptions {
   workspacePath?: string;
@@ -85,10 +86,11 @@ export class BridgeRuntime {
         gateway_url: config.gateway.url,
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = getErrorMessage(error);
       this.logger.error('runtime.config.loading_failed', {
         error: errorMessage,
         workspacePath: this.options.workspacePath,
+        ...getErrorDetailsForLog(error),
       });
       throw error;
     }
@@ -144,7 +146,8 @@ export class BridgeRuntime {
       this.logger.debug('gateway.message.received', { messageType });
       this.handleDownstreamMessage(message).catch((error) => {
         this.logger.error('runtime.downstream_message_error', {
-          error: error instanceof Error ? error.message : String(error),
+          error: getErrorMessage(error),
+          ...getErrorDetailsForLog(error),
         });
       });
     });

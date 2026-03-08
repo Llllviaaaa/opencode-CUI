@@ -1,5 +1,6 @@
 import { parse as jsoncParse } from 'jsonc-parser';
 import { promises as fs } from 'fs';
+import { getErrorMessage } from '../utils/error';
 
 /**
  * JSONC parser that supports comments and trailing commas
@@ -15,7 +16,7 @@ export class JsoncParser {
     try {
       return jsoncParse(content);
     } catch (error) {
-      throw new Error(`Failed to parse JSONC: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Failed to parse JSONC: ${getErrorMessage(error)}`);
     }
   }
 
@@ -34,7 +35,7 @@ export class JsoncParser {
         // File doesn't exist
         return null;
       }
-      throw new Error(`Failed to read or parse JSONC file ${filePath}: ${(error as Error).message}`);
+      throw new Error(`Failed to read or parse JSONC file ${filePath}: ${getErrorMessage(error)}`);
     }
   }
 }

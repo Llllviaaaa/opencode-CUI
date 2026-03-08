@@ -11,26 +11,13 @@ import {
   safeExecute,
   stateToErrorCode
 } from '../types';
+import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
 /**
  * Concrete implementation of chat action for sending messages to OpenCode
  */
 export class ChatAction implements Action<ChatPayload> {
   name: string = 'chat';
-
-  private formatUnknownError(error: unknown): string {
-    if (error instanceof Error) {
-      return error.message;
-    }
-    if (typeof error === 'string') {
-      return error;
-    }
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return String(error);
-    }
-  }
 
   private normalizePayload(payload: unknown): { toolSessionId: string; text: string } | null {
     if (!payload || typeof payload !== 'object') {
@@ -64,7 +51,7 @@ export class ChatAction implements Action<ChatPayload> {
         }
         return String(messageField);
       }
-      return this.formatUnknownError(errorField);
+      return getErrorMessage(errorField);
     }
     return 'Unknown error';
   }
@@ -79,7 +66,7 @@ export class ChatAction implements Action<ChatPayload> {
         path: { id: toolSessionId },
         body: { parts: [{ type: 'text', text }] },
       }),
-      (error) => this.formatUnknownError(error),
+      (error) => getErrorMessage(error),
     );
 
     if (executionResult.success) {
@@ -174,11 +161,12 @@ export class ChatAction implements Action<ChatPayload> {
       };
     } catch (error) {
       const errorCode = this.errorMapper(error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = getErrorMessage(error);
       context.logger?.error('action.chat.exception', {
         toolSessionId: normalized.toolSessionId,
         error: errorMessage,
         errorCode,
+        ...getErrorDetailsForLog(error),
         latencyMs: Date.now() - startedAt,
       });
 

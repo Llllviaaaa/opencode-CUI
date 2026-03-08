@@ -17,7 +17,7 @@ class ScriptedWebSocket {
 
     setTimeout(() => {
       if (this.script.errorOnOpen) {
-        this.onerror?.(new Error('socket error'));
+        this.onerror?.(this.script.errorEvent ?? new Error('socket error'));
         return;
       }
       if (this.script.closeBeforeOpen) {
@@ -118,6 +118,90 @@ describe('DefaultGatewayConnection coverage', () => {
     });
     errorConn.on('error', () => {});
     await expect(errorConn.connect()).rejects.toBeDefined();
+  });
+
+  test('logs websocket error details when the runtime provides them', async () => {
+    const errorLogs = [];
+    ScriptedWebSocket.scripts.push({ errorOnOpen: true });
+    const conn = new DefaultGatewayConnection({
+      url: 'ws://localhost:8081/ws/agent',
+      registerMessage: registerMessage(),
+      logger: {
+        debug() {},
+        info() {},
+        warn() {},
+        error(message, extra) {
+          errorLogs.push({ message, extra });
+        },
+        child() {
+          return this;
+        },
+        getTraceId() {
+          return 'trace-test';
+        },
+      },
+    });
+    conn.on('error', () => {});
+
+    await expect(conn.connect()).rejects.toBeDefined();
+
+    expect(errorLogs).toContainEqual({
+      message: 'gateway.error',
+      extra: {
+        error: 'gateway_websocket_error',
+        state: 'CONNECTING',
+        errorDetail: 'socket error',
+        errorName: 'Error',
+        errorType: 'Error',
+        rawType: 'Error',
+      },
+    });
+  });
+
+  test('logs websocket event metadata when onerror receives an event object', async () => {
+    const errorLogs = [];
+    ScriptedWebSocket.scripts.push({
+      errorOnOpen: true,
+      errorEvent: {
+        type: 'error',
+        message: 'socket error',
+        target: { readyState: 0 },
+      },
+    });
+    const conn = new DefaultGatewayConnection({
+      url: 'ws://localhost:8081/ws/agent',
+      registerMessage: registerMessage(),
+      logger: {
+        debug() {},
+        info() {},
+        warn() {},
+        error(message, extra) {
+          errorLogs.push({ message, extra });
+        },
+        child() {
+          return this;
+        },
+        getTraceId() {
+          return 'trace-test';
+        },
+      },
+    });
+    conn.on('error', () => {});
+
+    await expect(conn.connect()).rejects.toBeDefined();
+
+    expect(errorLogs).toContainEqual({
+      message: 'gateway.error',
+      extra: {
+        error: 'gateway_websocket_error',
+        state: 'CONNECTING',
+        errorDetail: 'socket error',
+        errorType: 'error',
+        rawType: 'Object',
+        eventType: 'error',
+        readyState: 0,
+      },
+    });
   });
 
   test('reconnects after opened connection closes unexpectedly', async () => {

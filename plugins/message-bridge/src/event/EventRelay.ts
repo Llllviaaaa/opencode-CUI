@@ -2,6 +2,7 @@ import { GatewayConnection, StateManager } from '../connection';
 import { EventFilter } from './EventFilter';
 import { EnvelopeBuilder } from './EnvelopeBuilder';
 import type { BridgeLogger } from '../runtime/AppLogger';
+import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
 export interface OpenCodeEvent {
   type: string;
@@ -44,7 +45,10 @@ export class EventRelay {
     this.logger?.info('event.relay.started');
     this.subscription = this.opencode.event.subscribe((event: OpenCodeEvent) => {
       this.handleEvent(event).catch((error) => {
-        this.logger?.error('event.relay.error', { error: error instanceof Error ? error.message : String(error) });
+        this.logger?.error('event.relay.error', {
+          error: getErrorMessage(error),
+          ...getErrorDetailsForLog(error),
+        });
       });
     });
   }

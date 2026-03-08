@@ -10,6 +10,7 @@ import {
   safeExecute,
   stateToErrorCode
 } from '../types';
+import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
 /**
  * Concrete implementation of close_session action (PRD §FR-MB-05: uses abort semantics, not delete)
@@ -93,7 +94,7 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
         client.session.abort({
           path: { id: normalized.toolSessionId }
         }),
-        (error) => `Close session (abort) failed: ${error instanceof Error ? error.message : String(error)}`
+        (error) => `Close session (abort) failed: ${getErrorMessage(error)}`
       );
 
       if (executionResult.success) {
@@ -104,20 +105,16 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
           };
         }
 
-        let errorMessage = 'Unknown error';
-        if (executionResult.data && typeof executionResult.data === 'object' && 'error' in executionResult.data) {
-          const errorField = (executionResult.data as { error: unknown }).error;
-          if (errorField && typeof errorField === 'object' && errorField !== null && 'message' in errorField) {
-            const messageField = (errorField as { message: unknown }).message;
-            errorMessage = typeof messageField === 'string' ? messageField : String(messageField) || 'Unknown error';
-          } else {
-            errorMessage = String(errorField) || 'Unknown error';
-          }
-        }
+        const errorField =
+          executionResult.data && typeof executionResult.data === 'object' && 'error' in executionResult.data
+            ? (executionResult.data as { error: unknown }).error
+            : undefined;
+        const errorMessage = errorField !== undefined ? getErrorMessage(errorField) : 'Unknown error';
 
         context.logger?.error('action.close_session.sdk_error_payload', {
           toolSessionId: normalized.toolSessionId,
           error: errorMessage,
+          ...(errorField !== undefined ? getErrorDetailsForLog(errorField) : {}),
           latencyMs: Date.now() - startedAt,
         });
         return {
@@ -139,11 +136,12 @@ export class CloseSessionAction implements Action<CloseSessionPayload> {
       };
     } catch (error) {
       const errorCode = this.errorMapper(error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = getErrorMessage(error);
       context.logger?.error('action.close_session.exception', {
         toolSessionId: normalized.toolSessionId,
         error: errorMessage,
         errorCode,
+        ...getErrorDetailsForLog(error),
         latencyMs: Date.now() - startedAt,
       });
 

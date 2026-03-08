@@ -170,6 +170,7 @@ This plugin now emits key-chain logs via OpenCode client API `client.app.log()` 
 - Service name is fixed as `message-bridge`
 - Levels: `debug`, `info`, `warn`, `error`
 - Logs always include the full redacted `extra` payload
+- Error logs include normalized detail fields such as `errorDetail`, `errorName`, `sourceErrorCode`, and `errorType` when available
 - `BRIDGE_DEBUG=true` only enables local debug hints when log delivery is unavailable or fails
 - Log delivery failures never block bridge traffic
 - Detailed reference (levels/fields/triggers/sequence diagrams): `docs/operations/logging-reference.md`
