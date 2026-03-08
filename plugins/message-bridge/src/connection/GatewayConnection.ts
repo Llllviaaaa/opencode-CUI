@@ -12,10 +12,37 @@ export interface GatewayConnectionEvents {
 export interface GatewayConnection {
   connect(): Promise<void>;
   disconnect(): void;
-  send(message: unknown): void;
+  send(message: unknown, logContext?: GatewaySendLogContext): void;
   isConnected(): boolean;
   getState(): ConnectionState;
   on<E extends keyof GatewayConnectionEvents>(event: E, listener: GatewayConnectionEvents[E]): this;
+}
+
+export interface GatewaySendLogContext {
+  traceId?: string;
+  runtimeTraceId?: string;
+  bridgeMessageId?: string;
+  gatewayMessageId?: string;
+  sessionId?: string;
+  toolSessionId?: string;
+  eventType?: string;
+  action?: string;
+  opencodeMessageId?: string;
+  opencodePartId?: string;
+  toolCallId?: string;
+}
+
+function buildGatewaySendLogExtra(messageType: string, payloadBytes: number, logContext?: GatewaySendLogContext) {
+  if (!logContext) {
+    return { messageType, payloadBytes };
+  }
+
+  const { bridgeMessageId: _bridgeMessageId, ...rest } = logContext;
+  return {
+    messageType,
+    payloadBytes,
+    ...rest,
+  };
 }
 
 export interface GatewayConnectionOptions {
@@ -75,6 +102,14 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private manuallyDisconnected = false;
   private state: ConnectionState = 'DISCONNECTED';
+  private lastMessageSummary: {
+    direction: 'sent' | 'received';
+    messageType?: string;
+    messageId?: string;
+    payloadBytes?: number;
+    eventType?: string;
+    opencodeMessageId?: string;
+  } | null = null;
 
   constructor(private readonly options: GatewayConnectionOptions) {
     super();
@@ -171,6 +206,12 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
             code: event?.code,
             reason: event?.reason,
             wasClean: event?.wasClean,
+            lastMessageDirection: this.lastMessageSummary?.direction,
+            lastMessageType: this.lastMessageSummary?.messageType,
+            lastMessageId: this.lastMessageSummary?.messageId,
+            lastPayloadBytes: this.lastMessageSummary?.payloadBytes,
+            lastEventType: this.lastMessageSummary?.eventType,
+            lastOpencodeMessageId: this.lastMessageSummary?.opencodeMessageId,
           });
           if (!opened) {
             finalizeReject(new Error('gateway_websocket_closed_before_open'));
@@ -231,7 +272,7 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
     this.setState('DISCONNECTED');
   }
 
-  send(message: unknown): void {
+  send(message: unknown, logContext?: GatewaySendLogContext): void {
     if (!this.isConnected() || !this.ws) {
       this.options.logger?.warn('gateway.send.rejected_not_connected', {
         state: this.state,
@@ -247,8 +288,20 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
       message && typeof message === 'object' && 'type' in (message as { type?: unknown })
         ? String((message as { type?: unknown }).type ?? '')
         : 'unknown';
-    this.options.logger?.debug('gateway.send', { messageType });
-    this.ws.send(JSON.stringify(message));
+    const serialized = JSON.stringify(message);
+    const payloadBytes = Buffer.byteLength(serialized, 'utf8');
+    this.lastMessageSummary = {
+      direction: 'sent',
+      messageType,
+      messageId: logContext?.bridgeMessageId ?? logContext?.gatewayMessageId,
+      payloadBytes,
+      eventType: logContext?.eventType,
+      opencodeMessageId: logContext?.opencodeMessageId,
+    };
+    this.options.logger?.debug('gateway.send', {
+      ...buildGatewaySendLogExtra(messageType, payloadBytes, logContext),
+    });
+    this.ws.send(serialized);
   }
 
   isConnected(): boolean {
@@ -339,6 +392,7 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
     } else {
       text = await (event.data as Blob).text();
     }
+    const frameBytes = Buffer.byteLength(text, 'utf8');
 
     try {
       const message = JSON.parse(text);
@@ -346,14 +400,29 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
         message && typeof message === 'object' && 'type' in (message as { type?: unknown })
           ? String((message as { type?: unknown }).type ?? '')
           : 'unknown';
-      this.options.logger?.debug('gateway.message.received', { messageType });
+      const gatewayMessageId = this.extractGatewayMessageId(message);
+      this.lastMessageSummary = {
+        direction: 'received',
+        messageType,
+        messageId: gatewayMessageId,
+        payloadBytes: frameBytes,
+      };
+      this.options.logger?.debug('gateway.message.received', { messageType, frameBytes, gatewayMessageId });
       this.emit('message', message);
     } catch {
       this.options.logger?.debug('gateway.message.ignored_non_json', {
         payloadLength: text.length,
+        frameBytes,
       });
       // Ignore non-json messages from gateway.
     }
+  }
+
+  private extractGatewayMessageId(message: unknown): string | undefined {
+    if (!isRecord(message) || !isRecord(message.envelope)) {
+      return undefined;
+    }
+    return typeof message.envelope.messageId === 'string' ? message.envelope.messageId : undefined;
   }
 
   private setState(next: ConnectionState): void {

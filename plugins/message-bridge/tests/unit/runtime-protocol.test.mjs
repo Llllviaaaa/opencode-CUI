@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import { BridgeRuntime } from '../../dist/runtime/BridgeRuntime.js';
 import { EnvelopeBuilder } from '../../dist/event/EnvelopeBuilder.js';
+import { EventFilter } from '../../dist/event/EventFilter.js';
 
 describe('runtime protocol strictness', () => {
   test('rejects non-baseline nested invoke payload and returns tool_error without code', async () => {
@@ -308,5 +309,121 @@ describe('runtime protocol strictness', () => {
       console.debug = originalDebug;
       await rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  test('logs event ids, delta bytes, and traceId when forwarding upstream events', async () => {
+    const appLogs = [];
+    const runtime = new BridgeRuntime({
+      client: {
+        app: {
+          log: async (options) => {
+            appLogs.push(options.body);
+            return true;
+          },
+        },
+      },
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = {
+      send: (message, context) => sent.push({ message, context }),
+    };
+    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
+    runtime.eventFilter = new EventFilter(['message.*']);
+    runtime.stateManager.setState('READY');
+    runtime.toolToSkillSessionMap.set('tool-1', 'skill-1');
+
+    await runtime.handleEvent({
+      type: 'message.part.updated',
+      properties: {
+        delta: '你好，bridge',
+        part: {
+          sessionID: 'tool-1',
+          messageID: 'op-msg-1',
+          id: 'part-1',
+          type: 'text',
+        },
+      },
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    const receivedLog = appLogs.find((entry) => entry.message === 'event.received');
+    const forwardingLog = appLogs.find((entry) => entry.message === 'event.forwarding');
+    const forwardedLog = appLogs.find((entry) => entry.message === 'event.forwarded');
+
+    expect(receivedLog.extra.traceId).toBe('op-msg-1');
+    expect(receivedLog.extra.runtimeTraceId).toBeDefined();
+    expect(receivedLog.extra.opencodeMessageId).toBe('op-msg-1');
+    expect(receivedLog.extra.opencodePartId).toBe('part-1');
+    expect(receivedLog.extra.toolSessionId).toBe('tool-1');
+    expect(receivedLog.extra.partType).toBe('text');
+    expect(receivedLog.extra.deltaBytes).toBe(Buffer.byteLength('你好，bridge', 'utf8'));
+
+    expect(forwardingLog.extra.sessionId).toBe('skill-1');
+    expect(forwardingLog.extra.traceId).toBeDefined();
+    expect('bridgeMessageId' in forwardingLog.extra).toBe(false);
+    expect(forwardingLog.extra.opencodeMessageId).toBe('op-msg-1');
+    expect(forwardingLog.extra.opencodePartId).toBe('part-1');
+    expect(forwardedLog.extra.traceId).toBe(forwardingLog.extra.traceId);
+    expect('bridgeMessageId' in forwardedLog.extra).toBe(false);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].context.traceId).toBe(forwardingLog.extra.traceId);
+    expect(sent[0].context.bridgeMessageId).toBe(forwardingLog.extra.traceId);
+    expect(sent[0].context.opencodeMessageId).toBe('op-msg-1');
+    expect(sent[0].context.opencodePartId).toBe('part-1');
+  });
+
+  test('uses gatewayMessageId as traceId across downstream invoke handling', async () => {
+    const appLogs = [];
+    const runtime = new BridgeRuntime({
+      client: {
+        app: {
+          log: async (options) => {
+            appLogs.push(options.body);
+            return true;
+          },
+        },
+        session: {
+          create: async () => ({}),
+          abort: async () => ({}),
+          prompt: async () => ({ data: { ok: true } }),
+        },
+        postSessionIdPermissionsPermissionId: async () => ({}),
+      },
+    });
+
+    runtime.gatewayConnection = { send: () => {} };
+    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      action: 'chat',
+      sessionId: 'skill-42',
+      payload: {
+        toolSessionId: 'tool-42',
+        text: 'hello',
+      },
+      envelope: {
+        messageId: 'gw-msg-1',
+        sessionId: 'skill-42',
+      },
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    const runtimeInvokeReceived = appLogs.find((entry) => entry.message === 'runtime.invoke.received');
+    const routerReceived = appLogs.find((entry) => entry.message === 'router.route.received');
+    const actionStarted = appLogs.find((entry) => entry.message === 'action.chat.started');
+    const runtimeInvokeCompleted = appLogs.find((entry) => entry.message === 'runtime.invoke.completed');
+
+    expect(runtimeInvokeReceived.extra.traceId).toBe('gw-msg-1');
+    expect(routerReceived.extra.traceId).toBe('gw-msg-1');
+    expect(actionStarted.extra.traceId).toBe('gw-msg-1');
+    expect(runtimeInvokeCompleted.extra.traceId).toBe('gw-msg-1');
+
+    expect(runtimeInvokeReceived.extra.gatewayMessageId).toBe('gw-msg-1');
+    expect(runtimeInvokeReceived.extra.toolSessionId).toBe('tool-42');
+    expect(runtimeInvokeCompleted.extra.runtimeTraceId).toBe(runtimeInvokeReceived.extra.runtimeTraceId);
   });
 });

@@ -37,6 +37,8 @@ describe('AppLogger coverage', () => {
     expect(calls[0].body.extra.sessionId).toBe('s-1');
     expect(calls[0].body.extra.token).toBe('***');
     expect(typeof calls[0].body.extra.traceId).toBe('string');
+    expect(typeof calls[0].body.extra.runtimeTraceId).toBe('string');
+    expect(calls[0].body.extra.traceId).toBe(calls[0].body.extra.runtimeTraceId);
   });
 
   test('preserves nested objects and arrays with redaction when debug mode is disabled', async () => {
@@ -122,5 +124,26 @@ describe('AppLogger coverage', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(debugSpy).toHaveBeenCalled();
     debugSpy.mockRestore();
+  });
+
+  test('child logger can override traceId while preserving runtimeTraceId', async () => {
+    const calls = [];
+    const logger = new AppLogger({
+      app: {
+        log: async (options) => {
+          calls.push(options);
+          return true;
+        },
+      },
+    });
+
+    logger.child({ traceId: 'msg-1', bridgeMessageId: 'bridge-1' }).info('event.forwarding');
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].body.extra.traceId).toBe('msg-1');
+    expect(calls[0].body.extra.bridgeMessageId).toBe('bridge-1');
+    expect(calls[0].body.extra.runtimeTraceId).toBe(logger.getTraceId());
+    expect(calls[0].body.extra.runtimeTraceId).not.toBe('msg-1');
   });
 });

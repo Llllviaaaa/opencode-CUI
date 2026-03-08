@@ -67,26 +67,50 @@ export class EventRelay {
   }
 
   private async handleEvent(event: OpenCodeEvent): Promise<void> {
+    const eventFields = this.extractEventLogFields(event);
+    const eventTraceId = eventFields.opencodeMessageId ?? this.logger?.getTraceId();
+    const eventLogger = this.createMessageLogger(eventFields, eventTraceId);
     if (!this.stateManager.isReady()) {
-      this.logger?.debug('event.relay.ignored_not_ready', { eventType: event.type });
+      eventLogger?.debug('event.relay.ignored_not_ready');
       return;
     }
 
     if (!this.eventFilter.isAllowed(event.type)) {
-      this.logger?.warn('event.relay.rejected_allowlist', { eventType: event.type });
+      eventLogger?.warn('event.relay.rejected_allowlist');
       return;
     }
 
     const sessionId = this.extractSessionId(event);
     const envelope = this.getEnvelopeBuilder().build(sessionId);
-    this.logger?.debug('event.relay.forwarding', { eventType: event.type, sessionId });
+    const bridgeMessageId = envelope.messageId;
+    const forwardingLogger = this.createMessageLogger(
+      {
+        ...eventFields,
+        sessionId,
+      },
+      bridgeMessageId,
+    );
+    forwardingLogger?.debug('event.relay.forwarding');
 
-    this.gateway.send({
-      type: 'tool_event',
-      sessionId,
-      event,
-      envelope,
-    });
+    this.gateway.send(
+      {
+        type: 'tool_event',
+        sessionId,
+        event,
+        envelope,
+      },
+      {
+        traceId: bridgeMessageId,
+        runtimeTraceId: this.logger?.getTraceId(),
+        bridgeMessageId,
+        sessionId,
+        toolSessionId: eventFields.toolSessionId,
+        eventType: event.type,
+        opencodeMessageId: eventFields.opencodeMessageId,
+        opencodePartId: eventFields.opencodePartId,
+        toolCallId: eventFields.toolCallId,
+      },
+    );
   }
 
   private getEnvelopeBuilder(): EnvelopeBuilder {
@@ -104,7 +128,11 @@ export class EventRelay {
   }
 
   private extractSessionId(event: OpenCodeEvent): string | undefined {
-    const fromProps = event.properties?.sessionId;
+    const fromProps =
+      event.properties?.sessionId ??
+      event.properties?.sessionID ??
+      (event.properties?.part as { sessionID?: unknown; sessionId?: unknown } | undefined)?.sessionID ??
+      (event.properties?.part as { sessionID?: unknown; sessionId?: unknown } | undefined)?.sessionId;
     if (typeof fromProps === 'string' && fromProps.trim()) {
       return fromProps;
     }
@@ -114,5 +142,55 @@ export class EventRelay {
     }
 
     return undefined;
+  }
+
+  private createMessageLogger(extra: Record<string, unknown>, traceId?: string): BridgeLogger | undefined {
+    if (!this.logger) {
+      return undefined;
+    }
+    if (traceId && traceId !== this.logger.getTraceId()) {
+      return this.logger.child({ ...extra, traceId });
+    }
+    return this.logger.child(extra);
+  }
+
+  private extractEventLogFields(event: OpenCodeEvent) {
+    const properties = event.properties ?? {};
+    const part =
+      typeof properties.part === 'object' && properties.part !== null
+        ? (properties.part as Record<string, unknown>)
+        : undefined;
+    const delta =
+      typeof properties.delta === 'string'
+        ? properties.delta
+        : typeof part?.delta === 'string'
+          ? part.delta
+          : undefined;
+    const diff = Array.isArray(properties.diff) ? properties.diff : undefined;
+
+    return {
+      eventType: event.type,
+      toolSessionId:
+        (typeof part?.sessionID === 'string' && part.sessionID.trim() ? part.sessionID : undefined) ??
+        (typeof part?.sessionId === 'string' && part.sessionId.trim() ? part.sessionId : undefined) ??
+        (typeof properties.sessionID === 'string' && properties.sessionID.trim() ? properties.sessionID : undefined) ??
+        (typeof properties.sessionId === 'string' && properties.sessionId.trim() ? properties.sessionId : undefined),
+      opencodeMessageId:
+        (typeof part?.messageID === 'string' && part.messageID.trim() ? part.messageID : undefined) ??
+        (typeof part?.messageId === 'string' && part.messageId.trim() ? part.messageId : undefined) ??
+        (typeof properties.messageID === 'string' && properties.messageID.trim() ? properties.messageID : undefined) ??
+        (typeof properties.messageId === 'string' && properties.messageId.trim() ? properties.messageId : undefined),
+      opencodePartId:
+        (typeof part?.id === 'string' && part.id.trim() ? part.id : undefined) ??
+        (typeof properties.partID === 'string' && properties.partID.trim() ? properties.partID : undefined) ??
+        (typeof properties.partId === 'string' && properties.partId.trim() ? properties.partId : undefined),
+      partType: typeof part?.type === 'string' && part.type.trim() ? part.type : undefined,
+      toolCallId:
+        (typeof part?.callID === 'string' && part.callID.trim() ? part.callID : undefined) ??
+        (typeof part?.callId === 'string' && part.callId.trim() ? part.callId : undefined) ??
+        (typeof properties.toolCallId === 'string' && properties.toolCallId.trim() ? properties.toolCallId : undefined),
+      deltaBytes: delta ? Buffer.byteLength(delta, 'utf8') : undefined,
+      diffCount: diff?.length,
+    };
   }
 }

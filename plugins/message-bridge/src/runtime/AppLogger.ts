@@ -99,6 +99,7 @@ export class AppLogger implements BridgeLogger {
 
   private write(level: BridgeLogLevel, message: string, extra?: Record<string, unknown>): void {
     const enriched = {
+      runtimeTraceId: this.traceId,
       traceId: this.traceId,
       ...this.baseExtra,
       ...(extra || {}),
