@@ -11,8 +11,8 @@ import type { Message, MessagePart } from '../protocol/types';
 
 interface MessageBubbleProps {
   message: Message;
-  onQuestionAnswer?: (answer: string) => void;
-  onPermissionDecision?: (permissionId: string, allow: boolean) => void;
+  onQuestionAnswer?: (answer: string, toolCallId?: string) => void;
+  onPermissionDecision?: (permissionId: string, response: 'once' | 'always' | 'reject') => void;
 }
 
 const roleLabels: Record<string, string> = {

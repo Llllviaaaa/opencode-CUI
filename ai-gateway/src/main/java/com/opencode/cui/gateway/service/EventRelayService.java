@@ -9,7 +9,9 @@ import org.springframework.web.socket.WebSocketSession;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Routes messages between PC Agent WebSocket sessions and Skill Server.
@@ -22,6 +24,8 @@ public class EventRelayService {
 
     /** Map of ak → WebSocket session for connected agents */
     private final Map<String, WebSocketSession> agentSessions = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> opencodeStatusCache = new ConcurrentHashMap<>();
+    private final Map<String, CompletableFuture<Boolean>> pendingStatusQueries = new ConcurrentHashMap<>();
 
     private final ObjectMapper objectMapper;
     private final RedisMessageBroker redisMessageBroker;
@@ -60,6 +64,11 @@ public class EventRelayService {
             }
         }
 
+        opencodeStatusCache.put(ak, false);
+        CompletableFuture<Boolean> pending = pendingStatusQueries.remove(ak);
+        if (pending != null) {
+            pending.complete(false);
+        }
         redisMessageBroker.unsubscribeFromAgent(ak);
         log.debug("Removed agent session: ak={}", ak);
     }
@@ -72,14 +81,14 @@ public class EventRelayService {
     public void relayToSkillServer(String ak, GatewayMessage message) {
         GatewayMessage forwarded = message.withAk(ak);
 
-        log.debug("Relaying to skill: ak={}, type={}, sessionId={}, toolSessionId={}",
-                ak, message.getType(), forwarded.getSessionId(), forwarded.getToolSessionId());
+        log.debug("Relaying to skill: ak={}, type={}, welinkSessionId={}, toolSessionId={}",
+                ak, message.getType(), forwarded.getWelinkSessionId(), forwarded.getToolSessionId());
 
         try {
             boolean routed = skillRelayService.relayToSkill(forwarded);
             if (!routed) {
-                log.warn("Failed to route message to skill: ak={}, type={}, sessionId={}",
-                        ak, message.getType(), forwarded.getSessionId());
+                log.warn("Failed to route message to skill: ak={}, type={}, welinkSessionId={}",
+                        ak, message.getType(), forwarded.getWelinkSessionId());
             }
         } catch (Exception e) {
             log.error("Failed to relay to skill: ak={}, type={}",
@@ -124,6 +133,45 @@ public class EventRelayService {
                 .build();
         sendToLocalAgent(ak, query);
         log.debug("Sent status_query to agent: ak={}", ak);
+    }
+
+    /**
+     * Request the latest OpenCode health from an agent and wait briefly for a
+     * status_response. Falls back to the last cached value on timeout.
+     */
+    public Boolean requestAgentStatus(String ak) {
+        if (!hasAgentSession(ak)) {
+            return opencodeStatusCache.getOrDefault(ak, false);
+        }
+
+        CompletableFuture<Boolean> future = new CompletableFuture<>();
+        CompletableFuture<Boolean> previous = pendingStatusQueries.put(ak, future);
+        if (previous != null && !previous.isDone()) {
+            previous.complete(opencodeStatusCache.getOrDefault(ak, false));
+        }
+
+        sendStatusQuery(ak);
+
+        try {
+            return future.get(1500, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            log.debug("Timed out waiting for status_response: ak={}", ak);
+            return opencodeStatusCache.getOrDefault(ak, false);
+        } finally {
+            pendingStatusQueries.remove(ak, future);
+        }
+    }
+
+    public void recordStatusResponse(String ak, Boolean opencodeOnline) {
+        if (opencodeOnline == null) {
+            return;
+        }
+
+        opencodeStatusCache.put(ak, opencodeOnline);
+        CompletableFuture<Boolean> pending = pendingStatusQueries.remove(ak);
+        if (pending != null) {
+            pending.complete(opencodeOnline);
+        }
     }
 
     /**

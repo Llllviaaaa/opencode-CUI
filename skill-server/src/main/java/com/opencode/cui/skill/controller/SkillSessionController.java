@@ -11,6 +11,7 @@ import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -46,13 +47,16 @@ public class SkillSessionController {
      * session.
      */
     @PostMapping
-    public ResponseEntity<ApiResponse<SkillSession>> createSession(@RequestBody CreateSessionRequest request) {
-        if (request.getUserId() == null) {
+    public ResponseEntity<ApiResponse<SkillSession>> createSession(
+            @CookieValue(value = "userId", required = false) String userIdCookie,
+            @RequestBody CreateSessionRequest request) {
+        Long resolvedUserId = resolveUserId(userIdCookie);
+        if (resolvedUserId == null) {
             return ResponseEntity.badRequest().body(ApiResponse.error(400, "userId is required"));
         }
 
         SkillSession session = sessionService.createSession(
-                request.getUserId(),
+                resolvedUserId,
                 request.getAk(),
                 request.getTitle(),
                 request.getImGroupId());
@@ -65,10 +69,10 @@ public class SkillSessionController {
                     request.getAk(),
                     session.getId().toString(),
                     "create_session",
-                    null);
+                    buildCreateSessionPayload(request.getTitle()));
         }
 
-        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(session));
+        return ResponseEntity.ok(ApiResponse.ok(session));
     }
 
     /**
@@ -77,12 +81,17 @@ public class SkillSessionController {
      */
     @GetMapping
     public ResponseEntity<ApiResponse<PageResult<SkillSession>>> listSessions(
-            @RequestParam Long userId,
+            @CookieValue(value = "userId", required = false) String userIdCookie,
             @RequestParam(required = false) List<SkillSession.Status> statuses,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
 
-        PageResult<SkillSession> sessions = sessionService.listSessions(userId, statuses, page, size);
+        Long resolvedUserId = resolveUserId(userIdCookie);
+        if (resolvedUserId == null) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(400, "userId is required"));
+        }
+
+        PageResult<SkillSession> sessions = sessionService.listSessions(resolvedUserId, statuses, page, size);
         return ResponseEntity.ok(ApiResponse.ok(sessions));
     }
 
@@ -128,7 +137,7 @@ public class SkillSessionController {
             }
             sessionService.closeSession(id);
             gatewayRelayService.unsubscribeFromSession(id.toString());
-            return ResponseEntity.ok(ApiResponse.ok(Map.of("status", "closed", "sessionId", id.toString())));
+            return ResponseEntity.ok(ApiResponse.ok(Map.of("status", "closed", "welinkSessionId", id.toString())));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error(404, "Session not found"));
         }
@@ -137,8 +146,7 @@ public class SkillSessionController {
     /**
      * POST /api/skill/sessions/{id}/abort
      * Abort a session. Sends abort_session to AI-Gateway to stop ongoing AI
-     * operations,
-     * then marks the session as CLOSED.
+     * operations while keeping the session reusable.
      */
     @PostMapping("/{id}/abort")
     public ResponseEntity<ApiResponse<Map<String, String>>> abortSession(@PathVariable Long id) {
@@ -167,17 +175,38 @@ public class SkillSessionController {
                         payload);
             }
 
-            sessionService.closeSession(id);
-            gatewayRelayService.unsubscribeFromSession(id.toString());
-            return ResponseEntity.ok(ApiResponse.ok(Map.of("status", "aborted", "sessionId", id.toString())));
+            return ResponseEntity.ok(ApiResponse.ok(Map.of("status", "aborted", "welinkSessionId", id.toString())));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error(404, "Session not found"));
         }
     }
 
+    private Long resolveUserId(String cookieValue) {
+        if (cookieValue != null && !cookieValue.isBlank()) {
+            try {
+                return Long.valueOf(cookieValue);
+            } catch (NumberFormatException e) {
+                log.warn("Invalid userId cookie value: {}", cookieValue);
+            }
+        }
+        return null;
+    }
+
+    private String buildCreateSessionPayload(String title) {
+        var node = objectMapper.createObjectNode();
+        if (title != null && !title.isBlank()) {
+            node.put("title", title);
+        }
+        try {
+            return objectMapper.writeValueAsString(node);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to serialize create_session payload", e);
+            return "{}";
+        }
+    }
+
     @Data
     public static class CreateSessionRequest {
-        private Long userId;
         private String ak;
         private String title;
         private String imGroupId;

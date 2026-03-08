@@ -11,7 +11,7 @@ interface UseAgentSelectorReturn {
     error: string | null;
 }
 
-export function useAgentSelector(userId: string): UseAgentSelectorReturn {
+export function useAgentSelector(): UseAgentSelectorReturn {
     const [agents, setAgents] = useState<AgentInfo[]>([]);
     const [selectedAgent, setSelectedAgent] = useState<AgentInfo | null>(null);
     const [loading, setLoading] = useState(true);
@@ -20,7 +20,7 @@ export function useAgentSelector(userId: string): UseAgentSelectorReturn {
 
     const fetchAgents = useCallback(async () => {
         try {
-            const result = await getOnlineAgents(userId);
+            const result = await getOnlineAgents();
             setAgents(result);
             setError(null);
 
@@ -39,7 +39,7 @@ export function useAgentSelector(userId: string): UseAgentSelectorReturn {
         } finally {
             setLoading(false);
         }
-    }, [userId, selectedAgent]);
+    }, [selectedAgent]);
 
     // Initial fetch + polling
     useEffect(() => {

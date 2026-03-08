@@ -47,6 +47,13 @@
         LIMIT #{limit} OFFSET #{offset}
     </select>
 
+    <select id="findActiveByUserId" resultMap="SkillSessionResultMap">
+        <include refid="selectAllColumns"/>
+        WHERE user_id = #{userId}
+          AND status = 'ACTIVE'
+        ORDER BY last_active_at DESC
+    </select>
+
     <select id="countByUserId" resultType="long">
         SELECT COUNT(*) FROM skill_session WHERE user_id = #{userId}
     </select>

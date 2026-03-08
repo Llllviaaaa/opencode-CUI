@@ -31,8 +31,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * agent_online
  * - heartbeat: updates last_seen_at
  * - tool_event / tool_done / tool_error / session_created / permission_request:
- * relayed to Skill
- * Server
+ * relayed to Skill Server
+ * - status_response: consumed by Gateway for REST status queries
  * On close: marks agent offline, notifies Skill Server agent_offline
  */
 @Slf4j
@@ -130,8 +130,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
             case "register" -> handleRegister(session, message, userId, akId);
             case "heartbeat" -> handleHeartbeat(session);
             case "tool_event", "tool_done", "tool_error", "session_created",
-                    "permission_request", "status_response" ->
+                    "permission_request" ->
                 handleRelayToSkillServer(session, message);
+            case "status_response" -> handleStatusResponse(session, message);
             default -> log.warn("Unknown message type from PCAgent: type={}, sessionId={}",
                     type, session.getId());
         }
@@ -222,9 +223,20 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
         }
 
         // Trace: log sessionId from PCAgent message for upstream debugging
-        log.debug("PCAgent -> Skill relay: ak={}, type={}, sessionId={}",
-                ak, message.getType(), message.getSessionId());
+        log.debug("PCAgent -> Skill relay: ak={}, type={}, welinkSessionId={}, toolSessionId={}",
+                ak, message.getType(), message.getWelinkSessionId(), message.getToolSessionId());
 
         eventRelayService.relayToSkillServer(ak, message);
+    }
+
+    private void handleStatusResponse(WebSocketSession session, GatewayMessage message) {
+        String ak = sessionAkMap.get(session.getId());
+        if (ak == null) {
+            log.warn("status_response from unregistered session: sessionId={}", session.getId());
+            return;
+        }
+
+        eventRelayService.recordStatusResponse(ak, message.getOpencodeOnline());
+        log.debug("Recorded status_response: ak={}, opencodeOnline={}", ak, message.getOpencodeOnline());
     }
 }

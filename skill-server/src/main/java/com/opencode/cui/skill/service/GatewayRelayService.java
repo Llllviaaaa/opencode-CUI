@@ -152,7 +152,9 @@ public class GatewayRelayService {
         ObjectNode message = objectMapper.createObjectNode();
         message.put("type", "invoke");
         message.put("ak", ak);
-        message.put("sessionId", sessionId);
+        if ("create_session".equals(action) && sessionId != null && !sessionId.isBlank()) {
+            message.put("welinkSessionId", sessionId);
+        }
         message.put("action", action);
 
         try {
@@ -206,22 +208,25 @@ public class GatewayRelayService {
         }
 
         String type = node.path("type").asText("");
-        String agentId = node.path("agentId").asText(null);
+        String ak = node.path("ak").asText(null);
+        if (ak == null || ak.isBlank()) {
+            ak = node.path("agentId").asText(null);
+        }
 
         // Resolve welinkSessionId: prefer explicit sessionId, fallback to toolSessionId
         // DB lookup
         String sessionId = resolveSessionId(node);
 
         // Trace: log key fields for full-chain debugging
-        log.debug("Gateway message dispatch: type={}, sessionId={}, agentId={}", type, sessionId, agentId);
+        log.debug("Gateway message dispatch: type={}, sessionId={}, ak={}", type, sessionId, ak);
 
         switch (type) {
             case "tool_event" -> handleToolEvent(sessionId, node);
             case "tool_done" -> handleToolDone(sessionId, node);
             case "tool_error" -> handleToolError(sessionId, node);
-            case "agent_online" -> handleAgentOnline(agentId, node);
-            case "agent_offline" -> handleAgentOffline(agentId);
-            case "session_created" -> handleSessionCreated(agentId, node);
+            case "agent_online" -> handleAgentOnline(ak, node);
+            case "agent_offline" -> handleAgentOffline(ak);
+            case "session_created" -> handleSessionCreated(ak, node);
             case "permission_request" -> handlePermissionRequest(sessionId, node);
             default -> log.warn("Unknown gateway message type: {}", type);
         }
@@ -236,7 +241,10 @@ public class GatewayRelayService {
      * session
      */
     private String resolveSessionId(JsonNode node) {
-        String sessionId = node.path("sessionId").asText(null);
+        String sessionId = node.path("welinkSessionId").asText(null);
+        if (sessionId == null || sessionId.isBlank()) {
+            sessionId = node.path("sessionId").asText(null);
+        }
         if (sessionId != null) {
             return sessionId;
         }
@@ -348,39 +356,42 @@ public class GatewayRelayService {
         log.error("Tool error for session {}: {}", sessionId, error);
     }
 
-    private void handleAgentOnline(String agentId, JsonNode node) {
+    private void handleAgentOnline(String ak, JsonNode node) {
         String toolType = node.path("toolType").asText("UNKNOWN");
         String toolVersion = node.path("toolVersion").asText("UNKNOWN");
-        log.info("Agent online: agentId={}, toolType={}, toolVersion={}", agentId, toolType, toolVersion);
+        log.info("Agent online: ak={}, toolType={}, toolVersion={}", ak, toolType, toolVersion);
 
-        if (agentId != null) {
+        if (ak != null) {
             StreamMessage msg = StreamMessage.builder()
                     .type(StreamMessage.Types.AGENT_ONLINE)
                     .build();
-            sessionService.findByAk(agentId).forEach(
+            sessionService.findByAk(ak).forEach(
                     session -> broadcastStreamMessage(session.getId().toString(), msg));
         }
     }
 
-    private void handleAgentOffline(String agentId) {
-        log.warn("Agent offline: agentId={}", agentId);
+    private void handleAgentOffline(String ak) {
+        log.warn("Agent offline: ak={}", ak);
 
-        if (agentId != null) {
+        if (ak != null) {
             StreamMessage msg = StreamMessage.builder()
                     .type(StreamMessage.Types.AGENT_OFFLINE)
                     .build();
-            sessionService.findByAk(agentId).forEach(
+            sessionService.findByAk(ak).forEach(
                     session -> broadcastStreamMessage(session.getId().toString(), msg));
         }
     }
 
-    private void handleSessionCreated(String agentId, JsonNode node) {
+    private void handleSessionCreated(String ak, JsonNode node) {
         String toolSessionId = node.path("toolSessionId").asText(null);
-        String sessionId = node.path("sessionId").asText(null);
+        String sessionId = node.path("welinkSessionId").asText(null);
+        if (sessionId == null || sessionId.isBlank()) {
+            sessionId = node.path("sessionId").asText(null);
+        }
 
         if (sessionId == null || toolSessionId == null) {
-            log.warn("session_created missing fields: sessionId={}, toolSessionId={}, agentId={}, raw={}",
-                    sessionId, toolSessionId, agentId, node.toString());
+            log.warn("session_created missing fields: sessionId={}, toolSessionId={}, ak={}, raw={}",
+                    sessionId, toolSessionId, ak, node.toString());
             return;
         }
 
@@ -438,9 +449,8 @@ public class GatewayRelayService {
     }
 
     private void enrichStreamMessage(String sessionId, StreamMessage msg) {
-        if (msg.getSessionId() == null || msg.getSessionId().isBlank()) {
-            msg.setSessionId(sessionId);
-        }
+        // Frontend WS routing expects the skill session id here, not the OpenCode tool session id.
+        msg.setSessionId(sessionId);
         if (msg.getEmittedAt() == null || msg.getEmittedAt().isBlank()) {
             msg.setEmittedAt(Instant.now().toString());
         }

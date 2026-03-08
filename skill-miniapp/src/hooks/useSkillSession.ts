@@ -13,7 +13,7 @@ export interface UseSkillSessionReturn {
   closeSession: (sessionId: string) => Promise<void>;
 }
 
-export function useSkillSession(userId: string): UseSkillSessionReturn {
+export function useSkillSession(): UseSkillSessionReturn {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(false);
@@ -21,11 +21,10 @@ export function useSkillSession(userId: string): UseSkillSessionReturn {
   const creatingRef = useRef(false);
 
   const loadSessions = useCallback(async () => {
-    if (!userId) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await api.getSessions(userId, 0, 100);
+      const res = await api.getSessions(0, 100);
       setSessions(res.content);
     } catch (err) {
       const message =
@@ -34,7 +33,7 @@ export function useSkillSession(userId: string): UseSkillSessionReturn {
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, []);
 
   const createSession = useCallback(
     async (params: api.CreateSessionParams): Promise<Session | null> => {

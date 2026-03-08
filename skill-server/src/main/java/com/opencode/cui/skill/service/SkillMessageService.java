@@ -109,6 +109,14 @@ public class SkillMessageService {
     }
 
     /**
+     * Query all messages for a session in seq order.
+     */
+    @Transactional(readOnly = true)
+    public java.util.List<SkillMessage> getAllMessages(Long sessionId) {
+        return messageRepository.findAllBySessionId(sessionId);
+    }
+
+    /**
      * Get the total message count for a session.
      */
     @Transactional(readOnly = true)
@@ -132,6 +140,13 @@ public class SkillMessageService {
         messageRepository.updateStats(messageId, tokensIn, tokensOut, cost);
         log.debug("Updated message stats: messageId={}, tokensIn={}, tokensOut={}, cost={}",
                 messageId, tokensIn, tokensOut, cost);
+    }
+
+    @Transactional
+    public void updateMessageContent(Long messageId, String content) {
+        messageRepository.updateContent(messageId, content);
+        log.debug("Updated message content: messageId={}, length={}",
+                messageId, content != null ? content.length() : 0);
     }
 
     /**

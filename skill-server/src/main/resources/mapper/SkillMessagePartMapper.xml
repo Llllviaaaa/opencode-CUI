@@ -69,7 +69,10 @@
              NOW(), NOW())
         ON DUPLICATE KEY UPDATE
             content     = COALESCE(VALUES(content), content),
+            tool_name   = COALESCE(VALUES(tool_name), tool_name),
+            tool_call_id = COALESCE(VALUES(tool_call_id), tool_call_id),
             tool_status = COALESCE(VALUES(tool_status), tool_status),
+            tool_input  = COALESCE(VALUES(tool_input), tool_input),
             tool_output = COALESCE(VALUES(tool_output), tool_output),
             tool_error  = COALESCE(VALUES(tool_error), tool_error),
             tool_title  = COALESCE(VALUES(tool_title), tool_title),

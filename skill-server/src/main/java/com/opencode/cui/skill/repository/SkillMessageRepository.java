@@ -18,6 +18,8 @@ public interface SkillMessageRepository {
             @Param("offset") int offset,
             @Param("limit") int limit);
 
+    List<SkillMessage> findAllBySessionId(@Param("sessionId") Long sessionId);
+
     long countBySessionId(@Param("sessionId") Long sessionId);
 
     int findMaxSeqBySessionId(@Param("sessionId") Long sessionId);
@@ -28,6 +30,9 @@ public interface SkillMessageRepository {
             @Param("tokensIn") Integer tokensIn,
             @Param("tokensOut") Integer tokensOut,
             @Param("cost") Double cost);
+
+    int updateContent(@Param("id") Long id,
+            @Param("content") String content);
 
     int markFinished(@Param("id") Long id);
 }

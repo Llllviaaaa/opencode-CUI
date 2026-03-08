@@ -21,6 +21,8 @@ public interface SkillSessionRepository {
                         @Param("offset") int offset,
                         @Param("limit") int limit);
 
+        List<SkillSession> findActiveByUserId(@Param("userId") Long userId);
+
         long countByUserId(@Param("userId") Long userId);
 
         long countByUserIdAndStatusIn(@Param("userId") Long userId,

@@ -45,6 +45,9 @@ public interface AgentConnectionRepository {
     /** Find by primary key */
     AgentConnection findById(@Param("id") Long id);
 
+    /** Find the latest connection record for an AK */
+    AgentConnection findLatestByAkId(@Param("akId") String akId);
+
     /** Update status for an agent */
     int updateStatus(@Param("id") Long id, @Param("status") AgentStatus status);
 

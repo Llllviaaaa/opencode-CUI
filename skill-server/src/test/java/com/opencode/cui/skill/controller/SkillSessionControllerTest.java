@@ -37,25 +37,24 @@ class SkillSessionControllerTest {
     }
 
     @Test
-    @DisplayName("createSession returns 201 CREATED")
-    void createSession201() {
+    @DisplayName("createSession returns 200 OK")
+    void createSession200() {
         SkillSession session = new SkillSession();
         session.setId(1L);
         session.setStatus(SkillSession.Status.ACTIVE);
         when(sessionService.createSession(any(), any(), any(), any())).thenReturn(session);
 
         var request = new SkillSessionController.CreateSessionRequest();
-        request.setUserId(1L);
         request.setAk("3");
         request.setTitle("Test");
 
-        var response = controller.createSession(request);
-        assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        var response = controller.createSession("1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
         assertEquals(0, response.getBody().getCode());
         assertNotNull(response.getBody().getData());
         verify(gatewayRelayService).subscribeToSessionBroadcast("1");
-        verify(gatewayRelayService).sendInvokeToGateway(eq("3"), eq("1"), eq("create_session"), isNull());
+        verify(gatewayRelayService).sendInvokeToGateway(eq("3"), eq("1"), eq("create_session"), contains("Test"));
     }
 
     @Test
@@ -64,7 +63,7 @@ class SkillSessionControllerTest {
         var request = new SkillSessionController.CreateSessionRequest();
         // userId is null
 
-        var response = controller.createSession(request);
+        var response = controller.createSession(null, request);
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
     }
 
@@ -130,8 +129,8 @@ class SkillSessionControllerTest {
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals("aborted", response.getBody().getData().get("status"));
         verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("42"), eq("abort_session"), any());
-        verify(sessionService).closeSession(42L);
-        verify(gatewayRelayService).unsubscribeFromSession("42");
+        verify(sessionService, never()).closeSession(anyLong());
+        verify(gatewayRelayService, never()).unsubscribeFromSession(anyString());
     }
 
     @Test

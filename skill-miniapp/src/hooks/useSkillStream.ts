@@ -3,6 +3,7 @@ import type { Message, MessageRole, StreamMessage, StreamMessageType } from '../
 import { StreamAssembler } from '../protocol/StreamAssembler';
 import { normalizeHistoryMessage, normalizeHistoryMessages } from '../protocol/history';
 import * as api from '../utils/api';
+import { ensureDevUserIdCookie } from '../utils/devAuth';
 
 type AgentStatus = 'online' | 'offline' | 'unknown';
 
@@ -11,8 +12,8 @@ export interface UseSkillStreamReturn {
   isStreaming: boolean;
   agentStatus: AgentStatus;
   socketReady: boolean;
-  sendMessage: (text: string) => Promise<void>;
-  replyPermission: (permissionId: string, allow: boolean) => Promise<void>;
+  sendMessage: (text: string, options?: { toolCallId?: string }) => Promise<void>;
+  replyPermission: (permissionId: string, response: 'once' | 'always' | 'reject') => Promise<void>;
   error: string | null;
 }
 
@@ -165,7 +166,7 @@ function normalizeStreamingPart(raw: Record<string, unknown>): StreamMessage | n
   }
 
   const base: Partial<StreamMessage> = {
-    sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : undefined,
+    sessionId: typeof raw.welinkSessionId === 'string' ? raw.welinkSessionId : undefined,
     emittedAt: typeof raw.emittedAt === 'string' ? raw.emittedAt : undefined,
     messageId: typeof raw.messageId === 'string' ? raw.messageId : undefined,
     messageSeq: typeof raw.messageSeq === 'number' ? raw.messageSeq : undefined,
@@ -222,6 +223,15 @@ function normalizeStreamingPart(raw: Record<string, unknown>): StreamMessage | n
   }
 }
 
+function normalizeIncomingStreamMessage(raw: Record<string, unknown>): StreamMessage {
+  const sessionId = typeof raw.welinkSessionId === 'string' ? raw.welinkSessionId : undefined;
+
+  return {
+    ...(raw as unknown as StreamMessage),
+    sessionId,
+  };
+}
+
 export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -236,6 +246,11 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   const assemblersRef = useRef(new Map<string, StreamAssembler>());
   const activeMessageIdsRef = useRef(new Set<string>());
   const knownUserMessageIdsRef = useRef(new Set<string>());
+  const sessionIdRef = useRef<string | null>(sessionId);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   useEffect(() => {
     knownUserMessageIdsRef.current = new Set(
@@ -305,8 +320,13 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
     }
 
     assembler.handleMessage({ ...msg, messageId, role });
-    activeMessageIdsRef.current.add(messageId);
-    setIsStreaming(true);
+    const hasActiveStreaming = assembler.hasActiveStreaming();
+    if (hasActiveStreaming) {
+      activeMessageIdsRef.current.add(messageId);
+    } else {
+      activeMessageIdsRef.current.delete(messageId);
+    }
+    setIsStreaming(activeMessageIdsRef.current.size > 0);
 
     const content = assembler.getText();
     const parts = assembler.getParts();
@@ -322,7 +342,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
         timestamp: existing?.timestamp ?? timestamp,
         messageSeq: msg.messageSeq ?? existing?.messageSeq,
         meta: existing?.meta,
-        isStreaming: true,
+        isStreaming: hasActiveStreaming,
         parts: parts.length > 0 ? [...parts] : existing?.parts,
       };
       return upsertMessage(prev, nextMessage);
@@ -383,6 +403,11 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   }, [finalizeAllStreamingMessages]);
 
   const handleStreamMessage = useCallback((msg: StreamMessage) => {
+    const currentSessionId = sessionIdRef.current;
+    if (msg.sessionId && (!currentSessionId || msg.sessionId !== currentSessionId)) {
+      return;
+    }
+
     switch (msg.type) {
       case 'text.delta':
       case 'text.done':
@@ -473,7 +498,6 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
       historyRequestRef.current += 1;
       setMessages([]);
       knownUserMessageIdsRef.current.clear();
-      setSocketReady(false);
       resetStreamingState();
       return;
     }
@@ -502,26 +526,22 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   }, [resetStreamingState, sessionId]);
 
   const connect = useCallback(() => {
-    if (!sessionId) {
-      return;
-    }
-
+    ensureDevUserIdCookie();
     setSocketReady(false);
-    const url = `${WS_BASE_URL}/ws/skill/stream/${sessionId}`;
+    const url = `${WS_BASE_URL}/ws/skill/stream`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {
       reconnectAttemptRef.current = 0;
       setError(null);
-      setAgentStatus('online');
       setSocketReady(true);
-      ws.send(JSON.stringify({ action: 'resume' }));
     };
 
     ws.onmessage = (event) => {
       try {
-        const msg: StreamMessage = JSON.parse(event.data as string);
+        const raw = JSON.parse(event.data as string) as Record<string, unknown>;
+        const msg = normalizeIncomingStreamMessage(raw);
         handleStreamMessage(msg);
       } catch {
         // Ignore malformed messages.
@@ -538,7 +558,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
       setSocketReady(false);
       scheduleReconnect();
     };
-  }, [handleStreamMessage, sessionId]);
+  }, [handleStreamMessage]);
 
   const scheduleReconnect = useCallback(() => {
     if (reconnectTimerRef.current) {
@@ -554,10 +574,6 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   }, [connect]);
 
   useEffect(() => {
-    if (!sessionId) {
-      return;
-    }
-
     connect();
 
     return () => {
@@ -573,10 +589,10 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
         wsRef.current = null;
       }
     };
-  }, [connect, sessionId]);
+  }, [connect]);
 
   const sendMessageFn = useCallback(
-    async (text: string) => {
+    async (text: string, options?: { toolCallId?: string }) => {
       if (!sessionId) {
         return;
       }
@@ -595,7 +611,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
       setMessages((prev) => upsertMessage(prev, optimisticMessage));
 
       try {
-        const saved = await api.sendMessage(sessionId, text);
+        const saved = await api.sendMessage(sessionId, text, options?.toolCallId);
         const normalized = normalizeHistoryMessage(saved as unknown as Record<string, unknown>);
         setMessages((prev) => {
           const nextMessages = prev.filter((message) => message.id !== tempId && message.id !== normalized.id);
@@ -610,14 +626,14 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   );
 
   const replyPermissionFn = useCallback(
-    async (permissionId: string, allow: boolean) => {
+    async (permissionId: string, response: 'once' | 'always' | 'reject') => {
       if (!sessionId) {
         return;
       }
 
       setError(null);
       try {
-        await api.replyPermission(sessionId, permissionId, allow);
+        await api.replyPermission(sessionId, permissionId, response);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to reply permission';
         setError(message);

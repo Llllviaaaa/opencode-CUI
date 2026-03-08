@@ -5,8 +5,8 @@ import type { Message } from '../protocol/types';
 interface ConversationViewProps {
   messages: Message[];
   loading?: boolean;
-  onQuestionAnswer?: (answer: string) => void;
-  onPermissionDecision?: (permissionId: string, allow: boolean) => void;
+  onQuestionAnswer?: (answer: string, toolCallId?: string) => void;
+  onPermissionDecision?: (permissionId: string, response: 'once' | 'always' | 'reject') => void;
 }
 
 export const ConversationView: React.FC<ConversationViewProps> = ({

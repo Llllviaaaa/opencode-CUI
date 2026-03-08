@@ -85,15 +85,15 @@ public class SkillRelayService {
      * Handle invoke messages FROM Skill Server → route to target agent via Redis.
      */
     public void handleInvokeFromSkill(WebSocketSession session, GatewayMessage message) {
-        if (message.getAgentId() == null || message.getAgentId().isBlank()) {
-            log.warn("Invoke from skill missing agentId: linkId={}, action={}",
+        if (message.getAk() == null || message.getAk().isBlank()) {
+            log.warn("Invoke from skill missing ak: linkId={}, action={}",
                     session.getId(), message.getAction());
             return;
         }
 
-        redisMessageBroker.publishToAgent(message.getAgentId(), message);
-        log.debug("Forwarded invoke from skill to agent: linkId={}, agentId={}, action={}",
-                session.getId(), message.getAgentId(), message.getAction());
+        redisMessageBroker.publishToAgent(message.getAk(), message);
+        log.debug("Forwarded invoke from skill to agent: linkId={}, ak={}, action={}",
+                session.getId(), message.getAk(), message.getAction());
     }
 
     /**
@@ -168,8 +168,9 @@ public class SkillRelayService {
             synchronized (session) {
                 session.sendMessage(new TextMessage(json));
             }
-            log.debug("Sent to skill link: instanceId={}, linkId={}, type={}, sessionId={}",
-                    instanceId, session.getId(), message.getType(), message.getSessionId());
+            log.debug("Sent to skill link: instanceId={}, linkId={}, type={}, welinkSessionId={}, toolSessionId={}",
+                    instanceId, session.getId(), message.getType(),
+                    message.getWelinkSessionId(), message.getToolSessionId());
             return true;
         } catch (IOException e) {
             log.error("Failed to send to skill link: instanceId={}, linkId={}, type={}",

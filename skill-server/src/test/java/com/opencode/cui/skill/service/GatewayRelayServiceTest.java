@@ -8,9 +8,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
@@ -61,16 +63,19 @@ class GatewayRelayServiceTest {
     @Test
     @DisplayName("tool_event persists and broadcasts to Skill Redis")
     void toolEventPersistsAndBroadcasts() {
-        String msg = "{\"type\":\"tool_event\",\"sessionId\":\"123\",\"event\":{\"data\":\"hello\"}}";
+        String msg = "{\"type\":\"tool_event\",\"welinkSessionId\":\"123\",\"event\":{\"data\":\"hello\"}}";
         when(translator.translate(any())).thenReturn(StreamMessage.builder()
                 .type(StreamMessage.Types.TEXT_DELTA)
+                .sessionId("ses_internal_1")
                 .partId("part-1")
                 .content("hello")
                 .build());
 
         service.handleGatewayMessage(msg);
 
-        verify(redisMessageBroker).publishToSession(eq("123"), contains("text.delta"));
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        verify(redisMessageBroker).publishToSession(eq("123"), payloadCaptor.capture());
+        assertTrue(payloadCaptor.getValue().contains("\"welinkSessionId\":\"123\""));
         verify(bufferService).accumulate(eq("123"), any(StreamMessage.class));
         verify(persistenceService).persistIfFinal(eq(123L), any(StreamMessage.class));
         verifyNoInteractions(skillStreamHandler);
@@ -79,7 +84,7 @@ class GatewayRelayServiceTest {
     @Test
     @DisplayName("tool_done broadcasts via Skill Redis")
     void toolDoneBroadcasts() {
-        String msg = "{\"type\":\"tool_done\",\"sessionId\":\"42\",\"usage\":{\"tokens\":100}}";
+        String msg = "{\"type\":\"tool_done\",\"welinkSessionId\":\"42\",\"usage\":{\"tokens\":100}}";
 
         service.handleGatewayMessage(msg);
 
@@ -92,7 +97,7 @@ class GatewayRelayServiceTest {
     @Test
     @DisplayName("tool_error persists and broadcasts via Skill Redis")
     void toolErrorPersistsAndBroadcasts() {
-        String msg = "{\"type\":\"tool_error\",\"sessionId\":\"42\",\"error\":\"timeout\"}";
+        String msg = "{\"type\":\"tool_error\",\"welinkSessionId\":\"42\",\"error\":\"timeout\"}";
 
         service.handleGatewayMessage(msg);
 
@@ -108,7 +113,7 @@ class GatewayRelayServiceTest {
         session.setId(1L);
         when(sessionService.findByAk("99")).thenReturn(java.util.List.of(session));
 
-        String msg = "{\"type\":\"agent_online\",\"agentId\":\"99\",\"toolType\":\"opencode\",\"toolVersion\":\"1.0\"}";
+        String msg = "{\"type\":\"agent_online\",\"ak\":\"99\",\"toolType\":\"opencode\",\"toolVersion\":\"1.0\"}";
         service.handleGatewayMessage(msg);
 
         verify(redisMessageBroker).publishToSession(eq("1"), contains("agent.online"));
@@ -121,7 +126,7 @@ class GatewayRelayServiceTest {
         session.setId(2L);
         when(sessionService.findByAk("99")).thenReturn(java.util.List.of(session));
 
-        String msg = "{\"type\":\"agent_offline\",\"agentId\":\"99\"}";
+        String msg = "{\"type\":\"agent_offline\",\"ak\":\"99\"}";
         service.handleGatewayMessage(msg);
 
         verify(redisMessageBroker).publishToSession(eq("2"), contains("agent.offline"));
@@ -130,7 +135,7 @@ class GatewayRelayServiceTest {
     @Test
     @DisplayName("session_created updates toolSessionId")
     void sessionCreatedUpdatesToolSessionId() {
-        String msg = "{\"type\":\"session_created\",\"agentId\":\"1\",\"sessionId\":\"42\",\"toolSessionId\":\"ts-abc\"}";
+        String msg = "{\"type\":\"session_created\",\"ak\":\"1\",\"welinkSessionId\":\"42\",\"toolSessionId\":\"ts-abc\"}";
 
         service.handleGatewayMessage(msg);
 
@@ -163,7 +168,7 @@ class GatewayRelayServiceTest {
                 .content("hello")
                 .build());
 
-        // Message has toolSessionId but NO sessionId
+        // Message has toolSessionId but NO welinkSessionId
         String msg = "{\"type\":\"tool_event\",\"toolSessionId\":\"ts-abc\",\"event\":{\"data\":\"hello\"}}";
         service.handleGatewayMessage(msg);
 
@@ -174,7 +179,7 @@ class GatewayRelayServiceTest {
     @Test
     @DisplayName("unknown type logs warning without errors")
     void unknownTypeLogsWarning() {
-        String msg = "{\"type\":\"unknown_type\",\"sessionId\":\"42\"}";
+        String msg = "{\"type\":\"unknown_type\",\"welinkSessionId\":\"42\"}";
 
         service.handleGatewayMessage(msg);
 
@@ -190,8 +195,8 @@ class GatewayRelayServiceTest {
     }
 
     @Test
-    @DisplayName("tool_event with missing sessionId logs warning")
-    void toolEventMissingSessionId() {
+    @DisplayName("tool_event with missing welinkSessionId logs warning")
+    void toolEventMissingWelinkSessionId() {
         String msg = "{\"type\":\"tool_event\",\"event\":{\"data\":\"hello\"}}";
 
         service.handleGatewayMessage(msg);

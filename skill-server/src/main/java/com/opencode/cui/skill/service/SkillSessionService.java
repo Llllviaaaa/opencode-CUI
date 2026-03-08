@@ -80,6 +80,15 @@ public class SkillSessionService {
     }
 
     /**
+     * Find all ACTIVE sessions for a user. Used by the protocol-level stream
+     * endpoint to resume all live sessions on connect.
+     */
+    @Transactional(readOnly = true)
+    public List<SkillSession> findActiveByUserId(Long userId) {
+        return sessionRepository.findActiveByUserId(userId);
+    }
+
+    /**
      * Close a session (set status to CLOSED).
      */
     @Transactional

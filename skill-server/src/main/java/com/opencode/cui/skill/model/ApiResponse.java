@@ -35,6 +35,7 @@ public class ApiResponse<T> {
     public static <T> ApiResponse<T> ok(T data) {
         return ApiResponse.<T>builder()
                 .code(0)
+                .errormsg("")
                 .data(data)
                 .build();
     }

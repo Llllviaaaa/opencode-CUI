@@ -41,7 +41,7 @@ class SkillWebSocketHandlerTest {
     @Test
     @DisplayName("valid internal token registers skill session")
     void validTokenRegistersSkillSession() throws Exception {
-        when(session.getUri()).thenReturn(URI.create("ws://localhost/ws/internal/skill?token=secret-token"));
+        when(session.getUri()).thenReturn(URI.create("ws://localhost/ws/skill?token=secret-token"));
 
         handler.onOpen(session);
 
@@ -52,7 +52,7 @@ class SkillWebSocketHandlerTest {
     @Test
     @DisplayName("invalid internal token rejects connection")
     void invalidTokenRejectsConnection() throws Exception {
-        when(session.getUri()).thenReturn(URI.create("ws://localhost/ws/internal/skill?token=wrong"));
+        when(session.getUri()).thenReturn(URI.create("ws://localhost/ws/skill?token=wrong"));
 
         handler.onOpen(session);
 
@@ -65,18 +65,18 @@ class SkillWebSocketHandlerTest {
     @Test
     @DisplayName("invoke message delegates to skill relay service")
     void invokeDelegatesToSkillRelayService() throws Exception {
-        handler.handle(session, "{\"type\":\"invoke\",\"agentId\":\"agent-1\",\"sessionId\":\"42\",\"action\":\"chat\"}");
+        handler.handle(session, "{\"type\":\"invoke\",\"ak\":\"ak_test_001\",\"welinkSessionId\":\"42\",\"action\":\"chat\"}");
 
         verify(skillRelayService).handleInvokeFromSkill(eq(session),
                 argThat(message -> "invoke".equals(message.getType())
-                        && "agent-1".equals(message.getAgentId())
-                        && "42".equals(message.getSessionId())));
+                        && "ak_test_001".equals(message.getAk())
+                        && "42".equals(message.getWelinkSessionId())));
     }
 
     @Test
     @DisplayName("non invoke message is ignored")
     void nonInvokeMessageIsIgnored() throws Exception {
-        handler.handle(session, "{\"type\":\"tool_event\",\"sessionId\":\"42\"}");
+        handler.handle(session, "{\"type\":\"tool_event\",\"welinkSessionId\":\"42\"}");
 
         verifyNoInteractions(skillRelayService);
     }

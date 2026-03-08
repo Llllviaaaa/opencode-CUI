@@ -55,8 +55,8 @@ class SkillMessageControllerTest {
     }
 
     @Test
-    @DisplayName("sendMessage returns 201 and invokes AI gateway")
-    void sendMessage201() {
+    @DisplayName("sendMessage returns 200 and invokes AI gateway")
+    void sendMessage200() {
         SkillSession session = new SkillSession();
         session.setId(1L);
         session.setAk("99");
@@ -72,7 +72,7 @@ class SkillMessageControllerTest {
         request.setContent("Hello");
 
         ResponseEntity<?> response = controller.sendMessage(1L, request);
-        assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        assertEquals(HttpStatus.OK, response.getStatusCode());
         verify(messagePersistenceService).finalizeActiveAssistantTurn(1L);
         verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("chat"), any());
     }
@@ -96,7 +96,7 @@ class SkillMessageControllerTest {
         request.setToolCallId("tc-001");
 
         ResponseEntity<?> response = controller.sendMessage(1L, request);
-        assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        assertEquals(HttpStatus.OK, response.getStatusCode());
         verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("question_reply"), any());
     }
 
@@ -150,7 +150,7 @@ class SkillMessageControllerTest {
 
         var response = controller.replyPermission(1L, "p-abc", request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertEquals(true, response.getBody().getData().get("success"));
+        assertEquals("1", response.getBody().getData().get("welinkSessionId"));
         assertEquals("p-abc", response.getBody().getData().get("permissionId"));
         assertEquals("once", response.getBody().getData().get("response"));
         verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("permission_reply"), any());

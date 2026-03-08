@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * AK/SK signature verification service.
  *
- * Signature algorithm: HMAC-SHA256(SK, "{AK}\n{timestamp}\n{nonce}")
+ * Signature algorithm: HMAC-SHA256(SK, "{AK}{timestamp}{nonce}")
  * Timestamp window: +/-5 minutes
  * Nonce replay prevention: Redis with TTL 5 minutes
  */
@@ -95,8 +95,8 @@ public class AkSkAuthService {
             return null;
         }
 
-        // 4. Compute expected signature: HMAC-SHA256(SK, "{AK}\n{timestamp}\n{nonce}")
-        String message = ak + "\n" + timestamp + "\n" + nonce;
+        // 4. Compute expected signature: HMAC-SHA256(SK, "{AK}{timestamp}{nonce}")
+        String message = ak + timestamp + nonce;
         String expectedSignature;
         try {
             expectedSignature = computeHmacSha256(record.sk, message);

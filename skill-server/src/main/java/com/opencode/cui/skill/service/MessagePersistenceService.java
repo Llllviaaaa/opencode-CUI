@@ -159,6 +159,10 @@ public class MessagePersistenceService {
         partRepository.upsert(part);
         log.debug("Persisted {} part: sessionId={}, protocolId={}, partId={}",
                 partType, sessionId, active.protocolMessageId(), part.getPartId());
+
+        if ("text".equals(partType)) {
+            syncMessageContent(active);
+        }
     }
 
     private void persistToolPartIfFinal(Long sessionId, StreamMessage msg, ActiveMessageRef active) {
@@ -293,6 +297,16 @@ public class MessagePersistenceService {
         }
 
         return partRepository.findMaxSeqByMessageId(messageDbId) + 1;
+    }
+
+    private void syncMessageContent(ActiveMessageRef active) {
+        StringBuilder content = new StringBuilder();
+        for (SkillMessagePart existingPart : partRepository.findByMessageId(active.dbId())) {
+            if ("text".equals(existingPart.getPartType()) && existingPart.getContent() != null) {
+                content.append(existingPart.getContent());
+            }
+        }
+        messageService.updateMessageContent(active.dbId(), content.toString());
     }
 
     private boolean requiresMessageContext(StreamMessage msg) {

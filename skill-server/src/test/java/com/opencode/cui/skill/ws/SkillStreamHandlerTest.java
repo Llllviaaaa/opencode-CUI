@@ -1,92 +1,220 @@
 package com.opencode.cui.skill.ws;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.model.SkillMessage;
+import com.opencode.cui.skill.model.SkillMessagePart;
+import com.opencode.cui.skill.repository.SkillMessagePartRepository;
+import com.opencode.cui.skill.service.SkillMessageService;
+import com.opencode.cui.skill.model.SkillSession;
+import com.opencode.cui.skill.service.SkillSessionService;
 import com.opencode.cui.skill.service.StreamBufferService;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.net.URI;
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.List;
 
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class SkillStreamHandlerTest {
 
     private SkillStreamHandler handler;
-    private ObjectMapper objectMapper;
     private StreamBufferService bufferService;
+    private SkillSessionService sessionService;
+    private SkillMessageService messageService;
+    private SkillMessagePartRepository partRepository;
 
     @BeforeEach
     void setUp() {
-        objectMapper = new ObjectMapper();
         bufferService = mock(StreamBufferService.class);
-        handler = new SkillStreamHandler(objectMapper, bufferService);
+        sessionService = mock(SkillSessionService.class);
+        messageService = mock(SkillMessageService.class);
+        partRepository = mock(SkillMessagePartRepository.class);
+        handler = new SkillStreamHandler(
+                new ObjectMapper(),
+                bufferService,
+                sessionService,
+                messageService,
+                partRepository);
     }
 
     @Test
-    @DisplayName("afterConnectionEstablished registers subscriber")
-    void connectionEstablishedRegistersSubscriber() throws Exception {
-        WebSocketSession session = mock(WebSocketSession.class);
-        when(session.getUri()).thenReturn(new URI("/ws/skill/stream/42"));
-        when(session.isOpen()).thenReturn(true);
+    @DisplayName("protocol /ws/skill/stream connection sends snapshot and receives live updates")
+    void protocolPathRegistersUserSubscriber() throws Exception {
+        WebSocketSession session = mockSession("/ws/skill/stream", "userId=10001");
+        SkillSession activeSession = new SkillSession();
+        activeSession.setId(42L);
+        activeSession.setUserId(10001L);
+        when(sessionService.findActiveByUserId(10001L)).thenReturn(List.of(activeSession));
+        when(messageService.getAllMessages(42L)).thenReturn(List.of());
+        when(bufferService.isSessionStreaming("42")).thenReturn(false);
+        when(bufferService.getStreamingParts("42")).thenReturn(List.of());
 
         handler.afterConnectionEstablished(session);
-
-        // Push should reach this subscriber
         handler.pushToSession("42", "delta", "hello");
-        verify(session).sendMessage(any(TextMessage.class));
+
+        verify(session, times(3)).sendMessage(any(TextMessage.class));
     }
 
     @Test
-    @DisplayName("pushToSession sends to multiple clients")
-    void pushToMultipleClients() throws Exception {
-        WebSocketSession session1 = mock(WebSocketSession.class);
-        WebSocketSession session2 = mock(WebSocketSession.class);
-        when(session1.getUri()).thenReturn(new URI("/ws/skill/stream/42"));
-        when(session2.getUri()).thenReturn(new URI("/ws/skill/stream/42"));
-        when(session1.isOpen()).thenReturn(true);
-        when(session2.isOpen()).thenReturn(true);
+    @DisplayName("snapshot payload uses protocol-shaped history messages")
+    void snapshotPayloadUsesProtocolShape() throws Exception {
+        WebSocketSession session = mockSession("/ws/skill/stream", "userId=10001");
+        SkillSession activeSession = new SkillSession();
+        activeSession.setId(42L);
+        activeSession.setUserId(10001L);
+        SkillMessage message = SkillMessage.builder()
+                .id(10L)
+                .messageId("msg_42_1")
+                .messageSeq(1)
+                .role(SkillMessage.Role.ASSISTANT)
+                .content("Done")
+                .contentType(SkillMessage.ContentType.MARKDOWN)
+                .createdAt(LocalDateTime.of(2026, 3, 8, 12, 0))
+                .build();
+        SkillMessagePart part = SkillMessagePart.builder()
+                .messageId(10L)
+                .partId("part-1")
+                .seq(1)
+                .partType("tool")
+                .toolName("bash")
+                .toolCallId("call-1")
+                .toolStatus("completed")
+                .toolInput("{\"command\":\"pwd\"}")
+                .toolOutput("D:/work")
+                .toolTitle("Run pwd")
+                .build();
 
-        handler.afterConnectionEstablished(session1);
-        handler.afterConnectionEstablished(session2);
-
-        handler.pushToSession("42", "delta", "content");
-        verify(session1).sendMessage(any(TextMessage.class));
-        verify(session2).sendMessage(any(TextMessage.class));
-    }
-
-    @Test
-    @DisplayName("pushToSession with no subscribers does not throw")
-    void pushToNoSubscribers() {
-        // No sessions registered for this sessionId
-        handler.pushToSession("999", "delta", "content");
-        // Should not throw �?just log
-    }
-
-    @Test
-    @DisplayName("afterConnectionClosed removes subscriber")
-    void connectionClosedRemovesSubscriber() throws Exception {
-        WebSocketSession session = mock(WebSocketSession.class);
-        when(session.getUri()).thenReturn(new URI("/ws/skill/stream/42"));
-        when(session.isOpen()).thenReturn(true);
+        when(sessionService.findActiveByUserId(10001L)).thenReturn(List.of(activeSession));
+        when(messageService.getAllMessages(42L)).thenReturn(List.of(message));
+        when(partRepository.findByMessageId(10L)).thenReturn(List.of(part));
+        when(bufferService.isSessionStreaming("42")).thenReturn(false);
+        when(bufferService.getStreamingParts("42")).thenReturn(List.of());
 
         handler.afterConnectionEstablished(session);
-        handler.afterConnectionClosed(session, null);
 
-        // Reset to track further interactions
-        reset(session);
-        handler.pushToSession("42", "delta", "content");
-        verify(session, never()).sendMessage(any());
+        ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, atLeastOnce()).sendMessage(captor.capture());
+
+        String payload = captor.getAllValues().get(0).getPayload();
+        var json = new ObjectMapper().readTree(payload);
+        Assertions.assertEquals("snapshot", json.path("type").asText());
+        Assertions.assertEquals("42", json.path("welinkSessionId").asText());
+        Assertions.assertEquals("msg_42_1", json.path("messages").get(0).path("id").asText());
+        Assertions.assertEquals("tool", json.path("messages").get(0).path("parts").get(0).path("type").asText());
+        Assertions.assertEquals("completed", json.path("messages").get(0).path("parts").get(0).path("status").asText());
+        Assertions.assertEquals("pwd",
+                json.path("messages").get(0).path("parts").get(0).path("input").path("command").asText());
     }
 
     @Test
-    @DisplayName("pushToSession skips closed sessions gracefully")
-    void pushSkipsClosedSessions() throws Exception {
-        WebSocketSession session = mock(WebSocketSession.class);
-        when(session.getUri()).thenReturn(new URI("/ws/skill/stream/42"));
+    @DisplayName("snapshot payload extracts nested question fields from tool input")
+    void snapshotPayloadExtractsNestedQuestionFields() throws Exception {
+        WebSocketSession session = mockSession("/ws/skill/stream", "userId=10001");
+        SkillSession activeSession = new SkillSession();
+        activeSession.setId(42L);
+        activeSession.setUserId(10001L);
+        SkillMessage message = SkillMessage.builder()
+                .id(11L)
+                .messageId("msg_42_2")
+                .messageSeq(2)
+                .role(SkillMessage.Role.ASSISTANT)
+                .content("")
+                .contentType(SkillMessage.ContentType.MARKDOWN)
+                .createdAt(LocalDateTime.of(2026, 3, 8, 12, 1))
+                .build();
+        SkillMessagePart part = SkillMessagePart.builder()
+                .messageId(11L)
+                .partId("part-question-1")
+                .seq(1)
+                .partType("tool")
+                .toolName("question")
+                .toolCallId("call-question-1")
+                .toolStatus("running")
+                .toolInput("""
+                        {"questions":[{"header":"实现方案","question":"选 A 还是 B？","options":[{"label":"A","description":"只改最小范围"},{"label":"B","description":"做完整重构"}]}]}
+                        """)
+                .build();
+
+        when(sessionService.findActiveByUserId(10001L)).thenReturn(List.of(activeSession));
+        when(messageService.getAllMessages(42L)).thenReturn(List.of(message));
+        when(partRepository.findByMessageId(11L)).thenReturn(List.of(part));
+        when(bufferService.isSessionStreaming("42")).thenReturn(false);
+        when(bufferService.getStreamingParts("42")).thenReturn(List.of());
+
+        handler.afterConnectionEstablished(session);
+
+        ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, atLeastOnce()).sendMessage(captor.capture());
+
+        String payload = captor.getAllValues().get(0).getPayload();
+        var json = new ObjectMapper().readTree(payload);
+        var partJson = json.path("messages").get(0).path("parts").get(0);
+        Assertions.assertEquals("question", partJson.path("type").asText());
+        Assertions.assertEquals("实现方案", partJson.path("header").asText());
+        Assertions.assertEquals("选 A 还是 B？", partJson.path("question").asText());
+        Assertions.assertEquals("A", partJson.path("options").get(0).asText());
+        Assertions.assertEquals("B", partJson.path("options").get(1).asText());
+    }
+
+    @Test
+    @DisplayName("resume action replays snapshot and streaming state")
+    void resumeReplaysCurrentState() throws Exception {
+        WebSocketSession session = mockSession("/ws/skill/stream", "userId=10001");
+        SkillSession activeSession = new SkillSession();
+        activeSession.setId(42L);
+        activeSession.setUserId(10001L);
+        when(sessionService.findActiveByUserId(10001L)).thenReturn(List.of(activeSession));
+        when(messageService.getAllMessages(42L)).thenReturn(List.of());
+        when(bufferService.isSessionStreaming("42")).thenReturn(false);
+        when(bufferService.getStreamingParts("42")).thenReturn(List.of());
+
+        handler.afterConnectionEstablished(session);
+        reset(session);
+        when(session.getAttributes()).thenReturn(new HashMap<>(java.util.Map.of("userId", "10001")));
+        when(session.isOpen()).thenReturn(true);
+
+        handler.handleMessage(session, new TextMessage("{\"action\":\"resume\"}"));
+
+        verify(session, times(2)).sendMessage(any(TextMessage.class));
+    }
+
+    @Test
+    @DisplayName("base stream path without userId cookie is rejected")
+    void missingUserCookieIsRejected() throws Exception {
+        WebSocketSession session = mockSession("/ws/skill/stream", null);
+
+        handler.afterConnectionEstablished(session);
+
+        verify(session).close(any());
+    }
+
+    @Test
+    @DisplayName("closed subscriber is skipped gracefully")
+    void closedSubscriberIsSkipped() throws Exception {
+        WebSocketSession session = mockSession("/ws/skill/stream", "userId=10001");
+        SkillSession skillSession = new SkillSession();
+        skillSession.setId(42L);
+        skillSession.setUserId(10001L);
+        when(sessionService.findActiveByUserId(10001L)).thenReturn(List.of(skillSession));
+        when(messageService.getAllMessages(42L)).thenReturn(List.of());
+        when(bufferService.isSessionStreaming("42")).thenReturn(false);
+        when(bufferService.getStreamingParts("42")).thenReturn(List.of());
         when(session.isOpen()).thenReturn(false);
 
         handler.afterConnectionEstablished(session);
@@ -95,13 +223,17 @@ class SkillStreamHandlerTest {
         verify(session, never()).sendMessage(any(TextMessage.class));
     }
 
-    @Test
-    @DisplayName("connection with missing sessionId in URI is handled")
-    void connectionWithMissingSessionId() throws Exception {
+    private WebSocketSession mockSession(String uri, String cookieHeader) throws Exception {
         WebSocketSession session = mock(WebSocketSession.class);
-        when(session.getUri()).thenReturn(new URI("/ws/skill/stream/"));
+        when(session.getUri()).thenReturn(new URI(uri));
+        when(session.isOpen()).thenReturn(true);
+        when(session.getAttributes()).thenReturn(new HashMap<>());
 
-        handler.afterConnectionEstablished(session);
-        verify(session).close(any());
+        HttpHeaders headers = new HttpHeaders();
+        if (cookieHeader != null) {
+            headers.put(HttpHeaders.COOKIE, List.of(cookieHeader));
+        }
+        when(session.getHandshakeHeaders()).thenReturn(headers);
+        return session;
     }
 }

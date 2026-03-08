@@ -3,7 +3,7 @@ import type { MessagePart } from '../protocol/types';
 
 interface PermissionCardProps {
   part: MessagePart;
-  onDecision?: (permissionId: string, allow: boolean) => void;
+  onDecision?: (permissionId: string, response: 'once' | 'always' | 'reject') => void;
 }
 
 const permTypeLabels: Record<string, string> = {
@@ -24,13 +24,13 @@ export const PermissionCard: React.FC<PermissionCardProps> = ({
     setResolved(part.permResolved ?? false);
   }, [part.permResolved]);
 
-  const handleDecision = (allow: boolean) => {
+  const handleDecision = (response: 'once' | 'always' | 'reject') => {
     if (resolved) {
       return;
     }
     setResolved(true);
     if (part.permissionId) {
-      onDecision?.(part.permissionId, allow);
+      onDecision?.(part.permissionId, response);
     }
   };
 
@@ -58,13 +58,19 @@ export const PermissionCard: React.FC<PermissionCardProps> = ({
         <div className="permission-card__actions">
           <button
             className="permission-card__btn permission-card__btn--allow"
-            onClick={() => handleDecision(true)}
+            onClick={() => handleDecision('once')}
           >
-            允许
+            允许一次
+          </button>
+          <button
+            className="permission-card__btn permission-card__btn--allow"
+            onClick={() => handleDecision('always')}
+          >
+            总是允许
           </button>
           <button
             className="permission-card__btn permission-card__btn--deny"
-            onClick={() => handleDecision(false)}
+            onClick={() => handleDecision('reject')}
           >
             拒绝
           </button>

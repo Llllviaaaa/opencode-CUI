@@ -63,6 +63,13 @@
         SELECT * FROM agent_connection WHERE id = #{id}
     </select>
 
+    <select id="findLatestByAkId" resultMap="AgentConnectionResultMap">
+        SELECT * FROM agent_connection
+        WHERE ak_id = #{akId}
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+    </select>
+
     <update id="updateStatus">
         UPDATE agent_connection SET status = #{status} WHERE id = #{id}
     </update>

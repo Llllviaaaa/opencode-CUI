@@ -25,7 +25,7 @@ class GatewayMessageTest {
         GatewayMessage deserialized = objectMapper.readValue(json, GatewayMessage.class);
 
         assertEquals("tool_event", deserialized.getType());
-        assertEquals("sess-42", deserialized.getSessionId());
+        assertEquals("sess-42", deserialized.getToolSessionId());
         assertNotNull(deserialized.getEvent());
         assertEquals("message.part.updated", deserialized.getEvent().get("type").asText());
     }
@@ -39,18 +39,20 @@ class GatewayMessageTest {
         GatewayMessage deserialized = objectMapper.readValue(json, GatewayMessage.class);
 
         assertEquals("tool_done", deserialized.getType());
-        assertEquals("sess-42", deserialized.getSessionId());
+        assertEquals("sess-42", deserialized.getToolSessionId());
         assertNotNull(deserialized.getUsage());
     }
 
     @Test
     void testToolErrorSerialization() throws Exception {
-        GatewayMessage msg = GatewayMessage.toolError("sess-42", "Connection refused");
+        GatewayMessage msg = GatewayMessage.toolError("welink-42", "sess-42", "Connection refused");
 
         String json = objectMapper.writeValueAsString(msg);
         GatewayMessage deserialized = objectMapper.readValue(json, GatewayMessage.class);
 
         assertEquals("tool_error", deserialized.getType());
+        assertEquals("welink-42", deserialized.getWelinkSessionId());
+        assertEquals("sess-42", deserialized.getToolSessionId());
         assertEquals("Connection refused", deserialized.getError());
     }
 
@@ -81,14 +83,14 @@ class GatewayMessageTest {
     @Test
     void testInvokeSerialization() throws Exception {
         JsonNode payload = objectMapper.readTree("{\"toolSessionId\":\"sess_abc\",\"text\":\"hello\"}");
-        GatewayMessage msg = GatewayMessage.invoke("123", "42", "chat", payload);
+        GatewayMessage msg = GatewayMessage.invoke("ak_test_001", "42", "chat", payload);
 
         String json = objectMapper.writeValueAsString(msg);
         GatewayMessage deserialized = objectMapper.readValue(json, GatewayMessage.class);
 
         assertEquals("invoke", deserialized.getType());
-        assertEquals("123", deserialized.getAgentId());
-        assertEquals("42", deserialized.getSessionId());
+        assertEquals("ak_test_001", deserialized.getAk());
+        assertEquals("42", deserialized.getWelinkSessionId());
         assertEquals("chat", deserialized.getAction());
         assertEquals("hello", deserialized.getPayload().get("text").asText());
     }
@@ -100,7 +102,7 @@ class GatewayMessageTest {
 
         assertNull(original.getAgentId());
         assertEquals("agent-123", withAgent.getAgentId());
-        assertEquals("sess-42", withAgent.getSessionId());
+        assertEquals("sess-42", withAgent.getToolSessionId());
         assertEquals("tool_event", withAgent.getType());
     }
 
@@ -111,7 +113,7 @@ class GatewayMessageTest {
 
         assertNull(original.getAk());
         assertEquals("ak_test_001", withAk.getAk());
-        assertEquals("sess-42", withAk.getSessionId());
+        assertEquals("sess-42", withAk.getToolSessionId());
         assertEquals("tool_event", withAk.getType());
     }
 
@@ -150,9 +152,10 @@ class GatewayMessageTest {
 
     @Test
     void testSessionCreatedFactory() {
-        GatewayMessage msg = GatewayMessage.sessionCreated("sess_abc123");
+        GatewayMessage msg = GatewayMessage.sessionCreated("welink-42", "sess_abc123");
 
         assertEquals("session_created", msg.getType());
+        assertEquals("welink-42", msg.getWelinkSessionId());
         assertEquals("sess_abc123", msg.getToolSessionId());
     }
 

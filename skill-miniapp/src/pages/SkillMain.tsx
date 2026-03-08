@@ -11,8 +11,6 @@ import { useAgentSelector } from '../hooks/useAgentSelector';
 
 interface SkillMainProps {
   onCollapse: () => void;
-  /** Current user ID for session filtering. */
-  userId: string;
   /** Pre-selected session ID (e.g. from the initial SKILL trigger flow). */
   initialSessionId?: string | null;
   /** IM chat ID for the "send to IM" feature. */
@@ -111,7 +109,6 @@ const agentStatusConfig: Record<
 
 export const SkillMain: React.FC<SkillMainProps> = ({
   onCollapse,
-  userId,
   initialSessionId,
   imChatId = '',
 }) => {
@@ -128,7 +125,7 @@ export const SkillMain: React.FC<SkillMainProps> = ({
     createSession,
     switchSession,
     // closeSession is available for future use (FR-5.3)
-  } = useSkillSession(userId);
+  } = useSkillSession();
 
   // Determine active session ID (prefer current session, fall back to initial)
   const activeSessionId = currentSession?.id ?? initialSessionId ?? null;
@@ -165,7 +162,7 @@ export const SkillMain: React.FC<SkillMainProps> = ({
     selectedAgent,
     selectAgent,
     loading: agentsLoading,
-  } = useAgentSelector(userId);
+  } = useAgentSelector();
 
   const handleNewSession = useCallback(async () => {
     if (!selectedAgent) return;
@@ -215,21 +212,35 @@ export const SkillMain: React.FC<SkillMainProps> = ({
   );
 
   const handleQuestionAnswer = useCallback(
-    (answer: string) => {
-      void handleSendMessage(answer);
+    (answer: string, toolCallId?: string) => {
+      if (!activeSessionId) {
+        void handleSendMessage(answer);
+        return;
+      }
+      void sendMessage(answer, toolCallId ? { toolCallId } : undefined);
     },
-    [handleSendMessage],
+    [activeSessionId, handleSendMessage, sendMessage],
   );
 
   const handlePermissionDecision = useCallback(
-    (permissionId: string, allow: boolean) => {
-      void replyPermission(permissionId, allow);
+    (permissionId: string, response: 'once' | 'always' | 'reject') => {
+      void replyPermission(permissionId, response);
     },
     [replyPermission],
   );
 
   const displayError = sessionError ?? streamError ?? imError;
-  const statusCfg = agentStatusConfig[agentStatus] ?? agentStatusConfig.unknown;
+  const resolvedAgentStatus =
+    !socketReady
+      ? 'unknown'
+      : agentStatus !== 'unknown'
+        ? agentStatus
+        : selectedAgent
+          ? 'online'
+          : agentsLoading
+            ? 'unknown'
+            : 'offline';
+  const statusCfg = agentStatusConfig[resolvedAgentStatus] ?? agentStatusConfig.unknown;
 
   return (
     <div style={styles.overlay}>

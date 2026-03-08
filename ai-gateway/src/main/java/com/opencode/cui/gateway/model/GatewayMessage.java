@@ -2,25 +2,20 @@ package com.opencode.cui.gateway.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.JsonNode;
-import lombok.Data;
-import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
 /**
  * Gateway WebSocket message protocol.
  *
- * Upstream (PCAgent -> Gateway):
- * register, heartbeat, tool_event, tool_done, tool_error, session_created
+ * Protocol-aligned fields:
+ * - welinkSessionId: skill-side session id
+ * - toolSessionId: OpenCode session id
+ * - ak: routing key for the connected agent
  *
- * Downstream (Gateway -> PCAgent):
- * invoke, status_query
- *
- * Internal (Gateway <-> Skill Server):
- * tool_event, tool_done, tool_error, agent_online, agent_offline,
- * session_created, invoke
  */
-
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -31,16 +26,16 @@ public class GatewayMessage {
     /** Message type discriminator */
     private String type;
 
-    /** Agent connection ID (used for DB operations) */
+    /** Legacy/internal DB identifier; protocol routing uses ak instead */
     private String agentId;
 
-    /** Agent AK identifier (used for routing — agent:{ak} Redis channel) */
+    /** Agent AK identifier used for routing */
     private String ak;
 
-    /** Session identifier */
-    private String sessionId;
+    /** Skill session identifier from Layer2/3 protocol */
+    private String welinkSessionId;
 
-    /** Action for invoke messages: chat, create_session, close_session */
+    /** Action for invoke messages: chat, create_session, close_session, ... */
     private String action;
 
     /** Payload for invoke or register messages */
@@ -64,19 +59,13 @@ public class GatewayMessage {
     private String toolType;
     private String toolVersion;
 
-    // --- Session created field ---
+    // --- Tool/session fields ---
     private String toolSessionId;
-
-    // --- Session created: full session details (transparent relay to Skill Server)
-    // ---
     private JsonNode session;
 
     // --- Status response fields ---
     private Boolean opencodeOnline;
 
-    // ========== Static factory methods ==========
-
-    /** PCAgent -> Gateway: register device */
     public static GatewayMessage register(String deviceName, String os,
             String toolType, String toolVersion) {
         return GatewayMessage.builder()
@@ -88,49 +77,45 @@ public class GatewayMessage {
                 .build();
     }
 
-    /** PCAgent -> Gateway: heartbeat */
     public static GatewayMessage heartbeat() {
         return GatewayMessage.builder()
                 .type("heartbeat")
                 .build();
     }
 
-    /** PCAgent -> Gateway: OpenCode tool event (transparent relay) */
-    public static GatewayMessage toolEvent(String sessionId, JsonNode event) {
+    public static GatewayMessage toolEvent(String toolSessionId, JsonNode event) {
         return GatewayMessage.builder()
                 .type("tool_event")
-                .sessionId(sessionId)
+                .toolSessionId(toolSessionId)
                 .event(event)
                 .build();
     }
 
-    /** PCAgent -> Gateway: tool execution completed */
-    public static GatewayMessage toolDone(String sessionId, JsonNode usage) {
+    public static GatewayMessage toolDone(String toolSessionId, JsonNode usage) {
         return GatewayMessage.builder()
                 .type("tool_done")
-                .sessionId(sessionId)
+                .toolSessionId(toolSessionId)
                 .usage(usage)
                 .build();
     }
 
-    /** PCAgent -> Gateway: tool execution error */
-    public static GatewayMessage toolError(String sessionId, String error) {
+    public static GatewayMessage toolError(String welinkSessionId, String toolSessionId, String error) {
         return GatewayMessage.builder()
                 .type("tool_error")
-                .sessionId(sessionId)
+                .welinkSessionId(welinkSessionId)
+                .toolSessionId(toolSessionId)
                 .error(error)
                 .build();
     }
 
-    /** PCAgent -> Gateway: session created on OpenCode side */
-    public static GatewayMessage sessionCreated(String toolSessionId) {
+    public static GatewayMessage sessionCreated(String welinkSessionId, String toolSessionId) {
         return GatewayMessage.builder()
                 .type("session_created")
+                .welinkSessionId(welinkSessionId)
                 .toolSessionId(toolSessionId)
                 .build();
     }
 
-    /** Gateway -> Skill Server: agent came online */
     public static GatewayMessage agentOnline(String ak, String toolType, String toolVersion) {
         return GatewayMessage.builder()
                 .type("agent_online")
@@ -140,7 +125,6 @@ public class GatewayMessage {
                 .build();
     }
 
-    /** Gateway -> Skill Server: agent went offline */
     public static GatewayMessage agentOffline(String ak) {
         return GatewayMessage.builder()
                 .type("agent_offline")
@@ -148,35 +132,29 @@ public class GatewayMessage {
                 .build();
     }
 
-    /** Skill Server -> Gateway -> PCAgent: invoke an action */
-    public static GatewayMessage invoke(String agentId, String sessionId,
+    public static GatewayMessage invoke(String ak, String welinkSessionId,
             String action, JsonNode payload) {
         return GatewayMessage.builder()
                 .type("invoke")
-                .agentId(agentId)
-                .sessionId(sessionId)
+                .ak(ak)
+                .welinkSessionId(welinkSessionId)
                 .action(action)
                 .payload(payload)
                 .build();
     }
 
-    /** Gateway -> PCAgent: query agent status */
     public static GatewayMessage statusQuery() {
         return GatewayMessage.builder()
                 .type("status_query")
                 .build();
     }
 
-    /**
-     * Attach agentId to an existing message (for relay to Skill Server).
-     * Returns a new instance with agentId set.
-     */
     public GatewayMessage withAgentId(String agentId) {
-        GatewayMessage copy = GatewayMessage.builder()
+        return GatewayMessage.builder()
                 .type(this.type)
                 .agentId(agentId)
                 .ak(this.ak)
-                .sessionId(this.sessionId)
+                .welinkSessionId(this.welinkSessionId)
                 .action(this.action)
                 .payload(this.payload)
                 .event(this.event)
@@ -191,19 +169,14 @@ public class GatewayMessage {
                 .session(this.session)
                 .opencodeOnline(this.opencodeOnline)
                 .build();
-        return copy;
     }
 
-    /**
-     * Attach ak to an existing message (for relay to Skill Server).
-     * Returns a new instance with ak set.
-     */
     public GatewayMessage withAk(String ak) {
-        GatewayMessage copy = GatewayMessage.builder()
+        return GatewayMessage.builder()
                 .type(this.type)
                 .agentId(this.agentId)
                 .ak(ak)
-                .sessionId(this.sessionId)
+                .welinkSessionId(this.welinkSessionId)
                 .action(this.action)
                 .payload(this.payload)
                 .event(this.event)
@@ -218,20 +191,14 @@ public class GatewayMessage {
                 .session(this.session)
                 .opencodeOnline(this.opencodeOnline)
                 .build();
-        return copy;
     }
 
-    /**
-     * Attach sequence number to an existing message (for multi-instance
-     * coordination).
-     * Returns a new instance with sequenceNumber set.
-     */
     public GatewayMessage withSequenceNumber(Long sequenceNumber) {
-        GatewayMessage copy = GatewayMessage.builder()
+        return GatewayMessage.builder()
                 .type(this.type)
                 .agentId(this.agentId)
                 .ak(this.ak)
-                .sessionId(this.sessionId)
+                .welinkSessionId(this.welinkSessionId)
                 .action(this.action)
                 .payload(this.payload)
                 .event(this.event)
@@ -246,7 +213,5 @@ public class GatewayMessage {
                 .session(this.session)
                 .opencodeOnline(this.opencodeOnline)
                 .build();
-        return copy;
     }
-
 }

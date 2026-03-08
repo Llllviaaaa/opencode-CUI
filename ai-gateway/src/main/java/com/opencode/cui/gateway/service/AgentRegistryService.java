@@ -118,6 +118,13 @@ public class AgentRegistryService {
     }
 
     /**
+     * Get the latest known connection record for an AK.
+     */
+    public AgentConnection findLatestByAk(String ak) {
+        return repository.findLatestByAkId(ak);
+    }
+
+    /**
      * Scheduled task: check for timed-out agents and mark them offline.
      * Runs at the interval configured by
      * gateway.agent.heartbeat-check-interval-seconds.

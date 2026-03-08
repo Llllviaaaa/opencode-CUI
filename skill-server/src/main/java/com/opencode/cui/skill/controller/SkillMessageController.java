@@ -120,7 +120,7 @@ public class SkillMessageController {
             log.warn("No agent associated with session {}, cannot invoke AI", sessionId);
         }
 
-        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(message));
+        return ResponseEntity.ok(ApiResponse.ok(message));
     }
 
     /**
@@ -258,7 +258,7 @@ public class SkillMessageController {
                 sessionId, permId, request.getResponse());
 
         return ResponseEntity.ok(ApiResponse.ok(Map.of(
-                "success", (Object) true,
+                "welinkSessionId", sessionId.toString(),
                 "permissionId", permId,
                 "response", request.getResponse())));
     }
@@ -283,9 +283,9 @@ public class SkillMessageController {
     /**
      * Build the JSON payload for a question_reply invoke command.
      */
-    private String buildQuestionReplyPayload(String text, String toolCallId, String toolSessionId) {
+    private String buildQuestionReplyPayload(String answer, String toolCallId, String toolSessionId) {
         var node = objectMapper.createObjectNode();
-        node.put("text", text);
+        node.put("answer", answer);
         node.put("toolCallId", toolCallId);
         if (toolSessionId != null) {
             node.put("toolSessionId", toolSessionId);
