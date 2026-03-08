@@ -66,17 +66,17 @@ export type ConnectionState = 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'REA
 // Envelope / Message Types
 // ---------------------------------------------------------------------------
 
-export type MessageSource = 'message-bridge' | 'OPENCODE' | 'CURSOR' | 'WINDSURF';
+export type MessageSource = 'OPENCODE' | 'CURSOR' | 'WINDSURF';
 
 export interface Envelope {
   version: string;
   messageId: string;
-  timestamp: number | string;
+  timestamp: string;
   source: MessageSource;
   agentId: string;
   sessionId?: string;
   sequenceNumber: number;
-  sequenceScope: 'session' | 'global';
+  sequenceScope: 'session' | 'agent';
 }
 
 export type UpstreamMessageType =
@@ -417,4 +417,4 @@ export const DEFAULT_CONFIG = {
 } as const;
 
 export const AGENT_ID_PREFIX = 'bridge-';
-export const PROTOCOL_VERSION = '1.0';
+export const PROTOCOL_VERSION = '1.0.0';

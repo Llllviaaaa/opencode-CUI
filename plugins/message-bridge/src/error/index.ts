@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { ToolErrorPayload, Envelope, MessageSource } from '../types';
+import { ToolErrorPayload, Envelope, MessageSource, PROTOCOL_VERSION } from '../types';
 import { FastFailDetector } from './FastFailDetector';
 import { ErrorMapper } from './ErrorMapper';
 
@@ -18,14 +18,14 @@ export function buildToolError(
   sequenceNumber?: number
 ): ToolErrorPayload {
   const envelope: Envelope = {
-    version: '1.0',
+    version: PROTOCOL_VERSION,
     messageId: randomUUID(),
     timestamp: new Date().toISOString(),
     source,
     agentId,
     sessionId,
     sequenceNumber: sequenceNumber ?? 1,
-    sequenceScope: sessionId ? 'session' : 'global'
+    sequenceScope: sessionId ? 'session' : 'agent'
   };
 
   return {
