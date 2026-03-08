@@ -1,5 +1,6 @@
 import { homedir } from 'os';
-import { join } from 'path';
+import { dirname, join, resolve } from 'path';
+import { promises } from 'fs';
 import { BridgeConfig, DEFAULT_EVENT_ALLOWLIST } from '../types';
 import { JsoncParser } from './JsoncParser';
 
@@ -53,11 +54,13 @@ export class ConfigResolver {
     }
 
     const workspaceRoot = workspacePath ?? process.cwd();
-    const projectConfigPath = join(workspaceRoot, '.opencode', 'message-bridge.jsonc');
-    const projectConfig = await this.loadConfigFile(projectConfigPath);
-    if (projectConfig) {
-      config = this.mergeConfig(config, projectConfig);
-      sources.push(`project:${projectConfigPath}`);
+    const projectConfigPath = await this.findProjectConfig(workspaceRoot);
+    if (projectConfigPath) {
+      const projectConfig = await this.loadConfigFile(projectConfigPath);
+      if (projectConfig) {
+        config = this.mergeConfig(config, projectConfig);
+        sources.push(`project:${projectConfigPath}`);
+      }
     }
 
     const envConfig = this.loadEnvConfig();
@@ -80,6 +83,28 @@ export class ConfigResolver {
       }
       throw error;
     }
+  }
+
+  private async findProjectConfig(startDir: string): Promise<string | null> {
+    const configFileName = 'message-bridge.jsonc';
+    const configDirName = '.opencode';
+    let current = resolve(startDir);
+
+    while (true) {
+      const configPath = join(current, configDirName, configFileName);
+      try {
+        await promises.access(configPath);
+        return configPath;
+      } catch {
+        const parent = dirname(current);
+        if (parent === current) {
+          break;
+        }
+        current = parent;
+      }
+    }
+
+    return null;
   }
 
   private loadEnvConfig(): Partial<BridgeConfig> {
