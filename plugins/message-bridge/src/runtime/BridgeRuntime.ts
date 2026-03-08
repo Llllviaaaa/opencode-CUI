@@ -8,6 +8,7 @@ import {
   DownstreamMessage,
   PERMISSION_REPLY_RESPONSES,
   PermissionReplyInvokeMessage,
+  QuestionReplyInvokeMessage,
   StatusQueryMessage,
   hasEnvelope,
 } from '../types';
@@ -15,6 +16,7 @@ import { ChatAction } from '../action/ChatAction';
 import { CreateSessionAction } from '../action/CreateSessionAction';
 import { CloseSessionAction } from '../action/CloseSessionAction';
 import { PermissionReplyAction } from '../action/PermissionReplyAction';
+import { QuestionReplyAction } from '../action/QuestionReplyAction';
 import { StatusQueryAction } from '../action/StatusQueryAction';
 import { DefaultActionRouter } from '../action/ActionRouter';
 import { DefaultActionRegistry } from '../action/ActionRegistry';
@@ -226,6 +228,7 @@ export class BridgeRuntime {
       new CreateSessionAction(),
       new CloseSessionAction(),
       new PermissionReplyAction(),
+      new QuestionReplyAction(),
       new StatusQueryAction(),
     ];
 
@@ -506,6 +509,8 @@ export class BridgeRuntime {
         return this.normalizeCloseSessionInvokeMessage(msg, envelope);
       case 'permission_reply':
         return this.normalizePermissionReplyInvokeMessage(msg, envelope);
+      case 'question_reply':
+        return this.normalizeQuestionReplyInvokeMessage(msg, envelope);
       default:
         return null;
     }
@@ -596,6 +601,27 @@ export class BridgeRuntime {
       type: 'invoke',
       action: 'permission_reply',
       payload: { toolSessionId, permissionId, response: normalizedResponse },
+      sessionId: this.readNonEmptyString(msg.sessionId),
+      envelope,
+    };
+  }
+
+  private normalizeQuestionReplyInvokeMessage(
+    msg: Record<string, unknown>,
+    envelope?: DownstreamMessage['envelope'],
+  ): QuestionReplyInvokeMessage | null {
+    const payload = this.extractInvokePayload(msg);
+    const toolSessionId = this.readNonEmptyString(payload?.toolSessionId);
+    const toolCallId = this.readNonEmptyString(payload?.toolCallId);
+    const answer = this.readNonEmptyString(payload?.answer);
+    if (!payload || !toolSessionId || !toolCallId || !answer) {
+      return null;
+    }
+
+    return {
+      type: 'invoke',
+      action: 'question_reply',
+      payload: { toolSessionId, toolCallId, answer },
       sessionId: this.readNonEmptyString(msg.sessionId),
       envelope,
     };

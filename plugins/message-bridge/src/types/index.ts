@@ -171,11 +171,17 @@ export interface PermissionReplyInvokeMessage extends BaseInvokeMessage {
   payload: PermissionReplyPayload;
 }
 
+export interface QuestionReplyInvokeMessage extends BaseInvokeMessage {
+  action: 'question_reply';
+  payload: QuestionReplyPayload;
+}
+
 export type InvokeMessage =
   | ChatInvokeMessage
   | CreateSessionInvokeMessage
   | CloseSessionInvokeMessage
-  | PermissionReplyInvokeMessage;
+  | PermissionReplyInvokeMessage
+  | QuestionReplyInvokeMessage;
 
 export interface StatusQueryMessage {
   type: 'status_query';
@@ -198,7 +204,7 @@ export type DownstreamMessage = InvokeMessage | StatusQueryMessage;
 // Actions
 // ---------------------------------------------------------------------------
 
-export const INVOKE_ACTIONS = ['chat', 'create_session', 'close_session', 'permission_reply'] as const;
+export const INVOKE_ACTIONS = ['chat', 'create_session', 'close_session', 'permission_reply', 'question_reply'] as const;
 export type InvokeAction = typeof INVOKE_ACTIONS[number];
 
 export interface ChatPayload {
@@ -222,6 +228,12 @@ export interface PermissionReplyPayload {
   permissionId: string;
   toolSessionId: string;
   response: PermissionReplyResponse;
+}
+
+export interface QuestionReplyPayload {
+  toolSessionId: string;
+  toolCallId: string;
+  answer: string;
 }
 
 export interface StatusQueryPayload {
@@ -426,7 +438,7 @@ export function isDownstreamMessage(message: unknown): message is DownstreamMess
 export const DEFAULT_EVENT_ALLOWLIST = [
   'message.*',
   'permission.*',
-  'requestion.*',
+  'question.*',
   'session.*',
   'file.edited',
   'todo.updated',

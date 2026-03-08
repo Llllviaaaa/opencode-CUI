@@ -4,6 +4,7 @@ import { ChatAction } from '../../dist/action/ChatAction.js';
 import { CreateSessionAction } from '../../dist/action/CreateSessionAction.js';
 import { CloseSessionAction } from '../../dist/action/CloseSessionAction.js';
 import { PermissionReplyAction } from '../../dist/action/PermissionReplyAction.js';
+import { QuestionReplyAction } from '../../dist/action/QuestionReplyAction.js';
 import { StatusQueryAction } from '../../dist/action/StatusQueryAction.js';
 
 function readyContext(client, overrides = {}) {
@@ -231,6 +232,86 @@ describe('PermissionReplyAction coverage', () => {
         body: { response },
       });
     }
+  });
+});
+
+describe('QuestionReplyAction coverage', () => {
+  test('validate strict format only', () => {
+    const action = new QuestionReplyAction();
+    expect(action.validate(null).valid).toBe(false);
+    expect(action.validate({ toolSessionId: 's-tool', toolCallId: 'call-1' }).valid).toBe(false);
+    expect(action.validate({ toolSessionId: 's-tool', answer: 'vite' }).valid).toBe(false);
+    expect(action.validate({ toolCallId: 'call-1', answer: 'vite' }).valid).toBe(false);
+    expect(action.validate({ toolSessionId: 's-tool', toolCallId: 'call-1', answer: 'vite' }).valid).toBe(true);
+  });
+
+  test('execute maps answer to session.prompt text and does not pass toolCallId to sdk', async () => {
+    const calls = [];
+    const action = new QuestionReplyAction();
+    const client = {
+      session: {
+        create: async () => ({}),
+        abort: async () => ({}),
+        prompt: async (options) => {
+          calls.push(options);
+          return { data: { ok: true } };
+        },
+      },
+      postSessionIdPermissionsPermissionId: async () => ({}),
+    };
+
+    const result = await action.execute(
+      { toolSessionId: 's-tool', toolCallId: 'call-1', answer: 'Vite' },
+      readyContext(client),
+    );
+
+    expect(result.success).toBe(true);
+    expect(calls[0]).toEqual({
+      path: { id: 's-tool' },
+      body: { parts: [{ type: 'text', text: 'Vite' }] },
+    });
+  });
+
+  test('execute handles sdk errors', async () => {
+    const action = new QuestionReplyAction();
+    const client = {
+      session: {
+        create: async () => ({}),
+        abort: async () => ({}),
+        prompt: async () => ({ error: { message: 'question blocked' } }),
+      },
+      postSessionIdPermissionsPermissionId: async () => ({}),
+    };
+
+    const failed = await action.execute(
+      { toolSessionId: 's-tool', toolCallId: 'call-1', answer: 'Vite' },
+      readyContext(client),
+    );
+    expect(failed.success).toBe(false);
+    expect(failed.errorCode).toBe('SDK_UNREACHABLE');
+    expect(failed.errorMessage).toContain('question blocked');
+  });
+
+  test('execute maps timeout errors to SDK_TIMEOUT', async () => {
+    const action = new QuestionReplyAction();
+    const client = {
+      session: {
+        create: async () => ({}),
+        abort: async () => ({}),
+        prompt: async () => {
+          throw new Error('request timed out');
+        },
+      },
+      postSessionIdPermissionsPermissionId: async () => ({}),
+    };
+
+    const failed = await action.execute(
+      { toolSessionId: 's-tool', toolCallId: 'call-1', answer: 'Vite' },
+      readyContext(client),
+    );
+    expect(failed.success).toBe(false);
+    expect(failed.errorCode).toBe('SDK_TIMEOUT');
+    expect(failed.errorMessage).toContain('timed out');
   });
 });
 

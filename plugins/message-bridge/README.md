@@ -131,7 +131,7 @@ Only `auth.ak` and `auth.sk` are required fields (when `enabled` is not `false`)
 | `gateway.ping.intervalMs` | no | `30000` | Ping interval (ms) |
 | `gateway.ping.pongTimeoutMs` | no | `10000` | Pong timeout (ms) |
 | `sdk.timeoutMs` | no | `10000` | SDK call timeout (ms) |
-| `events.allowlist` | no | `['message.*', 'permission.*', 'requestion.*', ...]` | Allowed event patterns |
+| `events.allowlist` | no | `['message.*', 'permission.*', 'question.*', ...]` | Allowed event patterns |
 | `enabled` | no | `true` | Enable/disable plugin |
 | `config_version` | no | `1` | Config version |
 

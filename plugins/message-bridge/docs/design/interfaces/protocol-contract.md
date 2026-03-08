@@ -11,6 +11,7 @@
 - 插件边界的上下行消息类型契约
 - Envelope 字段及语义约束
 - `permission_reply` 的标准字段定义
+- `question_reply` 的标准字段定义
 
 ## Out of Scope
 
@@ -106,6 +107,16 @@
   "permissionId": "perm-100",
   "toolSessionId": "tool-001",
   "response": "once"
+}
+```
+
+`question_reply`
+
+```json
+{
+  "toolSessionId": "tool-001",
+  "toolCallId": "call-200",
+  "answer": "Vite"
 }
 ```
 
