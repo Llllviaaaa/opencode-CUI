@@ -17,6 +17,11 @@ export interface EventRelayOptions {
   logger?: BridgeLogger;
 }
 
+/**
+ * @deprecated Historical envelope-based relay implementation. The active
+ * plugin runtime forwards events through BridgeRuntime.handleEvent() using the
+ * flat tool_event protocol without envelope/sessionId wrapper fields.
+ */
 export class EventRelay {
   private readonly eventFilter: EventFilter;
   private subscription: (() => void) | null = null;

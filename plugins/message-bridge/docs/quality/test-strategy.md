@@ -15,7 +15,7 @@
 | 范围项 | 说明 |
 |--------|------|
 | 需求追踪矩阵 | FR-ID 到测试用例的完整映射 |
-| 单元测试用例 | 配置、白名单、envelope、错误处理等模块的独立测试 |
+| 单元测试用例 | 配置、白名单、扁平协议字段、错误处理等模块的独立测试 |
 | 集成测试用例 | Mock Gateway + Mock SDK 的模块间交互测试 |
 | E2E Smoke 测试 | 端到端完整链路验证 |
 | 回归测试策略 | 版本迭代时的回归范围与自动化策略 |
@@ -98,7 +98,7 @@
 | UT-CHAT-002 | chat action 执行 | 单元测试 | P0 | §5 FR-MB-04 |
 | UT-SESN-001 | create_session action 验证 | 单元测试 | P0 | §5 FR-MB-04 |
 | UT-SESN-002 | close_session action 验证 | 单元测试 | P0 | §5 FR-MB-04 |
-| UT-SESN-003 | close_session 调用 abort | 单元测试 | P0 | §5 FR-MB-05 |
+| UT-SESN-003 | abort_session 调用 abort | 单元测试 | P0 | §5 FR-MB-05 |
 | UT-PERM-001 | permission_reply payload 验证 | 单元测试 | P0 | §5 FR-MB-04 |
 | UT-PERM-002 | permission_reply 执行 | 单元测试 | P0 | §5 FR-MB-04 |
 | UT-STAT-001 | status_query payload 验证 | 单元测试 | P0 | §5 FR-MB-04 |
@@ -114,10 +114,10 @@
 
 | 测试用例 ID | 用例名称 | 测试类型 | 优先级 | 关联 PRD 章节 |
 |-------------|----------|----------|--------|---------------|
-| UT-CLSE-001 | close_session 映射到 abort | 单元测试 | P0 | §5 FR-MB-05 |
-| UT-CLSE-002 | close_session 不执行 delete | 单元测试 | P0 | §5 FR-MB-05 |
-| INT-CLSE-001 | close_session 调用验证 | 集成测试 | P0 | §5 FR-MB-05 |
-| E2E-CLSE-001 | close_session 语义验证 | E2E Smoke | P0 | §5 FR-MB-05 |
+| UT-CLSE-001 | close_session 映射到 delete | 单元测试 | P0 | §5 FR-MB-05 |
+| UT-CLSE-002 | abort_session 映射到 abort | 单元测试 | P0 | §5 FR-MB-05 |
+| INT-CLSE-001 | close_session / abort_session 调用验证 | 集成测试 | P0 | §5 FR-MB-05 |
+| E2E-CLSE-001 | session lifecycle 语义验证 | E2E Smoke | P0 | §5 FR-MB-05 |
 
 ### 2.6 FR-MB-06: 权限回复协议对齐
 
@@ -154,8 +154,8 @@
 | UT-REGI-001 | register 消息格式 | 单元测试 | P1 | §5 FR-MB-08 |
 | UT-REGI-002 | 心跳消息格式 | 单元测试 | P1 | §5 FR-MB-08 |
 | UT-STAT-003 | status_response 格式 | 单元测试 | P1 | §5 FR-MB-08 |
-| UT-STAT-004 | status_response 携带 envelope | 单元测试 | P1 | §5 FR-MB-08 |
-| UT-STAT-005 | status_response sessionId 透传 | 单元测试 | P1 | §5 FR-MB-08 |
+| UT-STAT-004 | status_response 不携带 envelope | 单元测试 | P1 | §5 FR-MB-08 |
+| UT-STAT-005 | status_response 不透传 sessionId | 单元测试 | P1 | §5 FR-MB-08 |
 | INT-REGI-001 | 注册与心跳完整链路 | 集成测试 | P1 | §5 FR-MB-08 |
 | INT-STAT-001 | status_query/response 完整链路 | 集成测试 | P1 | §5 FR-MB-08 |
 | E2E-REGI-001 | 注册与心跳端到端 | E2E Smoke | P1 | §5 FR-MB-08 |
@@ -178,23 +178,18 @@
 | INT-CFG-001 | 配置发现完整链路 | 集成测试 | P0 | §5 FR-MB-09 |
 | E2E-CFG-001 | 配置发现端到端 | E2E Smoke | P0 | §5 FR-MB-09 |
 
-### 2.10 Envelope 与 Sequence
+### 2.10 Flat Protocol 与 Legacy Envelope 兼容夹具
 
 | 测试用例 ID | 用例名称 | 测试类型 | 优先级 | 关联 PRD 章节 |
 |-------------|----------|----------|--------|---------------|
-| UT-ENVL-001 | envelope 所有字段存在 | 单元测试 | P0 | §4.4 |
-| UT-ENVL-002 | version 字段值为 "1.0" | 单元测试 | P0 | §4.4 |
-| UT-ENVL-003 | messageId 为 UUID | 单元测试 | P0 | §4.4 |
-| UT-ENVL-004 | timestamp 为 Unix ms | 单元测试 | P0 | §4.4 |
-| UT-ENVL-005 | source 为 "message-bridge" | 单元测试 | P0 | §4.4 |
-| UT-ENVL-006 | agentId 格式正确 | 单元测试 | P0 | §4.4 |
-| UT-ENVL-007 | sessionId 可选 | 单元测试 | P0 | §4.4 |
-| UT-ENVL-008 | sequenceNumber 递增 | 单元测试 | P0 | §4.4 |
-| UT-ENVL-009 | sequenceScope 为 session/global | 单元测试 | P0 | §4.4 |
-| UT-ENVL-010 | 同 session sequence 递增 | 单元测试 | P0 | §4.4 |
-| UT-ENVL-011 | 不同 session sequence 独立 | 单元测试 | P0 | §4.4 |
-| INT-ENVL-001 | envelope 封装完整链路 | 集成测试 | P0 | §4.4 |
-| E2E-ENVL-001 | envelope 端到端验证 | E2E Smoke | P0 | §4.4 |
+| UT-ENVL-001 | 上行消息不携带 envelope | 单元测试 | P0 | §4.4 |
+| UT-ENVL-002 | invoke 使用 welinkSessionId | 单元测试 | P0 | §4.4 |
+| UT-ENVL-003 | tool_error 使用扁平路由字段 | 单元测试 | P0 | §4.4 |
+| UT-ENVL-004 | status_response 仅含 opencodeOnline | 单元测试 | P0 | §4.4 |
+| UT-ENVL-005 | tool_done 不再作为活跃上行消息 | 单元测试 | P0 | §4.4 |
+| UT-ENVL-006 | legacy envelope helper 显式标记弃用 | 单元测试 | P1 | §4.4 |
+| INT-ENVL-001 | 扁平协议完整链路 | 集成测试 | P0 | §4.4 |
+| E2E-ENVL-001 | 扁平协议端到端验证 | E2E Smoke | P0 | §4.4 |
 
 ---
 
@@ -752,7 +747,7 @@ describe('UT-ACTN-002', () => {
       }
       
       mapError(error: Error, context: ActionContext) {
-        return { type: 'tool_error', code: 'SDK_UNREACHABLE', error: error.message, envelope: context.envelopeBuilder.build() };
+        return { type: 'tool_error', code: 'SDK_UNREACHABLE', error: error.message, welinkSessionId: context.sessionId };
       }
     }
     
@@ -811,45 +806,41 @@ describe('UT-PERM-003', () => {
 
 ---
 
-#### UT-SESN-003: close_session 映射到 abort
+#### UT-SESN-003: abort_session 映射到 abort
 
 **前置条件:**
-- CloseSessionAction 实例已创建
+- AbortSessionAction 实例已创建
 - Mock SDK session.abort 方法
 
 **测试步骤:**
 1. 调用 execute() 传入 toolSessionId
 2. 验证 SDK session.abort 被调用
-3. 验证 SDK session.delete 未被调用
+3. 验证 `close_session` 语义不在此 action 中出现
 
 **预期结果:**
 - session.abort 被调用一次
-- session.delete 未被调用
+- 不触发 delete 路径
 
 **测试代码:**
 ```typescript
 describe('UT-SESN-003', () => {
-  it('should call session.abort instead of delete', async () => {
-    const action = new CloseSessionAction();
+  it('should call session.abort for abort_session', async () => {
+    const action = new AbortSessionAction();
     let abortCalledWith: unknown = null;
     let abortCalls = 0;
-    let deleteCalls = 0;
     const mockSDK = {
       session: {
-        abort: async (id: string) => { abortCalledWith = id; abortCalls++; },
-        delete: async () => { deleteCalls++; }
+        abort: async (id: string) => { abortCalledWith = id; abortCalls++; }
       }
     };
-    const mockBuilder = { build: () => ({}) };
     
     await action.execute(
       { toolSessionId: 'sess-123' },
-      { opencode: mockSDK as any, envelopeBuilder: mockBuilder as any }
+      { opencode: mockSDK as any }
     );
     
     expect(abortCalledWith).toBe('sess-123');
     expect(abortCalls).toBe(1);
-    expect(deleteCalls).toBe(0);
   });
 });
 ```
@@ -926,14 +917,14 @@ describe('INT-CONN-001', () => {
 **测试步骤:**
 1. Gateway 发送 invoke(chat) 消息
 2. 插件接收并路由到 ChatAction
-3. ChatAction 调用 SDK session.chat()
+3. ChatAction 调用 SDK session.prompt()
 4. 模拟 SDK 返回成功
-5. 验证 tool_done 消息发送到 Gateway
+5. 验证插件不会发送 tool_done，完成态仍通过事件流向 Gateway 透传
 
 **预期结果:**
-- SDK session.chat 被正确调用
-- tool_done 消息格式正确
-- envelope 包含完整字段
+- SDK session.prompt 被正确调用
+- 不会发送 tool_done
+- `session.idle` 或其他完成事件以 `tool_event` 发送
 
 **测试代码:**
 ```typescript
@@ -944,30 +935,22 @@ describe('INT-ACTN-002', () => {
     // Gateway 发送 invoke
     gateway.send({
       type: 'invoke',
-      sessionId: 'sess-123',
+      welinkSessionId: 'sess-123',
       action: 'chat',
       payload: { text: 'Hello', toolSessionId: 'oc-456' }
     });
     
     // 等待处理
-    await waitFor(() => sdk.session.chat.mock.calls.length > 0);
+    await waitFor(() => sdk.session.prompt.mock.calls.length > 0);
     
     // 验证 SDK 被调用
-    expect(sdk.session.chat).toHaveBeenCalledWith('oc-456', { text: 'Hello' });
+    expect(sdk.session.prompt).toHaveBeenCalled();
     
     // 模拟 SDK 成功回调
     await simulateSDKSuccess();
     
-    // 验证 tool_done 发送到 Gateway
-    await waitFor(() => gateway.receivedToolDone.length > 0);
-    expect(gateway.receivedToolDone[0]).toMatchObject({
-      type: 'tool_done',
-      sessionId: 'sess-123',
-      envelope: expect.objectContaining({
-        version: '1.0',
-        sequenceNumber: expect.any(Number)
-      })
-    });
+    // 验证不会发送 tool_done
+    expect(gateway.receivedMessages.some((msg) => msg.type === 'tool_done')).toBe(false);
   });
 });
 ```
@@ -986,12 +969,12 @@ describe('INT-ACTN-002', () => {
 1. Gateway 发送 invoke 消息
 2. 验证连接态检查在 100ms 内完成
 3. 验证 tool_error(GATEWAY_UNREACHABLE) 返回
-4. 验证错误包含完整 envelope
+4. 验证错误包含扁平路由字段
 
 **预期结果:**
 - 响应时间 < 100ms
 - 错误码为 GATEWAY_UNREACHABLE
-- envelope 字段完整
+- 错误消息使用 `welinkSessionId/toolSessionId` 等扁平字段
 
 **测试代码:**
 ```typescript
@@ -1008,7 +991,7 @@ describe('INT-FAIL-001', () => {
     // Gateway 发送 invoke
     gateway.send({
       type: 'invoke',
-      sessionId: 'sess-123',
+      welinkSessionId: 'sess-123',
       action: 'chat',
       payload: { text: 'Hello' }
     });
@@ -1024,11 +1007,7 @@ describe('INT-FAIL-001', () => {
     expect(gateway.receivedToolErrors[0]).toMatchObject({
       type: 'tool_error',
       code: 'GATEWAY_UNREACHABLE',
-      sessionId: 'sess-123',
-      envelope: expect.objectContaining({
-        version: '1.0',
-        agentId: expect.any(String)
-      })
+      welinkSessionId: 'sess-123'
     });
   });
 });
@@ -1127,13 +1106,13 @@ $ docker start ai-gateway
 2. Gateway 转发 invoke(chat) 到插件
 3. 插件调用 OpenCode SDK
 4. OpenCode 生成响应
-5. 插件发送 tool_done 到 Gateway
+5. 插件继续以 tool_event 向 Gateway 透传完成事件
 6. Gateway 转发到 Skill
 
 **预期结果:**
 - 完整链路时延 < 5s
-- tool_done 包含 usage 信息
-- envelope sequenceNumber 正确递增
+- 不发送 tool_done
+- 完成态事件仍可被 Gateway/Skill 消费
 
 **验证方式:**
 ```bash
@@ -1143,12 +1122,12 @@ $ curl -X POST http://skill-server/api/sessions/sess-123/chat \
 
 # 插件日志
 [INFO] Received invoke: chat
-[INFO] Calling SDK session.chat
+[INFO] Calling SDK session.prompt
 [INFO] SDK response received
-[INFO] Sending tool_done
+[INFO] Forwarding tool_event
 
 # Gateway 日志
-[INFO] Forwarded tool_done to Skill-Server
+[INFO] Forwarded tool_event to Skill-Server
 ```
 
 ---
@@ -1162,23 +1141,22 @@ $ curl -X POST http://skill-server/api/sessions/sess-123/chat \
 **测试步骤:**
 1. Skill 发送 close_session 请求
 2. Gateway 转发 invoke(close_session)
-3. 插件调用 OpenCode session.abort()
-4. 验证不调用 session.delete()
-5. 插件发送 tool_done
+3. 插件调用 OpenCode session.delete()
+4. 单独验证 abort_session 走 session.abort()
+5. 插件不发送 tool_done
 
 **预期结果:**
-- session.abort 被调用
-- session.delete 未被调用
-- 会话被中止但未删除
+- close_session 触发 delete
+- abort_session 触发 abort
+- 两条路径都不发送 tool_done
 
 **验证方式:**
 ```bash
 # 插件日志（开启 debug）
 [DEBUG] Received invoke: close_session
-[DEBUG] Calling session.abort with toolSessionId: oc-xxx
-[DEBUG] session.abort completed successfully
-[DEBUG] session.delete was NOT called
-[INFO] Sending tool_done
+[DEBUG] Calling session.delete with toolSessionId: oc-xxx
+[DEBUG] session.delete completed successfully
+[INFO] No tool_done emitted
 ```
 
 ---
@@ -1243,7 +1221,7 @@ curl -X POST http://gateway/api/permission-reply \
 **预期结果:**
 - 响应时间 <= 100ms
 - 错误码: GATEWAY_UNREACHABLE
-- 错误消息包含完整 envelope
+- 错误消息使用扁平字段
 
 **验证方式:**
 ```bash
@@ -1260,8 +1238,8 @@ $ time curl -X POST http://skill-server/api/invoke \
 {
   "type": "tool_error",
   "code": "GATEWAY_UNREACHABLE",
-  "error": "Gateway connection is not active",
-  "envelope": { ... }
+  "welinkSessionId": "sess-123",
+  "error": "Gateway connection is not active"
 }
 ```
 
@@ -1312,7 +1290,7 @@ Release Build:
 
 **关键路径定义:**
 1. 连接建立 -> 注册 -> READY
-2. invoke(chat) -> SDK.chat -> tool_done
+2. invoke(chat) -> SDK.chat -> tool_event/session.idle
 3. 连接断开 -> 重连 -> 重新注册
 
 **回归频率:**
@@ -1386,7 +1364,7 @@ export class MockGatewayServer {
   sendInvoke(payload: InvokePayload): void;
   
   // 发送 status_query 到插件
-  sendStatusQuery(sessionId?: string): void;
+  sendStatusQuery(): void;
   
   // 等待特定消息
   waitForMessage(type: string, timeout?: number): Promise<any>;

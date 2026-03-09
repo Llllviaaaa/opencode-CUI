@@ -283,7 +283,7 @@ export interface Envelope {
   timestamp: number;                // Unix timestamp (ms)
   source: string;                   // "message-bridge"
   agentId: string;                  // 本地 agentId
-  sessionId?: string;               // 业务 sessionId（可选）
+  sessionId?: string;               // 历史业务 sessionId（当前扁平协议不再使用）
   sequenceNumber: number;           // 递增序号
   sequenceScope: 'session' | 'global';
 }
@@ -294,7 +294,7 @@ export class EnvelopeBuilder {
   constructor(private agentId: string);
   
   /**
-   * 构建 envelope
+   * 构建历史 envelope（仅兼容旧设计）
    */
   build(sessionId?: string): Envelope;
   
@@ -318,10 +318,9 @@ export class EnvelopeBuilder {
 // src/action/BaseAction.ts
 
 export interface ActionContext {
-  sessionId?: string;
+  sessionId?: string; // 内部保留，用于透传 welinkSessionId 到 action context
   toolSessionId?: string;
   opencode: OpenCodeSDK;
-  envelopeBuilder: EnvelopeBuilder;
 }
 
 export interface ValidationResult {
@@ -434,7 +433,7 @@ export class CloseSessionAction extends BaseAction {
   mapError(error: Error, context: ActionContext): ToolErrorPayload;
   
   /**
-   * 注意：close_session 固定映射到 session.abort，不执行 delete
+   * 注意：close_session 固定映射到 session.delete
    */
 }
 ```
@@ -464,7 +463,7 @@ export class PermissionReplyAction extends BaseAction {
 
 export interface QuestionReplyPayload {
   toolSessionId: string;
-  toolCallId: string;
+  toolCallId?: string;
   answer: string;
 }
 
@@ -481,14 +480,12 @@ export class QuestionReplyAction extends BaseAction {
 // src/action/StatusQueryAction.ts
 
 export interface StatusQueryPayload {
-  sessionId?: string;               // 可选
+  sessionId?: string;               // 兼容旧输入，runtime 不向上游透传
 }
 
 export interface StatusResponsePayload {
   type: 'status_response';
   opencodeOnline: boolean;
-  sessionId?: string;               // 按请求透传
-  envelope: Envelope;
 }
 
 export class StatusQueryAction extends BaseAction {
@@ -515,10 +512,10 @@ export type ErrorCode =
 
 export interface ToolErrorPayload {
   type: 'tool_error';
-  sessionId?: string;
+  welinkSessionId?: string;
+  toolSessionId?: string;
   code: ErrorCode;
   error: string;
-  envelope: Envelope;
 }
 ```
 
@@ -550,8 +547,8 @@ export class FastFailDetector {
   buildError(
     code: ErrorCode,
     message: string,
-    sessionId: string | undefined,
-    envelopeBuilder: EnvelopeBuilder
+    welinkSessionId: string | undefined,
+    toolSessionId?: string
   ): ToolErrorPayload;
 }
 ```
@@ -604,7 +601,7 @@ class FastFailHandler {
       const error = this.buildToolError({
         code: 'AGENT_NOT_READY',
         error: `Connection state check timeout after ${this.CONNECTION_CHECK_TIMEOUT_MS}ms`,
-        sessionId: invoke.sessionId
+        welinkSessionId: invoke.welinkSessionId
       });
       this.sendToolError(error);
       return;
@@ -614,7 +611,7 @@ class FastFailHandler {
       const error = this.buildToolError({
         code: 'GATEWAY_UNREACHABLE',
         error: 'Gateway connection is not active',
-        sessionId: invoke.sessionId
+        welinkSessionId: invoke.welinkSessionId
       });
       this.bestEffortSend(error);
       return;
@@ -625,7 +622,7 @@ class FastFailHandler {
       const error = this.buildToolError({
         code: 'AGENT_NOT_READY',
         error: 'Agent not ready, cannot process invoke',
-        sessionId: invoke.sessionId
+        welinkSessionId: invoke.welinkSessionId
       });
       this.sendToolError(error);
       return;
@@ -643,7 +640,7 @@ class FastFailHandler {
       // 发送失败，记录本地结构化日志并累计错误计数
       this.logger.error('Failed to send tool_error', {
         error: error.code,
-        sessionId: error.sessionId,
+        welinkSessionId: error.welinkSessionId,
         sendError: e.message
       });
       this.metrics.increment('tool_error_send_failed', { code: error.code });
@@ -670,19 +667,9 @@ class FastFailHandler {
 ```json
 {
   "type": "tool_error",
-  "sessionId": "sess_123",
+  "welinkSessionId": "sess_123",
   "code": "SDK_TIMEOUT",
-  "error": "SDK call timeout after 10000ms",
-  "envelope": {
-    "version": "1.0",
-    "messageId": "msg_456",
-    "timestamp": 1709654400000,
-    "source": "message-bridge",
-    "agentId": "bridge-uuid-123",
-    "sessionId": "sess_123",
-    "sequenceNumber": 42,
-    "sequenceScope": "session"
-  }
+  "error": "SDK call timeout after 10000ms"
 }
 ```
 
@@ -706,7 +693,7 @@ interface LogEntry {
   component: string;                // 模块名称
   message: string;
   context: {
-    sessionId?: string;
+    sessionId?: string;             // 内部日志字段，可对应 welinkSessionId
     messageId?: string;
     agentId?: string;
     action?: string;
@@ -964,9 +951,8 @@ export class CustomAction extends BaseAction {
     return {
       type: 'tool_error',
       code: 'SDK_UNREACHABLE',
-      sessionId: context.sessionId,
+      welinkSessionId: context.sessionId,
       error: error.message,
-      envelope: context.envelopeBuilder.build(context.sessionId)
     };
   }
 }
@@ -984,8 +970,7 @@ registry.register(new CustomAction());
 export class ActionRouter {
   constructor(
     private registry: ActionRegistry,
-    private errorHandler: ErrorHandler,
-    private envelopeBuilder: EnvelopeBuilder
+    private errorHandler: ErrorHandler
   ) {}
   
   async route(invoke: InvokeMessage, context: ActionContext): Promise<void> {
@@ -993,7 +978,7 @@ export class ActionRouter {
     const action = this.registry.get(invoke.action);
     if (!action) {
       const error = this.buildError('UNSUPPORTED_ACTION', `Action ${invoke.action} is not supported`);
-      this.sendError(error, invoke.sessionId);
+      this.sendError(error, invoke.welinkSessionId);
       return;
     }
     
@@ -1001,7 +986,7 @@ export class ActionRouter {
     const validation = action.validate(invoke.payload);
     if (!validation.valid) {
       const error = this.buildError('INVALID_PAYLOAD', validation.errors!.join(', '));
-      this.sendError(error, invoke.sessionId);
+      this.sendError(error, invoke.welinkSessionId);
       return;
     }
     
@@ -1011,15 +996,15 @@ export class ActionRouter {
       
       if (result.success) {
         // 发送成功响应
-        this.sendSuccess(result.payload, invoke.sessionId);
+        this.sendSuccess(result.payload, invoke.welinkSessionId);
       } else {
         // 发送错误响应
-        this.sendError(result.error!, invoke.sessionId);
+        this.sendError(result.error!, invoke.welinkSessionId);
       }
     } catch (error) {
       // 未捕获异常
       const toolError = action.mapError(error as Error, context);
-      this.sendError(toolError, invoke.sessionId);
+      this.sendError(toolError, invoke.welinkSessionId);
     }
   }
   
@@ -1027,17 +1012,16 @@ export class ActionRouter {
     return {
       type: 'tool_error',
       code,
-      error: message,
-      envelope: this.envelopeBuilder.build()
+      error: message
     };
   }
   
-  private sendError(error: ToolErrorPayload, sessionId?: string): void {
+  private sendError(error: ToolErrorPayload, welinkSessionId?: string): void {
     // 发送 tool_error 到 Gateway
   }
   
-  private sendSuccess(payload: unknown, sessionId?: string): void {
-    // 发送 tool_done/session_created/status_response 到 Gateway
+  private sendSuccess(payload: unknown, welinkSessionId?: string): void {
+    // 发送 session_created/status_response 到 Gateway
   }
 }
 ```
@@ -1081,8 +1065,8 @@ export class CloseSessionAction extends BaseAction {
   readonly name = 'close_session';
   
   async execute(payload: CloseSessionPayload, context: ActionContext): Promise<ActionResult> {
-    // 固定映射到 session.abort，不执行 delete
-    await context.opencode.session.abort(payload.toolSessionId);
+    // 固定映射到 session.delete
+    await context.opencode.session.delete(payload.toolSessionId);
     
     return { success: true };
   }
@@ -1094,7 +1078,8 @@ export class CloseSessionAction extends BaseAction {
 | 差异项 | 当前行为 | 目标行为 | 收敛版本 | 退场条件 |
 |--------|----------|----------|----------|----------|
 | permission_reply | 仅 response 字段 | 与协议保持一致 | 已完成 | 无 |
-| close_session | 映射到 abort | SDK 原生支持 | 待定 | SDK 提供原生 close_session 语义 |
+| close_session | 映射到 delete | 与当前 SDK 路径一致 | 已完成 | 无 |
+| abort_session | 映射到 abort | 与当前 SDK 路径一致 | 已完成 | 无 |
 | agentId 绑定 | 插件本地生成 agentId | Gateway 分配 gatewayAgentId | 待定 | Gateway 新增 register_success 响应 |
 
 ### 6.3 兼容性矩阵
@@ -1114,7 +1099,7 @@ export class CloseSessionAction extends BaseAction {
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        E2E Smoke                                │
-│  • 注册、心跳、create+chat+close 完整链路                        │
+│  • 注册、心跳、create+chat+abort+close 完整链路                 │
 │  • permission_reply / question_reply 协议校验                     │
 │  • 断连重连场景                                                  │
 │  • 不可达启动失败场景                                            │
@@ -1130,7 +1115,7 @@ export class CloseSessionAction extends BaseAction {
 ┌────────────────────────────▼────────────────────────────────────┐
 │                         Unit                                    │
 │  • 白名单匹配逻辑                                                │
-│  • Envelope 构建与 Sequence 递增                                │
+│  • 扁平协议字段与历史 envelope 兼容夹具                         │
 │  • Action 验证与执行                                             │
 │  • 错误映射                                                      │
 │  • 配置校验                                                      │
@@ -1141,17 +1126,17 @@ export class CloseSessionAction extends BaseAction {
 
 | 序号 | 场景 | 测试类型 | 验证点 |
 |------|------|----------|--------|
-| 1 | chat action 正常链路 | E2E | invoke -> SDK.chat -> tool_done |
+| 1 | chat action 正常链路 | E2E | invoke -> SDK.prompt -> tool_event/session.idle |
 | 2 | create_session action | E2E | invoke -> SDK.create -> session_created |
-| 3 | close_session -> abort | E2E | 验证调用 abort 而非 delete |
+| 3 | close_session / abort_session | E2E | 验证 `close_session -> delete`、`abort_session -> abort` |
 | 4 | permission_reply response-only | E2E | `response=once|always|reject` 严格校验 |
-| 5 | question_reply 协议链路 | E2E | `toolSessionId + toolCallId + answer` 必填 |
-| 6 | status_query/response | E2E | 可选 sessionId 透传 |
+| 5 | question_reply 协议链路 | E2E | `toolSessionId + answer` 必填；`toolCallId` 可选但优先匹配 |
+| 6 | status_query/response | E2E | `status_response` 仅返回 `opencodeOnline` |
 | 7 | 白名单允许路径 | Unit | 匹配白名单的事件正常上行 |
 | 8 | 白名单拒绝路径 | Unit | 不匹配白名单的事件被丢弃并记录 |
 | 9 | Fast Fail 触发 | Unit | 连接异常时立即返回 tool_error |
-| 10 | envelope 完整性 | Unit | 所有字段正确填充 |
-| 11 | sequence 递增 | Unit | 同 session 内 sequenceNumber 递增 |
+| 10 | 扁平协议字段一致性 | Unit | `welinkSessionId/toolSessionId` 路由与响应形态正确 |
+| 11 | 历史 envelope 兼容夹具 | Unit | legacy helper 仅用于旧设计参考，不作为现行协议依据 |
 | 12 | READY 前 invoke | Unit | 返回 AGENT_NOT_READY |
 | 13 | 配置发现优先级 | Integration | env > project > user > default |
 | 14 | JSONC 解析 | Unit | 支持注释与尾逗号 |

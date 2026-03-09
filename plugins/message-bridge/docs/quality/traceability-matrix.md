@@ -25,11 +25,11 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 
 | PRD Ref | Requirement | Status | Code Reference | Notes |
 |---------|-------------|--------|----------------|-------|
-| FR-MB-01 | Gateway WS connection with AK/SK auth | **Partial** | `src/connection/GatewayConnection.ts` (lines 1-159), `src/connection/AkSkAuth.ts` (lines 1-43) | Connection established but AK/SK auth is basic (Bearer token format). HMAC-SHA256 signature not implemented per PRD §4.1 query params (ak/ts/nonce/sign). |
+| FR-MB-01 | Gateway WS connection with AK/SK auth | **Implemented** | `src/connection/GatewayConnection.ts`, `src/connection/AkSkAuth.ts` | Query params `ak/ts/nonce/sign` are generated and sent; signature uses Gateway-compatible HMAC-SHA256 over `ak + ts + nonce`. |
 | FR-MB-01 | WebSocket endpoint `/ws/agent` | **Implemented** | `src/config/ConfigResolver.ts` (line 28): default URL `ws://localhost:8081/ws/agent` | Default matches PRD §4.1. Endpoint configurable via `gateway.url`. |
 | §4.5 | READY state machine (DISCONNECTED/CONNECTING/CONNECTED/READY) | **Implemented** | `src/types/index.ts` (line 130): `ConnectionState` type; `src/connection/StateManager.ts` (lines 16-23): `ConnectionStatus` enum | Four-state model matches PRD. States transition through connection lifecycle. |
 | §4.5 | Send register after WS open | **Implemented** | `src/types/index.ts` (lines 198-204): `RegisterMessage` interface with deviceName, os, toolType, toolVersion | Structure defined. Plugin sends register on connection per architecture. |
-| §4.5 | READY before business messages | **Implemented** | `src/event/EventRelay.ts` (lines 64-67): checks `isReady()` before handling events | Events dropped if not READY. |
+| §4.5 | READY before business messages | **Implemented** | `src/runtime/BridgeRuntime.ts` | Runtime blocks business traffic when not READY. |
 | §4.5 | State to error code mapping | **Implemented** | `src/error/FastFailDetector.ts` (lines 6-18): `checkState()` maps DISCONNECTED/CONNECTING -> GATEWAY_UNREACHABLE, CONNECTED -> AGENT_NOT_READY | Matches PRD §4.5 mapping exactly. |
 | §4.5 | agentId local generation (bridge-{uuid}) | **Implemented** | `src/types/index.ts` (line 773): `AGENT_ID_PREFIX = 'bridge-'` | Local generation confirmed. Architecture notes Gateway does not return gatewayAgentId (see `overview.md` §9). |
 | NFR-MB-02 | Heartbeat interval 30s | **Implemented** | `src/types/index.ts` (line 750): `DEFAULT_CONFIG.heartbeatIntervalMs = 30000`; `src/connection/GatewayConnection.ts` (line 133-136): ping heartbeat | Default matches PRD. Interval configurable. |
@@ -40,23 +40,18 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 
 | Gap | Description | Recommendation |
 |-----|-------------|----------------|
-| HMAC-SHA256 signature | PRD §4.1 requires ak/ts/nonce/sign query params; current implementation uses Bearer token | Implement HMAC-SHA256 signature generation in `AkSkAuth.ts` with timestamp, nonce, and signature |
 | Pong timeout handling | PRD §3.2.4 requires disconnect if pong not received within timeout | Add pong listener and timeout detection in `GatewayConnection.ts` |
 
 ---
 
-## 2. Event Relay / Envelope
+## 2. Event Relay / Flat Protocol
 
 | PRD Ref | Requirement | Status | Code Reference | Notes |
 |---------|-------------|--------|----------------|-------|
 | FR-MB-02 | Event allowlist with prefix matching | **Implemented** | `src/event/EventFilter.ts` (lines 1-35): `EventFilter` class with prefix and exact matching | Supports `message.*`, `permission.*`, etc. Default allowlist matches PRD. |
 | FR-MB-02 | Default allowlist: message.*, permission.*, question.*, session.*, file.edited, todo.updated, command.executed | **Implemented** | `src/event/EventFilter.ts` (default constructor values); `src/types/index.ts` (`DEFAULT_EVENT_ALLOWLIST`) | Exact match to PRD §FR-MB-02. |
-| §4.4 | Envelope with all required fields | **Implemented** | `src/types/index.ts` (lines 146-170): `Envelope` interface with version, messageId, timestamp, source, agentId, sessionId, sequenceNumber, sequenceScope | All 9 fields defined per PRD. |
-| §4.4 | Envelope version field | **Implemented** | `src/event/EnvelopeBuilder.ts` (line 22): hardcoded `'1.0'` | Matches PRD format. |
-| §4.4 | Envelope sequenceNumber per scope | **Implemented** | `src/event/EnvelopeBuilder.ts` (lines 36-42): `nextSequence()` with per-scope counters | Separate counters per sessionId plus global scope. |
-| §4.4 | Envelope sequenceScope (session/global) | **Implemented** | `src/event/EnvelopeBuilder.ts` (line 28): `sequenceScope: sessionId ? 'session' : 'global'` | Logic matches PRD. |
-| §4.4 | status_response must carry envelope | **Implemented** | `src/types/index.ts` (lines 257-262): `StatusResponseMessage` includes envelope | Structure defined. |
-| §4.2 | Upstream message types: register, heartbeat, tool_event, tool_done, tool_error, session_created, status_response | **Implemented** | `src/types/index.ts` (lines 179-186): `UpstreamMessageType` union type; lines 286-293: `UpstreamMessage` union | All 7 types defined per PRD. |
+| §4.4 | Flat upstream messages without envelope | **Implemented** | `src/runtime/BridgeRuntime.ts`, `src/types/index.ts` | Active runtime sends flat messages and does not attach envelope. |
+| §4.2 | Upstream message types: register, heartbeat, tool_event, tool_error, session_created, status_response | **Implemented** | `src/types/index.ts`, `src/runtime/BridgeRuntime.ts` | Current runtime emits 6 active upstream message types. |
 | FR-MB-02 | Drop unsupported events (no tool_error for allowlist rejects) | **Gap** | `src/event/EventRelay.ts` (lines 69-71): silently returns if not allowed | PRD requires recording `unsupported_event`. Currently silent drop. |
 
 ### Event Relay Gaps
@@ -71,12 +66,12 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 
 | PRD Ref | Requirement | Status | Code Reference | Notes |
 |---------|-------------|--------|----------------|-------|
-| FR-MB-04 | chat action | **Implemented** | `src/action/ChatAction.ts` (lines 1-160): full implementation with validation, execution, error mapping | Validates sessionId/message, calls `session.prompt()`, handles errors. |
-| FR-MB-04 | create_session action | **Implemented** | `src/action/CreateSessionAction.ts` (lines 1-168): full implementation | Validates optional sessionId/metadata, calls `session.create()`. |
-| FR-MB-04 | close_session action | **Implemented** | `src/action/CloseSessionAction.ts` (lines 1-144): full implementation | Validates sessionId, calls `session.abort()`. |
+| FR-MB-04 | chat action | **Implemented** | `src/action/ChatAction.ts` | Validates `toolSessionId/text`, calls `session.prompt()`, handles errors. |
+| FR-MB-04 | create_session action | **Implemented** | `src/action/CreateSessionAction.ts` | Forwards payload to `session.create()`. |
+| FR-MB-04 | close_session action | **Implemented** | `src/action/CloseSessionAction.ts` | Validates `toolSessionId`, calls `session.delete()`. |
 | FR-MB-04 | permission_reply action | **Implemented** | `src/action/PermissionReplyAction.ts` | Strict response-only validation and execution. |
-| FR-MB-04 | question_reply action | **Implemented** | `src/action/QuestionReplyAction.ts` | Validates `toolSessionId/toolCallId/answer`, executes via `session.prompt`. |
-| FR-MB-04 | status_query action | **Implemented** | `src/action/StatusQueryAction.ts` (lines 1-91): full implementation | Validates optional sessionId, returns opencodeOnline status. |
+| FR-MB-04 | question_reply action | **Implemented** | `src/action/QuestionReplyAction.ts` | Validates `toolSessionId/answer`, resolves pending request with `GET /question`, replies via `POST /question/{requestID}/reply`. |
+| FR-MB-04 | status_query action | **Implemented** | `src/action/StatusQueryAction.ts`, `src/runtime/BridgeRuntime.ts` | Action tolerates an optional legacy sessionId internally; runtime emits flat `status_response` with `opencodeOnline` only. |
 | FR-MB-03 | Action Registry pattern | **Implemented** | `src/action/ActionRegistry.ts` (lines 1-41): `DefaultActionRegistry` with register/get/has/list | New actions can be registered without modifying core. |
 | FR-MB-03 | Action validator/executor/errorMapper | **Implemented** | `src/types/index.ts` (lines 639-651): `Action` interface with validate/execute/errorMapper | All actions implement the interface. |
 | FR-MB-03 | ActionRouter for invoke routing | **Implemented** | `src/action/ActionRouter.ts` (lines 1-37): `DefaultActionRouter` with registry integration | Routes to registered actions, validates payload before execution. |
@@ -106,7 +101,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 | FR-MB-07 | No queuing, no buffering | **Implemented** | `src/event/EventRelay.ts` (lines 64-67): events dropped if not ready; no queue | Architecture confirms no buffering per PRD Fast Fail. |
 | §7 | Error codes: GATEWAY_UNREACHABLE, SDK_TIMEOUT, SDK_UNREACHABLE, AGENT_NOT_READY, INVALID_PAYLOAD, UNSUPPORTED_ACTION | **Implemented** | `src/types/index.ts` (lines 440-446): `ErrorCode` union type with all 6 codes | Minimum set from PRD §7 complete. |
 | §7 | Error mapping from connection state | **Implemented** | `src/types/index.ts` (lines 455-465): `stateToErrorCode()` function | Maps all states to appropriate error codes. |
-| §7 | tool_error structure with error/envelope | **Implemented** | `src/types/index.ts`: `ToolErrorPayload` interface | Plugin wire payload uses type, sessionId, error, and envelope. |
+| §7 | tool_error structure with flat routing fields | **Implemented** | `src/types/index.ts` | Plugin wire payload uses type, optional `welinkSessionId` / `toolSessionId`, and `error`. |
 | FR-MB-07 | Best effort send, local log on failure | **Partial** | Architecture describes behavior; implementation in actions uses try-catch | Error logging present but structured logging not fully standardized. |
 
 ### Fast Fail Gaps
@@ -129,12 +124,12 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 
 ---
 
-## 6. Close Session Semantics (FR-MB-05)
+## 6. Session Lifecycle Semantics (FR-MB-05)
 
 | PRD Ref | Requirement | Status | Code Reference | Notes |
 |---------|-------------|--------|----------------|-------|
-| FR-MB-05 | close_session maps to session.abort | **Implemented** | `src/action/CloseSessionAction.ts` (lines 69-75): calls `client.session.abort()` | Comment confirms PRD requirement. No delete called. |
-| FR-MB-05 | NOT session.delete | **Implemented** | `src/action/CloseSessionAction.ts`: no delete method called | Verified: only abort used. |
+| FR-MB-05 | close_session maps to session.delete | **Implemented** | `src/action/CloseSessionAction.ts` | Calls `client.session.delete()` with `toolSessionId`. |
+| FR-MB-05 | abort_session maps to session.abort | **Implemented** | `src/action/AbortSessionAction.ts` | Calls `client.session.abort()` with `toolSessionId`. |
 
 ---
 
@@ -166,7 +161,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 
 | PRD Ref | Requirement | Status | Code Reference | Notes |
 |---------|-------------|--------|----------------|-------|
-| §9.1 | Unit tests | **Implemented** | `tests/unit/example.test.mjs` (lines 1-405): comprehensive unit tests | Tests for all 5 actions, FastFailDetector, ErrorMapper, EventFilter, EnvelopeBuilder. |
+| §9.1 | Unit tests | **Implemented** | `tests/unit/example.test.mjs`, `tests/unit/runtime-protocol.test.mjs` | Covers core actions, protocol strictness, Fast Fail, ErrorMapper, and EventFilter. |
 | §9.1 | Integration tests | **Implemented** | `tests/integration/plugin.test.mjs` (lines 1-159): integration tests | Tests plugin lifecycle, action registry, routing. |
 | §9.1 | E2E smoke tests | **Implemented** | `tests/e2e/example.test.mjs` (exists) | File present (content not examined). |
 | §9.3 | Test framework: bun test | **Implemented** | `package.json` (scripts): uses `bun test` | Bun test runner baseline. |
@@ -175,9 +170,9 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 | §9.3 | Branches coverage >= 70% | **Planned / Observable** | `scripts/check-coverage.mjs` | Bun coverage 在当前环境可能出现 `BRF=0`，暂不作为硬门禁。 |
 | §9.2 | 6 action normal paths tested | **Implemented** | `tests/unit/actions-coverage.test.mjs`, `tests/unit/runtime-protocol.test.mjs` | Includes `question_reply` success/invalid paths. |
 | §9.2 | response-only permission_reply tested | **Implemented** | `tests/unit/actions-coverage.test.mjs`, `tests/unit/runtime-protocol.test.mjs` | Covers valid once/always/reject paths and rejects legacy values. |
-| §9.2 | close_session -> abort tested | **Implemented** | `tests/unit/example.test.mjs` (lines 165-177): tests abort semantics | Verified in test. |
+| §9.2 | close_session / abort_session semantics covered | **Partial** | `tests/unit/example.test.mjs`, `tests/unit/runtime-protocol.test.mjs` | Runtime protocol paths are covered; dedicated unit assertions for delete vs abort should be added. |
 | §9.2 | Fast Fail returns tool_error tested | **Implemented** | `tests/unit/example.test.mjs` (lines 76-110): AGENT_NOT_READY tests; lines 294-310: FastFailDetector tests | State checking tested. |
-| §9.2 | envelope/sequence tested | **Implemented** | `tests/unit/example.test.mjs` (lines 357-404): EnvelopeBuilder tests | Sequence per scope verified. |
+| §9.2 | flat protocol fields tested | **Implemented** | `tests/unit/runtime-protocol.test.mjs` | Verifies `welinkSessionId/toolSessionId` routing, no `tool_done`, and flat `status_response`. |
 | §9.2 | config discovery/priority/JSONC/version tested | **Partial** | `tests/unit/example.test.mjs`: no explicit config tests seen | ConfigResolver/ConfigValidator logic present but tests not found in examined files. |
 
 ### Testing Gaps
@@ -193,7 +188,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 
 | PRD Ref | Requirement | Status | Code Reference | Notes |
 |---------|-------------|--------|----------------|-------|
-| §2.2 | In Scope items | **Implemented** | All items have corresponding implementations | WS auth, heartbeat, invoke/status_query, allowlist, permission_reply response-only, close_session->abort, config, tests. |
+| §2.2 | In Scope items | **Implemented** | All items have corresponding implementations | WS auth, heartbeat, invoke/status_query, allowlist, permission_reply response-only, `abort_session` + `close_session`, config, tests. |
 | §2.3 | Out of Scope respected | **Implemented** | No Gateway/Skill-Server modifications | Plugin-only implementation confirmed. |
 | §3 | Design principles: transparent pass-through, extensible, SDK-aligned | **Implemented** | Architecture and implementation follow principles | EventRelay passes through; ActionRegistry is extensible; types align with SDK. |
 | §4.3 | Downstream types: invoke, status_query | **Implemented** | `src/types/index.ts` (lines 191-193, 267-281): `DownstreamMessageType`, `InvokeMessage`, `StatusQueryMessage` | Both message types defined. |

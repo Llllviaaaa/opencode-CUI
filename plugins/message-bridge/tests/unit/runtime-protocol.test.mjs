@@ -198,6 +198,111 @@ describe('runtime protocol strictness', () => {
     expect(sent).toHaveLength(0);
   });
 
+  test('rejects question_reply when toolCallId is omitted and pending request is not unique', async () => {
+    const runtime = new BridgeRuntime({
+      client: {
+        session: {
+          create: async () => ({}),
+          abort: async () => ({}),
+          prompt: async () => ({ data: { ok: true } }),
+        },
+        _client: {
+          get: async () => ({
+            data: [
+              { id: 'question-request-a', sessionID: 'tool-43' },
+              { id: 'question-request-b', sessionID: 'tool-43' },
+            ],
+          }),
+          post: async () => ({ data: undefined }),
+        },
+        postSessionIdPermissionsPermissionId: async () => ({}),
+      },
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      welinkSessionId: 'q-43b',
+      action: 'question_reply',
+      payload: { toolSessionId: 'tool-43', answer: 'Vite' },
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('tool_error');
+    expect(sent[0].error).toContain('unique pending question');
+  });
+
+  test('rejects question_reply when no pending request matches', async () => {
+    const runtime = new BridgeRuntime({
+      client: {
+        session: {
+          create: async () => ({}),
+          abort: async () => ({}),
+          prompt: async () => ({ data: { ok: true } }),
+        },
+        _client: {
+          get: async () => ({
+            data: [
+              {
+                id: 'question-request-99',
+                sessionID: 'tool-other',
+                tool: { callID: 'call-other' },
+              },
+            ],
+          }),
+          post: async () => ({ data: undefined }),
+        },
+        postSessionIdPermissionsPermissionId: async () => ({}),
+      },
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      welinkSessionId: 'q-46',
+      action: 'question_reply',
+      payload: { toolSessionId: 'tool-46', toolCallId: 'call-46', answer: 'Vite' },
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('tool_error');
+    expect(sent[0].welinkSessionId).toBe('q-46');
+  });
+
+  test('rejects question_reply when raw client is unavailable', async () => {
+    const runtime = new BridgeRuntime({
+      client: {
+        session: {
+          create: async () => ({}),
+          abort: async () => ({}),
+          prompt: async () => ({ data: { ok: true } }),
+        },
+        postSessionIdPermissionsPermissionId: async () => ({}),
+      },
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      welinkSessionId: 'q-47',
+      action: 'question_reply',
+      payload: { toolSessionId: 'tool-47', toolCallId: 'call-47', answer: 'Vite' },
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('tool_error');
+    expect(sent[0].error).toContain('raw client GET unavailable');
+  });
+
   test('rejects question_reply payloads missing toolSessionId', async () => {
     const runtime = new BridgeRuntime({
       client: {
@@ -395,6 +500,29 @@ describe('runtime protocol strictness', () => {
     expect(sent[0].context.gatewayMessageId).toBe(forwardingLog.extra.traceId);
     expect(sent[0].context.opencodeMessageId).toBe('op-msg-1');
     expect(sent[0].context.opencodePartId).toBe('part-1');
+  });
+
+  test('forwards session.idle as tool_event and never emits tool_done', async () => {
+    const runtime = new BridgeRuntime({ client: {} });
+    const sent = [];
+
+    runtime.gatewayConnection = {
+      send: (message, context) => sent.push({ message, context }),
+    };
+    runtime.eventFilter = new EventFilter(['session.*']);
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleEvent({
+      type: 'session.idle',
+      properties: {
+        sessionID: 'tool-idle-1',
+      },
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].message.type).toBe('tool_event');
+    expect(sent[0].message.toolSessionId).toBe('tool-idle-1');
+    expect(sent.some((entry) => entry.message.type === 'tool_done')).toBe(false);
   });
 
   test('uses gatewayMessageId as traceId across downstream invoke handling', async () => {

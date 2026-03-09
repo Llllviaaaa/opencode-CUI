@@ -87,7 +87,7 @@ export class QuestionReplyAction implements Action<QuestionReplyPayload> {
       ? pendingQuestions.filter((item): item is Record<string, unknown> => item !== null && typeof item === 'object')
       : [];
 
-    const matched = requests.find((request) => {
+    const matchedRequests = requests.filter((request) => {
       const sessionID = this.readString(request.sessionID);
       if (sessionID !== toolSessionId) {
         return false;
@@ -101,7 +101,15 @@ export class QuestionReplyAction implements Action<QuestionReplyPayload> {
       return this.readString(tool?.callID) === toolCallId;
     });
 
-    return this.readString(matched?.id);
+    if (toolCallId) {
+      return this.readString(matchedRequests[0]?.id);
+    }
+
+    if (matchedRequests.length !== 1) {
+      return undefined;
+    }
+
+    return this.readString(matchedRequests[0]?.id);
   }
 
   validate(payload: unknown): ValidationResult {
@@ -163,7 +171,10 @@ export class QuestionReplyAction implements Action<QuestionReplyPayload> {
         return {
           success: false,
           errorCode: 'INVALID_PAYLOAD',
-          errorMessage: `Unable to resolve pending question request for toolSessionId=${normalized.toolSessionId}, toolCallId=${normalized.toolCallId ?? 'unknown'}`
+          errorMessage:
+            normalized.toolCallId
+              ? `Unable to resolve pending question request for toolSessionId=${normalized.toolSessionId}, toolCallId=${normalized.toolCallId}`
+              : `Unable to resolve a unique pending question request for toolSessionId=${normalized.toolSessionId}`
         };
       }
 

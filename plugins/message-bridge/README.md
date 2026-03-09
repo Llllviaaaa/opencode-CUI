@@ -14,15 +14,15 @@ The message-bridge plugin acts as a protocol adapter between OpenCode and a gate
 
 ## Implemented Actions
 
-The plugin supports 5 gateway-invokable actions:
+The plugin supports 6 gateway-invokable actions plus the standalone `status_query` message:
 
 ### 1. chat
 Send a message to an existing OpenCode session.
 
 ```typescript
 payload: {
-  sessionId: string;  // Required: target session
-  message: string;    // Required: message content
+  toolSessionId: string;  // Required: target OpenCode session
+  text: string;           // Required: message content
 }
 ```
 
@@ -30,13 +30,19 @@ payload: {
 Create a new OpenCode session.
 
 ```typescript
+payload: Record<string, unknown>;  // Forwarded to session.create({ body: payload })
+```
+
+### 3. abort_session
+Abort an active OpenCode session.
+
+```typescript
 payload: {
-  sessionId?: string;              // Optional: custom session ID
-  metadata?: Record<string, any>;  // Optional: session metadata
+  toolSessionId: string;  // Required: target OpenCode session ID
 }
 ```
 
-### 3. close_session
+### 4. close_session
 Close an OpenCode session using **delete semantics**.
 
 ```typescript
@@ -45,7 +51,7 @@ payload: {
 }
 ```
 
-### 4. permission_reply
+### 5. permission_reply
 Respond to a permission request from OpenCode. Uses **response-only** protocol:
 ```typescript
 payload: {
@@ -57,15 +63,25 @@ payload: {
 
 Legacy `approved` payloads are no longer accepted.
 
-### 5. status_query
-Query the connection health status.
+### 6. question_reply
+Reply to a pending OpenCode question using the raw question APIs.
 
 ```typescript
 payload: {
-  sessionId?: string;  // Optional: for context
+  toolSessionId: string;
+  toolCallId?: string;  // Optional: used when multiple pending questions exist
+  answer: string;
 }
+```
 
-// Returns: { opencodeOnline: boolean, connectionState: string }
+The plugin resolves the pending request via `GET /question`, then replies with
+`POST /question/{requestID}/reply`.
+
+### Standalone status_query
+Query the connection health status.
+
+```typescript
+{ type: 'status_query' }
 ```
 
 ## Configuration
