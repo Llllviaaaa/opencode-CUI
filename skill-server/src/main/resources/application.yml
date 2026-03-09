@@ -42,7 +42,7 @@ skill:
     # Allowed origins for Skill miniapp WebSocket connections
     allowed-origins: ${CORS_ORIGINS:*}
   gateway:
-    ws-url: ${SKILL_GATEWAY_WS_URL:ws://localhost:8081/ws/internal/skill}
+    ws-url: ${SKILL_GATEWAY_WS_URL:ws://localhost:8081/ws/skill}
     # Internal token for Skill Server -> AI-Gateway authentication
     internal-token: ${SKILL_SERVER_INTERNAL_TOKEN:sk-intl-9f2a7d3e4b1c}
     reconnect-initial-delay-ms: 1000

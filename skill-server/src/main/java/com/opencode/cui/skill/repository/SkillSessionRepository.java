@@ -10,36 +10,52 @@ import java.util.List;
 @Mapper
 public interface SkillSessionRepository {
 
-    SkillSession findById(@Param("id") Long id);
+        SkillSession findById(@Param("id") Long id);
 
-    List<SkillSession> findByUserId(@Param("userId") Long userId,
-            @Param("offset") int offset,
-            @Param("limit") int limit);
+        List<SkillSession> findByUserId(@Param("userId") String userId,
+                        @Param("offset") int offset,
+                        @Param("limit") int limit);
 
-    List<SkillSession> findByUserIdAndStatusIn(@Param("userId") Long userId,
-            @Param("statuses") List<String> statuses,
-            @Param("offset") int offset,
-            @Param("limit") int limit);
+        List<SkillSession> findByUserIdAndStatusIn(@Param("userId") String userId,
+                        @Param("statuses") List<String> statuses,
+                        @Param("offset") int offset,
+                        @Param("limit") int limit);
 
-    long countByUserId(@Param("userId") Long userId);
+        List<SkillSession> findActiveByUserId(@Param("userId") String userId);
 
-    long countByUserIdAndStatusIn(@Param("userId") Long userId,
-            @Param("statuses") List<String> statuses);
+        long countByUserId(@Param("userId") String userId);
 
-    List<SkillSession> findByAgentId(@Param("agentId") Long agentId);
+        long countByUserIdAndStatusIn(@Param("userId") String userId,
+                        @Param("statuses") List<String> statuses);
 
-    List<SkillSession> findByStatus(@Param("status") String status);
+        List<SkillSession> findByUserIdFiltered(@Param("userId") String userId,
+                        @Param("ak") String ak,
+                        @Param("imGroupId") String imGroupId,
+                        @Param("statuses") List<String> statuses,
+                        @Param("offset") int offset,
+                        @Param("limit") int limit);
 
-    int insert(SkillSession session);
+        long countByUserIdFiltered(@Param("userId") String userId,
+                        @Param("ak") String ak,
+                        @Param("imGroupId") String imGroupId,
+                        @Param("statuses") List<String> statuses);
 
-    int updateStatus(@Param("id") Long id, @Param("status") String status);
+        List<SkillSession> findByAk(@Param("ak") String ak);
 
-    int updateLastActiveAt(@Param("id") Long id, @Param("lastActiveAt") LocalDateTime lastActiveAt);
+        SkillSession findByToolSessionId(@Param("toolSessionId") String toolSessionId);
 
-    int updateToolSessionId(@Param("id") Long id, @Param("toolSessionId") String toolSessionId,
-            @Param("lastActiveAt") LocalDateTime lastActiveAt);
+        List<SkillSession> findByStatus(@Param("status") String status);
 
-    int updateAgentId(@Param("id") Long id, @Param("agentId") Long agentId);
+        int insert(SkillSession session);
 
-    int markIdleSessions(@Param("status") String status, @Param("cutoff") LocalDateTime cutoff);
+        int updateStatus(@Param("id") Long id, @Param("status") String status);
+
+        int updateLastActiveAt(@Param("id") Long id, @Param("lastActiveAt") LocalDateTime lastActiveAt);
+
+        int updateToolSessionId(@Param("id") Long id, @Param("toolSessionId") String toolSessionId,
+                        @Param("lastActiveAt") LocalDateTime lastActiveAt);
+
+        int updateAk(@Param("id") Long id, @Param("ak") String ak);
+
+        int markIdleSessions(@Param("status") String status, @Param("cutoff") LocalDateTime cutoff);
 }

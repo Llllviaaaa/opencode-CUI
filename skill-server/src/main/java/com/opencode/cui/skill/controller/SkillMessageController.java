@@ -2,6 +2,7 @@ package com.opencode.cui.skill.controller;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.model.ApiResponse;
 import com.opencode.cui.skill.model.PageResult;
 import com.opencode.cui.skill.model.SkillMessage;
 import com.opencode.cui.skill.model.SkillMessageView;
@@ -26,11 +27,14 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @RestController
 @RequestMapping("/api/skill/sessions/{sessionId}")
 public class SkillMessageController {
+
+    private static final Set<String> VALID_PERMISSION_RESPONSES = Set.of("once", "always", "reject");
 
     private final SkillMessageService messageService;
     private final SkillSessionService sessionService;
@@ -62,12 +66,12 @@ public class SkillMessageController {
      * AI-Gateway.
      */
     @PostMapping("/messages")
-    public ResponseEntity<SkillMessage> sendMessage(
+    public ResponseEntity<ApiResponse<SkillMessage>> sendMessage(
             @PathVariable Long sessionId,
             @RequestBody SendMessageRequest request) {
 
         if (request.getContent() == null || request.getContent().isBlank()) {
-            return ResponseEntity.badRequest().build();
+            return ResponseEntity.badRequest().body(ApiResponse.error(400, "Content is required"));
         }
 
         // Verify session exists and is not closed
@@ -75,36 +79,48 @@ public class SkillMessageController {
         try {
             session = sessionService.getSession(sessionId);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error(404, "Session not found"));
         }
 
         if (session.getStatus() == SkillSession.Status.CLOSED) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(null);
+                    .body(ApiResponse.error(409, "Session is closed"));
         }
 
         // Persist user message
         messagePersistenceService.finalizeActiveAssistantTurn(sessionId);
         SkillMessage message = messageService.saveUserMessage(sessionId, request.getContent());
 
-        // Send chat invoke to AI-Gateway to trigger OpenCode processing
-        if (session.getAgentId() != null) {
+        // Send invoke to AI-Gateway to trigger OpenCode processing
+        if (session.getAk() != null) {
             if (session.getToolSessionId() == null) {
                 log.warn("Session {} has no toolSessionId, cannot invoke AI", sessionId);
                 return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                        .body(message);
+                        .body(ApiResponse.error(503, "No toolSessionId available"));
             }
-            String payload = buildChatPayload(request.getContent(), session.getToolSessionId());
+
+            // Route: toolCallId present → question_reply, otherwise → chat
+            String action;
+            String payload;
+            if (request.getToolCallId() != null && !request.getToolCallId().isBlank()) {
+                action = "question_reply";
+                payload = buildQuestionReplyPayload(
+                        request.getContent(), request.getToolCallId(), session.getToolSessionId());
+            } else {
+                action = "chat";
+                payload = buildChatPayload(request.getContent(), session.getToolSessionId());
+            }
+
             gatewayRelayService.sendInvokeToGateway(
-                    session.getAgentId().toString(),
+                    session.getAk(),
                     sessionId.toString(),
-                    "chat",
+                    action,
                     payload);
         } else {
             log.warn("No agent associated with session {}, cannot invoke AI", sessionId);
         }
 
-        return ResponseEntity.status(HttpStatus.CREATED).body(message);
+        return ResponseEntity.ok(ApiResponse.ok(message));
     }
 
     /**
@@ -112,7 +128,7 @@ public class SkillMessageController {
      * Get message history with pagination.
      */
     @GetMapping("/messages")
-    public ResponseEntity<PageResult<SkillMessageView>> getMessages(
+    public ResponseEntity<ApiResponse<PageResult<SkillMessageView>>> getMessages(
             @PathVariable Long sessionId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
@@ -121,7 +137,7 @@ public class SkillMessageController {
         try {
             sessionService.getSession(sessionId);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error(404, "Session not found"));
         }
 
         PageResult<SkillMessage> messages = messageService.getMessageHistory(sessionId, page, size);
@@ -130,10 +146,10 @@ public class SkillMessageController {
                         message,
                         partRepository.findByMessageId(message.getId())))
                 .toList();
-        return ResponseEntity.ok(new PageResult<>(content,
+        return ResponseEntity.ok(ApiResponse.ok(new PageResult<>(content,
                 messages.getTotalElements(),
                 messages.getNumber(),
-                messages.getSize()));
+                messages.getSize())));
     }
 
     /**
@@ -141,13 +157,13 @@ public class SkillMessageController {
      * Send selected text content to the IM chat associated with this session.
      */
     @PostMapping("/send-to-im")
-    public ResponseEntity<Map<String, Object>> sendToIm(
+    public ResponseEntity<ApiResponse<Map<String, Object>>> sendToIm(
             @PathVariable Long sessionId,
             @RequestBody SendToImRequest request) {
 
         if (request.getContent() == null || request.getContent().isBlank()) {
             return ResponseEntity.badRequest()
-                    .body(Map.of("success", false, "error", "Content is required"));
+                    .body(ApiResponse.error(400, "Content is required"));
         }
 
         // Determine the IM chatId: from request or from session
@@ -155,15 +171,15 @@ public class SkillMessageController {
         if (chatId == null || chatId.isBlank()) {
             try {
                 SkillSession session = sessionService.getSession(sessionId);
-                chatId = session.getImChatId();
+                chatId = session.getImGroupId();
             } catch (IllegalArgumentException e) {
-                return ResponseEntity.notFound().build();
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error(404, "Session not found"));
             }
         }
 
         if (chatId == null || chatId.isBlank()) {
             return ResponseEntity.badRequest()
-                    .body(Map.of("success", false, "error", "No IM chat ID associated with this session"));
+                    .body(ApiResponse.error(400, "No IM chat ID associated with this session"));
         }
 
         boolean success = imMessageService.sendMessage(chatId, request.getContent());
@@ -171,28 +187,34 @@ public class SkillMessageController {
         if (success) {
             log.info("Sent content to IM: sessionId={}, chatId={}, contentLength={}",
                     sessionId, chatId, request.getContent().length());
-            return ResponseEntity.ok(Map.of("success", true));
+            return ResponseEntity.ok(ApiResponse.ok(Map.of("success", true)));
         } else {
             log.error("Failed to send content to IM: sessionId={}, chatId={}", sessionId, chatId);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("success", false, "error", "Failed to send message to IM"));
+                    .body(ApiResponse.error(500, "Failed to send message to IM"));
         }
     }
 
     /**
      * POST /api/skill/sessions/{sessionId}/permissions/{permId}
-     * Reply to a permission request (approve or reject).
-     * Routes the reply to AI-Gateway �?PCAgent �?OpenCode for execution.
+     * Reply to a permission request.
+     * Valid response values: "once", "always", "reject".
+     * Routes the reply to AI-Gateway -> PCAgent -> OpenCode for execution.
      */
     @PostMapping("/permissions/{permId}")
-    public ResponseEntity<Map<String, Object>> replyPermission(
+    public ResponseEntity<ApiResponse<Map<String, Object>>> replyPermission(
             @PathVariable Long sessionId,
             @PathVariable String permId,
             @RequestBody PermissionReplyRequest request) {
 
-        if (request.getApproved() == null) {
+        // Validate response field
+        if (request.getResponse() == null || request.getResponse().isBlank()) {
             return ResponseEntity.badRequest()
-                    .body(Map.of("success", false, "error", "Field 'approved' is required"));
+                    .body(ApiResponse.error(400, "Field 'response' is required"));
+        }
+        if (!VALID_PERMISSION_RESPONSES.contains(request.getResponse())) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error(400, "Invalid response value. Must be one of: once, always, reject"));
         }
 
         // Verify session exists and is not closed
@@ -200,26 +222,26 @@ public class SkillMessageController {
         try {
             session = sessionService.getSession(sessionId);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error(404, "Session not found"));
         }
 
         if (session.getStatus() == SkillSession.Status.CLOSED) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(Map.of("success", false, "error", "Session is closed"));
+                    .body(ApiResponse.error(409, "Session is closed"));
         }
 
-        if (session.getAgentId() == null) {
+        if (session.getAk() == null) {
             return ResponseEntity.badRequest()
-                    .body(Map.of("success", false, "error", "No agent associated with this session"));
+                    .body(ApiResponse.error(400, "No agent associated with this session"));
         }
 
         // Build permission_reply payload
-        String payload = buildPermissionReplyPayload(permId, request.getApproved(),
+        String payload = buildPermissionReplyPayload(permId, request.getResponse(),
                 session.getToolSessionId());
 
         // Send permission_reply invoke to AI-Gateway
         gatewayRelayService.sendInvokeToGateway(
-                session.getAgentId().toString(),
+                session.getAk(),
                 sessionId.toString(),
                 "permission_reply",
                 payload);
@@ -228,17 +250,17 @@ public class SkillMessageController {
                 .type(StreamMessage.Types.PERMISSION_REPLY)
                 .role("assistant")
                 .permissionId(permId)
-                .response(request.getApproved() ? "approved" : "rejected")
+                .response(request.getResponse())
                 .build();
         gatewayRelayService.publishProtocolMessage(sessionId.toString(), replyMessage);
 
-        log.info("Permission reply sent: sessionId={}, permId={}, approved={}",
-                sessionId, permId, request.getApproved());
+        log.info("Permission reply sent: sessionId={}, permId={}, response={}",
+                sessionId, permId, request.getResponse());
 
-        return ResponseEntity.ok(Map.of(
-                "success", true,
+        return ResponseEntity.ok(ApiResponse.ok(Map.of(
+                "welinkSessionId", sessionId.toString(),
                 "permissionId", permId,
-                "approved", request.getApproved()));
+                "response", request.getResponse())));
     }
 
     /**
@@ -259,13 +281,31 @@ public class SkillMessageController {
     }
 
     /**
+     * Build the JSON payload for a question_reply invoke command.
+     */
+    private String buildQuestionReplyPayload(String answer, String toolCallId, String toolSessionId) {
+        var node = objectMapper.createObjectNode();
+        node.put("answer", answer);
+        node.put("toolCallId", toolCallId);
+        if (toolSessionId != null) {
+            node.put("toolSessionId", toolSessionId);
+        }
+        try {
+            return objectMapper.writeValueAsString(node);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to serialize question_reply payload", e);
+            return "{}";
+        }
+    }
+
+    /**
      * Build the JSON payload for a permission_reply invoke command.
      */
-    private String buildPermissionReplyPayload(String permissionId, boolean approved,
+    private String buildPermissionReplyPayload(String permissionId, String response,
             String toolSessionId) {
         var node = objectMapper.createObjectNode();
         node.put("permissionId", permissionId);
-        node.put("approved", approved);
+        node.put("response", response);
         if (toolSessionId != null) {
             node.put("toolSessionId", toolSessionId);
         }
@@ -280,6 +320,8 @@ public class SkillMessageController {
     @Data
     public static class SendMessageRequest {
         private String content;
+        /** Optional: when present, routes to question_reply instead of chat */
+        private String toolCallId;
     }
 
     @Data
@@ -290,6 +332,7 @@ public class SkillMessageController {
 
     @Data
     public static class PermissionReplyRequest {
-        private Boolean approved;
+        /** Valid values: "once", "always", "reject" */
+        private String response;
     }
 }

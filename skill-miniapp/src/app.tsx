@@ -8,9 +8,6 @@ import { useSkillStream } from './hooks/useSkillStream';
 import { useAgentSelector } from './hooks/useAgentSelector';
 import './index.css';
 
-const SKILL_DEFINITION_ID = 1;
-const DEFAULT_USER_ID = '1'; // Test user
-
 const agentStatusConfig: Record<string, { className: string; label: string }> = {
   online: { className: 'online', label: 'Online' },
   offline: { className: 'offline', label: 'Offline' },
@@ -29,7 +26,7 @@ const App: React.FC = () => {
     error: sessionError,
     createSession,
     switchSession,
-  } = useSkillSession(DEFAULT_USER_ID);
+  } = useSkillSession();
 
   const activeSessionId = currentSession?.id ?? null;
 
@@ -39,6 +36,7 @@ const App: React.FC = () => {
     agentStatus,
     socketReady,
     sendMessage,
+    replyPermission,
     error: streamError,
   } = useSkillStream(activeSessionId);
 
@@ -47,14 +45,12 @@ const App: React.FC = () => {
     selectedAgent,
     selectAgent,
     loading: agentsLoading,
-  } = useAgentSelector(DEFAULT_USER_ID);
+  } = useAgentSelector();
 
   const handleNewSession = useCallback(async () => {
     if (!selectedAgent) return;
     await createSession({
-      skillDefinitionId: SKILL_DEFINITION_ID,
-      userId: 1,
-      agentId: selectedAgent.id,
+      ak: selectedAgent.akId,
       title: `Session ${new Date().toLocaleString()}`,
     });
   }, [createSession, selectedAgent]);
@@ -76,9 +72,7 @@ const App: React.FC = () => {
       if (!activeSessionId) {
         pendingInitialMessageRef.current = text;
         const session = await createSession({
-          skillDefinitionId: SKILL_DEFINITION_ID,
-          userId: 1,
-          agentId: selectedAgent.id,
+          ak: selectedAgent.akId,
           title: text.slice(0, 50),
         });
         if (!session) {
@@ -91,8 +85,36 @@ const App: React.FC = () => {
     [activeSessionId, createSession, sendMessage, selectedAgent],
   );
 
+  const handleQuestionAnswer = useCallback(
+    (answer: string, toolCallId?: string) => {
+      if (!activeSessionId) {
+        void handleSendMessage(answer);
+        return;
+      }
+      void sendMessage(answer, toolCallId ? { toolCallId } : undefined);
+    },
+    [activeSessionId, handleSendMessage, sendMessage],
+  );
+
+  const handlePermissionDecision = useCallback(
+    (permissionId: string, response: 'once' | 'always' | 'reject') => {
+      void replyPermission(permissionId, response);
+    },
+    [replyPermission],
+  );
+
   const displayError = sessionError ?? streamError;
-  const statusCfg = agentStatusConfig[agentStatus] ?? agentStatusConfig.unknown;
+  const resolvedAgentStatus =
+    !socketReady
+      ? 'unknown'
+      : agentStatus !== 'unknown'
+        ? agentStatus
+        : selectedAgent
+          ? 'online'
+          : agentsLoading
+            ? 'unknown'
+            : 'offline';
+  const statusCfg = agentStatusConfig[resolvedAgentStatus] ?? agentStatusConfig.unknown;
   const inputDisabled = isStreaming || !selectedAgent;
 
   return (
@@ -128,7 +150,12 @@ const App: React.FC = () => {
         )}
         <div className="main-content">
           <div ref={conversationContainerRef} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <ConversationView messages={messages} loading={sessionsLoading} />
+            <ConversationView
+              messages={messages}
+              loading={sessionsLoading}
+              onQuestionAnswer={handleQuestionAnswer}
+              onPermissionDecision={handlePermissionDecision}
+            />
           </div>
           <AgentSelector
             agents={agents}

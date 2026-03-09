@@ -20,10 +20,7 @@ public class SkillConfig implements WebSocketConfigurer {
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-        // Client endpoint: Skill miniapp connects here for streaming
-        // Use wildcard "*" because Spring raw WebSocket does not support path variables.
-        // The sessionId is extracted from the URI path in SkillStreamHandler.
-        registry.addHandler(skillStreamHandler, "/ws/skill/stream/*")
+        registry.addHandler(skillStreamHandler, "/ws/skill/stream")
                 .setAllowedOrigins("*");
     }
 }

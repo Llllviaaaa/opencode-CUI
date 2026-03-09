@@ -329,14 +329,18 @@ Gateway 自身生成。
 ```json
 {
   "type": "agent_online",
-  "ak": "ak_xxxxxxxx"
+  "ak": "ak_xxxxxxxx",
+  "toolType": "OPENCODE",
+  "toolVersion": "1.0.0"
 }
 ```
 
-| 字段   | 类型   | 必填  | 说明                  |
-| ------ | ------ | :---: | --------------------- |
-| `type` | String |   ✅   | 固定 `"agent_online"` |
-| `ak`   | String |   ✅   | Agent 的 Access Key   |
+| 字段          | 类型   | 必填  | 说明                                            |
+| ------------- | ------ | :---: | ----------------------------------------------- |
+| `type`        | String |   ✅   | 固定 `"agent_online"`                           |
+| `ak`          | String |   ✅   | Agent 的 Access Key                             |
+| `toolType`    | String |   ❌   | 工具类型，默认 `"OPENCODE"`。用于同 AK 连接去重 |
+| `toolVersion` | String |   ❌   | 工具版本号                                      |
 
 ---
 

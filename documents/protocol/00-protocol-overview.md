@@ -7,6 +7,11 @@
 
 ## 系统架构
 
+![系统架构](images/01-system-architecture.png)
+
+<details>
+<summary>查看 Mermaid 源码</summary>
+
 ```mermaid
 graph LR
     subgraph "用户侧"
@@ -29,13 +34,15 @@ graph LR
     D -- "层④ SDK API + Event Hook" --> E
 ```
 
+</details>
+
 ---
 
 ## 四层协议总览
 
 | 层  | 链路                      | 下行（指令方向） | 上行（事件方向）         | 认证             |
 | --- | ------------------------- | ---------------- | ------------------------ | ---------------- |
-| ①   | Miniapp ↔ Skill Server    | 8 REST API       | 19 种 StreamMessage (WS) | WeLink Cookie    |
+| ①   | Miniapp ↔ Skill Server    | 10 REST API      | 19 种 StreamMessage (WS) | WeLink Cookie    |
 | ②   | Skill Server ↔ AI-Gateway | 6 种 invoke (WS) | 6 种事件 (WS) + 3 REST   | 内部 Token       |
 | ③   | AI-Gateway ↔ PC Agent     | 7 种消息 (WS)    | 7 种消息 (WS)            | AK/SK 签名       |
 | ④   | PC Agent ↔ OpenCode       | 7 SDK 调用       | 17 种事件 + 12 种 Part   | 无（本机进程间） |
@@ -45,6 +52,11 @@ graph LR
 ## 完整流程图
 
 ### 流程 1：创建会话
+
+![流程 1：创建会话](images/02-create-session.png)
+
+<details>
+<summary>查看 Mermaid 源码</summary>
 
 ```mermaid
 sequenceDiagram
@@ -72,9 +84,16 @@ sequenceDiagram
     SS->>SS: 更新 SkillSession.toolSessionId = "ses_abc"
 ```
 
+</details>
+
 ---
 
 ### 流程 2：发送消息（含 AI 流式回复）
+
+![流程 2：发送消息（含 AI 流式回复）](images/03-send-message.png)
+
+<details>
+<summary>查看 Mermaid 源码</summary>
 
 ```mermaid
 sequenceDiagram
@@ -109,9 +128,16 @@ sequenceDiagram
     SS-->>MA: [WS] step.done<br/>{welinkSessionId, tokens, cost}
 ```
 
+</details>
+
 ---
 
 ### 流程 3：AI 提问（question tool）+ 用户回答
+
+![流程 3：AI 提问（question tool）+ 用户回答](images/04-question-answer.png)
+
+<details>
+<summary>查看 Mermaid 源码</summary>
 
 ```mermaid
 sequenceDiagram
@@ -146,9 +172,16 @@ sequenceDiagram
     SS-->>MA: [WS] tool.update<br/>{toolCallId:"call_2", status:"completed"}
 ```
 
+</details>
+
 ---
 
 ### 流程 4：权限请求 + 用户批准
+
+![流程 4：权限请求 + 用户批准](images/05-permission-request.png)
+
+<details>
+<summary>查看 Mermaid 源码</summary>
 
 ```mermaid
 sequenceDiagram
@@ -182,9 +215,16 @@ sequenceDiagram
     Note over OC: 开始执行命令...
 ```
 
+</details>
+
 ---
 
 ### 流程 5：中止执行
+
+![流程 5：中止执行](images/06-abort-execution.png)
+
+<details>
+<summary>查看 Mermaid 源码</summary>
 
 ```mermaid
 sequenceDiagram
@@ -209,9 +249,16 @@ sequenceDiagram
     SS-->>MA: [WS] session.status {sessionStatus:"idle"}
 ```
 
+</details>
+
 ---
 
 ### 流程 6：关闭会话
+
+![流程 6：关闭会话](images/07-close-session.png)
+
+<details>
+<summary>查看 Mermaid 源码</summary>
 
 ```mermaid
 sequenceDiagram
@@ -234,9 +281,16 @@ sequenceDiagram
     OC-->>PA: [Event] session.deleted
 ```
 
+</details>
+
 ---
 
 ### 流程 7：Agent 上线/下线
+
+![流程 7：Agent 上线/下线](images/08-agent-online-offline.png)
+
+<details>
+<summary>查看 Mermaid 源码</summary>
 
 ```mermaid
 sequenceDiagram
@@ -265,9 +319,16 @@ sequenceDiagram
     SS-->>SS: 更新 Agent 状态 → 通知前端
 ```
 
+</details>
+
 ---
 
 ### 流程 8：健康检查
+
+![流程 8：健康检查](images/09-health-check.png)
+
+<details>
+<summary>查看 Mermaid 源码</summary>
 
 ```mermaid
 sequenceDiagram
@@ -280,6 +341,8 @@ sequenceDiagram
     OC-->>PA: 200 OK
     PA->>GW: [WS] status_response<br/>{type:"status_response", opencodeOnline:true}
 ```
+
+</details>
 
 ---
 
@@ -295,6 +358,8 @@ sequenceDiagram
 | 权限批准 | `POST /sessions/{id}/permissions/{permId}`       | `invoke.permission_reply` | `invoke.permission_reply` | `postSessionIdPermissionsPermissionId()` |
 | 中止     | `POST /sessions/{id}/abort`                      | `invoke.abort_session`    | `invoke.abort_session`    | `session.abort()`                        |
 | 关闭会话 | `DELETE /sessions/{id}`                          | `invoke.close_session`    | `invoke.close_session`    | `session.delete()`                       |
+| 转发到IM | `POST /sessions/{id}/send-to-im`                 | —                         | —                         | —                                        |
+| 查Agent  | `GET /agents`                                    | REST `GET /agents`        | —                         | —                                        |
 | 健康检查 | —                                                | REST `GET /agents/status` | `status_query`            | `app.health()`                           |
 
 ### 上行映射（事件方向：AI → 用户）
@@ -320,6 +385,11 @@ sequenceDiagram
 
 ## ID 流转全景
 
+![ID 流转全景](images/10-id-flow.png)
+
+<details>
+<summary>查看 Mermaid 源码</summary>
+
 ```mermaid
 graph LR
     subgraph "Skill Server 创建"
@@ -343,6 +413,8 @@ graph LR
     AK -->|"层①② 定位 Agent"| AID
     AID -->|"仅 Gateway 内部"| AID
 ```
+
+</details>
 
 | ID                | 创建者       | 感知范围                         | 用途                         |
 | ----------------- | ------------ | -------------------------------- | ---------------------------- |

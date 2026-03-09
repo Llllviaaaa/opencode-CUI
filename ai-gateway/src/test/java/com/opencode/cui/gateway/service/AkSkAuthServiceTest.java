@@ -69,7 +69,7 @@ class AkSkAuthServiceTest {
     // -----------------------------------------------------------------------
 
     private String computeSignature(String ak, String sk, String timestamp, String nonce) throws Exception {
-        String message = ak + "\n" + timestamp + "\n" + nonce;
+        String message = ak + timestamp + nonce;
         Mac mac = Mac.getInstance("HmacSHA256");
         mac.init(new SecretKeySpec(sk.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
         return Base64.getEncoder().encodeToString(

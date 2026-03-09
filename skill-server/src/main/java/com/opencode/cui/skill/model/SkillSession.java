@@ -1,5 +1,6 @@
 package com.opencode.cui.skill.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -13,18 +14,19 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 public class SkillSession {
 
+    @JsonProperty("welinkSessionId")
     private Long id;
-    private Long userId;
-    private Long skillDefinitionId;
-    private Long agentId;
+    private String userId;
+    private String ak;
     private String toolSessionId;
     private String title;
 
     @Builder.Default
     private Status status = Status.ACTIVE;
 
-    private String imChatId;
+    private String imGroupId;
     private LocalDateTime createdAt;
+    @JsonProperty("updatedAt")
     private LocalDateTime lastActiveAt;
 
     public enum Status {

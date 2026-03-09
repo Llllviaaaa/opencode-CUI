@@ -2,6 +2,7 @@ package com.opencode.cui.skill.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.SkillMessage;
+import com.opencode.cui.skill.model.SkillMessagePart;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.repository.SkillMessagePartRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,6 +50,12 @@ class MessagePersistenceServiceTest {
                         .seq(1)
                         .build());
         when(partRepository.findMaxSeqByMessageId(11L)).thenReturn(0);
+        when(partRepository.findByMessageId(11L)).thenReturn(java.util.List.of(
+                SkillMessagePart.builder()
+                        .messageId(11L)
+                        .partType("text")
+                        .content("hello")
+                        .build()));
 
         service.persistIfFinal(1L, StreamMessage.builder()
                 .type(StreamMessage.Types.TEXT_DONE)
@@ -59,6 +66,39 @@ class MessagePersistenceServiceTest {
         service.finalizeActiveAssistantTurn(1L);
 
         verify(messageService).markMessageFinished(11L);
+    }
+
+    @Test
+    @DisplayName("text parts refresh skill_message content")
+    void textPartsRefreshMessageContent() {
+        when(messageService.saveMessage(
+                eq(1L),
+                eq(null),
+                eq(SkillMessage.Role.ASSISTANT),
+                eq(""),
+                eq(SkillMessage.ContentType.MARKDOWN),
+                eq(null)))
+                .thenReturn(SkillMessage.builder()
+                        .id(11L)
+                        .messageId("msg_1_1")
+                        .sessionId(1L)
+                        .seq(1)
+                        .build());
+        when(partRepository.findMaxSeqByMessageId(11L)).thenReturn(0);
+        when(partRepository.findByMessageId(11L)).thenReturn(java.util.List.of(
+                SkillMessagePart.builder()
+                        .messageId(11L)
+                        .partType("text")
+                        .content("final answer")
+                        .build()));
+
+        service.persistIfFinal(1L, StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DONE)
+                .partId("part-1")
+                .content("final answer")
+                .build());
+
+        verify(messageService).updateMessageContent(11L, "final answer");
     }
 
     @Test

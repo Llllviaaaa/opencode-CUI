@@ -25,7 +25,7 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget {
 
     private final GatewayRelayService gatewayRelayService;
 
-    @Value("${skill.gateway.ws-url:ws://localhost:8081/ws/internal/skill}")
+    @Value("${skill.gateway.ws-url:ws://localhost:8081/ws/skill}")
     private String gatewayWsUrl;
 
     @Value("${skill.gateway.internal-token:changeme}")

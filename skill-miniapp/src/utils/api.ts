@@ -1,4 +1,5 @@
 import type { Session, Message } from '../protocol/types';
+import { ensureDevUserIdCookie } from './devAuth';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -37,6 +38,7 @@ async function request<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
+  ensureDevUserIdCookie();
   const url = `${baseURL}${path}`;
 
   const headers: Record<string, string> = {
@@ -44,7 +46,11 @@ async function request<T>(
     ...(options.headers as Record<string, string> | undefined),
   };
 
-  const res = await fetch(url, { ...options, headers });
+  const res = await fetch(url, {
+    credentials: options.credentials ?? 'include',
+    ...options,
+    headers,
+  });
 
   if (!res.ok) {
     let body: unknown;
@@ -53,7 +59,16 @@ async function request<T>(
     } catch {
       /* ignore parse errors */
     }
-    throw new ApiError(res.status, res.statusText, body);
+
+    const errorText =
+      body !== null &&
+        typeof body === 'object' &&
+        'errormsg' in body &&
+        typeof body.errormsg === 'string'
+        ? body.errormsg
+        : res.statusText;
+
+    throw new ApiError(res.status, errorText, body);
   }
 
   // 204 No Content
@@ -61,7 +76,22 @@ async function request<T>(
     return undefined as T;
   }
 
-  return res.json() as Promise<T>;
+  const json = await res.json();
+
+  // Auto-unwrap ApiResponse wrapper: { code, errormsg, data }
+  if (
+    json !== null &&
+    typeof json === 'object' &&
+    'code' in json &&
+    'data' in json
+  ) {
+    if (json.code !== 0) {
+      throw new ApiError(res.status, json.errormsg ?? 'Unknown error', json);
+    }
+    return json.data as T;
+  }
+
+  return json as T;
 }
 
 // ---------------------------------------------------------------------------
@@ -88,8 +118,9 @@ export function getDefinitions(): Promise<SkillDefinition[]> {
 // ---------------------------------------------------------------------------
 
 export interface AgentInfo {
-  id: number;
-  userId: number;
+  id: string;
+  userId?: number;
+  akId: string;
   deviceName: string;
   os: string;
   toolType: string;
@@ -97,9 +128,48 @@ export interface AgentInfo {
   status: string;
 }
 
-/** GET /api/skill/agents?userId={userId} */
-export function getOnlineAgents(userId: string): Promise<AgentInfo[]> {
-  return request<AgentInfo[]>(`/api/skill/agents?userId=${userId}`);
+interface RawAgentInfo {
+  id?: string | number | null;
+  userId?: string | number | null;
+  akId?: string | null;
+  ak?: string | null;
+  deviceName?: string | null;
+  os?: string | null;
+  toolType?: string | null;
+  toolVersion?: string | null;
+  status?: string | null;
+}
+
+function normalizeAgent(raw: RawAgentInfo): AgentInfo | null {
+  const akId = raw.akId?.trim() || raw.ak?.trim() || '';
+  if (!akId) {
+    return null;
+  }
+
+  const parsedUserId =
+    raw.userId == null || raw.userId === ''
+      ? undefined
+      : Number(raw.userId);
+
+  return {
+    id: raw.id != null ? String(raw.id) : akId,
+    userId: Number.isFinite(parsedUserId) ? parsedUserId : undefined,
+    akId,
+    deviceName: raw.deviceName?.trim() || akId,
+    os: raw.os?.trim() || 'UNKNOWN',
+    toolType: raw.toolType?.trim() || 'UNKNOWN',
+    toolVersion: raw.toolVersion?.trim() || '',
+    status: raw.status?.trim() || 'UNKNOWN',
+  };
+}
+
+/** GET /api/skill/agents */
+export function getOnlineAgents(): Promise<AgentInfo[]> {
+  return request<RawAgentInfo[]>('/api/skill/agents').then((agents) =>
+    agents
+      .map((agent) => normalizeAgent(agent))
+      .filter((agent): agent is AgentInfo => agent !== null),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -107,11 +177,9 @@ export function getOnlineAgents(userId: string): Promise<AgentInfo[]> {
 // ---------------------------------------------------------------------------
 
 export interface CreateSessionParams {
-  userId?: number;
-  skillDefinitionId: number;
-  agentId: number;
+  ak: string;
   title?: string;
-  imChatId?: string;
+  imGroupId?: string;
 }
 
 interface PaginatedResponse<T> {
@@ -122,28 +190,68 @@ interface PaginatedResponse<T> {
   size: number;
 }
 
+interface BackendSession {
+  welinkSessionId?: string | number | null;
+  userId?: string | null;
+  ak?: string | null;
+  title?: string | null;
+  imGroupId?: string | null;
+  status?: string | null;
+  toolSessionId?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+function normalizeSessionStatus(status: string | null | undefined): Session['status'] {
+  switch (status?.toUpperCase()) {
+    case 'ACTIVE':
+      return 'active';
+    case 'CLOSED':
+      return 'closed';
+    default:
+      return 'idle';
+  }
+}
+
+function normalizeSession(raw: BackendSession): Session {
+  const createdAt = raw.createdAt ?? new Date().toISOString();
+  return {
+    id: raw.welinkSessionId != null ? String(raw.welinkSessionId) : '',
+    userId: raw.userId ?? undefined,
+    ak: raw.ak ?? undefined,
+    title: raw.title ?? '',
+    imGroupId: raw.imGroupId ?? undefined,
+    status: normalizeSessionStatus(raw.status),
+    toolSessionId: raw.toolSessionId ?? undefined,
+    createdAt,
+    updatedAt: raw.updatedAt ?? createdAt,
+  };
+}
+
 /** POST /api/skill/sessions */
 export function createSession(params: CreateSessionParams): Promise<Session> {
-  return request<Session>('/api/skill/sessions', {
+  return request<BackendSession>('/api/skill/sessions', {
     method: 'POST',
     body: JSON.stringify(params),
-  });
+  }).then(normalizeSession);
 }
 
 /** GET /api/skill/sessions */
 export function getSessions(
-  userId: string,
   page = 0,
   size = 20,
 ): Promise<PaginatedResponse<Session>> {
-  return request<PaginatedResponse<Session>>(
-    `/api/skill/sessions?userId=${userId}&page=${page}&size=${size}`,
-  );
+  return request<PaginatedResponse<BackendSession>>(
+    `/api/skill/sessions?page=${page}&size=${size}`,
+  ).then((pageResult) => ({
+    ...pageResult,
+    content: pageResult.content.map(normalizeSession),
+  }));
 }
 
 /** GET /api/skill/sessions/{id} */
 export function getSession(id: string): Promise<Session> {
-  return request<Session>(`/api/skill/sessions/${id}`);
+  return request<BackendSession>(`/api/skill/sessions/${id}`).then(normalizeSession);
 }
 
 /** DELETE /api/skill/sessions/{id} */
@@ -159,10 +267,11 @@ export function closeSession(id: string): Promise<void> {
 export function sendMessage(
   sessionId: string,
   content: string,
+  toolCallId?: string,
 ): Promise<Message> {
   return request<Message>(`/api/skill/sessions/${sessionId}/messages`, {
     method: 'POST',
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(toolCallId ? { content, toolCallId } : { content }),
   });
 }
 
@@ -181,13 +290,13 @@ export function getMessages(
 export function replyPermission(
   sessionId: string,
   permissionId: string,
-  approved: boolean,
-): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(
+  response: 'once' | 'always' | 'reject',
+): Promise<{ welinkSessionId: string; permissionId: string; response: string }> {
+  return request<{ welinkSessionId: string; permissionId: string; response: string }>(
     `/api/skill/sessions/${sessionId}/permissions/${permissionId}`,
     {
       method: 'POST',
-      body: JSON.stringify({ approved }),
+      body: JSON.stringify({ response }),
     },
   );
 }

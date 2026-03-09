@@ -3,7 +3,7 @@ import type { MessagePart } from '../protocol/types';
 
 interface QuestionCardProps {
     part: MessagePart;
-    onAnswer?: (answer: string) => void;
+    onAnswer?: (answer: string, toolCallId?: string) => void;
 }
 
 export const QuestionCard: React.FC<QuestionCardProps> = ({ part, onAnswer }) => {
@@ -13,13 +13,13 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ part, onAnswer }) =>
     const handleSelect = (option: string) => {
         if (answered) return;
         setAnswered(true);
-        onAnswer?.(option);
+        onAnswer?.(option, part.toolCallId);
     };
 
     const handleSubmit = () => {
         if (answered || !customInput.trim()) return;
         setAnswered(true);
-        onAnswer?.(customInput.trim());
+        onAnswer?.(customInput.trim(), part.toolCallId);
     };
 
     return (

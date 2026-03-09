@@ -1,6 +1,7 @@
 package com.opencode.cui.skill.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.model.ApiResponse;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.SkillSessionService;
@@ -36,24 +37,24 @@ class SkillSessionControllerTest {
     }
 
     @Test
-    @DisplayName("createSession returns 201 CREATED")
-    void createSession201() {
+    @DisplayName("createSession returns 200 OK")
+    void createSession200() {
         SkillSession session = new SkillSession();
         session.setId(1L);
         session.setStatus(SkillSession.Status.ACTIVE);
-        when(sessionService.createSession(any(), any(), any(), any(), any())).thenReturn(session);
+        when(sessionService.createSession(any(), any(), any(), any())).thenReturn(session);
 
         var request = new SkillSessionController.CreateSessionRequest();
-        request.setUserId(1L);
-        request.setSkillDefinitionId(2L);
-        request.setAgentId(3L);
+        request.setAk("3");
         request.setTitle("Test");
 
-        ResponseEntity<SkillSession> response = controller.createSession(request);
-        assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        var response = controller.createSession("1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
+        assertEquals(0, response.getBody().getCode());
+        assertNotNull(response.getBody().getData());
         verify(gatewayRelayService).subscribeToSessionBroadcast("1");
-        verify(gatewayRelayService).sendInvokeToGateway(eq("3"), eq("1"), eq("create_session"), isNull());
+        verify(gatewayRelayService).sendInvokeToGateway(eq("3"), eq("1"), eq("create_session"), contains("Test"));
     }
 
     @Test
@@ -62,7 +63,7 @@ class SkillSessionControllerTest {
         var request = new SkillSessionController.CreateSessionRequest();
         // userId is null
 
-        ResponseEntity<SkillSession> response = controller.createSession(request);
+        var response = controller.createSession(null, request);
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
     }
 
@@ -73,9 +74,9 @@ class SkillSessionControllerTest {
         session.setId(42L);
         when(sessionService.getSession(42L)).thenReturn(session);
 
-        ResponseEntity<SkillSession> response = controller.getSession(42L);
+        var response = controller.getSession(42L);
         assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertEquals(42L, response.getBody().getId());
+        assertEquals(42L, response.getBody().getData().getId());
     }
 
     @Test
@@ -83,7 +84,7 @@ class SkillSessionControllerTest {
     void getSession404() {
         when(sessionService.getSession(999L)).thenThrow(new IllegalArgumentException("Not found"));
 
-        ResponseEntity<SkillSession> response = controller.getSession(999L);
+        var response = controller.getSession(999L);
         assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
     }
 
@@ -106,11 +107,38 @@ class SkillSessionControllerTest {
     void closeSessionSendsGatewayInvoke() {
         SkillSession session = new SkillSession();
         session.setId(42L);
-        session.setAgentId(99L);
+        session.setAk("99");
         session.setToolSessionId("ts-abc");
         when(sessionService.getSession(42L)).thenReturn(session);
 
         controller.closeSession(42L);
         verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("42"), eq("close_session"), any());
+    }
+
+    @Test
+    @DisplayName("abortSession returns 200 and sends abort_session invoke")
+    void abortSession200() {
+        SkillSession session = new SkillSession();
+        session.setId(42L);
+        session.setAk("99");
+        session.setToolSessionId("ts-abc");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(sessionService.getSession(42L)).thenReturn(session);
+
+        var response = controller.abortSession(42L);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals("aborted", response.getBody().getData().get("status"));
+        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("42"), eq("abort_session"), any());
+        verify(sessionService, never()).closeSession(anyLong());
+        verify(gatewayRelayService, never()).unsubscribeFromSession(anyString());
+    }
+
+    @Test
+    @DisplayName("abortSession returns 404 when session not found")
+    void abortSession404() {
+        when(sessionService.getSession(999L)).thenThrow(new IllegalArgumentException("Not found"));
+
+        var response = controller.abortSession(999L);
+        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
     }
 }

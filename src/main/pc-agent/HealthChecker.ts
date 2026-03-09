@@ -4,7 +4,7 @@
  * After Plugin refactor (Phase 1):
  * - Uses OpencodeClient (from ctx.client) instead of OpenCodeBridge
  * - Health checks via the SDK client's app.health() endpoint
- * - Reports agent_online/agent_offline status changes to AI-Gateway
+ * - Tracks local health state for later status queries
  */
 
 import type { GatewayConnection } from './GatewayConnection';
@@ -122,15 +122,11 @@ export class HealthChecker {
   }
 
   /**
-   * Send an `agent_online` or `agent_offline` message to the gateway.
-   * Failures are silently swallowed (the gateway may be disconnected).
+   * Health transitions are kept locally. Gateway learns runtime state through
+   * explicit `status_query` requests.
    */
   private reportStatusChange(status: HealthStatus): void {
-    const messageType = status === 'online' ? 'agent_online' : 'agent_offline';
-    try {
-      this.gateway.send({ type: messageType });
-    } catch {
-      // Gateway may not be connected yet; ignore.
-    }
+    void this.gateway;
+    void status;
   }
 }

@@ -2,6 +2,7 @@ package com.opencode.cui.skill.controller;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.model.ApiResponse;
 import com.opencode.cui.skill.model.PageResult;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.service.GatewayRelayService;
@@ -10,6 +11,7 @@ import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -32,8 +34,8 @@ public class SkillSessionController {
     private final ObjectMapper objectMapper;
 
     public SkillSessionController(SkillSessionService sessionService,
-                                  GatewayRelayService gatewayRelayService,
-                                  ObjectMapper objectMapper) {
+            GatewayRelayService gatewayRelayService,
+            ObjectMapper objectMapper) {
         this.sessionService = sessionService;
         this.gatewayRelayService = gatewayRelayService;
         this.objectMapper = objectMapper;
@@ -41,35 +43,36 @@ public class SkillSessionController {
 
     /**
      * POST /api/skill/sessions
-     * Create a new skill session. Also instructs AI-Gateway to create an OpenCode session.
+     * Create a new skill session. Also instructs AI-Gateway to create an OpenCode
+     * session.
      */
     @PostMapping
-    public ResponseEntity<SkillSession> createSession(@RequestBody CreateSessionRequest request) {
-        if (request.getUserId() == null || request.getSkillDefinitionId() == null) {
-            return ResponseEntity.badRequest().build();
+    public ResponseEntity<ApiResponse<SkillSession>> createSession(
+            @CookieValue(value = "userId", required = false) String userIdCookie,
+            @RequestBody CreateSessionRequest request) {
+        String resolvedUserId = resolveUserId(userIdCookie);
+        if (resolvedUserId == null) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(400, "userId is required"));
         }
 
         SkillSession session = sessionService.createSession(
-                request.getUserId(),
-                request.getSkillDefinitionId(),
-                request.getAgentId(),
+                resolvedUserId,
+                request.getAk(),
                 request.getTitle(),
-                request.getImChatId()
-        );
+                request.getImGroupId());
 
         gatewayRelayService.subscribeToSessionBroadcast(session.getId().toString());
 
-        // Send create_session invoke to AI-Gateway if agentId is provided
-        if (request.getAgentId() != null) {
+        // Send create_session invoke to AI-Gateway if ak is provided
+        if (request.getAk() != null) {
             gatewayRelayService.sendInvokeToGateway(
-                    request.getAgentId().toString(),
+                    request.getAk(),
                     session.getId().toString(),
                     "create_session",
-                    null
-            );
+                    buildCreateSessionPayload(request.getTitle()));
         }
 
-        return ResponseEntity.status(HttpStatus.CREATED).body(session);
+        return ResponseEntity.ok(ApiResponse.ok(session));
     }
 
     /**
@@ -77,14 +80,22 @@ public class SkillSessionController {
      * List sessions for a user with pagination.
      */
     @GetMapping
-    public ResponseEntity<PageResult<SkillSession>> listSessions(
-            @RequestParam Long userId,
-            @RequestParam(required = false) List<SkillSession.Status> statuses,
+    public ResponseEntity<ApiResponse<PageResult<SkillSession>>> listSessions(
+            @CookieValue(value = "userId", required = false) String userIdCookie,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String ak,
+            @RequestParam(required = false) String imGroupId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
 
-        PageResult<SkillSession> sessions = sessionService.listSessions(userId, statuses, page, size);
-        return ResponseEntity.ok(sessions);
+        String resolvedUserId = resolveUserId(userIdCookie);
+        if (resolvedUserId == null) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(400, "userId is required"));
+        }
+
+        PageResult<SkillSession> sessions = sessionService.listSessions(
+                resolvedUserId, ak, imGroupId, status, page, size);
+        return ResponseEntity.ok(ApiResponse.ok(sessions));
     }
 
     /**
@@ -92,26 +103,27 @@ public class SkillSessionController {
      * Get a single session by ID.
      */
     @GetMapping("/{id}")
-    public ResponseEntity<SkillSession> getSession(@PathVariable Long id) {
+    public ResponseEntity<ApiResponse<SkillSession>> getSession(@PathVariable Long id) {
         try {
             SkillSession session = sessionService.getSession(id);
-            return ResponseEntity.ok(session);
+            return ResponseEntity.ok(ApiResponse.ok(session));
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error(404, "Session not found"));
         }
     }
 
     /**
      * DELETE /api/skill/sessions/{id}
-     * Close a session. Also sends close_session to AI-Gateway if a tool session exists.
+     * Close a session. Also sends close_session to AI-Gateway if a tool session
+     * exists.
      */
     @DeleteMapping("/{id}")
-    public ResponseEntity<Map<String, String>> closeSession(@PathVariable Long id) {
+    public ResponseEntity<ApiResponse<Map<String, String>>> closeSession(@PathVariable Long id) {
         try {
             SkillSession session = sessionService.getSession(id);
 
             // Send close_session to AI-Gateway if toolSessionId and agentId exist
-            if (session.getAgentId() != null && session.getToolSessionId() != null) {
+            if (session.getAk() != null && session.getToolSessionId() != null) {
                 var node = objectMapper.createObjectNode();
                 node.put("toolSessionId", session.getToolSessionId());
                 String payload;
@@ -121,27 +133,81 @@ public class SkillSessionController {
                     payload = "{}";
                 }
                 gatewayRelayService.sendInvokeToGateway(
-                        session.getAgentId().toString(),
+                        session.getAk(),
                         session.getId().toString(),
                         "close_session",
-                        payload
-                );
+                        payload);
             }
-
             sessionService.closeSession(id);
             gatewayRelayService.unsubscribeFromSession(id.toString());
-            return ResponseEntity.ok(Map.of("status", "closed", "sessionId", id.toString()));
+            return ResponseEntity.ok(ApiResponse.ok(Map.of("status", "closed", "welinkSessionId", id.toString())));
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error(404, "Session not found"));
+        }
+    }
+
+    /**
+     * POST /api/skill/sessions/{id}/abort
+     * Abort a session. Sends abort_session to AI-Gateway to stop ongoing AI
+     * operations while keeping the session reusable.
+     */
+    @PostMapping("/{id}/abort")
+    public ResponseEntity<ApiResponse<Map<String, String>>> abortSession(@PathVariable Long id) {
+        try {
+            SkillSession session = sessionService.getSession(id);
+
+            if (session.getStatus() == SkillSession.Status.CLOSED) {
+                return ResponseEntity.status(HttpStatus.CONFLICT)
+                        .body(ApiResponse.error(409, "Session is already closed"));
+            }
+
+            // Send abort_session to AI-Gateway if toolSessionId and ak exist
+            if (session.getAk() != null && session.getToolSessionId() != null) {
+                var node = objectMapper.createObjectNode();
+                node.put("toolSessionId", session.getToolSessionId());
+                String payload;
+                try {
+                    payload = objectMapper.writeValueAsString(node);
+                } catch (JsonProcessingException e) {
+                    payload = "{}";
+                }
+                gatewayRelayService.sendInvokeToGateway(
+                        session.getAk(),
+                        session.getId().toString(),
+                        "abort_session",
+                        payload);
+            }
+
+            return ResponseEntity.ok(ApiResponse.ok(Map.of("status", "aborted", "welinkSessionId", id.toString())));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error(404, "Session not found"));
+        }
+    }
+
+    private String resolveUserId(String cookieValue) {
+        if (cookieValue != null && !cookieValue.isBlank()) {
+            return cookieValue.trim();
+        }
+        return null;
+    }
+
+    private String buildCreateSessionPayload(String title) {
+        var node = objectMapper.createObjectNode();
+        if (title != null && !title.isBlank()) {
+            node.put("title", title);
+        }
+        try {
+            return objectMapper.writeValueAsString(node);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to serialize create_session payload", e);
+            return "{}";
         }
     }
 
     @Data
     public static class CreateSessionRequest {
-        private Long userId;
-        private Long skillDefinitionId;
-        private Long agentId;
+        private String ak;
         private String title;
-        private String imChatId;
+        private String imGroupId;
     }
 }

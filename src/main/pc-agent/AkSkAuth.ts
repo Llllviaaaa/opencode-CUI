@@ -35,7 +35,7 @@ export class AkSkAuth {
    *
    * Signature algorithm:
    * ```
-   * message  = "{ak}\n{timestamp}\n{nonce}"
+   * message  = "{ak}{timestamp}{nonce}"
    * signature = HMAC-SHA256(sk, message)   // Base64-encoded
    * ```
    *
@@ -46,7 +46,7 @@ export class AkSkAuth {
   static sign(ak: string, sk: string): AuthParams {
     const timestamp = Math.floor(Date.now() / 1000).toString();
     const nonce = randomUUID();
-    const message = `${ak}\n${timestamp}\n${nonce}`;
+    const message = `${ak}${timestamp}${nonce}`;
     const signature = createHmac('sha256', sk).update(message).digest('base64');
 
     return { ak, timestamp, nonce, signature };

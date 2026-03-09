@@ -181,4 +181,52 @@ class OpenCodeEventTranslatorTest {
         assertEquals("Which option?", translated.getQuestion());
         assertEquals(java.util.List.of("A", "B"), translated.getOptions());
     }
+
+    @Test
+    @DisplayName("tool question running with nested questions payload is mapped to frontend question")
+    void translatesRunningToolQuestionWithNestedPayload() throws Exception {
+        var event = objectMapper.readTree("""
+                {
+                  "type": "message.part.updated",
+                  "properties": {
+                    "part": {
+                      "id": "part-question-1",
+                      "sessionID": "sess-question",
+                      "messageID": "msg-question",
+                      "type": "tool",
+                      "callID": "call-question-1",
+                      "tool": "question",
+                      "state": {
+                        "status": "running",
+                        "input": {
+                          "questions": [
+                            {
+                              "header": "实现方案",
+                              "question": "选 A 还是 B？",
+                              "options": [
+                                { "label": "A", "description": "只改最小范围" },
+                                { "label": "B", "description": "做完整重构" }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+                """);
+
+        StreamMessage translated = translator.translate(event);
+
+        assertNotNull(translated);
+        assertEquals(StreamMessage.Types.QUESTION, translated.getType());
+        assertEquals("sess-question", translated.getSessionId());
+        assertEquals("msg-question", translated.getMessageId());
+        assertEquals("part-question-1", translated.getPartId());
+        assertEquals("call-question-1", translated.getToolCallId());
+        assertEquals("实现方案", translated.getHeader());
+        assertEquals("选 A 还是 B？", translated.getQuestion());
+        assertEquals(java.util.List.of("A", "B"), translated.getOptions());
+        assertNotNull(translated.getInput());
+    }
 }

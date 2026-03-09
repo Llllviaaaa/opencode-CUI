@@ -219,6 +219,7 @@ public class OpenCodeEventTranslator {
     private StreamMessage translateQuestion(String sessionId, String messageId, String partId,
             Integer partSeq, String callId, JsonNode state, String role) {
         JsonNode input = state != null ? state.get("input") : null;
+        JsonNode questionNode = resolveQuestionPayload(input);
         StreamMessage.StreamMessageBuilder builder = partBuilder(
                 StreamMessage.Types.QUESTION,
                 sessionId,
@@ -230,16 +231,16 @@ public class OpenCodeEventTranslator {
                 .toolName("question")
                 .status("running");
 
-        if (input != null) {
-            builder.header(input.path("header").asText(null));
-            builder.question(input.path("question").asText(null));
+        if (input != null && !input.isNull()) {
+            builder.input(jsonNodeToMap(input));
+        }
 
-            JsonNode optionsNode = input.get("options");
-            if (optionsNode != null && optionsNode.isArray()) {
-                List<String> options = new ArrayList<>();
-                for (JsonNode optionNode : optionsNode) {
-                    options.add(optionNode.asText());
-                }
+        if (questionNode != null) {
+            builder.header(questionNode.path("header").asText(null));
+            builder.question(questionNode.path("question").asText(null));
+
+            List<String> options = extractQuestionOptions(questionNode.get("options"));
+            if (!options.isEmpty()) {
                 builder.options(options);
             }
         }
@@ -360,27 +361,12 @@ public class OpenCodeEventTranslator {
 
     private StreamMessage translateQuestionAsked(JsonNode event) {
         JsonNode props = event.path("properties");
-        JsonNode questionsNode = props.get("questions");
-        JsonNode firstQuestion = questionsNode != null && questionsNode.isArray() && !questionsNode.isEmpty()
-                ? questionsNode.get(0)
-                : null;
+        JsonNode firstQuestion = resolveQuestionPayload(props);
         if (firstQuestion == null) {
             return null;
         }
 
-        List<String> options = new ArrayList<>();
-        JsonNode optionsNode = firstQuestion.get("options");
-        if (optionsNode != null && optionsNode.isArray()) {
-            for (JsonNode optionNode : optionsNode) {
-                String label = optionNode.path("label").asText(null);
-                if (label == null || label.isBlank()) {
-                    label = optionNode.asText(null);
-                }
-                if (label != null && !label.isBlank()) {
-                    options.add(label);
-                }
-            }
-        }
+        List<String> options = extractQuestionOptions(firstQuestion.get("options"));
 
         String sessionId = props.path("sessionID").asText(null);
         String messageId = props.path("messageID").asText(null);
@@ -390,10 +376,45 @@ public class OpenCodeEventTranslator {
         return partBuilder(StreamMessage.Types.QUESTION, sessionId, messageId, partId, partSeq)
                 .toolName("question")
                 .status("running")
+                .input(jsonNodeToMap(props))
                 .header(firstQuestion.path("header").asText(null))
                 .question(firstQuestion.path("question").asText(null))
                 .options(options.isEmpty() ? null : options)
                 .build();
+    }
+
+    private JsonNode resolveQuestionPayload(JsonNode input) {
+        if (input == null || input.isMissingNode() || input.isNull()) {
+            return null;
+        }
+
+        JsonNode questionsNode = input.get("questions");
+        if (questionsNode != null && questionsNode.isArray() && !questionsNode.isEmpty()) {
+            JsonNode firstQuestion = questionsNode.get(0);
+            if (firstQuestion != null && !firstQuestion.isNull()) {
+                return firstQuestion;
+            }
+        }
+
+        return input;
+    }
+
+    private List<String> extractQuestionOptions(JsonNode optionsNode) {
+        if (optionsNode == null || !optionsNode.isArray()) {
+            return List.of();
+        }
+
+        List<String> options = new ArrayList<>();
+        for (JsonNode optionNode : optionsNode) {
+            String label = optionNode.path("label").asText(null);
+            if (label == null || label.isBlank()) {
+                label = optionNode.asText(null);
+            }
+            if (label != null && !label.isBlank()) {
+                options.add(label);
+            }
+        }
+        return options;
     }
 
     private StreamMessage.StreamMessageBuilder baseBuilder(String type, String sessionId) {

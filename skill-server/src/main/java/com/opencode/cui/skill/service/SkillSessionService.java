@@ -31,36 +31,40 @@ public class SkillSessionService {
      * Create a new skill session.
      */
     @Transactional
-    public SkillSession createSession(Long userId, Long skillDefinitionId, Long agentId,
-            String title, String imChatId) {
+    public SkillSession createSession(String userId, String ak,
+            String title, String imGroupId) {
         SkillSession session = SkillSession.builder()
                 .userId(userId)
-                .skillDefinitionId(skillDefinitionId)
-                .agentId(agentId)
+                .ak(ak)
                 .title(title)
-                .imChatId(imChatId)
+                .imGroupId(imGroupId)
                 .status(SkillSession.Status.ACTIVE)
                 .build();
 
         sessionRepository.insert(session);
-        log.info("Created skill session: id={}, userId={}, skillDefId={}", session.getId(), userId, skillDefinitionId);
+        log.info("Created skill session: id={}, userId={}, ak={}", session.getId(), userId, ak);
         return session;
     }
 
     /**
-     * List sessions for a user with pagination.
-     * If statuses is null or empty, returns all sessions for the user.
+     * List sessions for a user with pagination and optional filters.
      */
     @Transactional(readOnly = true)
-    public PageResult<SkillSession> listSessions(Long userId, List<SkillSession.Status> statuses,
-            int page, int size) {
+    public PageResult<SkillSession> listSessions(String userId, String ak, String imGroupId,
+            String status, int page, int size) {
         int offset = page * size;
-        if (statuses != null && !statuses.isEmpty()) {
-            List<String> statusNames = statuses.stream()
-                    .map(SkillSession.Status::name)
-                    .collect(Collectors.toList());
-            List<SkillSession> content = sessionRepository.findByUserIdAndStatusIn(userId, statusNames, offset, size);
-            long total = sessionRepository.countByUserIdAndStatusIn(userId, statusNames);
+        List<String> statusNames = null;
+        if (status != null && !status.isBlank()) {
+            statusNames = List.of(status);
+        }
+        boolean hasFilters = (ak != null && !ak.isBlank())
+                || (imGroupId != null && !imGroupId.isBlank())
+                || statusNames != null;
+        if (hasFilters) {
+            List<SkillSession> content = sessionRepository.findByUserIdFiltered(
+                    userId, ak, imGroupId, statusNames, offset, size);
+            long total = sessionRepository.countByUserIdFiltered(
+                    userId, ak, imGroupId, statusNames);
             return new PageResult<>(content, total, page, size);
         }
         List<SkillSession> content = sessionRepository.findByUserId(userId, offset, size);
@@ -78,6 +82,15 @@ public class SkillSessionService {
             throw new IllegalArgumentException("Session not found: " + sessionId);
         }
         return session;
+    }
+
+    /**
+     * Find all ACTIVE sessions for a user. Used by the protocol-level stream
+     * endpoint to resume all live sessions on connect.
+     */
+    @Transactional(readOnly = true)
+    public List<SkillSession> findActiveByUserId(String userId) {
+        return sessionRepository.findActiveByUserId(userId);
     }
 
     /**
@@ -110,11 +123,20 @@ public class SkillSessionService {
     }
 
     /**
-     * Find sessions by agent ID (used when agent goes offline).
+     * Find sessions by AK (used when agent goes offline).
      */
     @Transactional(readOnly = true)
-    public List<SkillSession> findByAgentId(Long agentId) {
-        return sessionRepository.findByAgentId(agentId);
+    public List<SkillSession> findByAk(String ak) {
+        return sessionRepository.findByAk(ak);
+    }
+
+    /**
+     * Find a session by its OpenCode tool session ID.
+     * Used to route upstream messages from Gateway to the correct welink session.
+     */
+    @Transactional(readOnly = true)
+    public SkillSession findByToolSessionId(String toolSessionId) {
+        return sessionRepository.findByToolSessionId(toolSessionId);
     }
 
     /**

@@ -2,16 +2,26 @@ import type { Message, MessagePart } from './types';
 
 interface BackendMessagePart {
   partId?: string | null;
+  partSeq?: number | null;
   seq?: number | null;
+  type?: string | null;
   partType?: string | null;
   content?: string | null;
   toolName?: string | null;
   toolCallId?: string | null;
+  status?: string | null;
   toolStatus?: string | null;
+  input?: Record<string, unknown> | null;
   toolInput?: string | Record<string, unknown> | null;
+  output?: string | null;
   toolOutput?: string | null;
+  error?: string | null;
   toolError?: string | null;
+  title?: string | null;
   toolTitle?: string | null;
+  header?: string | null;
+  question?: string | null;
+  options?: unknown[] | null;
   fileName?: string | null;
   fileUrl?: string | null;
   fileMime?: string | null;
@@ -134,33 +144,51 @@ function extractQuestionFields(input?: Record<string, unknown>): Pick<MessagePar
 
 function normalizePart(raw: BackendMessagePart, index: number): MessagePart | null {
   const partId = raw.partId ?? `part_${index + 1}`;
-  const toolInput = parseObject(raw.toolInput);
+  const toolInput = raw.input ?? parseObject(raw.toolInput);
+  const partSeq = raw.partSeq ?? raw.seq ?? undefined;
+  const partType = raw.type ?? raw.partType;
 
-  switch (raw.partType) {
+  switch (partType) {
     case 'text':
       return {
         partId,
-        partSeq: raw.seq ?? undefined,
+        partSeq,
         type: 'text',
         content: raw.content ?? '',
         isStreaming: false,
       };
 
+    case 'thinking':
     case 'reasoning':
       return {
         partId,
-        partSeq: raw.seq ?? undefined,
+        partSeq,
         type: 'thinking',
         content: raw.content ?? '',
         isStreaming: false,
       };
 
+    case 'question':
+      return {
+        partId,
+        partSeq,
+        type: 'question',
+        content: raw.content ?? '',
+        isStreaming: false,
+        toolName: raw.toolName ?? 'question',
+        toolCallId: raw.toolCallId ?? undefined,
+        header: raw.header ?? undefined,
+        question: raw.question ?? undefined,
+        options: normalizeQuestionOptions(raw.options),
+      };
+
     case 'tool': {
-      if (raw.toolName === 'question' && raw.toolStatus === 'running') {
+      const toolStatus = raw.status ?? raw.toolStatus;
+      if (raw.toolName === 'question' && toolStatus === 'running') {
         const questionFields = extractQuestionFields(toolInput);
         return {
           partId,
-          partSeq: raw.seq ?? undefined,
+          partSeq,
           type: 'question',
           content: raw.content ?? '',
           isStreaming: false,
@@ -174,23 +202,23 @@ function normalizePart(raw: BackendMessagePart, index: number): MessagePart | nu
 
       return {
         partId,
-        partSeq: raw.seq ?? undefined,
+        partSeq,
         type: 'tool',
-        content: raw.toolError ?? raw.content ?? '',
+        content: raw.error ?? raw.toolError ?? raw.content ?? '',
         isStreaming: false,
         toolName: raw.toolName ?? undefined,
         toolCallId: raw.toolCallId ?? undefined,
-        toolStatus: (raw.toolStatus as MessagePart['toolStatus']) ?? undefined,
+        toolStatus: (toolStatus as MessagePart['toolStatus']) ?? undefined,
         toolInput,
-        toolOutput: raw.toolOutput ?? undefined,
-        toolTitle: raw.toolTitle ?? undefined,
+        toolOutput: raw.output ?? raw.toolOutput ?? undefined,
+        toolTitle: raw.title ?? raw.toolTitle ?? undefined,
       };
     }
 
     case 'file':
       return {
         partId,
-        partSeq: raw.seq ?? undefined,
+        partSeq,
         type: 'file',
         content: raw.content ?? '',
         isStreaming: false,
