@@ -1,10 +1,11 @@
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { promises } from 'fs';
-import { BridgeConfig, DEFAULT_EVENT_ALLOWLIST } from '../types';
+import { BridgeConfig } from '../types';
 import type { BridgeLogger } from '../runtime/AppLogger';
 import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 import { JsoncParser } from './JsoncParser';
+import { DEFAULT_BRIDGE_CONFIG } from './default-config';
 
 const CONFIG_FILE_NAMES = ['message-bridge.jsonc', 'message-bridge.json'] as const;
 
@@ -18,38 +19,7 @@ export class ConfigResolver {
   }
 
   async resolveConfig(workspacePath?: string): Promise<BridgeConfig> {
-    const defaultConfig: BridgeConfig = {
-      enabled: true,
-      config_version: 1,
-      gateway: {
-        url: 'ws://localhost:8081/ws/agent',
-        toolType: 'opencode',
-        toolVersion: '1.0.0',
-        deviceName: 'Local Machine',
-        heartbeatIntervalMs: 30000,
-        reconnect: {
-          baseMs: 1000,
-          maxMs: 30000,
-          exponential: true,
-        },
-        ping: {
-          intervalMs: 30000,
-          pongTimeoutMs: 10000,
-        },
-      },
-      sdk: {
-        timeoutMs: 10000,
-      },
-      auth: {
-        ak: '',
-        sk: '',
-      },
-      events: {
-        allowlist: [...DEFAULT_EVENT_ALLOWLIST],
-      },
-    };
-
-    let config: Partial<BridgeConfig> = { ...defaultConfig };
+    let config: Partial<BridgeConfig> = this.mergeConfig({}, DEFAULT_BRIDGE_CONFIG);
     const sources: string[] = ['default'];
     const workspaceRoot = workspacePath ?? process.cwd();
     this.logger?.info('config.resolve.started', { workspacePath: workspaceRoot });
