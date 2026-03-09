@@ -1,11 +1,10 @@
 import { describe, test, expect } from 'bun:test';
 
 import { BridgeRuntime } from '../../dist/runtime/BridgeRuntime.js';
-import { EnvelopeBuilder } from '../../dist/event/EnvelopeBuilder.js';
 import { EventFilter } from '../../dist/event/EventFilter.js';
 
 describe('event uplink via hook boundary', () => {
-  test('allowlist reject records unsupported_event', async () => {
+  test('allowlist reject records event.rejected_allowlist', async () => {
     const logs = [];
     const runtime = new BridgeRuntime({
       client: {
@@ -20,7 +19,6 @@ describe('event uplink via hook boundary', () => {
     const sent = [];
 
     runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
-    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
     runtime.eventFilter = new EventFilter(['session.idle']);
     runtime.stateManager.setState('READY');
 
@@ -37,7 +35,6 @@ describe('event uplink via hook boundary', () => {
     const sent = [];
 
     runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
-    runtime.envelopeBuilder = new EnvelopeBuilder('agent-2');
     runtime.eventFilter = new EventFilter(['message.*']);
     runtime.stateManager.setState('READY');
 

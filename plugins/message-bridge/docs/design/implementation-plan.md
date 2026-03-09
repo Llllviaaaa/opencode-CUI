@@ -102,7 +102,7 @@
 - **Library/Module**: Bash (bun/node REPL) - 导入模块测试
 
 ### 测试分层
-1. **Unit**: 白名单、映射、路由、错误分支、envelope/sequence
+1. **Unit**: 白名单、映射、路由、错误分支、扁平协议字段
 2. **Integration**: Mock Gateway WS + Mock SDK Client  
 3. **E2E Smoke**: 注册、心跳、create+chat+close、permission_reply、断连重连、不可达启动失败
 
@@ -125,7 +125,7 @@ Wave 1 (基础层 - 立即可开始):
 Wave 2 (核心层 - 依赖 Wave 1):
 ├── Task 5: 配置层实现 (ConfigResolver/Validator/Parser) [ultrabrain]
 ├── Task 6: 连接层实现 (GatewayConnection/AkSkAuth/StateManager) [ultrabrain]
-├── Task 7: 事件层实现 (EventFilter/EnvelopeBuilder/EventRelay) [ultrabrain]
+├── Task 7: 事件层实现 (EventFilter/runtime.handleEvent) [ultrabrain]
 ├── Task 8: Action 层骨架 (ActionRegistry/Router/BaseAction) [ultrabrain]
 └── Task 9: 错误层实现 (ErrorMapper/FastFailDetector) [ultrabrain]
 
@@ -266,7 +266,7 @@ Max Concurrent: 5 (Wave 2 & 3 have 5 parallel tasks each)
   - 定义 WebSocket 消息类型 (PRD §4.2, §4.3, §4.4)
   - 定义 Action Payload 类型 (PRD §7)
   - 定义 Error 类型 (PRD §7)
-  - 定义 Envelope 类型 (PRD §4.4)
+  - 定义 flat protocol 消息类型 (PRD §4.4)
 
   **Must NOT do**:
   - 不要实现具体逻辑
@@ -288,7 +288,7 @@ Max Concurrent: 5 (Wave 2 & 3 have 5 parallel tasks each)
 
   **References**:
   - `plugins/message-bridge/docs/product/prd.md §7` - Type and error model
-  - `plugins/message-bridge/docs/product/prd.md §4.4` - Envelope requirements
+  - `plugins/message-bridge/docs/product/prd.md §4.4` - Flat protocol requirements
   - `src/main/pc-agent/types/` - Reference for type organization
 
   **Acceptance Criteria**:
@@ -940,7 +940,7 @@ Max Concurrent: 5 (Wave 2 & 3 have 5 parallel tasks each)
   **Acceptance Criteria**:
   - [ ] StatusQueryAction extends BaseAction correctly
   - [ ] execute method calls SDK health() and returns status_response
-  - [ ] status_response contains opencodeOnline boolean and envelope
+  - [ ] status_response contains opencodeOnline boolean only
   - [ ] Only responds to queries, no periodic reporting
 
   **QA Scenarios**:
@@ -951,7 +951,7 @@ Max Concurrent: 5 (Wave 2 & 3 have 5 parallel tasks each)
     Steps:
       1. cd plugins/message-bridge
       2. node -e "const action = require('./dist/action/StatusQueryAction').default; // mock health check"
-    Expected Result: Returns status_response with opencodeOnline and envelope
+    Expected Result: Returns status_response with opencodeOnline only
     Evidence: .sisyphus/evidence/task-14-status-response.txt
   ```
 
@@ -995,7 +995,7 @@ Max Concurrent: 5 (Wave 2 & 3 have 5 parallel tasks each)
   - [ ] MessageBridgePlugin orchestrates all components correctly
   - [ ] start method initializes all layers in correct order
   - [ ] stop method cleans up resources properly
-  - [ ] SDK events routed to EventRelay
+  - [ ] SDK events routed to runtime.handleEvent
   - [ ] Gateway messages routed to ActionRouter
 
   **QA Scenarios**:
@@ -1021,7 +1021,7 @@ Max Concurrent: 5 (Wave 2 & 3 have 5 parallel tasks each)
   - 为所有核心模块实现单元测试使用 node:test
   - ConfigResolver/Validator/Parser 测试
   - GatewayConnection/AkSkAuth/StateManager 测试
-  - EventFilter/EnvelopeBuilder/EventRelay 测试
+  - EventFilter/runtime.handleEvent 测试
   - ActionRegistry/Router/BaseAction 测试
   - ErrorMapper/FastFailDetector 测试
   - 所有 Action 实现测试
@@ -1137,7 +1137,7 @@ Max Concurrent: 5 (Wave 2 & 3 have 5 parallel tasks each)
   - 测试注册、心跳、create+chat+close、permission_reply
   - 测试断连重连、不可达启动失败
   - 测试 Fast Fail 行为
-  - 测试 envelope 完整性和 sequence 递增
+  - 测试扁平协议字段与不发送 tool_done
 
   **Must NOT do**:
   - 不要实现完整的 E2E 套件（仅 Smoke）

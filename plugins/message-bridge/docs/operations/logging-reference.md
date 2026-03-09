@@ -55,8 +55,8 @@
 | `agentId` | agent 标识，重连后可能重新绑定 |
 | `action` | 下行调用动作名（chat/create_session/...） |
 | `eventType` | OpenCode 事件类型 |
-| `bridgeMessageId` | bridge 上行消息 envelope.messageId；主要用于内部发送上下文，日志中通常直接复用到 `traceId`，不再单独输出 |
-| `gatewayMessageId` | gateway 下行消息 envelope.messageId |
+| `bridgeMessageId` | bridge 侧生成的消息追踪 ID；主要用于内部发送上下文，日志中通常直接复用到 `traceId`，不再单独输出 |
+| `gatewayMessageId` | gateway 下行消息携带或运行时派生的消息 ID |
 | `opencodeMessageId` | OpenCode 事件 message ID |
 | `opencodePartId` | OpenCode 事件 part ID |
 | `payloadBytes` | 出站 JSON 消息 UTF-8 字节数 |
@@ -107,23 +107,23 @@ sequenceDiagram
   P->>P: runtime.invoke.completed / runtime.status_query.responded
 ```
 
-### 3.3 上行 event relay 链路
+### 3.3 上行 event 链路
 
 ```mermaid
 sequenceDiagram
   participant O as "OpenCode Event"
-  participant P as "BridgeRuntime/EventRelay"
+  participant P as "BridgeRuntime"
   participant G as "GatewayConnection"
   participant GW as "Gateway"
 
   O->>P: event
-  P->>P: event.received or event.relay.started
+  P->>P: event.received
   alt not ready
-    P->>P: event.ignored_not_ready or event.relay.ignored_not_ready
+    P->>P: event.ignored_not_ready
   else not allowed
-    P->>P: event.rejected_allowlist or event.relay.rejected_allowlist
+    P->>P: event.rejected_allowlist
   else forwarding
-    P->>P: event.forwarding or event.relay.forwarding
+    P->>P: event.forwarding
     P->>G: gateway.send(type=tool_event)
     G->>G: gateway.send
     G->>GW: tool_event
@@ -166,7 +166,7 @@ sequenceDiagram
 | `runtime.start.completed` | info | 启动完成 | `agentId` | `src/runtime/BridgeRuntime.ts:137` |
 | `runtime.stop.requested` | info | stop 入口 | - | `src/runtime/BridgeRuntime.ts:141` |
 | `runtime.stop.completed` | info | stop 完成 | - | `src/runtime/BridgeRuntime.ts:148` |
-| `runtime.downstream_ignored_no_connection` | warn | 下行处理时无连接/无 envelopeBuilder | - | `src/runtime/BridgeRuntime.ts:198` |
+| `runtime.downstream_ignored_no_connection` | warn | 下行处理时无连接 | - | `src/runtime/BridgeRuntime.ts:198` |
 | `runtime.status_query.received` | info | 收到 status_query | `traceId`,`runtimeTraceId`,`gatewayMessageId`,`sessionId` | `src/runtime/BridgeRuntime.ts` |
 | `runtime.status_query.responded` | info | status_response 已发送 | `traceId`,`runtimeTraceId`,`gatewayMessageId`,`sessionId`,`latencyMs` | `src/runtime/BridgeRuntime.ts` |
 | `runtime.invoke.received` | info | 收到 invoke | `traceId`,`runtimeTraceId`,`gatewayMessageId`,`action`,`sessionId`,`toolSessionId` | `src/runtime/BridgeRuntime.ts` |
@@ -203,7 +203,7 @@ sequenceDiagram
 | `gateway.state.changed` | info | runtime 监听到连接状态变化 | `state` | `src/runtime/BridgeRuntime.ts:99` |
 | `gateway.message.received` | debug | runtime 收到下行消息入口 | `traceId`,`runtimeTraceId`,`messageType`,`gatewayMessageId`,`action`,`sessionId`,`toolSessionId` | `src/runtime/BridgeRuntime.ts` |
 
-### 4.3 event.* 与 event.relay.*
+### 4.3 event.*
 
 | message | level | 触发时机 | 关键 extra | 源码位置 |
 |---|---|---|---|---|
@@ -212,12 +212,6 @@ sequenceDiagram
 | `event.rejected_allowlist` | warn | runtime allowlist 拒绝事件 | `traceId`,`runtimeTraceId`,`eventType`,`toolSessionId`,`opencodeMessageId`,`opencodePartId` | `src/runtime/BridgeRuntime.ts` |
 | `event.forwarding` | info | runtime 上行发送前 | `traceId`,`runtimeTraceId`,`eventType`,`sessionId`,`toolSessionId`,`opencodeMessageId`,`opencodePartId` | `src/runtime/BridgeRuntime.ts` |
 | `event.forwarded` | debug | runtime 上行发送后 | `traceId`,`runtimeTraceId`,`eventType`,`sessionId`,`toolSessionId`,`opencodeMessageId`,`opencodePartId` | `src/runtime/BridgeRuntime.ts` |
-| `event.relay.started` | info | EventRelay 启动 | - | `src/event/EventRelay.ts:44` |
-| `event.relay.error` | error | EventRelay 处理事件异常 | `error`,`errorDetail`,`errorName`,`sourceErrorCode?` | `src/event/EventRelay.ts:47` |
-| `event.relay.stopped` | info | EventRelay 停止 | - | `src/event/EventRelay.ts:58` |
-| `event.relay.ignored_not_ready` | debug | EventRelay 未就绪时忽略 | `traceId`,`runtimeTraceId`,`eventType`,`toolSessionId`,`opencodeMessageId`,`opencodePartId` | `src/event/EventRelay.ts` |
-| `event.relay.rejected_allowlist` | warn | EventRelay allowlist 拒绝 | `traceId`,`runtimeTraceId`,`eventType`,`toolSessionId`,`opencodeMessageId`,`opencodePartId` | `src/event/EventRelay.ts` |
-| `event.relay.forwarding` | debug | EventRelay 转发前 | `traceId`,`runtimeTraceId`,`eventType`,`sessionId`,`toolSessionId`,`opencodeMessageId`,`opencodePartId` | `src/event/EventRelay.ts` |
 
 ### 4.4 router.*
 

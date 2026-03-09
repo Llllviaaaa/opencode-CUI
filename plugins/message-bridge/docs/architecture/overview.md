@@ -99,8 +99,7 @@ message-bridge 是 OpenCode 原生插件，桥接本地 OpenCode 实例与远端
 │  ┌───────────────────────────▼─────────────────────────────────────┐  │
 │  │  事件层 (Event Layer) —— 上行                                       │  │
 │  │  • EventFilter (白名单前缀匹配)                                     │  │
-│  │  • EnvelopeBuilder (历史 envelope/sequence 兼容参考)                │  │
-│  │  • EventRelay (透传到 Gateway)                                      │  │
+│  │  • BridgeRuntime.handleEvent (透传到 Gateway)                       │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 │                              │                                         │
 │  ┌───────────────────────────▼─────────────────────────────────────┐  │
@@ -318,9 +317,8 @@ baseMs = 1000, maxMs = 30000
 | 模块 | 文件 | 职责 |
 |---|---|---|
 | 事件过滤 | `event/EventFilter.ts` | 白名单前缀匹配 |
-| Envelope 构建 | `event/EnvelopeBuilder.ts` | 历史 envelope 生成逻辑，仅保留兼容参考 |
-| 事件透传 | `event/EventRelay.ts` | 发送到 Gateway |
-| 事件订阅 | `event/EventSubscriber.ts` | 订阅 SDK 事件流 |
+| 事件透传 | `runtime/BridgeRuntime.ts` | 过滤并发送扁平 `tool_event` |
+| 事件订阅 | `runtime/BridgeRuntime.ts` | 通过插件 event hook 接收 SDK 事件流 |
 
 #### 3.3.2 白名单规则
 
@@ -347,18 +345,13 @@ function isAllowed(eventType: string): boolean {
 }
 ```
 
-#### 3.3.3 Historical Envelope 结构（仅兼容旧设计）
+#### 3.3.3 当前事件上行结构
 
 ```typescript
-interface Envelope {
-  version: string;        // "1.0"
-  messageId: string;      // UUID
-  timestamp: number;      // Unix timestamp (ms)
-  source: string;         // "message-bridge"
-  agentId: string;        // localAgentId (本地生成，如 bridge-{uuid})
-  sessionId?: string;     // 历史业务 sessionId（当前扁平协议不再使用）
-  sequenceNumber: number; // 递增序号
-  sequenceScope: string;  // "session" | "global"（仅 legacy envelope 使用）
+interface ToolEventMessage {
+  type: 'tool_event';
+  toolSessionId?: string;
+  event: unknown; // 原样透传 OpenCode event
 }
 ```
 
@@ -504,10 +497,10 @@ async function handleInvoke(invoke: InvokeMessage): Promise<void> {
 ```
 OpenCode SSE 事件
   ↓
-EventSubscriber (sdk.event.subscribe)
+BridgeRuntime.handleEvent (event hook)
   ↓
 EventFilter (白名单匹配)
-  ├─ 匹配失败 → 记录 unsupported_event，丢弃
+  ├─ 匹配失败 → 记录 event.rejected_allowlist，丢弃
   ↓
 Flat protocol mapping
   ↓
@@ -719,10 +712,8 @@ plugins/message-bridge/
 │   │   ├── MessageHandler.ts         # 消息序列化
 │   │   └── AkSkAuth.ts               # AK/SK 签名
 │   ├── event/
-│   │   ├── EventSubscriber.ts        # SDK 事件订阅
 │   │   ├── EventFilter.ts            # 白名单过滤
-│   │   ├── EnvelopeBuilder.ts        # 历史 Envelope 构建（兼容参考）
-│   │   └── EventRelay.ts             # 事件透传
+│   │   └── index.ts                  # 事件过滤导出
 │   ├── action/
 │   │   ├── ActionRegistry.ts         # Action 注册表
 │   │   ├── ActionRouter.ts           # Action 路由
@@ -917,7 +908,7 @@ plugins/message-bridge/
 | SDK | `@opencode-ai/sdk` |
 | READY | 插件状态：已注册成功，可收发业务消息 |
 | Fast Fail | 连接异常立即返回错误，不排队缓冲 |
-| Envelope | 消息信封，包含元数据（version、timestamp、agentId 等） |
+| Flat Protocol | 当前边界消息形态，仅包含活跃路由字段与业务载荷，不再使用 envelope 包装 |
 | Action | Gateway 下发的指令类型（chat、create_session 等） |
 
 ### 11.2 参考文档
