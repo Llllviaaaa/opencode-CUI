@@ -1,51 +1,23 @@
-import { Action, StatusQueryPayload, ValidationResult, ActionResult, ActionContext, ErrorCode } from '../types';
-import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
+import {
+  Action,
+  StatusQueryPayload,
+  StatusQueryResultData,
+  ActionResult,
+  ActionContext,
+  ErrorCode,
+} from '../types';
 
 /**
  * Concrete implementation of status_query action for online status retrieval
  */
-export class StatusQueryAction implements Action<StatusQueryPayload> {
-  name: string = 'status_query';
-
-  /**
-   * Validate status query payload
-   */
-  validate(payload: unknown): ValidationResult {
-    if (!payload) {
-      // Payload can be empty or object containing optional sessionId
-      return {
-        valid: true
-      };
-    }
-
-    if (typeof payload !== 'object') {
-      return {
-        valid: false,
-        error: 'Status query payload must be an object or undefined'
-      };
-    }
-
-    const typedPayload = payload as StatusQueryPayload;
-    
-    // Validate optional sessionId if present
-    if (typedPayload.sessionId !== undefined && 
-        (typeof typedPayload.sessionId !== 'string' || !typedPayload.sessionId.trim())) {
-      return {
-        valid: false,
-        error: 'sessionId must be a non-empty string if provided'
-      };
-    }
-
-    return {
-      valid: true
-    };
-  }
+export class StatusQueryAction implements Action<'status_query', StatusQueryPayload, StatusQueryResultData> {
+  name: 'status_query' = 'status_query';
 
   /**
    * Execute status query action
    * Returns online status from health check
    */
-  async execute(payload: StatusQueryPayload, context: ActionContext): Promise<ActionResult> {
+  async execute(payload: StatusQueryPayload, context: ActionContext): Promise<ActionResult<StatusQueryResultData>> {
     const startedAt = Date.now();
     context.logger?.debug('action.status_query.started', {
       sessionId: payload.sessionId,
@@ -74,11 +46,10 @@ export class StatusQueryAction implements Action<StatusQueryPayload> {
       };
     } catch (error) {
       const errorCode = this.errorMapper(error);
-      const errorMessage = getErrorMessage(error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       context.logger?.error('action.status_query.exception', {
         error: errorMessage,
         errorCode,
-        ...getErrorDetailsForLog(error),
         latencyMs: Date.now() - startedAt,
       });
 

@@ -1,7 +1,7 @@
 import {
   Action,
+  CreateSessionResultData,
   CreateSessionPayload,
-  ValidationResult,
   ActionResult,
   ActionContext,
   ErrorCode,
@@ -15,29 +15,13 @@ import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 /**
  * Concrete implementation of create_session action for creating OpenCode sessions
  */
-export class CreateSessionAction implements Action<CreateSessionPayload> {
-  name: string = 'create_session';
-
-  /**
-   * Validate create session payload
-   */
-  validate(payload: unknown): ValidationResult {
-    if (!payload || typeof payload !== 'object') {
-      return {
-        valid: false,
-        error: 'Create session payload must be an object'
-      };
-    }
-
-    return {
-      valid: true
-    };
-  }
+export class CreateSessionAction implements Action<'create_session', CreateSessionPayload, CreateSessionResultData> {
+  name: 'create_session' = 'create_session';
 
   /**
    * Execute create session action
    */
-  async execute(payload: CreateSessionPayload, context: ActionContext): Promise<ActionResult> {
+  async execute(payload: CreateSessionPayload, context: ActionContext): Promise<ActionResult<CreateSessionResultData>> {
     const startedAt = Date.now();
     context.logger?.info('action.create_session.started', {
       payloadKeys: Object.keys(payload ?? {}),
