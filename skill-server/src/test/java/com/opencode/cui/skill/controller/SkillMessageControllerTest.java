@@ -26,7 +26,6 @@ import java.util.List;
 import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentCaptor.forClass;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -190,7 +189,7 @@ class SkillMessageControllerTest {
         when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
 
         var request = new SkillMessageController.PermissionReplyRequest();
-        request.setResponse("once");
+        request.setApproved(true);
 
         var response = controller.replyPermission("1", "1", "p-abc", request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
@@ -202,10 +201,10 @@ class SkillMessageControllerTest {
     }
 
     @Test
-    @DisplayName("replyPermission returns 400 when response is null")
-    void permissionReplyMissingResponse400() {
+    @DisplayName("replyPermission returns 400 when approved is null")
+    void permissionReplyMissingApproved400() {
         var request = new SkillMessageController.PermissionReplyRequest();
-        // response is null
+        // approved is null
 
         var response = controller.replyPermission("1", "1", "p-abc", request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
@@ -221,17 +220,6 @@ class SkillMessageControllerTest {
         var response = controller.replyPermission("1", "1", "p-abc", request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(400, response.getBody().getCode());
-    }
-
-    @Test
-    @DisplayName("replyPermission returns 400 when response is invalid")
-    void permissionReplyInvalidResponse400() {
-        var request = new SkillMessageController.PermissionReplyRequest();
-        request.setResponse("allow");
-
-        ResponseEntity<Map<String, Object>> response = controller.replyPermission(1L, "p-abc", request);
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        assertEquals("Field 'response' must be one of: once, always, reject", response.getBody().get("error"));
     }
 
     @Test

@@ -29,7 +29,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -37,7 +36,6 @@ import java.util.Set;
 @RestController
 @RequestMapping("/api/skill/sessions/{sessionId}")
 public class SkillMessageController {
-    private static final List<String> PERMISSION_REPLY_RESPONSES = List.of("once", "always", "reject");
 
     private static final Set<String> VALID_PERMISSION_RESPONSES = Set.of("once", "always", "reject");
 
@@ -298,12 +296,12 @@ public class SkillMessageController {
                 .type(StreamMessage.Types.PERMISSION_REPLY)
                 .role("assistant")
                 .permissionId(permId)
-                .response(request.getResponse())
+                .response(request.getApproved() ? "approved" : "rejected")
                 .build();
         gatewayRelayService.publishProtocolMessage(sessionId.toString(), replyMessage);
 
-        log.info("Permission reply sent: sessionId={}, permId={}, response={}",
-                sessionId, permId, request.getResponse());
+        log.info("Permission reply sent: sessionId={}, permId={}, approved={}",
+                sessionId, permId, request.getApproved());
 
         return ResponseEntity.ok(ApiResponse.ok(Map.of(
                 "welinkSessionId", sessionId.toString(),
@@ -349,11 +347,11 @@ public class SkillMessageController {
     /**
      * Build the JSON payload for a permission_reply invoke command.
      */
-    private String buildPermissionReplyPayload(String permissionId, String response,
+    private String buildPermissionReplyPayload(String permissionId, boolean approved,
             String toolSessionId) {
         var node = objectMapper.createObjectNode();
         node.put("permissionId", permissionId);
-        node.put("response", response);
+        node.put("approved", approved);
         if (toolSessionId != null) {
             node.put("toolSessionId", toolSessionId);
         }
