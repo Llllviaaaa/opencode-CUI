@@ -24,7 +24,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentCaptor.forClass;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -124,44 +123,27 @@ class SkillMessageControllerTest {
         session.setId(1L);
         session.setAgentId(99L);
         session.setStatus(SkillSession.Status.ACTIVE);
-        session.setToolSessionId("tool-session-1");
         when(sessionService.getSession(1L)).thenReturn(session);
 
         var request = new SkillMessageController.PermissionReplyRequest();
-        request.setResponse("once");
+        request.setApproved(true);
 
         ResponseEntity<Map<String, Object>> response = controller.replyPermission(1L, "p-abc", request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(true, response.getBody().get("success"));
         assertEquals("p-abc", response.getBody().get("permissionId"));
-        assertEquals("once", response.getBody().get("response"));
-
-        var payloadCaptor = forClass(String.class);
-        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("permission_reply"), payloadCaptor.capture());
-        assertTrue(payloadCaptor.getValue().contains("\"response\":\"once\""));
-        assertTrue(payloadCaptor.getValue().contains("\"toolSessionId\":\"tool-session-1\""));
+        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("permission_reply"), any());
         verify(gatewayRelayService).publishProtocolMessage(eq("1"), any());
     }
 
     @Test
-    @DisplayName("replyPermission returns 400 when response is null")
-    void permissionReplyMissingResponse400() {
+    @DisplayName("replyPermission returns 400 when approved is null")
+    void permissionReplyMissingApproved400() {
         var request = new SkillMessageController.PermissionReplyRequest();
-        // response is null
+        // approved is null
 
         ResponseEntity<Map<String, Object>> response = controller.replyPermission(1L, "p-abc", request);
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-    }
-
-    @Test
-    @DisplayName("replyPermission returns 400 when response is invalid")
-    void permissionReplyInvalidResponse400() {
-        var request = new SkillMessageController.PermissionReplyRequest();
-        request.setResponse("allow");
-
-        ResponseEntity<Map<String, Object>> response = controller.replyPermission(1L, "p-abc", request);
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        assertEquals("Field 'response' must be one of: once, always, reject", response.getBody().get("error"));
     }
 
     @Test
@@ -173,7 +155,7 @@ class SkillMessageControllerTest {
         when(sessionService.getSession(1L)).thenReturn(session);
 
         var request = new SkillMessageController.PermissionReplyRequest();
-        request.setResponse("reject");
+        request.setApproved(true);
 
         ResponseEntity<Map<String, Object>> response = controller.replyPermission(1L, "p-abc", request);
         assertEquals(HttpStatus.CONFLICT, response.getStatusCode());

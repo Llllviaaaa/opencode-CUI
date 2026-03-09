@@ -25,14 +25,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
 import java.util.Map;
 
 @Slf4j
 @RestController
 @RequestMapping("/api/skill/sessions/{sessionId}")
 public class SkillMessageController {
-    private static final List<String> PERMISSION_REPLY_RESPONSES = List.of("once", "always", "reject");
 
     private final SkillMessageService messageService;
     private final SkillSessionService sessionService;
@@ -192,16 +190,9 @@ public class SkillMessageController {
             @PathVariable String permId,
             @RequestBody PermissionReplyRequest request) {
 
-        if (request.getResponse() == null || request.getResponse().isBlank()) {
+        if (request.getApproved() == null) {
             return ResponseEntity.badRequest()
-                    .body(Map.of("success", false, "error", "Field 'response' is required"));
-        }
-
-        if (!PERMISSION_REPLY_RESPONSES.contains(request.getResponse())) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of(
-                            "success", false,
-                            "error", "Field 'response' must be one of: once, always, reject"));
+                    .body(Map.of("success", false, "error", "Field 'approved' is required"));
         }
 
         // Verify session exists and is not closed
@@ -223,7 +214,7 @@ public class SkillMessageController {
         }
 
         // Build permission_reply payload
-        String payload = buildPermissionReplyPayload(permId, request.getResponse(),
+        String payload = buildPermissionReplyPayload(permId, request.getApproved(),
                 session.getToolSessionId());
 
         // Send permission_reply invoke to AI-Gateway
@@ -237,17 +228,17 @@ public class SkillMessageController {
                 .type(StreamMessage.Types.PERMISSION_REPLY)
                 .role("assistant")
                 .permissionId(permId)
-                .response(request.getResponse())
+                .response(request.getApproved() ? "approved" : "rejected")
                 .build();
         gatewayRelayService.publishProtocolMessage(sessionId.toString(), replyMessage);
 
-        log.info("Permission reply sent: sessionId={}, permId={}, response={}",
-                sessionId, permId, request.getResponse());
+        log.info("Permission reply sent: sessionId={}, permId={}, approved={}",
+                sessionId, permId, request.getApproved());
 
         return ResponseEntity.ok(Map.of(
                 "success", true,
                 "permissionId", permId,
-                "response", request.getResponse()));
+                "approved", request.getApproved()));
     }
 
     /**
@@ -270,11 +261,11 @@ public class SkillMessageController {
     /**
      * Build the JSON payload for a permission_reply invoke command.
      */
-    private String buildPermissionReplyPayload(String permissionId, String response,
+    private String buildPermissionReplyPayload(String permissionId, boolean approved,
             String toolSessionId) {
         var node = objectMapper.createObjectNode();
         node.put("permissionId", permissionId);
-        node.put("response", response);
+        node.put("approved", approved);
         if (toolSessionId != null) {
             node.put("toolSessionId", toolSessionId);
         }
@@ -299,6 +290,6 @@ public class SkillMessageController {
 
     @Data
     public static class PermissionReplyRequest {
-        private String response;
+        private Boolean approved;
     }
 }
