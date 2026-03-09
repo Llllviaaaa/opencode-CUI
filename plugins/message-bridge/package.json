@@ -1,0 +1,28 @@
+{
+  "name": "@opencode-cui/message-bridge",
+  "version": "1.0.0",
+  "description": "Message Bridge Plugin — unified message interface supporting OpenCode and future AI tools",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && bun test",
+    "test:unit": "npm run build && bun test tests/unit",
+    "test:integration": "npm run build && bun test tests/integration",
+    "test:e2e": "npm run build && bun test tests/e2e",
+    "test:coverage": "npm run build && node ./scripts/check-coverage.mjs",
+    "debug:e2e": "bash ./scripts/debug-e2e.sh",
+    "logs:fetch": "bash ./scripts/fetch-logs.sh"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.2.18",
+    "@opencode-ai/sdk": "^1.2.15",
+    "jsonc-parser": "^3.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

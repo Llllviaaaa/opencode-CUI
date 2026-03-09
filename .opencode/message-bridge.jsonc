@@ -1,0 +1,25 @@
+{
+  "debug": true,
+  "config_version": 1,
+  "enabled": true,
+  "gateway": {
+    "url": "ws://localhost:8081/ws/agent",
+    "deviceName": "Local Machine",
+    "toolType": "opencode",
+    "toolVersion": "1.0.0",
+    "heartbeatIntervalMs": 30000,
+    "reconnect": {
+      "baseMs": 1000,
+      "maxMs": 30000,
+      "exponential": true
+    },
+    "ping": {
+      "intervalMs": 30000,
+      "pongTimeoutMs": 10000
+    }
+  },
+  "auth": {
+    "ak": "test-ak-001",
+    "sk": "test-sk-secret-001"
+  }
+}
