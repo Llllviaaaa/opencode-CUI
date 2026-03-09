@@ -10,6 +10,23 @@ export function generateTestId(prefix = 'test') {
 }
 
 /**
+ * Create a valid envelope object for testing
+ */
+export function createEnvelope(overrides = {}) {
+  return {
+    version: '1.0',
+    messageId: crypto.randomUUID(),
+    timestamp: Date.now(),
+    source: 'message-bridge',
+    agentId: overrides.agentId || 'bridge-test-001',
+    sessionId: overrides.sessionId || null,
+    sequenceNumber: overrides.sequenceNumber || 1,
+    sequenceScope: overrides.sequenceScope || 'session',
+    ...overrides
+  };
+}
+
+/**
  * Create a register message for testing
  */
 export function createRegisterMessage(overrides = {}) {
@@ -28,24 +45,25 @@ export function createRegisterMessage(overrides = {}) {
  * Create an invoke message for testing
  */
 export function createInvokeMessage(overrides = {}) {
-  const action = overrides.action || 'chat';
-  const payload =
-    overrides.payload ||
-    (action === 'chat'
-      ? { toolSessionId: generateTestId('oc-sess'), text: 'Hello' }
-      : action === 'create_session'
-        ? {}
-        : action === 'close_session'
-          ? { toolSessionId: generateTestId('oc-sess') }
-          : action === 'question_reply'
-            ? { toolSessionId: generateTestId('oc-sess'), toolCallId: generateTestId('call'), answer: 'answer' }
-            : { permissionId: generateTestId('perm'), toolSessionId: generateTestId('oc-sess'), response: 'once' });
-
   return {
     type: 'invoke',
-    welinkSessionId: overrides.welinkSessionId || generateTestId('sess'),
-    action,
-    payload,
+    sessionId: overrides.sessionId || generateTestId('sess'),
+    action: overrides.action || 'chat',
+    payload: overrides.payload || { toolSessionId: generateTestId('oc-sess'), text: 'Hello' },
+    timestamp: Date.now(),
+    ...overrides
+  };
+}
+
+/**
+ * Create a tool_done message for testing
+ */
+export function createToolDoneMessage(overrides = {}) {
+  return {
+    type: 'tool_done',
+    sessionId: overrides.sessionId || generateTestId('sess'),
+    payload: overrides.payload || { success: true },
+    envelope: createEnvelope(overrides.envelope),
     timestamp: Date.now(),
     ...overrides
   };
@@ -58,8 +76,8 @@ export function createToolErrorMessage(overrides = {}) {
   return {
     type: 'tool_error',
     error: overrides.error || 'Test error',
-    welinkSessionId: overrides.welinkSessionId || generateTestId('sess'),
-    toolSessionId: overrides.toolSessionId,
+    sessionId: overrides.sessionId || generateTestId('sess'),
+    envelope: createEnvelope(overrides.envelope),
     timestamp: Date.now(),
     ...overrides
   };
@@ -71,6 +89,7 @@ export function createToolErrorMessage(overrides = {}) {
 export function createStatusQueryMessage(overrides = {}) {
   return {
     type: 'status_query',
+    sessionId: overrides.sessionId || null,
     timestamp: Date.now(),
     ...overrides
   };
@@ -83,6 +102,8 @@ export function createStatusResponseMessage(overrides = {}) {
   return {
     type: 'status_response',
     opencodeOnline: overrides.opencodeOnline !== undefined ? overrides.opencodeOnline : true,
+    envelope: createEnvelope(overrides.envelope),
+    sessionId: overrides.sessionId || null,
     timestamp: Date.now(),
     ...overrides
   };
@@ -126,7 +147,7 @@ export function createPermissionReplyPayload(overrides = {}) {
   return {
     permissionId: overrides.permissionId || generateTestId('perm'),
     toolSessionId: overrides.toolSessionId || generateTestId('oc-sess'),
-    response: overrides.response || 'once',
+    response: overrides.response || 'allow',
     ...overrides
   };
 }
@@ -204,13 +225,17 @@ export function createTestConfig(overrides = {}) {
     },
     events: {
       allowlist: [
-        'message.*',
-        'permission.*',
-        'question.*',
-        'session.*',
-        'file.edited',
-        'todo.updated',
-        'command.executed'
+        'message.updated',
+        'message.part.updated',
+        'message.part.delta',
+        'message.part.removed',
+        'session.status',
+        'session.idle',
+        'session.updated',
+        'session.error',
+        'permission.updated',
+        'permission.asked',
+        'question.asked'
       ]
     },
     ...overrides
@@ -235,4 +260,25 @@ export function sanitizeLog(data) {
     return sanitized;
   }
   return data;
+}
+
+/**
+ * Compare two envelopes (ignoring timestamp and messageId)
+ */
+export function compareEnvelopes(env1, env2) {
+  const keysToCompare = [
+    'version',
+    'agentId',
+    'sessionId',
+    'sequenceNumber',
+    'sequenceScope'
+  ];
+
+  for (const key of keysToCompare) {
+    if (env1[key] !== env2[key]) {
+      return false;
+    }
+  }
+
+  return true;
 }
