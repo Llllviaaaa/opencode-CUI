@@ -27,26 +27,15 @@ describe('DefaultActionRouter coverage', () => {
     expect(result.errorCode).toBe('UNSUPPORTED_ACTION');
   });
 
-  test('returns invalid payload and success execution', async () => {
+  test('executes registered action with typed payload routing', async () => {
     const router = new DefaultActionRouter();
     const registry = new DefaultActionRegistry();
     registry.register({
       name: 'x',
-      validate: () => ({ valid: false, error: 'bad input' }),
-      execute: async () => ({ success: true, data: { ok: true } }),
+      execute: async (_payload, ctx) => ({ success: true, data: { id: ctx.agentId } }),
     });
     router.setRegistry(registry);
 
-    const invalid = await router.route('x', {}, context);
-    expect(invalid.success).toBe(false);
-    expect(invalid.errorCode).toBe('INVALID_PAYLOAD');
-
-    registry.unregister('x');
-    registry.register({
-      name: 'x',
-      validate: () => ({ valid: true }),
-      execute: async (_payload, ctx) => ({ success: true, data: { id: ctx.agentId } }),
-    });
     const ok = await router.route('x', { p: 1 }, context);
     expect(ok.success).toBe(true);
     expect(ok.data.id).toBe('agent-1');

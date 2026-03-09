@@ -1,8 +1,12 @@
-import { Action, ActionContext, ActionResult } from '../types';
+import { ActionContext, ActionResult, ActionResultDataByAction, InvokeAction, InvokePayloadByAction } from '../types';
 import { ActionRegistry } from './ActionRegistry';
 
 export interface ActionRouter {
-  route(actionType: string, payload: unknown, context: ActionContext): Promise<ActionResult>;
+  route<K extends InvokeAction>(
+    actionType: K,
+    payload: InvokePayloadByAction[K],
+    context: ActionContext,
+  ): Promise<ActionResult<ActionResultDataByAction[K]>>;
   setRegistry(registry: ActionRegistry): void;
   getRegistry(): ActionRegistry | null;
 }
@@ -18,7 +22,11 @@ export class DefaultActionRouter implements ActionRouter {
     return this.registry;
   }
 
-  async route(actionType: string, payload: unknown, context: ActionContext): Promise<ActionResult> {
+  async route<K extends InvokeAction>(
+    actionType: K,
+    payload: InvokePayloadByAction[K],
+    context: ActionContext,
+  ): Promise<ActionResult<ActionResultDataByAction[K]>> {
     const startedAt = Date.now();
     context.logger?.info('router.route.received', {
       action: actionType,
@@ -35,7 +43,7 @@ export class DefaultActionRouter implements ActionRouter {
       };
     }
 
-    const action = this.registry.get<Action>(actionType);
+    const action = this.registry.get(actionType);
     if (!action) {
       context.logger?.warn('router.route.unsupported_action', { action: actionType });
       return {
@@ -45,24 +53,11 @@ export class DefaultActionRouter implements ActionRouter {
       };
     }
 
-    const validation = action.validate(payload);
-    if (!validation.valid) {
-      context.logger?.warn('router.route.invalid_payload', {
-        action: actionType,
-        error: validation.error,
-      });
-      return {
-        success: false,
-        errorCode: 'INVALID_PAYLOAD',
-        errorMessage: validation.error ?? `Invalid payload for action: ${actionType}`,
-      };
-    }
-
     const result = await action.execute(payload, context);
     context.logger?.info('router.route.completed', {
       action: actionType,
       success: result.success,
-      errorCode: result.errorCode,
+      errorCode: result.success ? undefined : result.errorCode,
       latencyMs: Date.now() - startedAt,
     });
     return result;

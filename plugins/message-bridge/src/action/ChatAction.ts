@@ -2,7 +2,6 @@ import {
   Action,
   ChatPayload,
   OpencodeClient,
-  ValidationResult,
   ActionResult,
   ActionContext,
   ErrorCode,
@@ -11,34 +10,25 @@ import {
   safeExecute,
   stateToErrorCode
 } from '../types';
-import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
 /**
  * Concrete implementation of chat action for sending messages to OpenCode
  */
-export class ChatAction implements Action<ChatPayload> {
-  name: string = 'chat';
+export class ChatAction implements Action<'chat', ChatPayload, void> {
+  name: 'chat' = 'chat';
 
-  private normalizePayload(payload: unknown): { toolSessionId: string; text: string } | null {
-    if (!payload || typeof payload !== 'object') {
-      return null;
+  private formatUnknownError(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
     }
-
-    const p = payload as {
-      toolSessionId?: unknown;
-      text?: unknown;
-    };
-
-    const toolSessionId = typeof p.toolSessionId === 'string' && p.toolSessionId.trim()
-      ? p.toolSessionId
-      : null;
-    const text = typeof p.text === 'string' && p.text.trim().length > 0 ? p.text : null;
-
-    if (!toolSessionId || text === null) {
-      return null;
+    if (typeof error === 'string') {
+      return error;
     }
-
-    return { toolSessionId, text };
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
   }
 
   private getErrorMessageFromResult(data: unknown): string {
@@ -51,7 +41,7 @@ export class ChatAction implements Action<ChatPayload> {
         }
         return String(messageField);
       }
-      return getErrorMessage(errorField);
+      return this.formatUnknownError(errorField);
     }
     return 'Unknown error';
   }
@@ -66,7 +56,7 @@ export class ChatAction implements Action<ChatPayload> {
         path: { id: toolSessionId },
         body: { parts: [{ type: 'text', text }] },
       }),
-      (error) => getErrorMessage(error),
+      (error) => this.formatUnknownError(error),
     );
 
     if (executionResult.success) {
@@ -82,39 +72,13 @@ export class ChatAction implements Action<ChatPayload> {
   }
 
   /**
-   * Validate chat payload
-   */
-  validate(payload: unknown): ValidationResult {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        valid: false,
-        error: 'chat payload requires toolSessionId and text'
-      };
-    }
-
-    return {
-      valid: true
-    };
-  }
-
-  /**
    * Execute chat action
    */
-  async execute(payload: ChatPayload, context: ActionContext): Promise<ActionResult> {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        success: false,
-        errorCode: 'INVALID_PAYLOAD',
-        errorMessage: 'chat payload requires toolSessionId and text'
-      };
-    }
-
+  async execute(payload: ChatPayload, context: ActionContext): Promise<ActionResult<void>> {
     const startedAt = Date.now();
     context.logger?.info('action.chat.started', {
-      toolSessionId: normalized.toolSessionId,
-      messageLength: normalized.text.length,
+      toolSessionId: payload.toolSessionId,
+      messageLength: payload.text.length,
     });
     if (context.connectionState !== 'READY') {
       context.logger?.warn('action.chat.rejected_state', { state: context.connectionState });
@@ -136,21 +100,15 @@ export class ChatAction implements Action<ChatPayload> {
     const client = context.client;
 
     try {
-      const executionResult = await this.sendPrompt(
-        client,
-        normalized.toolSessionId,
-        normalized.text,
-      );
+      const executionResult = await this.sendPrompt(client, payload.toolSessionId, payload.text);
 
       if (executionResult.success) {
         return {
           success: true,
-          data: executionResult.data
         };
       }
 
       context.logger?.error('action.chat.failed', {
-        toolSessionId: normalized.toolSessionId,
         error: executionResult.error,
         latencyMs: Date.now() - startedAt,
       });
@@ -161,12 +119,10 @@ export class ChatAction implements Action<ChatPayload> {
       };
     } catch (error) {
       const errorCode = this.errorMapper(error);
-      const errorMessage = getErrorMessage(error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       context.logger?.error('action.chat.exception', {
-        toolSessionId: normalized.toolSessionId,
         error: errorMessage,
         errorCode,
-        ...getErrorDetailsForLog(error),
         latencyMs: Date.now() - startedAt,
       });
 
