@@ -1,3 +1,4 @@
+import { SUPPORTED_UPSTREAM_EVENT_TYPES } from '../contracts/upstream-events';
 import { BridgeConfig } from '../types';
 
 export interface ConfigValidationError {
@@ -61,6 +62,25 @@ export class ConfigValidator {
     if (c.events?.allowlist !== undefined) {
       if (!Array.isArray(c.events.allowlist)) {
         errors.push({ path: 'events.allowlist', code: 'INVALID_TYPE', message: 'events.allowlist must be an array' });
+      } else {
+        const supported = new Set<string>(SUPPORTED_UPSTREAM_EVENT_TYPES);
+        c.events.allowlist.forEach((item, index) => {
+          if (typeof item !== 'string') {
+            errors.push({
+              path: `events.allowlist[${index}]`,
+              code: 'INVALID_TYPE',
+              message: 'events.allowlist entries must be strings',
+            });
+            return;
+          }
+          if (!supported.has(item)) {
+            errors.push({
+              path: `events.allowlist[${index}]`,
+              code: 'UNSUPPORTED_EVENT',
+              message: `Unsupported event type: ${item}`,
+            });
+          }
+        });
       }
     }
 

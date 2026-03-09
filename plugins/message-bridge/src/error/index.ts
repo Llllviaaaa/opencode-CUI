@@ -1,4 +1,5 @@
-import { ToolErrorPayload } from '../types';
+import { randomUUID } from 'crypto';
+import { ToolErrorMessage, Envelope, MessageSource } from '../types';
 import { FastFailDetector } from './FastFailDetector';
 import { ErrorMapper } from './ErrorMapper';
 
@@ -11,16 +12,26 @@ export class BridgeError extends Error {
 
 export function buildToolError(
   error: string,
-  _agentId: string,
-  welinkSessionId?: string,
-  _sequenceNumber?: number,
-  toolSessionId?: string,
-): ToolErrorPayload {
+  agentId: string,
+  source: MessageSource,
+  sessionId?: string,
+  sequenceNumber?: number
+): ToolErrorMessage {
+  const envelope: Envelope = {
+    version: '1.0',
+    messageId: randomUUID(),
+    timestamp: new Date().toISOString(),
+    source,
+    agentId,
+    sessionId,
+    sequenceNumber: sequenceNumber ?? 1,
+    sequenceScope: sessionId ? 'session' : 'global'
+  };
   return {
     type: 'tool_error',
-    welinkSessionId,
-    toolSessionId,
+    sessionId,
     error,
+    envelope,
   };
 }
 

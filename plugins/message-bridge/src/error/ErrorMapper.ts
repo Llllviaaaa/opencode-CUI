@@ -1,21 +1,21 @@
-import { ErrorCode } from '../types';
+import { ERROR_CODES, type ErrorCode } from '../types';
 
 export class ErrorMapper {
   fromSDKError(error: Error): ErrorCode {
     const errorMessage = error.message.toLowerCase();
     
     if (errorMessage.includes('timeout')) {
-      return 'SDK_TIMEOUT';
+      return ERROR_CODES[1];
     }
     
     if (errorMessage.includes('connection') || errorMessage.includes('network') || errorMessage.includes('fetch')) {
-      return 'SDK_UNREACHABLE';
+      return ERROR_CODES[2];
     }
     
-    return 'SDK_UNREACHABLE';
+    return ERROR_CODES[2];
   }
 
   fromValidationError(errors: string[]): ErrorCode {
-    return 'INVALID_PAYLOAD';
+    return ERROR_CODES[4];
   }
 }

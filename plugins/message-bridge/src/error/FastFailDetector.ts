@@ -1,16 +1,16 @@
-import { ConnectionState, ErrorCode } from '../types';
+import { CONNECTION_STATES, type ConnectionState, type ErrorCode } from '../types';
 
 export class FastFailDetector {
   static readonly connectionCheckTimeoutMs = 100;
 
   checkState(connectionState: ConnectionState): ErrorCode | null {
     switch (connectionState) {
-      case 'DISCONNECTED':
-      case 'CONNECTING':
+      case CONNECTION_STATES[0]:
+      case CONNECTION_STATES[1]:
         return 'GATEWAY_UNREACHABLE';
-      case 'CONNECTED':
+      case CONNECTION_STATES[2]:
         return 'AGENT_NOT_READY';
-      case 'READY':
+      case CONNECTION_STATES[3]:
         return null;
       default:
         return 'AGENT_NOT_READY';
@@ -18,6 +18,6 @@ export class FastFailDetector {
   }
 
   isGatewayReachable(state: ConnectionState): boolean {
-    return state === 'READY' || state === 'CONNECTED';
+    return state === CONNECTION_STATES[3] || state === CONNECTION_STATES[2];
   }
 }
