@@ -7,6 +7,8 @@
   "license": "MIT",
   "scripts": {
     "build": "tsc",
+    "clean:release": "rm -rf ./release",
+    "build:plugin": "npm run build && node ./scripts/build-plugin.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && bun test",
     "test:unit": "npm run build && bun test tests/unit",
@@ -14,7 +16,8 @@
     "test:e2e": "npm run build && bun test tests/e2e",
     "test:coverage": "npm run build && node ./scripts/check-coverage.mjs",
     "debug:e2e": "bash ./scripts/debug-e2e.sh",
-    "logs:fetch": "bash ./scripts/fetch-logs.sh"
+    "logs:fetch": "bash ./scripts/fetch-logs.sh",
+    "verify:opencode-load": "bash ./scripts/verify-opencode-load.sh"
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.2.18",
