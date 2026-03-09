@@ -1,6 +1,6 @@
 # 实施计划
 
-> 版本：1.0  
+> 版本：1.1  
 > 日期：2026-03-09
 
 ## 1. 改造顺序
@@ -8,7 +8,7 @@
 采用自底向上的依赖顺序：
 
 ```text
-Phase 1: 数据层 → Phase 2: 服务层 → Phase 3: 客户端 → Phase 4: 验证
+Phase 1: 数据层 → Phase 2: 服务层 → Phase 3: 客户端 → Phase 4: 验证 → Phase 5: 联调修复
 ```
 
 ## 2. 文件变更清单
@@ -77,3 +77,11 @@ gateway:
 | Phase 4 完成 | `mvn test`      | 全部测试通过                         |
 | 部署前       | Flyway 迁移     | V3 脚本执行成功                      |
 | 部署后       | 手动 E2E        | 正常连接 + 重复连接拒绝 + 身份持久化 |
+
+### Phase 5: 联调修复（Bun 运行时兼容性）
+
+| 操作   | 文件                         | 变更说明                                                           |
+| ------ | ---------------------------- | ------------------------------------------------------------------ |
+| MODIFY | `GatewayConnection.ts`       | `.toString('base64')` → `.toString('base64url')`                   |
+| MODIFY | `AgentWebSocketHandler.java` | `Base64.getDecoder()` → `Base64.getUrlDecoder()`；子协议回显完整值 |
+| MODIFY | `EventRelay.ts`              | 移除 `gateway.send()` 多余的第二个参数（TS2554 修复）              |

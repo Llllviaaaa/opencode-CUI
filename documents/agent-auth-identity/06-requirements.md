@@ -1,6 +1,6 @@
 # 需求文档
 
-> 版本：1.0  
+> 版本：1.1  
 > 日期：2026-03-09
 
 ## 1. 背景
@@ -57,7 +57,8 @@
 
 ### 4.2 协议与实现
 
-- WebSocket 子协议格式：`auth.{base64-json}`
+- WebSocket 子协议格式：`auth.{base64url-json}`（必须用 Base64URL 编码，RFC 4648 §5）
+- 服务端必须回显完整子协议值（RFC 6455 精确匹配要求）
 - 自定义关闭码范围：4000-4999（RFC 6455 允许）
 - 设备绑定服务默认关闭，需显式启用
 - Flyway 管理数据库版本迁移
@@ -66,6 +67,7 @@
 
 - PC Agent 必须同步更新（不兼容旧版 URL 认证）
 - Gateway 不再接受 URL Query Parameter 中的认证参数
+- 客户端运行在 Bun 运行时（OpenCode 使用），对 WebSocket 子协议有严格 RFC 校验
 
 ## 5. 验收标准
 

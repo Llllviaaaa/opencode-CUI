@@ -1,22 +1,22 @@
 # 测试用例文档
 
-> 版本：1.0  
+> 版本：1.1  
 > 日期：2026-03-09
 
 ## 一、后端单元测试
 
 ### 1.1 子协议认证
 
-| 用例 ID    | 场景            | 操作                                                   | 期望结果                    |
-| ---------- | --------------- | ------------------------------------------------------ | --------------------------- |
-| UT-AUTH-01 | 子协议认证成功  | 发送有效 `Sec-WebSocket-Protocol: auth.{valid-base64}` | 握手成功，回应子协议 `auth` |
-| UT-AUTH-02 | 子协议缺失      | 不发送 `Sec-WebSocket-Protocol`                        | 握手拒绝                    |
-| UT-AUTH-03 | 子协议格式错误  | 发送 `Sec-WebSocket-Protocol: invalid`                 | 握手拒绝                    |
-| UT-AUTH-04 | Base64 解码失败 | 发送 `auth.!!!invalid!!!`                              | 握手拒绝                    |
-| UT-AUTH-05 | JSON 格式错误   | Base64 编码的非 JSON 字符串                            | 握手拒绝                    |
-| UT-AUTH-06 | 签名校验失败    | 有效格式但 sign 错误                                   | 握手拒绝                    |
-| UT-AUTH-07 | AK 不存在       | 未注册的 AK                                            | 握手拒绝                    |
-| UT-AUTH-08 | 时间戳过期      | ts 超出窗口期                                          | 握手拒绝                    |
+| 用例 ID    | 场景               | 操作                                                      | 期望结果                                     |
+| ---------- | ------------------ | --------------------------------------------------------- | -------------------------------------------- |
+| UT-AUTH-01 | 子协议认证成功     | 发送有效 `Sec-WebSocket-Protocol: auth.{valid-base64url}` | 握手成功，回应子协议 `auth.{same-base64url}` |
+| UT-AUTH-02 | 子协议缺失         | 不发送 `Sec-WebSocket-Protocol`                           | 握手拒绝                                     |
+| UT-AUTH-03 | 子协议格式错误     | 发送 `Sec-WebSocket-Protocol: invalid`                    | 握手拒绝                                     |
+| UT-AUTH-04 | Base64URL 解码失败 | 发送 `auth.!!!invalid!!!`                                 | 握手拒绝                                     |
+| UT-AUTH-05 | JSON 格式错误      | Base64 编码的非 JSON 字符串                               | 握手拒绝                                     |
+| UT-AUTH-06 | 签名校验失败       | 有效格式但 sign 错误                                      | 握手拒绝                                     |
+| UT-AUTH-07 | AK 不存在          | 未注册的 AK                                               | 握手拒绝                                     |
+| UT-AUTH-08 | 时间戳过期         | ts 超出窗口期                                             | 握手拒绝                                     |
 
 ### 1.2 注册三步校验
 
@@ -60,7 +60,7 @@
 
 | 用例 ID    | 场景           | 操作                          | 期望结果                         |
 | ---------- | -------------- | ----------------------------- | -------------------------------- |
-| CT-CONN-01 | 子协议格式     | connect 时检查 WebSocket 参数 | 子协议包含 `auth.{base64}`       |
+| CT-CONN-01 | 子协议格式     | connect 时检查 WebSocket 参数 | 子协议包含 `auth.{base64url}`    |
 | CT-CONN-02 | Base64 内容    | 解码子协议 payload            | 包含 `ak`, `ts`, `nonce`, `sign` |
 | CT-CONN-03 | URL 无认证参数 | 检查 WebSocket URL            | URL 中不包含 ak/ts/nonce/sign    |
 

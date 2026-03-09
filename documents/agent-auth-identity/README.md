@@ -1,13 +1,15 @@
 # Agent 认证与身份管理 文档包
 
-> 版本：1.0  
+> 版本：1.1  
 > 日期：2026-03-09
 
 本目录用于沉淀 PCAgent 认证方式改造与 Agent 身份持久化的完整设计文档。核心目标是将认证参数从 URL Query Parameter 迁移到 WebSocket 子协议，实施两阶段校验，保障单一活跃连接策略，并通过记录复用实现稳定的 Agent 身份。
 
 ## 锁定决策
 
-- 认证参数通过 `Sec-WebSocket-Protocol: auth.{base64-json}` 传输，不暴露在 URL 中
+- 认证参数通过 `Sec-WebSocket-Protocol: auth.{base64url-json}` 传输，不暴露在 URL 中
+- 必须使用 **Base64URL 编码**（RFC 4648 §5），不能用标准 Base64（Bun 运行时严格校验）
+- 服务端必须回显完整子协议值（RFC 6455 精确匹配要求）
 - 两阶段校验：握手阶段验签 + register 阶段校验设备绑定和重复连接
 - 重复连接策略固定为 **保留旧连接、拒绝新连接**（close code `4409`）
 - Agent 身份持久化：同一 AK + toolType 复用已有 `agent_connection` 记录（UPDATE 而非 INSERT）
