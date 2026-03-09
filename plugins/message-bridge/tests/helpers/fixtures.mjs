@@ -10,24 +10,6 @@ export function generateTestId(prefix = 'test') {
 }
 
 /**
- * @deprecated Historical envelope fixture retained only for legacy tests.
- * Active runtime protocol is flat and does not send envelope.
- */
-export function createEnvelope(overrides = {}) {
-  return {
-    version: '1.0.0',
-    messageId: crypto.randomUUID(),
-    timestamp: new Date().toISOString(),
-    source: 'OPENCODE',
-    agentId: overrides.agentId || 'bridge-test-001',
-    sessionId: overrides.sessionId || null,
-    sequenceNumber: overrides.sequenceNumber || 1,
-    sequenceScope: overrides.sequenceScope || 'session',
-    ...overrides
-  };
-}
-
-/**
  * Create a register message for testing
  */
 export function createRegisterMessage(overrides = {}) {
@@ -253,25 +235,4 @@ export function sanitizeLog(data) {
     return sanitized;
   }
   return data;
-}
-
-/**
- * @deprecated Historical helper for legacy envelope-based tests only.
- */
-export function compareEnvelopes(env1, env2) {
-  const keysToCompare = [
-    'version',
-    'agentId',
-    'sessionId',
-    'sequenceNumber',
-    'sequenceScope'
-  ];
-
-  for (const key of keysToCompare) {
-    if (env1[key] !== env2[key]) {
-      return false;
-    }
-  }
-
-  return true;
 }

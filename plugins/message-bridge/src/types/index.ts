@@ -65,22 +65,8 @@ export const CONNECTION_STATES = ['DISCONNECTED', 'CONNECTING', 'CONNECTED', 'RE
 export type ConnectionState = typeof CONNECTION_STATES[number];
 
 // ---------------------------------------------------------------------------
-// Envelope / Message Types
+// Message Types
 // ---------------------------------------------------------------------------
-
-export const MESSAGE_SOURCES = ['OPENCODE', 'CURSOR', 'WINDSURF'] as const;
-export type MessageSource = typeof MESSAGE_SOURCES[number];
-
-export interface Envelope {
-  version: string;
-  messageId: string;
-  timestamp: string;
-  source: MessageSource;
-  agentId: string;
-  sessionId?: string;
-  sequenceNumber: number;
-  sequenceScope: 'session' | 'agent';
-}
 
 export const UPSTREAM_MESSAGE_TYPES = [
   'register',
@@ -112,17 +98,6 @@ export interface ToolEventMessage {
   type: 'tool_event';
   toolSessionId?: string;
   event: unknown;
-}
-
-/**
- * @deprecated Reserved for legacy compatibility only. The current runtime does
- * not emit tool_done.
- */
-export interface ToolDoneMessage {
-  type: 'tool_done';
-  toolSessionId?: string;
-  result?: unknown;
-  usage?: unknown;
 }
 
 export interface ToolErrorMessage {
@@ -413,15 +388,6 @@ export interface MessageBridgePlugin {
 // Type guards / constants
 // ---------------------------------------------------------------------------
 
-export function hasEnvelope(message: unknown): message is { envelope: Envelope } {
-  return (
-    typeof message === 'object' &&
-    message !== null &&
-    'envelope' in message &&
-    typeof (message as { envelope: unknown }).envelope === 'object'
-  );
-}
-
 export function isUpstreamMessage(message: unknown): message is UpstreamMessage {
   return (
     typeof message === 'object' &&
@@ -462,4 +428,3 @@ export const DEFAULT_CONFIG = {
 } as const;
 
 export const AGENT_ID_PREFIX = 'bridge-';
-export const PROTOCOL_VERSION = '1.0.0';

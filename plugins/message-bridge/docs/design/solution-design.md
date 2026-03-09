@@ -272,41 +272,15 @@ export class EventFilter {
 }
 ```
 
-#### 2.4.2 EnvelopeBuilder
+#### 2.4.2 Event Uplink Message
 
 ```typescript
-// src/event/EnvelopeBuilder.ts
+// runtime uplink shape
 
-export interface Envelope {
-  version: string;                  // "1.0"
-  messageId: string;                // UUID v4
-  timestamp: number;                // Unix timestamp (ms)
-  source: string;                   // "message-bridge"
-  agentId: string;                  // 本地 agentId
-  sessionId?: string;               // 历史业务 sessionId（当前扁平协议不再使用）
-  sequenceNumber: number;           // 递增序号
-  sequenceScope: 'session' | 'global';
-}
-
-export class EnvelopeBuilder {
-  private sequenceCounters: Map<string, number> = new Map();
-  
-  constructor(private agentId: string);
-  
-  /**
-   * 构建历史 envelope（仅兼容旧设计）
-   */
-  build(sessionId?: string): Envelope;
-  
-  /**
-   * 获取下一个 sequence number
-   */
-  private nextSequence(scope: string): number;
-  
-  /**
-   * 重置指定 scope 的计数器
-   */
-  resetSequence(scope: string): void;
+export interface ToolEventMessage {
+  type: 'tool_event';
+  toolSessionId?: string;
+  event: unknown;
 }
 ```
 
@@ -1115,7 +1089,7 @@ export class CloseSessionAction extends BaseAction {
 ┌────────────────────────────▼────────────────────────────────────┐
 │                         Unit                                    │
 │  • 白名单匹配逻辑                                                │
-│  • 扁平协议字段与历史 envelope 兼容夹具                         │
+│  • 扁平协议字段与事件上行约束                                   │
 │  • Action 验证与执行                                             │
 │  • 错误映射                                                      │
 │  • 配置校验                                                      │
@@ -1136,7 +1110,7 @@ export class CloseSessionAction extends BaseAction {
 | 8 | 白名单拒绝路径 | Unit | 不匹配白名单的事件被丢弃并记录 |
 | 9 | Fast Fail 触发 | Unit | 连接异常时立即返回 tool_error |
 | 10 | 扁平协议字段一致性 | Unit | `welinkSessionId/toolSessionId` 路由与响应形态正确 |
-| 11 | 历史 envelope 兼容夹具 | Unit | legacy helper 仅用于旧设计参考，不作为现行协议依据 |
+| 11 | 扁平协议字段一致性 | Unit | `tool_event/status_response/tool_error` 仅包含当前协议字段 |
 | 12 | READY 前 invoke | Unit | 返回 AGENT_NOT_READY |
 | 13 | 配置发现优先级 | Integration | env > project > user > default |
 | 14 | JSONC 解析 | Unit | 支持注释与尾逗号 |
@@ -1163,7 +1137,7 @@ export class CloseSessionAction extends BaseAction {
 |------|------|--------|----------|
 | **M1: 基础设施** | Week 1 | • 项目脚手架<br>• 配置层实现<br>• 错误类型定义 | • typecheck 通过<br>• 配置发现单元测试通过 |
 | **M2: 连接层** | Week 2 | • WebSocket 连接<br>• AK/SK 鉴权<br>• 状态机实现<br>• 指数退避重连 | • 连接建立/断开测试通过<br>• 重连 5 次无异常 |
-| **M3: 事件层** | Week 3 | • 事件订阅<br>• 白名单过滤<br>• Envelope 构建<br>• 事件透传 | • 白名单单元测试通过<br>• Sequence 递增验证通过 |
+| **M3: 事件层** | Week 3 | • 事件订阅<br>• 白名单过滤<br>• Flat tool_event 映射<br>• 事件透传 | • 白名单单元测试通过<br>• 扁平协议字段验证通过 |
 | **M4: Action 层** | Week 4 | • Action Registry<br>• 6 个基础 Action<br>• Permission/Question Reply 对齐 | • 所有 action 单元测试通过<br>• 协议字段校验测试通过 |
 | **M5: 集成与 E2E** | Week 5 | • 模块集成<br>• E2E 测试<br>• 性能基准 | • E2E 冒烟全通过<br>• 覆盖率达标 |
 | **M6: 文档与交付** | Week 6 | • API 文档<br>• 使用指南<br>• 运维手册 | • 文档评审通过 |
@@ -1225,7 +1199,7 @@ export class CloseSessionAction extends BaseAction {
 | SDK | `@opencode-ai/sdk` |
 | READY | 插件状态：已注册成功，可收发业务消息 |
 | Fast Fail | 连接异常立即返回错误，不排队缓冲 |
-| Envelope | 消息信封，包含元数据 |
+| Flat Protocol | 当前边界消息结构，不使用 envelope 包装 |
 | Action | Gateway 下发的指令类型 |
 
 ### 9.3 文档变更记录

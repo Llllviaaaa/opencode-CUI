@@ -1,4 +1,4 @@
-import { ToolErrorPayload, MessageSource } from '../types';
+import { ToolErrorPayload } from '../types';
 import { FastFailDetector } from './FastFailDetector';
 import { ErrorMapper } from './ErrorMapper';
 
@@ -12,7 +12,6 @@ export class BridgeError extends Error {
 export function buildToolError(
   error: string,
   _agentId: string,
-  _source: MessageSource,
   welinkSessionId?: string,
   _sequenceNumber?: number,
   toolSessionId?: string,

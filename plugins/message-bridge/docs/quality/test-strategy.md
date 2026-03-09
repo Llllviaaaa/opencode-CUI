@@ -178,7 +178,7 @@
 | INT-CFG-001 | 配置发现完整链路 | 集成测试 | P0 | §5 FR-MB-09 |
 | E2E-CFG-001 | 配置发现端到端 | E2E Smoke | P0 | §5 FR-MB-09 |
 
-### 2.10 Flat Protocol 与 Legacy Envelope 兼容夹具
+### 2.10 Flat Protocol 上下行约束
 
 | 测试用例 ID | 用例名称 | 测试类型 | 优先级 | 关联 PRD 章节 |
 |-------------|----------|----------|--------|---------------|
@@ -187,7 +187,7 @@
 | UT-ENVL-003 | tool_error 使用扁平路由字段 | 单元测试 | P0 | §4.4 |
 | UT-ENVL-004 | status_response 仅含 opencodeOnline | 单元测试 | P0 | §4.4 |
 | UT-ENVL-005 | tool_done 不再作为活跃上行消息 | 单元测试 | P0 | §4.4 |
-| UT-ENVL-006 | legacy envelope helper 显式标记弃用 | 单元测试 | P1 | §4.4 |
+| UT-ENVL-006 | tool_event 不透传 sessionId | 单元测试 | P1 | §4.4 |
 | INT-ENVL-001 | 扁平协议完整链路 | 集成测试 | P0 | §4.4 |
 | E2E-ENVL-001 | 扁平协议端到端验证 | E2E Smoke | P0 | §4.4 |
 
@@ -456,80 +456,96 @@ describe('UT-EVNT-002', () => {
 
 ---
 
-### 3.3 Envelope 测试 (UT-ENVL)
+### 3.3 Flat Protocol 测试 (UT-ENVL)
 
-#### UT-ENVL-008: sequenceNumber 递增
+#### UT-ENVL-008: `tool_event` 不携带 `sessionId` 或 `envelope`
 
 **前置条件:**
-- EnvelopeBuilder 实例已创建
-- agentId = "bridge-test-001"
+- `BridgeRuntime` 实例已创建
+- `gatewayConnection.send()` 已 mock
 
 **测试步骤:**
-1. 连续调用 build() 5 次，使用相同 sessionId
-2. 记录每次返回的 sequenceNumber
-3. 验证递增规律
+1. 将 runtime 状态置为 `READY`
+2. 设置允许 `message.*` 的事件白名单
+3. 发送一个 `message.delta` 事件
+4. 检查上行消息字段
 
 **预期结果:**
-- sequenceNumber 依次为: 1, 2, 3, 4, 5
-- 每次递增 1
+- 发送一条 `tool_event`
+- 消息仅包含当前扁平协议字段
+- `sessionId` 与 `envelope` 均不存在
 
 **测试代码:**
 ```typescript
 describe('UT-ENVL-008', () => {
-  it('should increment sequenceNumber within session', () => {
-    const builder = new EnvelopeBuilder('bridge-test-001');
-    const sessionId = 'sess-123';
-    
-    const numbers: number[] = [];
-    for (let i = 0; i < 5; i++) {
-      const envelope = builder.build(sessionId);
-      numbers.push(envelope.sequenceNumber);
-    }
-    
-    expect(numbers).toEqual([1, 2, 3, 4, 5]);
+  it('should forward flat tool_event fields only', async () => {
+    const runtime = new BridgeRuntime({ client: {} });
+    const sent: unknown[] = [];
+
+    runtime.gatewayConnection = { send: (msg: unknown) => sent.push(msg) };
+    runtime.eventFilter = new EventFilter(['message.*']);
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleEvent({
+      type: 'message.delta',
+      properties: { sessionId: 'tool-1' },
+      text: 'hello',
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ type: 'tool_event' });
+    expect((sent[0] as Record<string, unknown>).sessionId).toBeUndefined();
+    expect((sent[0] as Record<string, unknown>).envelope).toBeUndefined();
   });
 });
 ```
 
 ---
 
-#### UT-ENVL-010: 同 session sequence 递增，不同 session 独立
+#### UT-ENVL-010: allowlist 拒绝仅记录日志，不发送上行消息
 
 **前置条件:**
-- EnvelopeBuilder 实例已创建
+- `BridgeRuntime` 实例已创建
+- 日志 sink 与 `gatewayConnection.send()` 已 mock
 
 **测试步骤:**
-1. 为 session-A 构建 3 个 envelope
-2. 为 session-B 构建 3 个 envelope
-3. 再次为 session-A 构建 2 个 envelope
-4. 验证 sequenceNumber 规律
+1. 将 runtime 状态置为 `READY`
+2. allowlist 仅允许 `session.idle`
+3. 发送一个 `session.created` 事件
+4. 检查日志与发送记录
 
 **预期结果:**
-- session-A: 1, 2, 3, 4, 5
-- session-B: 1, 2, 3
+- 不发送 `tool_event`
+- 记录 `event.rejected_allowlist`
+- 不发送 `tool_error`
 
 **测试代码:**
 ```typescript
 describe('UT-ENVL-010', () => {
-  it('should track sequence per session independently', () => {
-    const builder = new EnvelopeBuilder('bridge-test-001');
-    
-    const sessionA = 'sess-a';
-    const sessionB = 'sess-b';
-    
-    // Session A: 1, 2, 3
-    expect(builder.build(sessionA).sequenceNumber).toBe(1);
-    expect(builder.build(sessionA).sequenceNumber).toBe(2);
-    expect(builder.build(sessionA).sequenceNumber).toBe(3);
-    
-    // Session B: 1, 2, 3
-    expect(builder.build(sessionB).sequenceNumber).toBe(1);
-    expect(builder.build(sessionB).sequenceNumber).toBe(2);
-    expect(builder.build(sessionB).sequenceNumber).toBe(3);
-    
-    // Session A continues: 4, 5
-    expect(builder.build(sessionA).sequenceNumber).toBe(4);
-    expect(builder.build(sessionA).sequenceNumber).toBe(5);
+  it('should log and drop rejected events', async () => {
+    const logs: unknown[] = [];
+    const sent: unknown[] = [];
+    const runtime = new BridgeRuntime({
+      client: {
+        app: {
+          log: async (entry: unknown) => {
+            logs.push(entry);
+            return true;
+          },
+        },
+      },
+    });
+
+    runtime.gatewayConnection = { send: (msg: unknown) => sent.push(msg) };
+    runtime.eventFilter = new EventFilter(['session.idle']);
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleEvent({ type: 'session.created' });
+
+    expect(sent).toHaveLength(0);
+    expect(
+      logs.some((entry) => (entry as { body?: { message?: string } }).body?.message === 'event.rejected_allowlist'),
+    ).toBe(true);
   });
 });
 ```
@@ -581,7 +597,6 @@ describe('UT-FAIL-001', () => {
 
 **前置条件:**
 - FastFailDetector 实例已创建
-- EnvelopeBuilder 实例已创建
 
 **测试步骤:**
 1. 测试 DISCONNECTED 状态
@@ -1256,7 +1271,7 @@ $ time curl -X POST http://skill-server/api/invoke \
 | 事件层修改 | UT-EVNT-*, INT-EVNT-*, E2E-EVNT-* | 全自动 |
 | Action 层修改 | UT-ACTN-*, UT-CHAT-*, UT-SESN-*, UT-PERM-*, UT-STAT-* | 全自动 |
 | 错误层修改 | UT-FAIL-*, INT-FAIL-*, E2E-FAIL-* | 全自动 |
-| Envelope 修改 | UT-ENVL-*, INT-ENVL-*, E2E-ENVL-* | 全自动 |
+| Flat Protocol 修改 | UT-ENVL-*, INT-ENVL-*, E2E-ENVL-* | 全自动 |
 | SDK 版本升级 | 全部 E2E 测试 | 全自动 + 手动验证 |
 | Gateway 协议变更 | 全部测试 | 全自动 + 手动验证 |
 
@@ -1460,7 +1475,7 @@ export class MockOpenCodeSDK {
 | §5 FR-MB-07 | Fast Fail | 8 | 1 | 1 |
 | §5 FR-MB-08 | 注册与状态查询 | 5 | 2 | 2 |
 | §5 FR-MB-09 | 配置文件获取 | 10 | 1 | 1 |
-| §4.4 | Envelope 规范 | 11 | 1 | 1 |
+| §4.4 | Flat Protocol 规范 | 11 | 1 | 1 |
 
 ### 9.3 参考文档
 

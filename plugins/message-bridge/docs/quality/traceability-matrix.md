@@ -15,9 +15,9 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 
 | Status | Count |
 |--------|-------|
-| Implemented | 42 |
+| Implemented | 43 |
 | Partial | 4 |
-| Gap | 3 |
+| Gap | 2 |
 
 ---
 
@@ -52,15 +52,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 | FR-MB-02 | Default allowlist: message.*, permission.*, question.*, session.*, file.edited, todo.updated, command.executed | **Implemented** | `src/event/EventFilter.ts` (default constructor values); `src/types/index.ts` (`DEFAULT_EVENT_ALLOWLIST`) | Exact match to PRD §FR-MB-02. |
 | §4.4 | Flat upstream messages without envelope | **Implemented** | `src/runtime/BridgeRuntime.ts`, `src/types/index.ts` | Active runtime sends flat messages and does not attach envelope. |
 | §4.2 | Upstream message types: register, heartbeat, tool_event, tool_error, session_created, status_response | **Implemented** | `src/types/index.ts`, `src/runtime/BridgeRuntime.ts` | Current runtime emits 6 active upstream message types. |
-| FR-MB-02 | Drop unsupported events (no tool_error for allowlist rejects) | **Gap** | `src/event/EventRelay.ts` (lines 69-71): silently returns if not allowed | PRD requires recording `unsupported_event`. Currently silent drop. |
-
-### Event Relay Gaps
-
-| Gap | Description | Recommendation |
-|-----|-------------|----------------|
-| unsupported_event logging | PRD §FR-MB-02 requires recording unsupported_event when event not in allowlist | Add logging/metrics in `EventRelay.ts` handleEvent for rejected events |
-
----
+| FR-MB-02 | Drop unsupported events (no tool_error for allowlist rejects) | **Implemented** | `src/runtime/BridgeRuntime.ts`: records `event.rejected_allowlist` and returns without `tool_error` | Current runtime logs rejected events and keeps the upstream wire contract flat. |
 
 ## 3. Actions (6 Required)
 
@@ -98,7 +90,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 | FR-MB-07 | Agent not ready: CONNECTED state | **Implemented** | `src/error/FastFailDetector.ts` (lines 11-12): returns 'AGENT_NOT_READY' for CONNECTED | Logic matches PRD. |
 | FR-MB-07 | SDK timeout default 10s | **Implemented** | `src/types/index.ts` (line 754): `DEFAULT_CONFIG.sdkTimeoutMs = 10000` | Default matches PRD. Configurable. |
 | FR-MB-07 | SDK unreachable detection | **Implemented** | `src/types/index.ts` (lines 534-549): `isOpencodeClient()` type guard; actions check client validity | Actions return SDK_UNREACHABLE if client invalid. |
-| FR-MB-07 | No queuing, no buffering | **Implemented** | `src/event/EventRelay.ts` (lines 64-67): events dropped if not ready; no queue | Architecture confirms no buffering per PRD Fast Fail. |
+| FR-MB-07 | No queuing, no buffering | **Implemented** | `src/runtime/BridgeRuntime.ts`: events are dropped when not ready; `src/connection/GatewayConnection.ts`: send rejects when disconnected | Architecture confirms no buffering per PRD Fast Fail. |
 | §7 | Error codes: GATEWAY_UNREACHABLE, SDK_TIMEOUT, SDK_UNREACHABLE, AGENT_NOT_READY, INVALID_PAYLOAD, UNSUPPORTED_ACTION | **Implemented** | `src/types/index.ts` (lines 440-446): `ErrorCode` union type with all 6 codes | Minimum set from PRD §7 complete. |
 | §7 | Error mapping from connection state | **Implemented** | `src/types/index.ts` (lines 455-465): `stateToErrorCode()` function | Maps all states to appropriate error codes. |
 | §7 | tool_error structure with flat routing fields | **Implemented** | `src/types/index.ts` | Plugin wire payload uses type, optional `welinkSessionId` / `toolSessionId`, and `error`. |
@@ -180,7 +172,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 | Gap | Description | Recommendation |
 |-----|-------------|----------------|
 | Config validation tests | No explicit unit tests for ConfigResolver/ConfigValidator in examined test files | Add tests for config loading priority, JSONC parsing, version validation |
-| E2E test content | File exists but content not verified | Ensure E2E tests cover full flow: connect, register, action invoke, event relay |
+| E2E test content | File exists but content not verified | Ensure E2E tests cover full flow: connect, register, action invoke, and event uplink |
 
 ---
 
@@ -190,7 +182,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 |---------|-------------|--------|----------------|-------|
 | §2.2 | In Scope items | **Implemented** | All items have corresponding implementations | WS auth, heartbeat, invoke/status_query, allowlist, permission_reply response-only, `abort_session` + `close_session`, config, tests. |
 | §2.3 | Out of Scope respected | **Implemented** | No Gateway/Skill-Server modifications | Plugin-only implementation confirmed. |
-| §3 | Design principles: transparent pass-through, extensible, SDK-aligned | **Implemented** | Architecture and implementation follow principles | EventRelay passes through; ActionRegistry is extensible; types align with SDK. |
+| §3 | Design principles: transparent pass-through, extensible, SDK-aligned | **Implemented** | Architecture and implementation follow principles | `BridgeRuntime.handleEvent()` preserves event payloads; ActionRegistry is extensible; types align with SDK. |
 | §4.3 | Downstream types: invoke, status_query | **Implemented** | `src/types/index.ts` (lines 191-193, 267-281): `DownstreamMessageType`, `InvokeMessage`, `StatusQueryMessage` | Both message types defined. |
 | NFR-MB-03 | SK/signature not logged | **Partial** | `src/connection/AkSkAuth.ts` (lines 40-42): `getSecretKey()` returns sk | No explicit logging seen, but no redaction logic either. Verify no logs include sk. |
 
@@ -212,7 +204,7 @@ This document maps implemented features to PRD v1.4 requirements with status ind
 | Component | Key Files |
 |-----------|-----------|
 | Connection | `src/connection/GatewayConnection.ts`, `StateManager.ts`, `AkSkAuth.ts` |
-| Event | `src/event/EventRelay.ts`, `EventFilter.ts`, `EnvelopeBuilder.ts` |
+| Event | `src/runtime/BridgeRuntime.ts`, `src/event/EventFilter.ts` |
 | Action | `src/action/ActionRouter.ts`, `ActionRegistry.ts`, `*Action.ts` (6 files) |
 | Error | `src/error/FastFailDetector.ts`, `ErrorMapper.ts` |
 | Config | `src/config/ConfigResolver.ts`, `ConfigValidator.ts`, `JsoncParser.ts` |

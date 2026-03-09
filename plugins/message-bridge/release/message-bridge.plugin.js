@@ -876,7 +876,7 @@ class QuestionReplyAction {
     const listResult = await getFn({ url: "/question" });
     const pendingQuestions = this.extractResultData(listResult);
     const requests = Array.isArray(pendingQuestions) ? pendingQuestions.filter((item) => item !== null && typeof item === "object") : [];
-    const matched = requests.find((request) => {
+    const matchedRequests = requests.filter((request) => {
       const sessionID = this.readString(request.sessionID);
       if (sessionID !== toolSessionId) {
         return false;
@@ -887,7 +887,13 @@ class QuestionReplyAction {
       const tool = this.readRecord(request.tool);
       return this.readString(tool?.callID) === toolCallId;
     });
-    return this.readString(matched?.id);
+    if (toolCallId) {
+      return this.readString(matchedRequests[0]?.id);
+    }
+    if (matchedRequests.length !== 1) {
+      return;
+    }
+    return this.readString(matchedRequests[0]?.id);
   }
   validate(payload) {
     const normalized = this.normalizePayload(payload);
@@ -937,7 +943,7 @@ class QuestionReplyAction {
         return {
           success: false,
           errorCode: "INVALID_PAYLOAD",
-          errorMessage: `Unable to resolve pending question request for toolSessionId=${normalized.toolSessionId}, toolCallId=${normalized.toolCallId ?? "unknown"}`
+          errorMessage: normalized.toolCallId ? `Unable to resolve pending question request for toolSessionId=${normalized.toolSessionId}, toolCallId=${normalized.toolCallId}` : `Unable to resolve a unique pending question request for toolSessionId=${normalized.toolSessionId}`
         };
       }
       const rawClient = this.readRecord(client._client);
@@ -2527,9 +2533,7 @@ class DefaultAkSkAuth {
   generateQueryParams() {
     const ts = Math.floor(Date.now() / 1000).toString();
     const nonce = randomUUID3();
-    const sign = createHmac("sha256", this._secretKey).update(`${this._accessKey}
-${ts}
-${nonce}`).digest("base64");
+    const sign = createHmac("sha256", this._secretKey).update(`${this._accessKey}${ts}${nonce}`).digest("base64");
     return new URLSearchParams({
       ak: this._accessKey,
       ts,
@@ -3585,5 +3589,5 @@ export {
   MessageBridgePlugin
 };
 
-//# debugId=357ABA005478B2C264756E2164756E21
+//# debugId=DC0DD91A53DE23EF64756E2164756E21
 //# sourceMappingURL=message-bridge.plugin.js.map

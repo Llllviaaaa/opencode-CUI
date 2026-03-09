@@ -7,7 +7,7 @@
 **Related:** `../architecture/overview.md`, `../design/solution-design.md`, `./traceability-matrix.md`  
 **Scope**: `plugins/message-bridge`  
 
-This document validates architecture alignment for key design decisions: pass-through behavior, action routing, fast-fail implementation, close-to-abort semantics, permission dual format support, and test framework choices.
+This document validates architecture alignment for key design decisions: pass-through behavior, action routing, fast-fail implementation, close-to-delete semantics, canonical permission reply support, and test framework choices.
 
 ---
 
@@ -18,8 +18,8 @@ This document validates architecture alignment for key design decisions: pass-th
 | Pass-Through (Transparent Relay) | **VALIDATED** | 4 |
 | Action Routing (Registry Pattern) | **VALIDATED** | 5 |
 | Fast Fail | **VALIDATED** | 6 |
-| Close -> Abort (Not Delete) | **VALIDATED** | 3 |
-| Permission Dual Format | **VALIDATED** | 5 |
+| Close -> Delete | **VALIDATED** | 3 |
+| Permission Canonical Protocol | **VALIDATED** | 5 |
 | Test Framework (bun test + coverage gate) | **VALIDATED** | 4 |
 
 **Overall**: Architecture implementation aligns with design documents. All core principles have concrete code evidence.
@@ -29,23 +29,23 @@ This document validates architecture alignment for key design decisions: pass-th
 ## 2. Pass-Through Validation (Transparent Relay)
 
 ### Principle
-Per `overview.md` §1.2 and §1.3: Events must be relayed transparently without business transformation. Only envelope metadata is added.
+Per `overview.md` §1.2 and §1.3: Events must be relayed transparently without business transformation. Runtime may add flat routing fields, but does not wrap events in `envelope`.
 
 ### Evidence
 
 | Location | Lines | Evidence |
 |----------|-------|----------|
-| `src/event/EventRelay.ts` | 44-48 | Event subscription: `this.opencode.event.subscribe((event) => this.handleEvent(event))` - raw event passed through |
-| `src/event/EventRelay.ts` | 76-82 | Message construction: `event` field contains raw event unchanged; only envelope added |
-| `src/event/EventFilter.ts` | 22-34 | Filter only checks allowlist, does not modify event content |
-| `src/event/EnvelopeBuilder.ts` | 19-30 | Only adds envelope metadata (version, timestamp, ids, sequence); event body untouched |
+| `src/runtime/BridgeRuntime.ts` | current | `handleEvent()` forwards the original `event` object as `tool_event.event` without business mutation |
+| `src/runtime/BridgeRuntime.ts` | current | Upstream message shape is flat: `type`, optional `toolSessionId`, and raw `event` |
+| `src/event/EventFilter.ts` | current | Filter only checks allowlist, does not modify event content |
+| `src/types/index.ts` | current | Active upstream types omit `envelope` and `tool_done` |
 
 ### Validation Result: **PASSED**
 
 The implementation correctly:
 1. Subscribes to raw OpenCode events without preprocessing
 2. Filters by type only (no content inspection)
-3. Adds envelope wrapper without event mutation
+3. Adds only flat routing fields without event mutation
 4. Sends original event in `tool_event` message
 
 ---
@@ -133,7 +133,7 @@ Per `overview.md` §3.5 and `../product/prd.md` §FR-MB-07: Connection failures 
 
 | Location | Lines | Evidence |
 |----------|-------|----------|
-| `src/event/EventRelay.ts` | 64-67 | `if (!this.stateManager.isReady()) return;` - events dropped, not queued |
+| `src/runtime/BridgeRuntime.ts` | current | `handleEvent()` returns early when not READY or no connection is available |
 | `src/connection/GatewayConnection.ts` | 111-117 | `send()` throws if not connected - no internal queue |
 
 #### 4.4 Error Code Mapping
@@ -153,36 +153,35 @@ The implementation correctly:
 
 ---
 
-## 5. Close Session -> Abort Validation
+## 5. Close Session -> Delete Validation
 
 ### Principle
-Per `../product/prd.md` §FR-MB-05 and `overview.md` §3.4.3: `close_session` action must use `session.abort()`, NOT `session.delete()`.
+Per `../product/prd.md` §FR-MB-05 and `overview.md` §3.4.3: `close_session` action must use `session.delete()`, while `abort_session` remains mapped to `session.abort()`.
 
 ### Evidence
 
 | Location | Lines | Evidence |
 |----------|-------|----------|
-| `src/action/CloseSessionAction.ts` | 14-15 | Comment: "Concrete implementation of close_session action (PRD §FR-MB-05: uses abort semantics, not delete)" |
-| `src/action/CloseSessionAction.ts` | 45 | Comment: "Execute close session action (using abort semantics - PRD §FR-MB-05)" |
-| `src/action/CloseSessionAction.ts` | 70-75 | Code: `client.session.abort({ sessionId: payload.sessionId })` - abort called |
-| `src/action/CloseSessionAction.ts` | 1-144 | **No delete method called anywhere in file** |
+| `src/action/CloseSessionAction.ts` | current | Class comment states `close_session` maps to `session.delete` |
+| `src/action/CloseSessionAction.ts` | current | Runtime checks `typeof client.session.delete === 'function'` before execution |
+| `src/action/CloseSessionAction.ts` | current | Code calls `client.session.delete({ path: { id: toolSessionId } })` |
 
 ### Verification
 
 Search for delete references in CloseSessionAction:
-- `abort`: 2 references (lines 14, 71)
-- `delete`: 0 references
+- `delete`: active execution path present
+- `abort`: no longer used in `close_session`
 
 ### Validation Result: **PASSED**
 
-The implementation correctly uses `session.abort()` as required. No `delete` semantics present.
+The implementation correctly uses `session.delete()` for `close_session`. `abort_session` remains the separate abort path.
 
 ---
 
 ## 6. Permission Reply Protocol Validation
 
 ### Principle
-Per PRD §FR-MB-06: `permission_reply` uses the canonical protocol field `response: once|always|reject`.
+Per PRD §FR-MB-06: `permission_reply` uses the canonical protocol field `response: once|always|reject`. Legacy payload drift is rejected during runtime parsing.
 
 ### Evidence
 
@@ -277,7 +276,6 @@ Per `overview.md` §8 and `../product/prd.md` §9: Tests use `bun test`, coverag
 | FastFailDetector | Yes (lines 294-310) | - |
 | ErrorMapper | Yes (lines 312-330) | - |
 | EventFilter | Yes (lines 332-355) | - |
-| EnvelopeBuilder | Yes (lines 357-404) | - |
 | ActionRegistry | - | Yes (lines 7-28) |
 | ActionRouter | - | Yes (lines 30-67) |
 
@@ -298,13 +296,13 @@ The implementation correctly:
 |--------------------------|---------------------|-----------|
 | `overview.md` §3.1 Config Layer | `src/config/ConfigResolver.ts`, `ConfigValidator.ts` | Direct mapping |
 | `overview.md` §3.2 Connection Layer | `src/connection/GatewayConnection.ts`, `StateManager.ts`, `AkSkAuth.ts` | Direct mapping |
-| `overview.md` §3.3 Event Layer | `src/event/EventRelay.ts`, `EventFilter.ts`, `EnvelopeBuilder.ts` | Direct mapping |
+| `overview.md` §3.3 Event Layer | `src/runtime/BridgeRuntime.ts`, `EventFilter.ts` | Direct mapping |
 | `overview.md` §3.4 Action Layer | `src/action/ActionRouter.ts`, `ActionRegistry.ts`, `*Action.ts` | Direct mapping |
 | `overview.md` §3.5 Error Layer | `src/error/FastFailDetector.ts`, `ErrorMapper.ts` | Direct mapping |
 | `solution-design.md` §2.5.2 Built-in Actions | 5 action files in `src/action/` | All 5 implemented |
 | `solution-design.md` §3.1 Fast Fail | `src/error/FastFailDetector.ts` | Direct implementation |
-| `solution-design.md` §6.1.1 Permission Reply | `src/action/PermissionReplyAction.ts` | Dual format supported |
-| `solution-design.md` §6.1.2 Close Session | `src/action/CloseSessionAction.ts` | Abort semantics confirmed |
+| `solution-design.md` §6.1.1 Permission Reply | `src/action/PermissionReplyAction.ts` | Canonical `response` protocol enforced |
+| `solution-design.md` §6.1.2 Close Session | `src/action/CloseSessionAction.ts` | Delete semantics confirmed |
 
 ---
 
@@ -321,8 +319,6 @@ The implementation correctly:
 
 | Gap | Impact | Recommendation |
 |-----|--------|----------------|
-| HMAC-SHA256 signature not implemented | Auth uses Bearer token instead of PRD query params | Implement in `AkSkAuth.ts` if gateway requires |
-| unsupported_event not logged | Events silently dropped when not in allowlist | Add logging in `EventRelay.ts` |
 | Config tests not found | Config logic not explicitly unit tested | Add tests for ConfigResolver/Validator |
 
 ---
@@ -333,10 +329,10 @@ The implementation correctly:
 
 The `plugins/message-bridge` implementation aligns with the architecture design documents:
 
-1. **Pass-Through**: Events are relayed transparently with only envelope metadata added
+1. **Pass-Through**: Events are relayed transparently with flat routing fields only
 2. **Action Routing**: Registry pattern enables extension without core modification
 3. **Fast Fail**: 100ms detection, immediate error return, no queuing
-4. **Close->Abort**: Uses `session.abort()`, no `delete` called
+4. **Close->Delete**: Uses `session.delete()` for `close_session`
 5. **Permission Protocol Alignment**: Uses canonical `response` values and rejects legacy payloads
 6. **Test Framework**: bun test with coverage threshold gate
 
