@@ -31,7 +31,7 @@ public class SkillSessionService {
      * Create a new skill session.
      */
     @Transactional
-    public SkillSession createSession(Long userId, String ak,
+    public SkillSession createSession(String userId, String ak,
             String title, String imGroupId) {
         SkillSession session = SkillSession.builder()
                 .userId(userId)
@@ -47,19 +47,24 @@ public class SkillSessionService {
     }
 
     /**
-     * List sessions for a user with pagination.
-     * If statuses is null or empty, returns all sessions for the user.
+     * List sessions for a user with pagination and optional filters.
      */
     @Transactional(readOnly = true)
-    public PageResult<SkillSession> listSessions(Long userId, List<SkillSession.Status> statuses,
-            int page, int size) {
+    public PageResult<SkillSession> listSessions(String userId, String ak, String imGroupId,
+            String status, int page, int size) {
         int offset = page * size;
-        if (statuses != null && !statuses.isEmpty()) {
-            List<String> statusNames = statuses.stream()
-                    .map(SkillSession.Status::name)
-                    .collect(Collectors.toList());
-            List<SkillSession> content = sessionRepository.findByUserIdAndStatusIn(userId, statusNames, offset, size);
-            long total = sessionRepository.countByUserIdAndStatusIn(userId, statusNames);
+        List<String> statusNames = null;
+        if (status != null && !status.isBlank()) {
+            statusNames = List.of(status);
+        }
+        boolean hasFilters = (ak != null && !ak.isBlank())
+                || (imGroupId != null && !imGroupId.isBlank())
+                || statusNames != null;
+        if (hasFilters) {
+            List<SkillSession> content = sessionRepository.findByUserIdFiltered(
+                    userId, ak, imGroupId, statusNames, offset, size);
+            long total = sessionRepository.countByUserIdFiltered(
+                    userId, ak, imGroupId, statusNames);
             return new PageResult<>(content, total, page, size);
         }
         List<SkillSession> content = sessionRepository.findByUserId(userId, offset, size);
@@ -84,7 +89,7 @@ public class SkillSessionService {
      * endpoint to resume all live sessions on connect.
      */
     @Transactional(readOnly = true)
-    public List<SkillSession> findActiveByUserId(Long userId) {
+    public List<SkillSession> findActiveByUserId(String userId) {
         return sessionRepository.findActiveByUserId(userId);
     }
 

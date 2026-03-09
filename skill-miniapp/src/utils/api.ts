@@ -62,9 +62,9 @@ async function request<T>(
 
     const errorText =
       body !== null &&
-      typeof body === 'object' &&
-      'errormsg' in body &&
-      typeof body.errormsg === 'string'
+        typeof body === 'object' &&
+        'errormsg' in body &&
+        typeof body.errormsg === 'string'
         ? body.errormsg
         : res.statusText;
 
@@ -192,11 +192,14 @@ interface PaginatedResponse<T> {
 
 interface BackendSession {
   welinkSessionId?: string | number | null;
+  userId?: string | null;
+  ak?: string | null;
   title?: string | null;
+  imGroupId?: string | null;
   status?: string | null;
+  toolSessionId?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
-  lastActiveAt?: string | null;
 }
 
 function normalizeSessionStatus(status: string | null | undefined): Session['status'] {
@@ -214,10 +217,14 @@ function normalizeSession(raw: BackendSession): Session {
   const createdAt = raw.createdAt ?? new Date().toISOString();
   return {
     id: raw.welinkSessionId != null ? String(raw.welinkSessionId) : '',
+    userId: raw.userId ?? undefined,
+    ak: raw.ak ?? undefined,
     title: raw.title ?? '',
+    imGroupId: raw.imGroupId ?? undefined,
     status: normalizeSessionStatus(raw.status),
+    toolSessionId: raw.toolSessionId ?? undefined,
     createdAt,
-    lastActiveAt: raw.updatedAt ?? raw.lastActiveAt ?? createdAt,
+    updatedAt: raw.updatedAt ?? createdAt,
   };
 }
 

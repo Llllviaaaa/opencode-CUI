@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -34,14 +34,16 @@ class AgentQueryControllerTest {
     @DisplayName("getOnlineAgents returns 200 for cookie-authenticated user")
     void getOnlineAgentsWithCookie() {
         List<Map<String, Object>> agents = List.of(Map.of("ak", "ak-1"));
-        when(gatewayApiClient.getOnlineAgentsByUserId(10001L)).thenReturn(agents);
+        when(gatewayApiClient.getOnlineAgentsByUserId("10001")).thenReturn(agents);
 
         var response = controller.getOnlineAgents("10001");
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertEquals("ak-1", response.getBody().get(0).get("ak"));
-        assertEquals("ak-1", response.getBody().get(0).get("akId"));
-        verify(gatewayApiClient).getOnlineAgentsByUserId(10001L);
+        assertNotNull(response.getBody());
+        assertEquals(0, response.getBody().getCode());
+        assertEquals("ak-1", response.getBody().getData().get(0).get("ak"));
+        assertEquals("ak-1", response.getBody().getData().get(0).get("akId"));
+        verify(gatewayApiClient).getOnlineAgentsByUserId("10001");
     }
 
     @Test
@@ -50,6 +52,7 @@ class AgentQueryControllerTest {
         var response = controller.getOnlineAgents(null);
 
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        assertTrue(response.getBody().isEmpty());
+        assertNotNull(response.getBody());
+        assertEquals(400, response.getBody().getCode());
     }
 }

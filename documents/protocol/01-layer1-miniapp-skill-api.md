@@ -15,6 +15,14 @@
 | `welinkSessionId` | Skill Server 内部分配的会话 ID |
 | `toolSessionId`   | OpenCode SDK 分配的会话 ID     |
 
+### 会话状态枚举
+
+| 状态     | 说明                             |
+| -------- | -------------------------------- |
+| `ACTIVE` | 会话活跃中，可收发消息           |
+| `IDLE`   | 会话超时闲置，由定时任务自动标记 |
+| `CLOSED` | 会话已关闭，不可再发送消息       |
+
 ### REST API 响应格式
 
 所有 REST 接口统一返回 HTTP `200 OK`，响应体结构如下：
@@ -443,6 +451,86 @@
   }
 }
 ```
+
+---
+
+### 9. 发送内容到 IM 群聊
+
+**POST** `/api/skill/sessions/{welinkSessionId}/send-to-im`
+
+将 AI 回复的文本内容转发到关联的 IM 群组。
+
+#### 路径参数
+
+| 参数              | 类型 | 说明    |
+| ----------------- | ---- | ------- |
+| `welinkSessionId` | Long | 会话 ID |
+
+#### 请求
+
+```json
+{
+  "content": "这是 AI 生成的代码片段...",
+  "chatId": "group_abc123"
+}
+```
+
+| 字段      | 类型   | 必填  | 说明                                             |
+| --------- | ------ | :---: | ------------------------------------------------ |
+| `content` | String |   ✅   | 要发送的文本内容                                 |
+| `chatId`  | String |   ❌   | 目标 IM 群组 ID，不传则从会话的 `imGroupId` 获取 |
+
+#### 响应
+
+```json
+{
+  "code": 0,
+  "errormsg": "",
+  "data": {
+    "success": true
+  }
+}
+```
+
+---
+
+### 10. 查询在线 Agent 列表
+
+**GET** `/api/skill/agents`
+
+查询当前用户名下在线的 Agent 列表（代理到 Gateway 的 `/api/gateway/agents`）。
+
+#### 请求
+
+无请求体。从 Cookie 解析 `userId`。
+
+#### 响应
+
+```json
+{
+  "code": 0,
+  "errormsg": "",
+  "data": [
+    {
+      "ak": "ak_xxxxxxxx",
+      "akId": "ak_xxxxxxxx",
+      "toolType": "OPENCODE",
+      "toolVersion": "1.0.0",
+      "deviceName": "MyPC",
+      "os": "WINDOWS"
+    }
+  ]
+}
+```
+
+| data[] 字段   | 类型   | 说明                  |
+| ------------- | ------ | --------------------- |
+| `ak`          | String | Agent 的 Access Key   |
+| `akId`        | String | 同 `ak`，前端兼容字段 |
+| `toolType`    | String | 工具类型              |
+| `toolVersion` | String | 工具版本号            |
+| `deviceName`  | String | 设备名称              |
+| `os`          | String | 操作系统              |
 
 ---
 

@@ -33,7 +33,7 @@ class SkillSessionServiceTest {
     @Test
     @DisplayName("createSession inserts and returns session")
     void createSessionInsertsAndReturns() {
-        SkillSession result = service.createSession(1L, "ak-3", "Test", "chat-1");
+        SkillSession result = service.createSession("1", "ak-3", "Test", "chat-1");
         assertNotNull(result);
         assertEquals(SkillSession.Status.ACTIVE, result.getStatus());
         verify(sessionRepository).insert(any(SkillSession.class));
@@ -103,10 +103,10 @@ class SkillSessionServiceTest {
     @Test
     @DisplayName("listSessions without status filter")
     void listSessionsWithoutFilter() {
-        when(sessionRepository.findByUserId(1L, 0, 10)).thenReturn(List.of());
-        when(sessionRepository.countByUserId(1L)).thenReturn(0L);
+        when(sessionRepository.findByUserId("1", 0, 10)).thenReturn(List.of());
+        when(sessionRepository.countByUserId("1")).thenReturn(0L);
 
-        PageResult<SkillSession> result = service.listSessions(1L, null, 0, 10);
+        PageResult<SkillSession> result = service.listSessions("1", null, null, null, 0, 10);
         assertNotNull(result);
         assertEquals(0, result.getTotalElements());
     }
@@ -114,12 +114,12 @@ class SkillSessionServiceTest {
     @Test
     @DisplayName("listSessions with status filter")
     void listSessionsWithFilter() {
-        when(sessionRepository.findByUserIdAndStatusIn(eq(1L), anyList(), eq(0), eq(10)))
+        when(sessionRepository.findByUserIdFiltered(eq("1"), isNull(), isNull(), anyList(), eq(0), eq(10)))
                 .thenReturn(List.of());
-        when(sessionRepository.countByUserIdAndStatusIn(eq(1L), anyList())).thenReturn(0L);
+        when(sessionRepository.countByUserIdFiltered(eq("1"), isNull(), isNull(), anyList())).thenReturn(0L);
 
         PageResult<SkillSession> result = service.listSessions(
-                1L, List.of(SkillSession.Status.ACTIVE), 0, 10);
+                "1", null, null, "ACTIVE", 0, 10);
         assertNotNull(result);
     }
 }

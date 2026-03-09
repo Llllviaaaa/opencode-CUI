@@ -32,7 +32,7 @@ export interface StreamTokenUsage {
 export interface StreamMessage {
   type: StreamMessageType;
   seq?: number;
-  sessionId?: string;
+  welinkSessionId?: string;
   emittedAt?: string;
   raw?: unknown;
 
@@ -119,10 +119,14 @@ export interface Message {
 
 export interface Session {
   id: string;
+  userId?: string;
+  ak?: string;
   title: string;
+  imGroupId?: string;
   status: 'active' | 'idle' | 'closed';
+  toolSessionId?: string;
   createdAt: string;
-  lastActiveAt: string;
+  updatedAt: string;
 }
 
 export type MiniBarStatus = 'processing' | 'completed' | 'error' | 'offline';

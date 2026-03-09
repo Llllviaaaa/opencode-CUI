@@ -99,10 +99,9 @@ public class GatewayMessage {
                 .build();
     }
 
-    public static GatewayMessage toolError(String welinkSessionId, String toolSessionId, String error) {
+    public static GatewayMessage toolError(String toolSessionId, String error) {
         return GatewayMessage.builder()
                 .type("tool_error")
-                .welinkSessionId(welinkSessionId)
                 .toolSessionId(toolSessionId)
                 .error(error)
                 .build();

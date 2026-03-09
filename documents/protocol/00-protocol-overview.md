@@ -42,7 +42,7 @@ graph LR
 
 | 层  | 链路                      | 下行（指令方向） | 上行（事件方向）         | 认证             |
 | --- | ------------------------- | ---------------- | ------------------------ | ---------------- |
-| ①   | Miniapp ↔ Skill Server    | 8 REST API       | 19 种 StreamMessage (WS) | WeLink Cookie    |
+| ①   | Miniapp ↔ Skill Server    | 10 REST API      | 19 种 StreamMessage (WS) | WeLink Cookie    |
 | ②   | Skill Server ↔ AI-Gateway | 6 种 invoke (WS) | 6 种事件 (WS) + 3 REST   | 内部 Token       |
 | ③   | AI-Gateway ↔ PC Agent     | 7 种消息 (WS)    | 7 种消息 (WS)            | AK/SK 签名       |
 | ④   | PC Agent ↔ OpenCode       | 7 SDK 调用       | 17 种事件 + 12 种 Part   | 无（本机进程间） |
@@ -358,6 +358,8 @@ sequenceDiagram
 | 权限批准 | `POST /sessions/{id}/permissions/{permId}`       | `invoke.permission_reply` | `invoke.permission_reply` | `postSessionIdPermissionsPermissionId()` |
 | 中止     | `POST /sessions/{id}/abort`                      | `invoke.abort_session`    | `invoke.abort_session`    | `session.abort()`                        |
 | 关闭会话 | `DELETE /sessions/{id}`                          | `invoke.close_session`    | `invoke.close_session`    | `session.delete()`                       |
+| 转发到IM | `POST /sessions/{id}/send-to-im`                 | —                         | —                         | —                                        |
+| 查Agent  | `GET /agents`                                    | REST `GET /agents`        | —                         | —                                        |
 | 健康检查 | —                                                | REST `GET /agents/status` | `status_query`            | `app.health()`                           |
 
 ### 上行映射（事件方向：AI → 用户）

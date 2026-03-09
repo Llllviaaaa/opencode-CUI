@@ -43,7 +43,7 @@ public class GatewayApiClient {
      * @param userId the user ID to filter by
      * @return list of online agent info maps
      */
-    public List<Map<String, Object>> getOnlineAgentsByUserId(Long userId) {
+    public List<Map<String, Object>> getOnlineAgentsByUserId(String userId) {
         try {
             String url = gatewayBaseUrl + "/api/gateway/agents?userId=" + userId;
             ResponseEntity<String> response = restTemplate.exchange(

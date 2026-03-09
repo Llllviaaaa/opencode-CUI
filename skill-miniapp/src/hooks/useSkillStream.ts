@@ -166,7 +166,7 @@ function normalizeStreamingPart(raw: Record<string, unknown>): StreamMessage | n
   }
 
   const base: Partial<StreamMessage> = {
-    sessionId: typeof raw.welinkSessionId === 'string' ? raw.welinkSessionId : undefined,
+    welinkSessionId: typeof raw.welinkSessionId === 'string' ? raw.welinkSessionId : undefined,
     emittedAt: typeof raw.emittedAt === 'string' ? raw.emittedAt : undefined,
     messageId: typeof raw.messageId === 'string' ? raw.messageId : undefined,
     messageSeq: typeof raw.messageSeq === 'number' ? raw.messageSeq : undefined,
@@ -224,11 +224,11 @@ function normalizeStreamingPart(raw: Record<string, unknown>): StreamMessage | n
 }
 
 function normalizeIncomingStreamMessage(raw: Record<string, unknown>): StreamMessage {
-  const sessionId = typeof raw.welinkSessionId === 'string' ? raw.welinkSessionId : undefined;
+  const welinkSessionId = typeof raw.welinkSessionId === 'string' ? raw.welinkSessionId : undefined;
 
   return {
     ...(raw as unknown as StreamMessage),
-    sessionId,
+    welinkSessionId,
   };
 }
 
@@ -277,11 +277,11 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
         prev.map((message) =>
           message.id === messageId
             ? {
-                ...message,
-                content,
-                isStreaming: false,
-                parts: parts.length > 0 ? [...parts] : message.parts,
-              }
+              ...message,
+              content,
+              isStreaming: false,
+              parts: parts.length > 0 ? [...parts] : message.parts,
+            }
             : message,
         ),
       );
@@ -404,7 +404,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
 
   const handleStreamMessage = useCallback((msg: StreamMessage) => {
     const currentSessionId = sessionIdRef.current;
-    if (msg.sessionId && (!currentSessionId || msg.sessionId !== currentSessionId)) {
+    if (msg.welinkSessionId && (!currentSessionId || msg.welinkSessionId !== currentSessionId)) {
       return;
     }
 
@@ -434,14 +434,14 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
             prev.map((message) =>
               message.id === msg.messageId
                 ? {
-                    ...message,
-                    meta: {
-                      ...message.meta,
-                      tokens: msg.tokens,
-                      cost: msg.cost,
-                      reason: msg.reason,
-                    },
-                  }
+                  ...message,
+                  meta: {
+                    ...message.meta,
+                    tokens: msg.tokens,
+                    cost: msg.cost,
+                    reason: msg.reason,
+                  },
+                }
                 : message,
             ),
           );

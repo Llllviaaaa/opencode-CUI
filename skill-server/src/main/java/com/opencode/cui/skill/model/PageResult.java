@@ -2,6 +2,8 @@ package com.opencode.cui.skill.model;
 
 import java.util.List;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 /**
  * Simple pagination wrapper that mirrors the Spring Data Page structure
  * expected by the frontend (content, totalElements, totalPages, number, size).
@@ -26,6 +28,7 @@ public class PageResult<T> {
         return content;
     }
 
+    @JsonProperty("total")
     public long getTotalElements() {
         return totalElements;
     }
@@ -34,6 +37,7 @@ public class PageResult<T> {
         return totalPages;
     }
 
+    @JsonProperty("page")
     public int getNumber() {
         return number;
     }

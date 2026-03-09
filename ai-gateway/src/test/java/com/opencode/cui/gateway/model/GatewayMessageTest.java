@@ -45,13 +45,13 @@ class GatewayMessageTest {
 
     @Test
     void testToolErrorSerialization() throws Exception {
-        GatewayMessage msg = GatewayMessage.toolError("welink-42", "sess-42", "Connection refused");
+        GatewayMessage msg = GatewayMessage.toolError("sess-42", "Connection refused");
 
         String json = objectMapper.writeValueAsString(msg);
         GatewayMessage deserialized = objectMapper.readValue(json, GatewayMessage.class);
 
         assertEquals("tool_error", deserialized.getType());
-        assertEquals("welink-42", deserialized.getWelinkSessionId());
+        assertNull(deserialized.getWelinkSessionId());
         assertEquals("sess-42", deserialized.getToolSessionId());
         assertEquals("Connection refused", deserialized.getError());
     }

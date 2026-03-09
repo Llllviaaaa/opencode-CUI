@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * WebSocket handler for Skill miniapp streaming.
  *
  * Protocol endpoint:
- * - /ws/skill/stream        : one stream per user, authenticated by Cookie userId
+ * - /ws/skill/stream : one stream per user, authenticated by Cookie userId
  *
  */
 @Slf4j
@@ -223,15 +223,10 @@ public class SkillStreamHandler extends TextWebSocketHandler {
     }
 
     private void sendInitialStreamingState(WebSocketSession session, String userId) {
-        Long parsedUserId = parseUserId(userId);
-        if (parsedUserId == null) {
-            return;
-        }
-
-        List<SkillSession> activeSessions = sessionService.findActiveByUserId(parsedUserId);
+        List<SkillSession> activeSessions = sessionService.findActiveByUserId(userId);
         for (SkillSession skillSession : activeSessions) {
             String sessionId = String.valueOf(skillSession.getId());
-            sessionOwners.put(sessionId, String.valueOf(skillSession.getUserId()));
+            sessionOwners.put(sessionId, skillSession.getUserId());
             sendSnapshot(session, sessionId);
             sendStreamingState(session, sessionId);
         }
@@ -309,7 +304,8 @@ public class SkillStreamHandler extends TextWebSocketHandler {
         node.put("seq", message.getMessageSeq() != null ? message.getMessageSeq() : message.getSeq());
         node.put("role", message.getRole() != null ? message.getRole().name().toLowerCase() : "assistant");
         node.put("content", message.getContent() != null ? message.getContent() : "");
-        node.put("contentType", message.getContentType() != null ? message.getContentType().name().toLowerCase() : "plain");
+        node.put("contentType",
+                message.getContentType() != null ? message.getContentType().name().toLowerCase() : "plain");
         if (message.getCreatedAt() != null) {
             node.put("createdAt", message.getCreatedAt().toString());
         }
@@ -490,7 +486,7 @@ public class SkillStreamHandler extends TextWebSocketHandler {
     private String resolveOwnerUserId(String sessionId) {
         try {
             SkillSession session = sessionService.getSession(Long.valueOf(sessionId));
-            return session.getUserId() != null ? String.valueOf(session.getUserId()) : null;
+            return session.getUserId();
         } catch (Exception e) {
             log.debug("Failed to resolve owner for session {}: {}", sessionId, e.getMessage());
             return null;
@@ -505,14 +501,9 @@ public class SkillStreamHandler extends TextWebSocketHandler {
     }
 
     private void preloadActiveSessionOwners(String userId) {
-        Long parsedUserId = parseUserId(userId);
-        if (parsedUserId == null) {
-            return;
-        }
-
-        for (SkillSession session : sessionService.findActiveByUserId(parsedUserId)) {
+        for (SkillSession session : sessionService.findActiveByUserId(userId)) {
             if (session.getId() != null && session.getUserId() != null) {
-                sessionOwners.put(String.valueOf(session.getId()), String.valueOf(session.getUserId()));
+                sessionOwners.put(String.valueOf(session.getId()), session.getUserId());
             }
         }
     }
@@ -567,12 +558,4 @@ public class SkillStreamHandler extends TextWebSocketHandler {
         return null;
     }
 
-    private Long parseUserId(String userId) {
-        try {
-            return Long.valueOf(userId);
-        } catch (NumberFormatException e) {
-            log.warn("Invalid userId on skill stream connection: {}", userId);
-            return null;
-        }
-    }
 }

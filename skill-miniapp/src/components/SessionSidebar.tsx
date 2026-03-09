@@ -72,7 +72,7 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
                     style={{ backgroundColor: statusColors[session.status] ?? 'var(--text-muted)' }}
                   />
                   <span>{session.status}</span>
-                  <span>{formatTime(session.lastActiveAt)}</span>
+                  <span>{formatTime(session.updatedAt)}</span>
                 </div>
               </div>
             );

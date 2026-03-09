@@ -50,7 +50,7 @@ public class SkillSessionController {
     public ResponseEntity<ApiResponse<SkillSession>> createSession(
             @CookieValue(value = "userId", required = false) String userIdCookie,
             @RequestBody CreateSessionRequest request) {
-        Long resolvedUserId = resolveUserId(userIdCookie);
+        String resolvedUserId = resolveUserId(userIdCookie);
         if (resolvedUserId == null) {
             return ResponseEntity.badRequest().body(ApiResponse.error(400, "userId is required"));
         }
@@ -82,16 +82,19 @@ public class SkillSessionController {
     @GetMapping
     public ResponseEntity<ApiResponse<PageResult<SkillSession>>> listSessions(
             @CookieValue(value = "userId", required = false) String userIdCookie,
-            @RequestParam(required = false) List<SkillSession.Status> statuses,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String ak,
+            @RequestParam(required = false) String imGroupId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
 
-        Long resolvedUserId = resolveUserId(userIdCookie);
+        String resolvedUserId = resolveUserId(userIdCookie);
         if (resolvedUserId == null) {
             return ResponseEntity.badRequest().body(ApiResponse.error(400, "userId is required"));
         }
 
-        PageResult<SkillSession> sessions = sessionService.listSessions(resolvedUserId, statuses, page, size);
+        PageResult<SkillSession> sessions = sessionService.listSessions(
+                resolvedUserId, ak, imGroupId, status, page, size);
         return ResponseEntity.ok(ApiResponse.ok(sessions));
     }
 
@@ -181,13 +184,9 @@ public class SkillSessionController {
         }
     }
 
-    private Long resolveUserId(String cookieValue) {
+    private String resolveUserId(String cookieValue) {
         if (cookieValue != null && !cookieValue.isBlank()) {
-            try {
-                return Long.valueOf(cookieValue);
-            } catch (NumberFormatException e) {
-                log.warn("Invalid userId cookie value: {}", cookieValue);
-            }
+            return cookieValue.trim();
         }
         return null;
     }

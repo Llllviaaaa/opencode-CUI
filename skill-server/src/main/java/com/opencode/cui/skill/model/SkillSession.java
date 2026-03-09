@@ -16,7 +16,7 @@ public class SkillSession {
 
     @JsonProperty("welinkSessionId")
     private Long id;
-    private Long userId;
+    private String userId;
     private String ak;
     private String toolSessionId;
     private String title;

@@ -82,6 +82,41 @@
         WHERE status = #{status}
     </select>
 
+    <select id="findByUserIdFiltered" resultMap="SkillSessionResultMap">
+        <include refid="selectAllColumns"/>
+        WHERE user_id = #{userId}
+        <if test="ak != null and ak != ''">
+            AND ak = #{ak}
+        </if>
+        <if test="imGroupId != null and imGroupId != ''">
+            AND im_group_id = #{imGroupId}
+        </if>
+        <if test="statuses != null and statuses.size() > 0">
+            AND status IN
+            <foreach item="s" collection="statuses" open="(" separator="," close=")">
+                #{s}
+            </foreach>
+        </if>
+        ORDER BY last_active_at DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countByUserIdFiltered" resultType="long">
+        SELECT COUNT(*) FROM skill_session
+        WHERE user_id = #{userId}
+        <if test="ak != null and ak != ''">
+            AND ak = #{ak}
+        </if>
+        <if test="imGroupId != null and imGroupId != ''">
+            AND im_group_id = #{imGroupId}
+        </if>
+        <if test="statuses != null and statuses.size() > 0">
+            AND status IN
+            <foreach item="s" collection="statuses" open="(" separator="," close=")">
+                #{s}
+            </foreach>
+        </if>
+    </select>
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO skill_session
             (user_id, ak, tool_session_id, title, status, im_group_id, created_at, last_active_at)

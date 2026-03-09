@@ -59,8 +59,8 @@ class SkillStreamHandlerTest {
         WebSocketSession session = mockSession("/ws/skill/stream", "userId=10001");
         SkillSession activeSession = new SkillSession();
         activeSession.setId(42L);
-        activeSession.setUserId(10001L);
-        when(sessionService.findActiveByUserId(10001L)).thenReturn(List.of(activeSession));
+        activeSession.setUserId("10001");
+        when(sessionService.findActiveByUserId("10001")).thenReturn(List.of(activeSession));
         when(messageService.getAllMessages(42L)).thenReturn(List.of());
         when(bufferService.isSessionStreaming("42")).thenReturn(false);
         when(bufferService.getStreamingParts("42")).thenReturn(List.of());
@@ -77,7 +77,7 @@ class SkillStreamHandlerTest {
         WebSocketSession session = mockSession("/ws/skill/stream", "userId=10001");
         SkillSession activeSession = new SkillSession();
         activeSession.setId(42L);
-        activeSession.setUserId(10001L);
+        activeSession.setUserId("10001");
         SkillMessage message = SkillMessage.builder()
                 .id(10L)
                 .messageId("msg_42_1")
@@ -100,7 +100,7 @@ class SkillStreamHandlerTest {
                 .toolTitle("Run pwd")
                 .build();
 
-        when(sessionService.findActiveByUserId(10001L)).thenReturn(List.of(activeSession));
+        when(sessionService.findActiveByUserId("10001")).thenReturn(List.of(activeSession));
         when(messageService.getAllMessages(42L)).thenReturn(List.of(message));
         when(partRepository.findByMessageId(10L)).thenReturn(List.of(part));
         when(bufferService.isSessionStreaming("42")).thenReturn(false);
@@ -128,7 +128,7 @@ class SkillStreamHandlerTest {
         WebSocketSession session = mockSession("/ws/skill/stream", "userId=10001");
         SkillSession activeSession = new SkillSession();
         activeSession.setId(42L);
-        activeSession.setUserId(10001L);
+        activeSession.setUserId("10001");
         SkillMessage message = SkillMessage.builder()
                 .id(11L)
                 .messageId("msg_42_2")
@@ -146,12 +146,13 @@ class SkillStreamHandlerTest {
                 .toolName("question")
                 .toolCallId("call-question-1")
                 .toolStatus("running")
-                .toolInput("""
-                        {"questions":[{"header":"实现方案","question":"选 A 还是 B？","options":[{"label":"A","description":"只改最小范围"},{"label":"B","description":"做完整重构"}]}]}
-                        """)
+                .toolInput(
+                        """
+                                {"questions":[{"header":"实现方案","question":"选 A 还是 B？","options":[{"label":"A","description":"只改最小范围"},{"label":"B","description":"做完整重构"}]}]}
+                                """)
                 .build();
 
-        when(sessionService.findActiveByUserId(10001L)).thenReturn(List.of(activeSession));
+        when(sessionService.findActiveByUserId("10001")).thenReturn(List.of(activeSession));
         when(messageService.getAllMessages(42L)).thenReturn(List.of(message));
         when(partRepository.findByMessageId(11L)).thenReturn(List.of(part));
         when(bufferService.isSessionStreaming("42")).thenReturn(false);
@@ -178,8 +179,8 @@ class SkillStreamHandlerTest {
         WebSocketSession session = mockSession("/ws/skill/stream", "userId=10001");
         SkillSession activeSession = new SkillSession();
         activeSession.setId(42L);
-        activeSession.setUserId(10001L);
-        when(sessionService.findActiveByUserId(10001L)).thenReturn(List.of(activeSession));
+        activeSession.setUserId("10001");
+        when(sessionService.findActiveByUserId("10001")).thenReturn(List.of(activeSession));
         when(messageService.getAllMessages(42L)).thenReturn(List.of());
         when(bufferService.isSessionStreaming("42")).thenReturn(false);
         when(bufferService.getStreamingParts("42")).thenReturn(List.of());
@@ -210,8 +211,8 @@ class SkillStreamHandlerTest {
         WebSocketSession session = mockSession("/ws/skill/stream", "userId=10001");
         SkillSession skillSession = new SkillSession();
         skillSession.setId(42L);
-        skillSession.setUserId(10001L);
-        when(sessionService.findActiveByUserId(10001L)).thenReturn(List.of(skillSession));
+        skillSession.setUserId("10001");
+        when(sessionService.findActiveByUserId("10001")).thenReturn(List.of(skillSession));
         when(messageService.getAllMessages(42L)).thenReturn(List.of());
         when(bufferService.isSessionStreaming("42")).thenReturn(false);
         when(bufferService.getStreamingParts("42")).thenReturn(List.of());
