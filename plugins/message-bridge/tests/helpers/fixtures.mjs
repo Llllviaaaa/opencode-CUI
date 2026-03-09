@@ -10,7 +10,8 @@ export function generateTestId(prefix = 'test') {
 }
 
 /**
- * Create a valid envelope object for testing
+ * @deprecated Historical envelope fixture retained only for legacy tests.
+ * Active runtime protocol is flat and does not send envelope.
  */
 export function createEnvelope(overrides = {}) {
   return {
@@ -60,23 +61,9 @@ export function createInvokeMessage(overrides = {}) {
 
   return {
     type: 'invoke',
-    sessionId: overrides.sessionId || generateTestId('sess'),
+    welinkSessionId: overrides.welinkSessionId || generateTestId('sess'),
     action,
     payload,
-    timestamp: Date.now(),
-    ...overrides
-  };
-}
-
-/**
- * Create a tool_done message for testing
- */
-export function createToolDoneMessage(overrides = {}) {
-  return {
-    type: 'tool_done',
-    sessionId: overrides.sessionId || generateTestId('sess'),
-    result: overrides.result || { success: true },
-    envelope: createEnvelope(overrides.envelope),
     timestamp: Date.now(),
     ...overrides
   };
@@ -89,8 +76,8 @@ export function createToolErrorMessage(overrides = {}) {
   return {
     type: 'tool_error',
     error: overrides.error || 'Test error',
-    sessionId: overrides.sessionId || generateTestId('sess'),
-    envelope: createEnvelope(overrides.envelope),
+    welinkSessionId: overrides.welinkSessionId || generateTestId('sess'),
+    toolSessionId: overrides.toolSessionId,
     timestamp: Date.now(),
     ...overrides
   };
@@ -102,7 +89,6 @@ export function createToolErrorMessage(overrides = {}) {
 export function createStatusQueryMessage(overrides = {}) {
   return {
     type: 'status_query',
-    sessionId: overrides.sessionId || null,
     timestamp: Date.now(),
     ...overrides
   };
@@ -115,8 +101,6 @@ export function createStatusResponseMessage(overrides = {}) {
   return {
     type: 'status_response',
     opencodeOnline: overrides.opencodeOnline !== undefined ? overrides.opencodeOnline : true,
-    envelope: createEnvelope(overrides.envelope),
-    sessionId: overrides.sessionId || null,
     timestamp: Date.now(),
     ...overrides
   };
@@ -272,7 +256,7 @@ export function sanitizeLog(data) {
 }
 
 /**
- * Compare two envelopes (ignoring timestamp and messageId)
+ * @deprecated Historical helper for legacy envelope-based tests only.
  */
 export function compareEnvelopes(env1, env2) {
   const keysToCompare = [

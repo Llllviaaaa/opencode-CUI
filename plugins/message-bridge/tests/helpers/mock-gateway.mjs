@@ -7,7 +7,6 @@ export class MockGatewayServer {
   constructor(options = {}) {
     this.port = options.port || 8888;
     this.receivedMessages = [];
-    this.receivedToolDone = [];
     this.receivedToolErrors = [];
     this.connected = false;
   }
@@ -45,7 +44,7 @@ export class MockGatewayServer {
   sendInvoke(payload) {
     const message = {
       type: 'invoke',
-      sessionId: payload.sessionId || 'test-session',
+      welinkSessionId: payload.welinkSessionId || 'test-session',
       action: payload.action,
       payload: payload.payload,
       timestamp: Date.now()
@@ -56,20 +55,12 @@ export class MockGatewayServer {
   /**
    * Simulate sending a status_query message
    */
-  sendStatusQuery(sessionId) {
+  sendStatusQuery() {
     const message = {
       type: 'status_query',
-      sessionId: sessionId || null,
       timestamp: Date.now()
     };
     return { sent: true, message };
-  }
-
-  /**
-   * Record a tool_done message received
-   */
-  recordToolDone(message) {
-    this.receivedToolDone.push(message);
   }
 
   /**
@@ -111,7 +102,6 @@ export class MockGatewayServer {
    */
   clear() {
     this.receivedMessages = [];
-    this.receivedToolDone = [];
     this.receivedToolErrors = [];
   }
 }

@@ -23,7 +23,7 @@ describe('DefaultAkSkAuth', () => {
     expect(ts).toMatch(/^\d{10}$/);
 
     const expectedSign = createHmac('sha256', sk)
-      .update(`${ak}\n${ts}\n${nonce}`)
+      .update(`${ak}${ts}${nonce}`)
       .digest('base64');
 
     expect(sign).toBe(expectedSign);

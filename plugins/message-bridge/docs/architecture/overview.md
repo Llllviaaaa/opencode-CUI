@@ -24,7 +24,7 @@ message-bridge 是 OpenCode 原生插件，桥接本地 OpenCode 实例与远端
 
 1. 边界报文不再携带 `envelope`。
 2. 会话字段采用双标识：`welinkSessionId`（技能侧）+ `toolSessionId`（OpenCode 侧）。
-3. `close_session -> session.delete`，并新增 `abort_session -> session.abort`。
+3. `close_session -> session.delete`，`abort_session -> session.abort`。
 4. `question_reply` 不再走 `session.prompt`，改为 question API 链路（`GET /question` + `POST /question/{requestID}/reply`）。
 
 ### 1.2 设计原则
@@ -99,7 +99,7 @@ message-bridge 是 OpenCode 原生插件，桥接本地 OpenCode 实例与远端
 │  ┌───────────────────────────▼─────────────────────────────────────┐  │
 │  │  事件层 (Event Layer) —— 上行                                       │  │
 │  │  • EventFilter (白名单前缀匹配)                                     │  │
-│  │  • EnvelopeBuilder (envelope 封装/sequence 生成)                     │  │
+│  │  • EnvelopeBuilder (历史 envelope/sequence 兼容参考)                │  │
 │  │  • EventRelay (透传到 Gateway)                                      │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 │                              │                                         │
@@ -110,9 +110,10 @@ message-bridge 是 OpenCode 原生插件，桥接本地 OpenCode 实例与远端
 │  │  • BaseAction (validator/executor/errorMapper)                     │  │
 │  │    - chat                                                         │  │
 │  │    - create_session                                               │  │
-│  │    - close_session → session.abort                                │  │
+│  │    - abort_session → session.abort                                │  │
+│  │    - close_session → session.delete                               │  │
 │  │    - permission_reply (response: once|always|reject)              │  │
-│  │    - question_reply (toolSessionId + toolCallId + answer)         │  │
+│  │    - question_reply (toolSessionId + answer, toolCallId optional) │  │
 │  │    - status_query                                                 │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 │                              │                                         │
@@ -124,7 +125,7 @@ message-bridge 是 OpenCode 原生插件，桥接本地 OpenCode 实例与远端
 │  └─────────────────────────────────────────────────────────────────┘  │
 └────────────────────────┬─────────────────────────────────────────────┘
                          │ WebSocket (WSS in production)
-                         │ 上行: tool_event/tool_done/tool_error/session_created/status_response
+                         │ 上行: tool_event/tool_error/session_created/status_response
                          │ 下行: invoke/status_query
                          ▼
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -135,7 +136,7 @@ message-bridge 是 OpenCode 原生插件，桥接本地 OpenCode 实例与远端
 ```
 
 **核心数据流**：
-- **上行**：OpenCode 事件 → 白名单过滤 → envelope 封装 → 透传到 Gateway
+- **上行**：OpenCode 事件 → 白名单过滤 → 扁平消息封装 → 透传到 Gateway
 - **下行**：Gateway invoke → Action Registry 路由 → SDK 调用 → 返回结果
 
 ---
@@ -287,7 +288,7 @@ env (BRIDGE_*) > project (.opencode/message-bridge.jsonc/.json) > user (~/.confi
 1. WS 建立后发送 `register` 消息
 2. **ai-gateway 无显式注册成功响应**，连接保持即表示注册成功
 3. 发送 `register` 后进入 `READY` 状态，可开始收发业务消息
-4. `envelope.agentId` 使用本地生成的唯一标识（如 `bridge-{uuid}`）
+4. 运行时内部使用本地生成的唯一标识（如 `bridge-{uuid}`）
 5. 连接重建后必须重新注册，生成新的 agentId
 
 ⚠️ **重要**：当前 ai-gateway 实现不会返回 `gatewayAgentId`，插件使用本地生成的 agentId。
@@ -317,7 +318,7 @@ baseMs = 1000, maxMs = 30000
 | 模块 | 文件 | 职责 |
 |---|---|---|
 | 事件过滤 | `event/EventFilter.ts` | 白名单前缀匹配 |
-| Envelope 构建 | `event/EnvelopeBuilder.ts` | 生成 envelope + sequence |
+| Envelope 构建 | `event/EnvelopeBuilder.ts` | 历史 envelope 生成逻辑，仅保留兼容参考 |
 | 事件透传 | `event/EventRelay.ts` | 发送到 Gateway |
 | 事件订阅 | `event/EventSubscriber.ts` | 订阅 SDK 事件流 |
 
@@ -346,7 +347,7 @@ function isAllowed(eventType: string): boolean {
 }
 ```
 
-#### 3.3.3 Envelope 结构
+#### 3.3.3 Historical Envelope 结构（仅兼容旧设计）
 
 ```typescript
 interface Envelope {
@@ -355,9 +356,9 @@ interface Envelope {
   timestamp: number;      // Unix timestamp (ms)
   source: string;         // "message-bridge"
   agentId: string;        // localAgentId (本地生成，如 bridge-{uuid})
-  sessionId?: string;     // 业务 sessionId（可选；status_query/status_response 可为空）
+  sessionId?: string;     // 历史业务 sessionId（当前扁平协议不再使用）
   sequenceNumber: number; // 递增序号
-  sequenceScope: string;  // "session" | "global"（sessionId 为空时使用 global）
+  sequenceScope: string;  // "session" | "global"（仅 legacy envelope 使用）
 }
 ```
 
@@ -374,7 +375,8 @@ interface Envelope {
 | Base Action | `action/BaseAction.ts` | 抽象基类 |
 | Chat Action | `action/ChatAction.ts` | chat 实现 |
 | Create Session Action | `action/CreateSessionAction.ts` | create_session 实现 |
-| Close Session Action | `action/CloseSessionAction.ts` | close_session → abort 实现 |
+| Abort Session Action | `action/AbortSessionAction.ts` | abort_session → abort 实现 |
+| Close Session Action | `action/CloseSessionAction.ts` | close_session → delete 实现 |
 | Permission Reply Action | `action/PermissionReplyAction.ts` | permission_reply 实现 |
 | Question Reply Action | `action/QuestionReplyAction.ts` | question_reply 实现 |
 | Status Query Action | `action/StatusQueryAction.ts` | status_query 实现 |
@@ -396,7 +398,7 @@ interface Action {
 }
 
 interface ActionContext {
-  sessionId?: string;
+  sessionId?: string; // 内部保留，用于透传 welinkSessionId 到 action context
   toolSessionId?: string;
   opencode: OpenCodeSDK;
 }
@@ -406,11 +408,12 @@ interface ActionContext {
 
 | Action | 说明 |
 |---|---|
-| `chat` | `session.chat(toolSessionId, { text })` |
+| `chat` | `session.prompt(...text parts...)` |
 | `create_session` | `session.create(payload)` |
-| `close_session` | `session.abort(toolSessionId)` ⚠️ **不执行 delete** |
+| `abort_session` | `session.abort(toolSessionId)` |
+| `close_session` | `session.delete(toolSessionId)` |
 | `permission_reply` | 标准协议字段 `response` |
-| `question_reply` | `session.prompt(parts[0].text = answer)`（`toolCallId` 仅用于协议校验） |
+| `question_reply` | `GET /question` 查找 pending request，再 `POST /question/{requestID}/reply` |
 | `status_query` | 返回 `status_response` |
 
 #### 3.4.4 Permission Reply
@@ -445,8 +448,7 @@ async function handleInvoke(invoke: InvokeMessage): Promise<void> {
     return sendToolError({
       code: 'AGENT_NOT_READY',
       error: `Connection state check timeout after ${CONNECTION_CHECK_TIMEOUT_MS}ms`,
-      sessionId: invoke.sessionId,
-      envelope: buildEnvelope(invoke.sessionId)
+      welinkSessionId: invoke.welinkSessionId
     });
   }
   
@@ -455,8 +457,7 @@ async function handleInvoke(invoke: InvokeMessage): Promise<void> {
     return sendToolError({
       code: 'GATEWAY_UNREACHABLE',
       error: 'Gateway connection is not active',
-      sessionId: invoke.sessionId,
-      envelope: buildEnvelope(invoke.sessionId)
+      welinkSessionId: invoke.welinkSessionId
     });
   }
 
@@ -465,8 +466,7 @@ async function handleInvoke(invoke: InvokeMessage): Promise<void> {
     return sendToolError({
       code: 'AGENT_NOT_READY',
       error: 'Agent not ready, cannot process invoke',
-      sessionId: invoke.sessionId,
-      envelope: buildEnvelope(invoke.sessionId)
+      welinkSessionId: invoke.welinkSessionId
     });
   }
 
@@ -475,8 +475,7 @@ async function handleInvoke(invoke: InvokeMessage): Promise<void> {
     return sendToolError({
       code: 'SDK_UNREACHABLE',
       error: 'OpenCode service unreachable',
-      sessionId: invoke.sessionId,
-      envelope: buildEnvelope(invoke.sessionId)
+      welinkSessionId: invoke.welinkSessionId
     });
   }
   
@@ -510,7 +509,7 @@ EventSubscriber (sdk.event.subscribe)
 EventFilter (白名单匹配)
   ├─ 匹配失败 → 记录 unsupported_event，丢弃
   ↓
-EnvelopeBuilder (添加 envelope)
+Flat protocol mapping
   ↓
 [READY 状态检查]
   ├─ 非 READY → 丢弃，记录警告
@@ -544,7 +543,7 @@ Action.execute (调用 SDK)
   ├─ SDK 异常 → 返回 tool_error(SDK_UNREACHABLE)
   ↓
 [结果处理]
-  ├─ 成功 → 发送 tool_done / session_created / status_response
+  ├─ 成功 → 发送 session_created / status_response，或继续透传 tool_event
   ├─ 失败 → 发送 tool_error
   ↓
 GatewayConnection (WS 发送)
@@ -615,7 +614,8 @@ ws://{gateway-host}/ws/agent?ak={ak}&ts={timestamp}&nonce={nonce}&sign={signatur
 
 ```json
 {
-  "type": "heartbeat"
+  "type": "heartbeat",
+  "timestamp": "2026-03-09T10:00:00.000Z"
 }
 ```
 
@@ -630,35 +630,11 @@ ws://{gateway-host}/ws/agent?ak={ak}&ts={timestamp}&nonce={nonce}&sign={signatur
 ```json
 {
   "type": "tool_event",
-  "sessionId": "sess_123",
+  "toolSessionId": "sess_123",
   "event": {
     "type": "message.updated",
     ...
-  },
-  "envelope": {
-    "version": "1.0",
-    "messageId": "msg_456",
-    "timestamp": 1709654400000,
-    "source": "message-bridge",
-    "agentId": "agent_001",
-    "sessionId": "sess_123",
-    "sequenceNumber": 42,
-    "sequenceScope": "session"
   }
-}
-```
-
-#### 5.2.4 tool_done
-
-```json
-{
-  "type": "tool_done",
-  "sessionId": "sess_123",
-  "usage": {
-    "input_tokens": 100,
-    "output_tokens": 200
-  },
-  "envelope": { ... }
 }
 ```
 
@@ -667,9 +643,9 @@ ws://{gateway-host}/ws/agent?ak={ak}&ts={timestamp}&nonce={nonce}&sign={signatur
 ```json
 {
   "type": "tool_error",
-  "sessionId": "sess_123",
-  "error": "SDK call timeout after 10000ms",
-  "envelope": { ... }
+  "welinkSessionId": "sess_123",
+  "toolSessionId": "oc_sess_789",
+  "error": "SDK call timeout after 10000ms"
 }
 ```
 
@@ -678,8 +654,8 @@ ws://{gateway-host}/ws/agent?ak={ak}&ts={timestamp}&nonce={nonce}&sign={signatur
 ```json
 {
   "type": "session_created",
-  "toolSessionId": "oc_sess_789",
-  "envelope": { ... }
+  "welinkSessionId": "sess_123",
+  "toolSessionId": "oc_sess_789"
 }
 ```
 
@@ -688,15 +664,12 @@ ws://{gateway-host}/ws/agent?ak={ak}&ts={timestamp}&nonce={nonce}&sign={signatur
 ```json
 {
   "type": "status_response",
-  "opencodeOnline": true,
-  "sessionId": "sess_123",
-  "envelope": { ... }
+  "opencodeOnline": true
 }
 ```
 
 说明：
-- `status_response.sessionId` 为可选字段；若 `status_query` 携带 `sessionId`，插件需原样透传返回。
-- 若 `status_query` 未携带 `sessionId`，`status_response` 可不带 `sessionId`（兼容当前网关行为）。
+- `status_query` / `status_response` 均不携带会话字段。
 
 ### 5.3 下行消息（Gateway → 插件）
 
@@ -705,7 +678,7 @@ ws://{gateway-host}/ws/agent?ak={ak}&ts={timestamp}&nonce={nonce}&sign={signatur
 ```json
 {
   "type": "invoke",
-  "sessionId": "sess_123",
+  "welinkSessionId": "sess_123",
   "action": "chat",
   "payload": {
     "text": "请帮我写一个函数",
@@ -718,14 +691,12 @@ ws://{gateway-host}/ws/agent?ak={ak}&ts={timestamp}&nonce={nonce}&sign={signatur
 
 ```json
 {
-  "type": "status_query",
-  "sessionId": "sess_123"
+  "type": "status_query"
 }
 ```
 
 说明：
-- `status_query.sessionId` 为可选字段。
-- 当前策略：可选 + 透传（兼容无 `sessionId` 的现网报文）。
+- `status_query` 不携带会话字段。
 
 ---
 
@@ -750,7 +721,7 @@ plugins/message-bridge/
 │   ├── event/
 │   │   ├── EventSubscriber.ts        # SDK 事件订阅
 │   │   ├── EventFilter.ts            # 白名单过滤
-│   │   ├── EnvelopeBuilder.ts        # Envelope 构建
+│   │   ├── EnvelopeBuilder.ts        # 历史 Envelope 构建（兼容参考）
 │   │   └── EventRelay.ts             # 事件透传
 │   ├── action/
 │   │   ├── ActionRegistry.ts         # Action 注册表
@@ -800,7 +771,8 @@ plugins/message-bridge/
 | 差异项 | 当前行为 | 目标行为 | 收敛版本 |
 |---|---|---|---|
 | permission_reply | 历史存在 approved 偏差 | 仅 response | v1.5 |
-| close_session | 映射到 abort | SDK 原生支持 | 待定 |
+| close_session | 映射到 delete | 与当前 SDK 路径一致 | 已完成 |
+| abort_session | 映射到 abort | 与当前 SDK 路径一致 | 已完成 |
 | agentId 绑定 | 插件本地生成 agentId | Gateway 分配 gatewayAgentId | 待定 |
 
 ---
@@ -811,9 +783,9 @@ plugins/message-bridge/
 
 | 层级 | 要求 |
 |---|---|
-| Unit | 白名单、映射、路由、错误分支、envelope/sequence |
+| Unit | 白名单、映射、路由、错误分支、协议字段 |
 | Integration | Mock Gateway WS + Mock SDK Client |
-| E2E Smoke | 注册、心跳、create+chat+close、permission_reply、question_reply、断连重连、不可达启动失败 |
+| E2E Smoke | 注册、心跳、create+chat+abort+close、permission_reply、question_reply、断连重连、不可达启动失败 |
 
 **测试框架基线（与测试验证文档一致）**：
 - Unit / Integration：`bun test`（主框架）
@@ -832,10 +804,10 @@ plugins/message-bridge/
 1. 六类 action 正常链路
 2. 白名单允许/拒绝路径
 3. `permission_reply.response` 使用 `once|always|reject`
-4. `close_session -> abort` 且不 delete
+4. `close_session -> delete`，`abort_session -> abort`
 5. Fast Fail 返回 `tool_error`
-6. envelope 完整与 sequence 递增
-7. `status_response` envelope 一致性
+6. 扁平协议字段一致性
+7. `status_response` 不携带会话字段
 8. 配置发现/优先级/JSONC/version 校验
 9. 新增事件或 action 不改核心引擎的扩展性验证
 10. 状态到错误码映射一致：`DISCONNECTED/CONNECTING -> GATEWAY_UNREACHABLE`，`CONNECTED -> AGENT_NOT_READY`
@@ -858,9 +830,9 @@ plugins/message-bridge/
 
 **PRD §4.5 原文：**
 > 2. 仅当收到 Gateway 注册成功确认并获得连接绑定标识 `gatewayAgentId` 后，插件进入 `READY`。
-> 3. `READY` 前不发送带 envelope 的业务消息。
+> 3. `READY` 前不发送业务消息。
 > 4. `READY` 前若收到 `invoke`，返回 `tool_error(error=Agent not ready)`。
-> 5. `READY` 后所有上行业务消息 `envelope.agentId` 必须等于 `gatewayAgentId`。
+> 5. 当前边界协议不使用 `envelope.agentId`。
 
 注：以上为 PRD 原文。当前实现口径已收敛为状态映射：
 `DISCONNECTED/CONNECTING -> GATEWAY_UNREACHABLE`，`CONNECTED -> AGENT_NOT_READY`。
@@ -875,7 +847,7 @@ plugins/message-bridge/
 // 调整后行为
 1. WS 建立后发送 `register` 消息
 2. 发送完成后立即进入 `READY` 状态
-3. `envelope.agentId` 使用本地生成的唯一标识（如 `bridge-${uuid}`）
+3. 内部本地标识使用 `bridge-${uuid}`
 4. 连接重建后生成新的 agentId
 ```
 
@@ -907,7 +879,7 @@ plugins/message-bridge/
 | 序号 | 确认项 | 结论 | 优先级 |
 |---|---|---|---|
 | 5 | **register 响应格式** | ✅ **已确认** - ai-gateway 无显式响应，连接保持即表示注册成功。插件使用本地生成的 agentId；后续与服务端对齐显式确认机制。 | P0 |
-| 6 | **status_response 触发时机** | ✅ **已确认** - **仅响应 status_query**，无定期上报。Gateway 转发 status_query 到 PCAgent，PCAgent 调用 OpenCode health API 后返回 status_response。字段：type, opencodeOnline (boolean), sessionId?（可选透传）。 | P1 |
+| 6 | **status_response 触发时机** | ✅ **已确认** - **仅响应 status_query**，无定期上报。Gateway 转发 status_query 到插件，插件调用 OpenCode health API 后返回 status_response。字段：type, opencodeOnline (boolean)。 | P1 |
 | 7 | **error 消息脱敏级别** | ✅ **已确认** - **SK (Secret Key)**: 绝不记录。**签名**: 只记录是否 present，不记录内容。**AK (Access Key)**: 作为标识符记录（非敏感）。**Payload**: 最小化记录，仅用于路由。遵循现有安全实践。 | P0 |
 
 ### 10.3 PRD 差异记录
@@ -916,7 +888,7 @@ plugins/message-bridge/
 
 | 差异项 | PRD 描述 | 实际实现 | 影响范围 | 备注 |
 |---|---|---|---|---|
-| agentId 绑定规则 (§4.5) | 插件等待 Gateway 返回 `gatewayAgentId`，READY 后使用 | ai-gateway 无显式响应，插件本地生成 agentId (如 `bridge-{uuid}`) | 插件 envelope.agentId 生成逻辑 | 已确认 - 连接保持即表示注册成功 |
+| agentId 绑定规则 (§4.5) | 插件等待 Gateway 返回 `gatewayAgentId`，READY 后使用 | ai-gateway 无显式响应，插件本地生成 agentId (如 `bridge-{uuid}`) | 插件内部状态与日志关联 | 已确认 - 连接保持即表示注册成功 |
 
 ### 10.4 实现层面
 
@@ -931,7 +903,7 @@ plugins/message-bridge/
 | ID | 代办项 | Owner | 优先级 | 状态 |
 |---|---|---|---|---|
 | TODO-MB-001 | 与 ai-gateway 对齐 register 显式确认机制（是否新增 `register_success` 与服务端分配 `gatewayAgentId`） | Gateway + Message-Bridge | P1 | OPEN |
-| TODO-MB-002 | `status_query/status_response` 的 `sessionId` 从“可选透传”收敛为服务端统一契约（是否升级为必填） | Gateway + Skill-Server + Message-Bridge | P1 | OPEN |
+| TODO-MB-002 | `status_query/status_response` 的无会话字段契约与服务端长期接口统一（是否保持极简响应） | Gateway + Skill-Server + Message-Bridge | P1 | OPEN |
 
 ---
 

@@ -31,8 +31,8 @@
 1. WS 鉴权连接、心跳、重连。
 2. 下行 `invoke/status_query` 与上行协议消息。
 3. 可配置白名单与 action 注册表。
-4. `permission_reply` 使用 `response` 标准字段，补齐 `question_reply`。
-5. `close_session -> session.abort` 固化。
+4. `permission_reply` 使用 `response` 标准字段，补齐 `question_reply` 与 `abort_session`。
+5. `close_session -> session.delete`；`abort_session -> session.abort`。
 6. 配置文件获取与校验（参考 bridge）。
 7. 插件级单测/集成/最小 E2E。
 
@@ -62,30 +62,23 @@
 - `register`
 - `heartbeat`
 - `tool_event`
-- `tool_done`
 - `tool_error`
 - `session_created`
 - `status_response`
 
-### 4.4 Envelope（统一要求）
-所有上行业务消息必须携带 envelope：
-- `version`
-- `messageId`
-- `timestamp`
-- `source`
-- `agentId`
-- `sessionId`（业务消息建议必填；`status_response` 场景可选）
-- `sequenceNumber`
-- `sequenceScope`
-
-`status_response` 也必须携带 envelope。
+### 4.4 Flat Message（统一要求）
+当前边界协议不使用 envelope；上行业务消息使用扁平字段：
+- `welinkSessionId`：技能侧会话标识
+- `toolSessionId`：OpenCode 会话标识
+- `status_query` / `status_response` 不携带会话字段
+- `tool_done` 不作为当前 runtime 的活跃上行消息
 
 ### 4.5 agentId 绑定规则（P0）
 1. 插件建立 WS 后发送 `register`。  
 2. 当前实现中，Gateway 无显式 `register_success` 响应；发送 `register` 后进入 `READY`。  
-3. `READY` 前不发送带 envelope 的业务消息。  
+3. `READY` 前不发送业务消息。  
 4. 当前实现状态映射：`DISCONNECTED/CONNECTING -> tool_error(error=Gateway unreachable)`，`CONNECTED -> tool_error(error=Agent not ready)`。  
-5. 当前实现 `envelope.agentId` 使用插件本地生成的 `localAgentId`（如 `bridge-{uuid}`）。  
+5. 当前实现使用插件本地生成的 `localAgentId`（如 `bridge-{uuid}`）做内部状态与日志关联。  
 6. 连接重建后必须重新注册并重新生成 `agentId`，不复用旧值。  
 7. 目标态为服务端分配 `gatewayAgentId` 并显式确认，作为后续收敛项（见 `TODO-MB-001`）。  
 
@@ -113,13 +106,14 @@
 ### FR-MB-04（P0）基础 action 支持
 - `chat`
 - `create_session`
+- `abort_session`
 - `close_session`
 - `permission_reply`
 - `question_reply`
 - `status_query`
 
 ### FR-MB-05（P0）关闭语义
-`close_session` 固定映射 `session.abort`，不执行 `session.delete`。
+`close_session` 固定映射 `session.delete`；`abort_session` 固定映射 `session.abort`。
 
 ### FR-MB-06（P0）权限回复兼容
 - 协议字段：`response: once|always|reject`
@@ -136,15 +130,15 @@
 
 行为：
 1. 对每个 invoke，在 `<=100ms` 内完成连接态判定。  
-2. 不可达时立即回传 `tool_error`（含 `error/sessionId/envelope`），采用 best effort 发送。  
+2. 不可达时立即回传 `tool_error`（含 `error` 与可路由字段 `welinkSessionId/toolSessionId`），采用 best effort 发送。  
 3. 若发送失败，记录本地结构化日志并累计错误计数。  
 4. 不排队、不缓冲 invoke。  
 5. 连接层继续重连，不退出进程。  
 
 ### FR-MB-08（P1）注册与状态查询
 - 连接成功发送 `register(deviceName, os, toolType, toolVersion)`  
-- `status_query.sessionId` 可选  
-- `status_response` 返回 `opencodeOnline:boolean` + envelope，`sessionId` 可选并按请求透传
+- `status_query` 不携带会话字段  
+- `status_response` 返回 `opencodeOnline:boolean`
 
 ### FR-MB-09（P0）配置文件获取（参考 bridge）
 配置发现必须支持：
@@ -195,10 +189,10 @@
 - 5 分钟失败率 > 5% 告警（平台接入为后续任务）
 
 ## 七、类型与错误模型冻结
-- `InvokeAction = chat | create_session | close_session | permission_reply | question_reply`
+- `InvokeAction = chat | create_session | abort_session | close_session | permission_reply | question_reply`
 - `PermissionReplyPayload = { permissionId, toolSessionId, response }`
-- `StatusResponse = { type: 'status_response', opencodeOnline: boolean, sessionId?: string, envelope }`
-- `tool_error = { type, sessionId?, error, envelope }`
+- `StatusResponse = { type: 'status_response', opencodeOnline: boolean }`
+- `tool_error = { type, welinkSessionId?, toolSessionId?, error }`
 
 错误码最小集：
 - `GATEWAY_UNREACHABLE`
@@ -237,18 +231,18 @@
 
 ## 九、测试与验收标准
 ### 9.1 测试分层
-1. Unit：白名单、映射、路由、错误分支、envelope/sequence  
+1. Unit：白名单、映射、路由、错误分支、扁平协议字段  
 2. Integration：Mock Gateway WS + Mock SDK Client  
-3. E2E Smoke：注册、心跳、create+chat+close、permission_reply、question_reply、断连重连、不可达启动失败  
+3. E2E Smoke：注册、心跳、create+chat+abort+close、permission_reply、question_reply、断连重连、不可达启动失败  
 
 ### 9.2 必测场景
 1. 六类 action 正常链路。  
 2. 白名单允许/拒绝路径。  
 3. `permission_reply.response` 仅接受 `once|always|reject`。  
-4. `close_session -> abort` 且不 delete。  
+4. `close_session -> delete`，`abort_session -> abort`。  
 5. Fast Fail 返回 `tool_error`。  
-6. envelope 完整与 sequence 递增。  
-7. `status_response` envelope 一致性。  
+6. 扁平协议字段一致性。  
+7. `status_response` 不携带会话字段。  
 8. 配置发现/优先级/JSONC/version 校验。  
 9. 新增事件或 action 不改核心引擎的扩展性验证。  
 10. 状态到错误码映射一致：`DISCONNECTED/CONNECTING -> GATEWAY_UNREACHABLE`，`CONNECTED -> AGENT_NOT_READY`。  

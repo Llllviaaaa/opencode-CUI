@@ -16,7 +16,7 @@
 | 方向 | 类型 |
 |---|---|
 | 下行 | `invoke`, `status_query` |
-| 上行 | `register`, `heartbeat`, `tool_event`, `tool_done`, `tool_error`, `session_created`, `status_response` |
+| 上行 | `register`, `heartbeat`, `tool_event`, `tool_error`, `session_created`, `status_response` |
 
 ## 3. 字段约定（关键）
 
@@ -24,6 +24,7 @@
 2. `welinkSessionId`：技能侧会话标识（Gateway/Skill 侧语义）。
 3. `toolSessionId`：OpenCode 会话标识（SDK 侧语义）。
 4. `status_query`/`status_response` 不携带会话字段。
+5. 当前 runtime 不主动发送 `tool_done`；完成态通过 `tool_event` 透传的 `session.idle` / `session.status` 等事件体现。
 
 ## 4. 下行协议（Gateway -> 插件）
 
@@ -70,16 +71,7 @@
 }
 ```
 
-### 5.2 `tool_done`
-
-```json
-{
-  "type": "tool_done",
-  "toolSessionId": "ses_001"
-}
-```
-
-### 5.3 `tool_error`
+### 5.2 `tool_error`
 
 ```json
 {
@@ -90,7 +82,9 @@
 }
 ```
 
-### 5.4 `session_created`
+`welinkSessionId` 与 `toolSessionId` 允许按可用性单独出现，但至少应携带一个可路由标识。
+
+### 5.3 `session_created`
 
 ```json
 {
@@ -101,7 +95,7 @@
 }
 ```
 
-### 5.5 `status_response`
+### 5.4 `status_response`
 
 ```json
 {

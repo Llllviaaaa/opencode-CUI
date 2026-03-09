@@ -86,7 +86,6 @@ export const UPSTREAM_MESSAGE_TYPES = [
   'register',
   'heartbeat',
   'tool_event',
-  'tool_done',
   'tool_error',
   'session_created',
   'status_response',
@@ -115,6 +114,10 @@ export interface ToolEventMessage {
   event: unknown;
 }
 
+/**
+ * @deprecated Reserved for legacy compatibility only. The current runtime does
+ * not emit tool_done.
+ */
 export interface ToolDoneMessage {
   type: 'tool_done';
   toolSessionId?: string;
@@ -192,7 +195,6 @@ export type UpstreamMessage =
   | RegisterMessage
   | HeartbeatMessage
   | ToolEventMessage
-  | ToolDoneMessage
   | ToolErrorMessage
   | SessionCreatedMessage
   | StatusResponseMessage;
