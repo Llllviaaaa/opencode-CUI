@@ -55,9 +55,13 @@ public class GatewayMessage {
 
     // --- Register message fields ---
     private String deviceName;
+    private String macAddress;
     private String os;
     private String toolType;
     private String toolVersion;
+
+    // --- Register response fields ---
+    private String reason;
 
     // --- Tool/session fields ---
     private String toolSessionId;
@@ -66,14 +70,28 @@ public class GatewayMessage {
     // --- Status response fields ---
     private Boolean opencodeOnline;
 
-    public static GatewayMessage register(String deviceName, String os,
-            String toolType, String toolVersion) {
+    public static GatewayMessage register(String deviceName, String macAddress,
+            String os, String toolType, String toolVersion) {
         return GatewayMessage.builder()
                 .type("register")
                 .deviceName(deviceName)
+                .macAddress(macAddress)
                 .os(os)
                 .toolType(toolType)
                 .toolVersion(toolVersion)
+                .build();
+    }
+
+    public static GatewayMessage registerOk() {
+        return GatewayMessage.builder()
+                .type("register_ok")
+                .build();
+    }
+
+    public static GatewayMessage registerRejected(String reason) {
+        return GatewayMessage.builder()
+                .type("register_rejected")
+                .reason(reason)
                 .build();
     }
 
@@ -161,12 +179,14 @@ public class GatewayMessage {
                 .usage(this.usage)
                 .sequenceNumber(this.sequenceNumber)
                 .deviceName(this.deviceName)
+                .macAddress(this.macAddress)
                 .os(this.os)
                 .toolType(this.toolType)
                 .toolVersion(this.toolVersion)
                 .toolSessionId(this.toolSessionId)
                 .session(this.session)
                 .opencodeOnline(this.opencodeOnline)
+                .reason(this.reason)
                 .build();
     }
 
@@ -183,12 +203,14 @@ public class GatewayMessage {
                 .usage(this.usage)
                 .sequenceNumber(this.sequenceNumber)
                 .deviceName(this.deviceName)
+                .macAddress(this.macAddress)
                 .os(this.os)
                 .toolType(this.toolType)
                 .toolVersion(this.toolVersion)
                 .toolSessionId(this.toolSessionId)
                 .session(this.session)
                 .opencodeOnline(this.opencodeOnline)
+                .reason(this.reason)
                 .build();
     }
 
@@ -205,12 +227,14 @@ public class GatewayMessage {
                 .usage(this.usage)
                 .sequenceNumber(sequenceNumber)
                 .deviceName(this.deviceName)
+                .macAddress(this.macAddress)
                 .os(this.os)
                 .toolType(this.toolType)
                 .toolVersion(this.toolVersion)
                 .toolSessionId(this.toolSessionId)
                 .session(this.session)
                 .opencodeOnline(this.opencodeOnline)
+                .reason(this.reason)
                 .build();
     }
 }

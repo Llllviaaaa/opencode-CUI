@@ -21,6 +21,8 @@ public class AgentConnection {
 
     private String deviceName;
 
+    private String macAddress;
+
     private String os;
 
     @Builder.Default

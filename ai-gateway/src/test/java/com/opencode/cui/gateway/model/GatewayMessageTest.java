@@ -141,13 +141,27 @@ class GatewayMessageTest {
 
     @Test
     void testRegisterFactoryMethod() {
-        GatewayMessage msg = GatewayMessage.register("MyPC", "WINDOWS", "OPENCODE", "1.0.0");
+        GatewayMessage msg = GatewayMessage.register("MyPC", "AA:BB:CC:DD:EE:FF", "WINDOWS", "OPENCODE", "1.0.0");
 
         assertEquals("register", msg.getType());
         assertEquals("MyPC", msg.getDeviceName());
+        assertEquals("AA:BB:CC:DD:EE:FF", msg.getMacAddress());
         assertEquals("WINDOWS", msg.getOs());
         assertEquals("OPENCODE", msg.getToolType());
         assertEquals("1.0.0", msg.getToolVersion());
+    }
+
+    @Test
+    void testRegisterOkFactory() {
+        GatewayMessage msg = GatewayMessage.registerOk();
+        assertEquals("register_ok", msg.getType());
+    }
+
+    @Test
+    void testRegisterRejectedFactory() {
+        GatewayMessage msg = GatewayMessage.registerRejected("duplicate_connection");
+        assertEquals("register_rejected", msg.getType());
+        assertEquals("duplicate_connection", msg.getReason());
     }
 
     @Test

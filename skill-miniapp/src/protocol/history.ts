@@ -1,4 +1,4 @@
-import type { Message, MessagePart } from './types';
+import type { Message, MessagePart, QuestionOption } from './types';
 
 interface BackendMessagePart {
   partId?: string | null;
@@ -97,25 +97,28 @@ function parseObject(value: string | Record<string, unknown> | null | undefined)
   }
 }
 
-function normalizeQuestionOptions(options: unknown): string[] | undefined {
+function normalizeQuestionOptions(options: unknown): QuestionOption[] | undefined {
   if (!Array.isArray(options)) {
     return undefined;
   }
 
-  const labels = options
-    .map((opt) => {
-      if (typeof opt === 'string') {
-        return opt;
+  const result: QuestionOption[] = [];
+  for (const opt of options) {
+    if (typeof opt === 'string') {
+      result.push({ label: opt });
+    } else if (opt && typeof opt === 'object') {
+      const obj = opt as Record<string, unknown>;
+      const label = typeof obj.label === 'string' ? obj.label : '';
+      if (label) {
+        result.push({
+          label,
+          description: typeof obj.description === 'string' ? obj.description : undefined,
+        });
       }
-      if (opt && typeof opt === 'object') {
-        const label = (opt as { label?: unknown }).label;
-        return typeof label === 'string' ? label : '';
-      }
-      return '';
-    })
-    .filter((opt): opt is string => Boolean(opt));
+    }
+  }
 
-  return labels.length > 0 ? labels : undefined;
+  return result.length > 0 ? result : undefined;
 }
 
 function extractQuestionFields(input?: Record<string, unknown>): Pick<MessagePart, 'header' | 'question' | 'options'> {
@@ -239,8 +242,8 @@ function normalizeMeta(meta: string | Record<string, unknown> | null | undefined
 export function normalizeHistoryMessage(raw: BackendMessage): Message {
   const parts = Array.isArray(raw.parts)
     ? raw.parts
-        .map((part, index) => normalizePart(part, index))
-        .filter((part): part is MessagePart => part !== null)
+      .map((part, index) => normalizePart(part, index))
+      .filter((part): part is MessagePart => part !== null)
     : [];
 
   const derivedContent = parts

@@ -1,5 +1,10 @@
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
 export type StreamMessageType =
   | 'text.delta'
   | 'text.done'
@@ -54,7 +59,7 @@ export interface StreamMessage {
 
   header?: string;
   question?: string;
-  options?: string[];
+  options?: QuestionOption[];
 
   permissionId?: string;
   permType?: string;
@@ -92,7 +97,7 @@ export interface MessagePart {
 
   header?: string;
   question?: string;
-  options?: string[];
+  options?: QuestionOption[];
   answered?: boolean;
 
   permissionId?: string;

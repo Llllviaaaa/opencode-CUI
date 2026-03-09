@@ -23,6 +23,7 @@ import { HealthChecker } from './HealthChecker';
 import { shouldRelay } from './EventFilter';
 import { resolveConfig } from './config/AgentConfig';
 import * as os from 'node:os';
+import { networkInterfaces } from 'node:os';
 
 // ---------------------------------------------------------------------------
 // Plugin Entry Point
@@ -73,6 +74,10 @@ export const PlatformAgent: Plugin = async (ctx) => {
     gateway.on('disconnected', ({ code, reason }) => {
         console.warn(`[PlatformAgent] Gateway disconnected: code=${code} reason=${reason}`);
     });
+    gateway.on('rejected', ({ code, reason }) => {
+        console.error(`[PlatformAgent] Connection rejected: code=${code} reason=${reason}`);
+        console.error('[PlatformAgent] Another instance may already be connected with this AK.');
+    });
     gateway.on('error', (err) => {
         console.error('[PlatformAgent] Gateway error:', err.message);
     });
@@ -121,6 +126,7 @@ function sendRegisterMessage(gateway: GatewayConnection): void {
         gateway.send({
             type: 'register',
             deviceName: os.hostname(),
+            macAddress: getMacAddress(),
             os: detectOS(),
             toolType: 'OPENCODE',
             toolVersion: '1.0.0',
@@ -128,6 +134,21 @@ function sendRegisterMessage(gateway: GatewayConnection): void {
     } catch (err) {
         console.error('[PlatformAgent] Failed to send register message:', err);
     }
+}
+
+/**
+ * Get the first non-internal MAC address of the device.
+ */
+function getMacAddress(): string {
+    const nets = networkInterfaces();
+    for (const name of Object.keys(nets)) {
+        for (const net of nets[name] ?? []) {
+            if (!net.internal && net.mac !== '00:00:00:00:00:00') {
+                return net.mac;
+            }
+        }
+    }
+    return 'unknown';
 }
 
 /**

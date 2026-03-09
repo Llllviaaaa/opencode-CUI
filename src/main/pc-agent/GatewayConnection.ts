@@ -2,9 +2,10 @@
  * GatewayConnection — AI-Gateway WebSocket connection manager.
  *
  * Maintains a persistent WebSocket connection to the AI-Gateway with:
- *  - AK/SK query-parameter authentication on connect
+ *  - AK/SK authentication via WebSocket subprotocol (Sec-WebSocket-Protocol)
  *  - Automatic reconnect with exponential backoff (1s -> 2s -> 4s -> ... -> 30s cap)
  *  - Periodic heartbeat messages
+ *  - Rejection handling for duplicate connections and device binding failures
  *  - EventEmitter interface for connection lifecycle events
  */
 
@@ -27,18 +28,20 @@ export enum ConnectionState {
 /**
  * Events emitted by {@link GatewayConnection}.
  *
- * | Event          | Payload                |
- * |----------------|------------------------|
- * | `connected`    | _none_                 |
- * | `disconnected` | `{ code, reason }`     |
- * | `message`      | parsed JSON object     |
- * | `error`        | `Error`                |
+ * | Event          | Payload                          |
+ * |----------------|----------------------------------|
+ * | `connected`    | _none_                           |
+ * | `disconnected` | `{ code, reason }`               |
+ * | `message`      | parsed JSON object               |
+ * | `error`        | `Error`                          |
+ * | `rejected`     | `{ code, reason }` (no reconnect)|
  */
 export interface GatewayConnectionEvents {
   connected: [];
   disconnected: [info: { code: number; reason: string }];
   message: [data: unknown];
   error: [err: Error];
+  rejected: [info: { code: number; reason: string }];
 }
 
 /** Type-safe EventEmitter for {@link GatewayConnectionEvents}. */
@@ -118,10 +121,10 @@ export class GatewayConnection extends EventEmitter {
   /**
    * Establish the WebSocket connection to the AI-Gateway.
    *
-   * Authentication parameters are appended as URL query params:
-   * `?ak=...&ts=...&nonce=...&sign=...`
+   * Authentication parameters are sent via WebSocket subprotocol:
+   * `Sec-WebSocket-Protocol: auth.{base64-json}`
    *
-   * @param authParams  Output of {@link AkSkAuth.sign}.
+   * @param auth  Output of {@link AkSkAuth.sign} or a provider function.
    * @returns Resolves once the connection is open; rejects on first-connect failure.
    */
   connect(auth: AuthParams | (() => AuthParams)): Promise<void> {
@@ -177,23 +180,37 @@ export class GatewayConnection extends EventEmitter {
   // Internal
   // -----------------------------------------------------------------------
 
-  /**
-   * Build the full WebSocket URL with auth query parameters.
-   */
-  private buildUrl(auth: AuthParams): string {
-    const sep = this.gatewayUrl.includes('?') ? '&' : '?';
-    return `${this.gatewayUrl}${sep}ak=${encodeURIComponent(auth.ak)}&ts=${encodeURIComponent(auth.timestamp)}&nonce=${encodeURIComponent(auth.nonce)}&sign=${encodeURIComponent(auth.signature)}`;
-  }
+  /** Custom close codes that indicate rejection (should NOT auto-reconnect). */
+  private static readonly REJECTION_CODES = new Set([
+    4403, // device_binding_failed
+    4408, // register_timeout
+    4409, // duplicate_connection
+  ]);
 
   /**
    * Core connection logic, used for both initial connect and reconnect.
+   *
+   * Auth is sent via WebSocket subprotocol: `auth.{base64-json({ak,ts,nonce,sign})}`
    */
   private doConnect(auth: AuthParams): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       this._state = ConnectionState.CONNECTING;
-      const url = this.buildUrl(auth);
 
-      const ws = new WebSocket(url);
+      // Encode auth params as subprotocol: auth.{base64url-json}
+      // MUST use base64url (RFC 4648 §5) instead of standard base64 because
+      // WebSocket subprotocol tokens cannot contain '+', '/', '=' characters
+      // (RFC 6455 §4.1 — token = 1*tchar, tchar excludes these).
+      // Bun enforces this strictly and throws SyntaxError for standard base64.
+      const authPayload = Buffer.from(
+        JSON.stringify({
+          ak: auth.ak,
+          ts: auth.timestamp,
+          nonce: auth.nonce,
+          sign: auth.signature,
+        }),
+      ).toString('base64url');
+
+      const ws = new WebSocket(this.gatewayUrl, [`auth.${authPayload}`]);
       this.ws = ws;
 
       ws.on('open', () => {
@@ -224,6 +241,14 @@ export class GatewayConnection extends EventEmitter {
         this.stopHeartbeat();
         const reasonStr = reason.toString();
         this.emit('disconnected', { code, reason: reasonStr });
+
+        // Rejection close codes: do NOT auto-reconnect
+        if (GatewayConnection.REJECTION_CODES.has(code)) {
+          this.intentionallyClosed = true;
+          this._state = ConnectionState.CLOSED;
+          this.emit('rejected', { code, reason: reasonStr });
+          return;
+        }
 
         if (!this.intentionallyClosed) {
           this.scheduleReconnect();

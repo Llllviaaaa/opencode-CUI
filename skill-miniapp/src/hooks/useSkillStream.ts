@@ -200,7 +200,19 @@ function normalizeStreamingPart(raw: Record<string, unknown>): StreamMessage | n
         status: 'running',
         header: typeof raw.header === 'string' ? raw.header : undefined,
         question: typeof raw.question === 'string' ? raw.question : undefined,
-        options: Array.isArray(raw.options) ? raw.options.filter((value): value is string => typeof value === 'string') : undefined,
+        options: Array.isArray(raw.options)
+          ? raw.options
+            .map((v: unknown) => {
+              if (typeof v === 'string') return { label: v };
+              if (v && typeof v === 'object') {
+                const obj = v as Record<string, unknown>;
+                const label = typeof obj.label === 'string' ? obj.label : '';
+                if (label) return { label, description: typeof obj.description === 'string' ? obj.description : undefined };
+              }
+              return null;
+            })
+            .filter((v): v is { label: string; description?: string } => v !== null)
+          : undefined,
       };
     case 'permission':
       return {
