@@ -26,7 +26,7 @@
 配置从多个源加载，**后加载的覆盖先加载的**（优先级从高到低）：
 
 ```
-env (BRIDGE_*) > project (.opencode/message-bridge.jsonc) > user (~/.config/opencode/message-bridge.jsonc) > default
+env (BRIDGE_*) > project (.opencode/message-bridge.jsonc/.json) > user (~/.config/opencode/message-bridge.jsonc/.json) > default
 ```
 
 ### 项目配置查找机制
@@ -34,15 +34,18 @@ env (BRIDGE_*) > project (.opencode/message-bridge.jsonc) > user (~/.config/open
 项目配置支持**向上查找**，从当前工作目录（或指定 workspace）向上查找到文件系统根：
 
 1. 从起始目录开始
-2. 检查 `.opencode/message-bridge.jsonc` 是否存在
-3. 如不存在，进入父目录继续查找
+2. 按顺序检查 `.opencode/message-bridge.jsonc`、`.opencode/message-bridge.json`
+3. 如都不存在，进入父目录继续查找
 4. 直到找到配置文件或到达文件系统根
+
+同一目录下若两者同时存在，优先使用 `message-bridge.jsonc`。
 
 **示例场景**：
 ```
 /workspace/project/
   ├── .opencode/
-  │   └── message-bridge.jsonc  ← 配置在这里
+  │   ├── message-bridge.jsonc  ← 同目录双文件时优先
+  │   └── message-bridge.json
   ├── src/
   │   └── components/
   │       └── Button.tsx        ← 在这里运行也能找到配置

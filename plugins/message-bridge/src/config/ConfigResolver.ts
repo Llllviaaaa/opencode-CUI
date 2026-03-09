@@ -6,6 +6,8 @@ import type { BridgeLogger } from '../runtime/AppLogger';
 import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 import { JsoncParser } from './JsoncParser';
 
+const CONFIG_FILE_NAMES = ['message-bridge.jsonc', 'message-bridge.json'] as const;
+
 export class ConfigResolver {
   private readonly jsoncParser: JsoncParser;
   private readonly logger?: BridgeLogger;
@@ -52,15 +54,20 @@ export class ConfigResolver {
     const workspaceRoot = workspacePath ?? process.cwd();
     this.logger?.info('config.resolve.started', { workspacePath: workspaceRoot });
 
-    const userConfigPath = join(homedir(), '.config', 'opencode', 'message-bridge.jsonc');
-    const userConfig = await this.loadConfigFile(userConfigPath);
-    if (userConfig) {
-      config = this.mergeConfig(config, userConfig);
-      sources.push(`user:${userConfigPath}`);
-      this.logger?.info('config.source.loaded', {
-        source: 'user',
-        path: userConfigPath,
-      });
+    const userConfigHome = process.env.HOME || homedir();
+    const userConfigPath = await this.findFirstExistingPath(
+      this.getConfigCandidatePaths(join(userConfigHome, '.config', 'opencode')),
+    );
+    if (userConfigPath) {
+      const userConfig = await this.loadConfigFile(userConfigPath);
+      if (userConfig) {
+        config = this.mergeConfig(config, userConfig);
+        sources.push(`user:${userConfigPath}`);
+        this.logger?.info('config.source.loaded', {
+          source: 'user',
+          path: userConfigPath,
+        });
+      }
     }
 
     const projectConfigPath = await this.findProjectConfig(workspaceRoot);
@@ -114,24 +121,39 @@ export class ConfigResolver {
   }
 
   private async findProjectConfig(startDir: string): Promise<string | null> {
-    const configFileName = 'message-bridge.jsonc';
     const configDirName = '.opencode';
     let current = resolve(startDir);
 
     while (true) {
-      const configPath = join(current, configDirName, configFileName);
-      try {
-        await promises.access(configPath);
+      const configPath = await this.findFirstExistingPath(
+        this.getConfigCandidatePaths(join(current, configDirName)),
+      );
+      if (configPath) {
         return configPath;
-      } catch {
-        const parent = dirname(current);
-        if (parent === current) {
-          break;
-        }
-        current = parent;
       }
+      const parent = dirname(current);
+      if (parent === current) {
+        break;
+      }
+      current = parent;
     }
 
+    return null;
+  }
+
+  private getConfigCandidatePaths(configDir: string): string[] {
+    return CONFIG_FILE_NAMES.map((fileName) => join(configDir, fileName));
+  }
+
+  private async findFirstExistingPath(paths: string[]): Promise<string | null> {
+    for (const path of paths) {
+      try {
+        await promises.access(path);
+        return path;
+      } catch {
+        // Continue to the next candidate.
+      }
+    }
     return null;
   }
 

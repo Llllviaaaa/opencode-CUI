@@ -82,18 +82,24 @@ payload: {
 Configuration loads from multiple sources with this priority (highest first):
 
 1. **Environment variables** (`BRIDGE_*`)
-2. **Project config** (`.opencode/message-bridge.jsonc`) - supports upward lookup from subdirectories
-3. **User config** (`~/.config/opencode/message-bridge.jsonc`)
+2. **Project config** (`.opencode/message-bridge.jsonc` or `.opencode/message-bridge.json`, with `jsonc` preferred) - supports upward lookup from subdirectories
+3. **User config** (`~/.config/opencode/message-bridge.jsonc` or `~/.config/opencode/message-bridge.json`, with `jsonc` preferred)
 4. **Built-in defaults**
 
 ### Project Config Lookup
 
-The plugin searches for `.opencode/message-bridge.jsonc` starting from the current working directory (or specified workspace) and walks up to the filesystem root. This allows running from any subdirectory within your project:
+The plugin searches for project config candidates in this order at each directory level:
+
+1. `.opencode/message-bridge.jsonc`
+2. `.opencode/message-bridge.json`
+
+It starts from the current working directory (or specified workspace) and walks up to the filesystem root. This allows running from any subdirectory within your project:
 
 ```
 /workspace/project/
   ├── .opencode/
-  │   └── message-bridge.jsonc  ← config file
+  │   ├── message-bridge.jsonc  ← preferred when both exist
+  │   └── message-bridge.json
   ├── src/
   │   └── components/
   │       └── Button.tsx        ← running from here works!
