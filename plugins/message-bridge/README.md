@@ -184,6 +184,9 @@ npm run typecheck
 # Build the plugin
 npm run build
 
+# Build single-file distribution artifact for direct copy into .opencode/plugins
+npm run build:plugin
+
 # Run all tests
 npm run test
 
@@ -205,7 +208,27 @@ npm run debug:e2e
 # Fetch logs from OpenCode log files for troubleshooting
 # Note: use -- before script arguments
 npm run logs:fetch -- --since "1 hour ago" --level error
+
+# Verify OpenCode can load the single-file distribution artifact
+npm run verify:opencode-load
 ```
+
+## Plugin Distribution (Direct Copy)
+
+Use this flow when sharing the plugin with other users who should install it by copying one file.
+
+```bash
+# Generate direct-copy artifact
+npm run build:plugin
+
+# Copy into target project plugin directory
+cp ./release/message-bridge.plugin.js /path/to/target-project/.opencode/plugins/message-bridge.plugin.js
+```
+
+Then restart OpenCode in the target project.
+
+- `npm run build` produces development artifacts under `dist/`
+- `npm run build:plugin` produces distribution artifact `release/message-bridge.plugin.js` for direct copy
 
 ## Developer Debug Flow
 
