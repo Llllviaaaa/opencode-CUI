@@ -119,18 +119,18 @@
 | INT-CLSE-001 | close_session 调用验证 | 集成测试 | P0 | §5 FR-MB-05 |
 | E2E-CLSE-001 | close_session 语义验证 | E2E Smoke | P0 | §5 FR-MB-05 |
 
-### 2.6 FR-MB-06: 权限回复兼容
+### 2.6 FR-MB-06: 权限回复协议对齐
 
 | 测试用例 ID | 用例名称 | 测试类型 | 优先级 | 关联 PRD 章节 |
 |-------------|----------|----------|--------|---------------|
-| UT-PERM-003 | approved=true 映射到 allow | 单元测试 | P0 | §5 FR-MB-06 |
-| UT-PERM-004 | approved=false 映射到 deny | 单元测试 | P0 | §5 FR-MB-06 |
-| UT-PERM-005 | response=allow 映射到 SDK once | 单元测试 | P0 | §5 FR-MB-06 |
-| UT-PERM-006 | response=always 映射到 SDK always | 单元测试 | P0 | §5 FR-MB-06 |
-| UT-PERM-007 | response=deny 映射到 SDK reject | 单元测试 | P0 | §5 FR-MB-06 |
-| UT-PERM-008 | 双字段同时存在时优先 response | 单元测试 | P1 | §5 FR-MB-06 |
+| UT-PERM-003 | response=once 透传到 SDK | 单元测试 | P0 | §5 FR-MB-06 |
+| UT-PERM-004 | response=always 透传到 SDK | 单元测试 | P0 | §5 FR-MB-06 |
+| UT-PERM-005 | response=reject 透传到 SDK | 单元测试 | P0 | §5 FR-MB-06 |
+| UT-PERM-006 | 拒绝 legacy approved 字段 | 单元测试 | P0 | §5 FR-MB-06 |
+| UT-PERM-007 | 拒绝 response=allow | 单元测试 | P0 | §5 FR-MB-06 |
+| UT-PERM-008 | 拒绝 response=deny | 单元测试 | P0 | §5 FR-MB-06 |
 | INT-PERM-001 | permission_reply 完整链路 | 集成测试 | P0 | §5 FR-MB-06 |
-| E2E-PERM-001 | permission_reply 双字段兼容 | E2E Smoke | P0 | §5 FR-MB-06 |
+| E2E-PERM-001 | permission_reply response-only | E2E Smoke | P0 | §5 FR-MB-06 |
 
 ### 2.7 FR-MB-07: Fast Fail
 
@@ -773,38 +773,37 @@ describe('UT-ACTN-002', () => {
 
 ---
 
-#### UT-PERM-003: approved=true 映射到 allow
+#### UT-PERM-003: response=once 透传到 SDK
 
 **前置条件:**
 - PermissionReplyAction 实例已创建
-- Mock SDK permission.reply 方法
+- Mock SDK `postSessionIdPermissionsPermissionId` 方法
 
 **测试步骤:**
-1. 调用 execute() 传入 approved=true
-2. 验证 SDK 被调用时 response 参数为 'once'
+1. 调用 execute() 传入 `response=once`
+2. 验证 SDK 被调用时 body.response 仍为 `once`
 
 **预期结果:**
-- approved=true -> response='allow' -> SDK 'once'
+- `response=once` 直接透传，不做中间映射
 
 **测试代码:**
 ```typescript
 describe('UT-PERM-003', () => {
-  it('should map approved=true to allow (SDK: once)', async () => {
+  it('should pass through response=once', async () => {
     const action = new PermissionReplyAction();
     const calls: unknown[] = [];
     const mockSDK = {
-      permission: { reply: async (payload: unknown) => { calls.push(payload); } }
+      postSessionIdPermissionsPermissionId: async (payload: unknown) => { calls.push(payload); }
     };
-    const mockBuilder = { build: () => ({}) };
     
     await action.execute(
-      { permissionId: 'perm-123', approved: true },
-      { opencode: mockSDK as any, envelopeBuilder: mockBuilder as any }
+      { permissionId: 'perm-123', toolSessionId: 's-1', response: 'once' },
+      { client: mockSDK as any, connectionState: 'READY' } as any
     );
     
     expect(calls[0]).toMatchObject({
-      permissionId: 'perm-123',
-      response: 'once' // mapped from allow
+      path: { id: 's-1', permissionID: 'perm-123' },
+      body: { response: 'once' }
     });
   });
 });
@@ -1186,43 +1185,44 @@ $ curl -X POST http://skill-server/api/sessions/sess-123/chat \
 
 ### 5.3 Permission Reply E2E 测试 (E2E-PERM)
 
-#### E2E-PERM-001: permission_reply 双字段兼容
+#### E2E-PERM-001: permission_reply response-only
 
 **前置条件:**
 - OpenCode 发起权限请求
 - 插件处于 READY 状态
 
 **测试步骤:**
-1. 测试 approved=true 路径
-   - Skill 发送 permission_reply with approved=true
-   - 验证映射到 allow -> SDK once
-   
-2. 测试 approved=false 路径
-   - Skill 发送 permission_reply with approved=false
-   - 验证映射到 deny -> SDK reject
-   
-3. 测试 response 字段路径
-   - Skill 发送 permission_reply with response=always
-   - 验证直接映射到 SDK always
+1. 测试 canonical response 路径
+   - Skill 发送 permission_reply with `response=once`
+   - 验证 SDK 收到 `response=once`
+
+2. 测试 canonical response 路径
+   - Skill 发送 permission_reply with `response=always`
+   - 验证 SDK 收到 `response=always`
+
+3. 测试 canonical response 路径
+   - Skill 发送 permission_reply with `response=reject`
+   - 验证 SDK 收到 `response=reject`
+
+4. 测试 legacy 字段拒绝路径
+   - Skill 发送 permission_reply with `approved=true`
+   - 验证插件返回 tool_error（INVALID_PAYLOAD）
 
 **预期结果:**
-- approved=true -> SDK once
-- approved=false -> SDK reject
-- response=always -> SDK always
-- response=allow -> SDK once
-- response=deny -> SDK reject
+- `response=once|always|reject` 均可成功执行
+- legacy `approved` 字段被拒绝
 
 **验证方式:**
 ```bash
-# 测试 approved=true
+# 测试 response=once
 curl -X POST http://gateway/api/permission-reply \
-  -d '{"permissionId": "perm-1", "approved": true}'
-# 插件日志: [INFO] Mapped approved=true to SDK response: once
+  -d '{"permissionId": "perm-1", "toolSessionId": "ses-1", "response": "once"}'
+# 插件日志: [INFO] action.permission_reply.started ... response=once
 
-# 测试 response=always
+# 测试 legacy approved（应失败）
 curl -X POST http://gateway/api/permission-reply \
-  -d '{"permissionId": "perm-2", "response": "always"}'
-# 插件日志: [INFO] Mapped response=always to SDK response: always
+  -d '{"permissionId": "perm-2", "approved": true}'
+# 预期: 返回 tool_error / INVALID_PAYLOAD
 ```
 
 ---
@@ -1304,7 +1304,7 @@ Release Build:
 ├── 全部自动化测试
 └── 手动验证清单
     ├── E2E-CONN-002 (断线重连)
-    ├── E2E-PERM-001 (双字段兼容)
+    ├── E2E-PERM-001 (response-only)
     └── E2E-FAIL-001 (Fast Fail 时延)
 ```
 
@@ -1478,7 +1478,7 @@ export class MockOpenCodeSDK {
 | §5 FR-MB-03 | action 下行可扩展 | 5 | 1 | 0 |
 | §5 FR-MB-04 | 基础 action 支持 | 8 | 3 | 3 |
 | §5 FR-MB-05 | 关闭语义 | 2 | 1 | 1 |
-| §5 FR-MB-06 | 权限回复兼容 | 6 | 1 | 1 |
+| §5 FR-MB-06 | 权限回复协议对齐 | 6 | 1 | 1 |
 | §5 FR-MB-07 | Fast Fail | 8 | 1 | 1 |
 | §5 FR-MB-08 | 注册与状态查询 | 5 | 2 | 2 |
 | §5 FR-MB-09 | 配置文件获取 | 10 | 1 | 1 |
