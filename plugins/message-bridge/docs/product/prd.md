@@ -148,13 +148,15 @@
 
 ### FR-MB-09（P0）配置文件获取（参考 bridge）
 配置发现必须支持：
-- 用户级：`~/.config/opencode/message-bridge.jsonc`
-- 项目级：`<workspace>/.opencode/message-bridge.jsonc`
+- 用户级：`~/.config/opencode/message-bridge.jsonc`、`~/.config/opencode/message-bridge.json`
+- 项目级：`<workspace>/.opencode/message-bridge.jsonc`、`<workspace>/.opencode/message-bridge.json`
 - 环境变量：`BRIDGE_*`
 - 默认回退
 
 优先级：
 `env > project > user > default`
+
+同一目录下若 `.jsonc` 与 `.json` 同时存在，优先读取 `.jsonc`。
 
 `<workspace>` 定义：
 1. 优先 `ctx.projectRoot`
