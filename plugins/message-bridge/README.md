@@ -37,34 +37,25 @@ payload: {
 ```
 
 ### 3. close_session
-Close an OpenCode session using **abort semantics** (not delete). This ends the session gracefully without removing session data.
+Close an OpenCode session using **delete semantics**.
 
 ```typescript
 payload: {
-  sessionId: string;  // Required: session to close
+  toolSessionId: string;  // Required: target OpenCode session ID
 }
 ```
 
 ### 4. permission_reply
-Respond to a permission request from OpenCode. Supports **dual payload formats**:
-
-**Target format** (preferred):
+Respond to a permission request from OpenCode. Uses **response-only** protocol:
 ```typescript
 payload: {
   permissionId: string;
-  toolSessionId?: string;
-  response: 'allow' | 'always' | 'deny';
+  toolSessionId: string;
+  response: 'once' | 'always' | 'reject';
 }
 ```
 
-**Compatibility format** (legacy):
-```typescript
-payload: {
-  permissionId: string;
-  toolSessionId?: string;
-  approved: boolean;  // true maps to 'allow', false maps to 'deny'
-}
-```
+Legacy `approved` payloads are no longer accepted.
 
 ### 5. status_query
 Query the connection health status.

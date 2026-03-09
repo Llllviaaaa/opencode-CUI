@@ -50,7 +50,7 @@
 1. WS 鉴权连接、心跳、重连
 2. 下行 invoke/status_query 与上行协议消息
 3. 可配置白名单与 action 注册表
-4. permission_reply 双字段兼容
+4. permission_reply response-only 协议对齐
 5. close_session → session.abort 固化
 6. 配置文件获取与校验
 7. 插件级单测/集成/最小 E2E
@@ -625,18 +625,18 @@ Max Concurrent: 5 (Wave 2 & 3 have 5 parallel tasks each)
 
   **What to do**:
   - 扩展 BaseAction 实现 PermissionReplyAction
-  - 实现 validate 方法验证双字段兼容 (approved + response)
-  - 实现 execute 方法处理 approved/response 映射
+  - 实现 validate 方法严格校验 `permissionId/toolSessionId/response`
+  - 实现 execute 方法透传 `response` 到 SDK
   - 实现 errorMapper 方法映射 SDK 错误
   - 注册到 ActionRegistry
 
   **Must NOT do**:
-  - 不要丢弃任一字段（必须支持双字段）
-  - 不要修改映射逻辑
+  - 不要接收 legacy `approved` 字段
+  - 不要引入 `allow/deny` 中间映射
 
   **Recommended Agent Profile**:
   - **Category**: `ultrabrain`
-    - Reason: Complex compatibility logic with dual field support
+    - Reason: Strict protocol validation and SDK passthrough behavior
   - **Skills**: [`typescript-programmer`]
     - `typescript-programmer`: For compatibility layer implementation
   - **Skills Evaluated but Omitted**:
@@ -649,34 +649,34 @@ Max Concurrent: 5 (Wave 2 & 3 have 5 parallel tasks each)
   - **Blocked By**: Tasks 5, 6, 7, 8, 9, 9.5
 
   **References**:
-  - `plugins/message-bridge/docs/product/prd.md §FR-MB-06` - Permission reply compatibility
-  - `plugins/message-bridge/docs/product/prd.md §7` - Dual field definitions
-  - Architecture doc §3.4.4 - Permission Reply compatibility details
+  - `plugins/message-bridge/docs/product/prd.md §FR-MB-06` - response-only protocol contract
+  - `plugins/message-bridge/docs/design/interfaces/protocol-contract.md` - canonical payload and values
+  - Architecture doc §3.4.4 - Permission Reply protocol details
 
   **Acceptance Criteria**:
-  - [ ] PermissionReplyAction supports both approved (boolean) and response (string) fields
-  - [ ] approved=true maps to allow, approved=false maps to deny
+  - [ ] PermissionReplyAction requires `permissionId/toolSessionId/response`
+  - [ ] `response` only accepts `once|always|reject`
   - [ ] Action registered in ActionRegistry
-  - [ ] Both field formats work correctly
+  - [ ] Legacy `approved` payload is rejected
 
   **QA Scenarios**:
   ```
-  Scenario: Verify dual field compatibility
+  Scenario: Verify response-only validation
     Tool: Bash
     Preconditions: PermissionReplyAction implemented
     Steps:
       1. cd plugins/message-bridge
-      2. node -e "const action = require('./dist/action/PermissionReplyAction').default; console.log(action.mapApproved(true), action.mapApproved(false))"
-    Expected Result: approved=true → 'allow', approved=false → 'deny'
-    Evidence: .sisyphus/evidence/task-13-dual-field.txt
+      2. node -e "const action = require('./dist/action/PermissionReplyAction').default; console.log(action.validate({ permissionId: 'p1', toolSessionId: 's1', response: 'once' }), action.validate({ permissionId: 'p1', approved: true }))"
+    Expected Result: first valid=true, second valid=false
+    Evidence: .sisyphus/evidence/task-13-response-only.txt
 
   Scenario: Verify response field direct use
     Tool: Bash
     Preconditions: PermissionReplyAction implemented
     Steps:
       1. cd plugins/message-bridge
-      2. node -e "const action = require('./dist/action/PermissionReplyAction').default; console.log(action.handleResponse('always'))"
-    Expected Result: response='always' used directly
+      2. node -e "const action = require('./dist/action/PermissionReplyAction').default; console.log(action.validate({ permissionId: 'p1', toolSessionId: 's1', response: 'always' }))"
+    Expected Result: valid=true
     Evidence: .sisyphus/evidence/task-13-response-direct.txt
   ```
 
@@ -846,18 +846,18 @@ Max Concurrent: 5 (Wave 2 & 3 have 5 parallel tasks each)
 
   **What to do**:
   - 扩展 BaseAction 实现 PermissionReplyAction
-  - 实现 validate 方法验证双字段兼容 (approved + response)
-  - 实现 execute 方法处理 approved/response 映射
+  - 实现 validate 方法严格校验 `permissionId/toolSessionId/response`
+  - 实现 execute 方法透传 `response` 到 SDK
   - 实现 errorMapper 方法映射 SDK 错误
   - 注册到 ActionRegistry
 
   **Must NOT do**:
-  - 不要丢弃任一字段（必须支持双字段）
-  - 不要修改映射逻辑
+  - 不要接收 legacy `approved` 字段
+  - 不要引入 `allow/deny` 中间映射
 
   **Recommended Agent Profile**:
   - **Category**: `ultrabrain`
-    - Reason: Complex compatibility logic with dual field support
+    - Reason: Strict protocol validation and SDK passthrough behavior
   - **Skills**: [`typescript-programmer`]
     - `typescript-programmer`: For compatibility layer implementation
   - **Skills Evaluated but Omitted**:
@@ -870,34 +870,34 @@ Max Concurrent: 5 (Wave 2 & 3 have 5 parallel tasks each)
   - **Blocked By**: Tasks 5, 6, 7, 8, 9
 
   **References**:
-  - `plugins/message-bridge/docs/product/prd.md §FR-MB-06` - Permission reply compatibility
-  - `plugins/message-bridge/docs/product/prd.md §7` - Dual field definitions
-  - Architecture doc §3.4.4 - Permission Reply compatibility details
+  - `plugins/message-bridge/docs/product/prd.md §FR-MB-06` - response-only protocol contract
+  - `plugins/message-bridge/docs/design/interfaces/protocol-contract.md` - canonical payload and values
+  - Architecture doc §3.4.4 - Permission Reply protocol details
 
   **Acceptance Criteria**:
-  - [ ] PermissionReplyAction supports both approved (boolean) and response (string) fields
-  - [ ] approved=true maps to allow, approved=false maps to deny
+  - [ ] PermissionReplyAction requires `permissionId/toolSessionId/response`
+  - [ ] `response` only accepts `once|always|reject`
   - [ ] Action registered in ActionRegistry
-  - [ ] Both field formats work correctly
+  - [ ] Legacy `approved` payload is rejected
 
   **QA Scenarios**:
   ```
-  Scenario: Verify dual field compatibility
+  Scenario: Verify response-only validation
     Tool: Bash
     Preconditions: PermissionReplyAction implemented
     Steps:
       1. cd plugins/message-bridge
-      2. node -e "const action = require('./dist/action/PermissionReplyAction').default; console.log(action.mapApproved(true), action.mapApproved(false))"
-    Expected Result: approved=true → 'allow', approved=false → 'deny'
-    Evidence: .sisyphus/evidence/task-13-dual-field.txt
+      2. node -e "const action = require('./dist/action/PermissionReplyAction').default; console.log(action.validate({ permissionId: 'p1', toolSessionId: 's1', response: 'once' }), action.validate({ permissionId: 'p1', approved: true }))"
+    Expected Result: first valid=true, second valid=false
+    Evidence: .sisyphus/evidence/task-13-response-only.txt
 
   Scenario: Verify response field direct use
     Tool: Bash
     Preconditions: PermissionReplyAction implemented
     Steps:
       1. cd plugins/message-bridge
-      2. node -e "const action = require('./dist/action/PermissionReplyAction').default; console.log(action.handleResponse('always'))"
-    Expected Result: response='always' used directly
+      2. node -e "const action = require('./dist/action/PermissionReplyAction').default; console.log(action.validate({ permissionId: 'p1', toolSessionId: 's1', response: 'always' }))"
+    Expected Result: valid=true
     Evidence: .sisyphus/evidence/task-13-response-direct.txt
   ```
 
