@@ -213,7 +213,11 @@ start_bg() {
   echo "[start] ${name}"
   nohup bash -lc "${cmd}" >"${log_file}" 2>&1 &
   local launcher_pid=$!
-  wait_for_port "${port}" "${name}" || true
+  if ! wait_for_port "${port}" "${name}"; then
+    echo "[error] ${name} failed to start. Recent log output:" >&2
+    tail -n 40 "${log_file}" >&2 || true
+    return 1
+  fi
 
   local listener_pid
   listener_pid="$(pids_on_port "${port}" | head -n 1)"
@@ -241,6 +245,21 @@ fi
 if ! table_exists "${AI_DB}" "ak_sk_credential"; then
   echo "[db] Init ${AI_DB}.ak_sk_credential"
   "${MYSQL_CMD[@]}" "${AI_DB}" < "${ROOT_DIR}/ai-gateway/src/main/resources/db/migration/V2__ak_sk_credential.sql"
+fi
+if table_exists "${AI_DB}" "agent_connection"; then
+  echo "[db] Reconcile ${AI_DB}.agent_connection schema"
+
+  if ! column_exists "${AI_DB}" "agent_connection" "mac_address"; then
+    echo "[db] Add agent_connection.mac_address"
+    run_sql "ALTER TABLE ${AI_DB}.agent_connection ADD COLUMN mac_address VARCHAR(64) AFTER device_name;"
+  fi
+
+  if ! index_exists "${AI_DB}" "agent_connection" "uk_ak_tooltype"; then
+    echo "[db] Add unique index uk_ak_tooltype on agent_connection(ak_id, tool_type)"
+    run_sql "DELETE a FROM ${AI_DB}.agent_connection a INNER JOIN (SELECT ak_id, tool_type, MAX(id) AS keep_id FROM ${AI_DB}.agent_connection GROUP BY ak_id, tool_type) b ON a.ak_id = b.ak_id AND a.tool_type = b.tool_type AND a.id != b.keep_id;"
+    run_sql "UPDATE ${AI_DB}.agent_connection SET status = 'OFFLINE';"
+    run_sql "ALTER TABLE ${AI_DB}.agent_connection ADD UNIQUE INDEX uk_ak_tooltype (ak_id, tool_type);"
+  fi
 fi
 if ! table_exists "${SKILL_DB}" "skill_definition"; then
   echo "[db] Init ${SKILL_DB}.skill_definition/skill_session/skill_message"
@@ -299,7 +318,7 @@ start_bg \
   "8081" \
   "${PID_DIR}/ai-gateway.pid" \
   "${LOG_DIR}/ai-gateway.log" \
-  "cd '${ROOT_DIR}/ai-gateway' && MYSQL_HOST='${DB_HOST}' MYSQL_PORT='${DB_PORT}' MYSQL_USERNAME='${DB_USER}' MYSQL_PASSWORD='${DB_PASSWORD}' MYSQL_AI_GATEWAY_DB='${AI_DB}' mvn spring-boot:run"
+  "cd '${ROOT_DIR}/ai-gateway' && MYSQL_HOST='${DB_HOST}' MYSQL_PORT='${DB_PORT}' MYSQL_AI_GATEWAY_DB='${AI_DB}' SPRING_DATASOURCE_USERNAME='${DB_USER}' SPRING_DATASOURCE_PASSWORD='${DB_PASSWORD}' mvn spring-boot:run"
 
 echo "[3/4] Start skill-server"
 start_bg \
