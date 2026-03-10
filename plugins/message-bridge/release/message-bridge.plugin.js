@@ -3340,6 +3340,78 @@ function createSdkAdapter(client) {
   };
 }
 
+// src/runtime/compat/ToolDoneCompat.ts
+class ToolDoneCompat {
+  pendingPromptSessions = new Set;
+  completedSessionsAwaitingIdleDrop = new Set;
+  handleInvokeStarted(input) {
+    if (input.action !== "chat" || !input.toolSessionId) {
+      return;
+    }
+    this.pendingPromptSessions.add(input.toolSessionId);
+  }
+  handleInvokeFailed(input) {
+    if (input.action !== "chat" || !input.toolSessionId) {
+      return;
+    }
+    this.pendingPromptSessions.delete(input.toolSessionId);
+  }
+  handleInvokeCompleted(input) {
+    const { action, toolSessionId, logger } = input;
+    if (action !== "chat") {
+      return { emit: false };
+    }
+    if (!toolSessionId) {
+      logger.warn("compat.tool_done.skipped_missing_session", {
+        action,
+        source: "invoke_complete"
+      });
+      return { emit: false };
+    }
+    this.pendingPromptSessions.delete(toolSessionId);
+    this.completedSessionsAwaitingIdleDrop.add(toolSessionId);
+    logger.info("compat.tool_done.sent", {
+      toolSessionId,
+      action,
+      source: "invoke_complete"
+    });
+    return {
+      emit: true,
+      source: "invoke_complete"
+    };
+  }
+  handleSessionIdle(input) {
+    const { toolSessionId, logger } = input;
+    if (this.pendingPromptSessions.has(toolSessionId)) {
+      logger.debug("compat.tool_done.deferred_pending", {
+        toolSessionId,
+        source: "session_idle"
+      });
+      return { emit: false };
+    }
+    if (this.completedSessionsAwaitingIdleDrop.has(toolSessionId)) {
+      this.completedSessionsAwaitingIdleDrop.delete(toolSessionId);
+      logger.debug("compat.tool_done.skipped_duplicate", {
+        toolSessionId,
+        source: "session_idle"
+      });
+      return { emit: false };
+    }
+    logger.info("compat.tool_done.fallback_from_idle", {
+      toolSessionId,
+      source: "session_idle"
+    });
+    logger.info("compat.tool_done.sent", {
+      toolSessionId,
+      source: "session_idle"
+    });
+    return {
+      emit: true,
+      source: "session_idle"
+    };
+  }
+}
+
 // src/runtime/BridgeRuntime.ts
 var UNKNOWN_MAC_ADDRESS = "unknown";
 function isUsableMacAddress(macAddress) {
@@ -3384,6 +3456,7 @@ class BridgeRuntime {
   started = false;
   sdkClient;
   logger;
+  toolDoneCompat = new ToolDoneCompat;
   constructor(options) {
     this.options = options;
     this.logger = new AppLogger(options.client, { component: "runtime" }, undefined, undefined, options.debug);
@@ -3530,6 +3603,19 @@ class BridgeRuntime {
       toolCallId: eventFields.toolCallId ?? undefined
     });
     forwardingLogger.debug("event.forwarded");
+    if (normalized.common.eventType === "session.idle") {
+      const decision = this.toolDoneCompat.handleSessionIdle({
+        toolSessionId: normalized.common.toolSessionId,
+        logger: forwardingLogger
+      });
+      if (decision.emit && decision.source) {
+        this.sendToolDone(normalized.common.toolSessionId, undefined, decision.source, {
+          logger: forwardingLogger,
+          traceId: bridgeMessageId,
+          gatewayMessageId: bridgeMessageId
+        });
+      }
+    }
   }
   getStarted() {
     return this.started;
@@ -3663,8 +3749,16 @@ class BridgeRuntime {
       });
       return;
     }
+    this.toolDoneCompat.handleInvokeStarted({
+      action: message.action,
+      toolSessionId
+    });
     const result = await this.actionRouter.route(message.action, message.payload, this.buildActionContext(welinkSessionId, invokeLogger));
     if (!result.success) {
+      this.toolDoneCompat.handleInvokeFailed({
+        action: message.action,
+        toolSessionId
+      });
       this.sendToolError(result, welinkSessionId, {
         logger: invokeLogger,
         traceId,
@@ -3680,6 +3774,19 @@ class BridgeRuntime {
       toolSessionId,
       latencyMs: Date.now() - startedAt
     });
+    const decision = this.toolDoneCompat.handleInvokeCompleted({
+      action: message.action,
+      toolSessionId,
+      logger: invokeLogger
+    });
+    if (decision.emit && toolSessionId && decision.source) {
+      this.sendToolDone(toolSessionId, welinkSessionId, decision.source, {
+        logger: invokeLogger,
+        traceId,
+        gatewayMessageId: downstreamFields.gatewayMessageId,
+        action: message.action
+      });
+    }
   }
   buildActionContext(welinkSessionId, logger = this.logger) {
     return {
@@ -3788,6 +3895,32 @@ class BridgeRuntime {
       toolSessionId: logOptions?.toolSessionId
     });
   }
+  sendToolDone(toolSessionId, welinkSessionId, source, logOptions) {
+    if (!this.gatewayConnection) {
+      this.logger.warn("runtime.tool_done.skipped_no_connection", { toolSessionId, welinkSessionId, source });
+      return;
+    }
+    const logger = logOptions?.logger ?? this.logger;
+    logger.info("runtime.tool_done.sending", {
+      toolSessionId,
+      welinkSessionId,
+      source,
+      action: logOptions?.action
+    });
+    this.gatewayConnection.send({
+      type: "tool_done",
+      toolSessionId,
+      welinkSessionId
+    }, {
+      traceId: logOptions?.traceId,
+      runtimeTraceId: this.logger.getTraceId(),
+      gatewayMessageId: logOptions?.gatewayMessageId,
+      welinkSessionId,
+      action: logOptions?.action,
+      toolSessionId,
+      source
+    });
+  }
 }
 
 // src/runtime/singleton.ts
@@ -3848,5 +3981,5 @@ export {
   MessageBridgePlugin
 };
 
-//# debugId=BA18E60660CF2CF464756E2164756E21
+//# debugId=614CB8084BAC618164756E2164756E21
 //# sourceMappingURL=message-bridge.plugin.js.map

@@ -38,7 +38,7 @@ describe('runtime protocol strictness', () => {
     expect('code' in sent[0]).toBe(false);
   });
 
-  test('accepts baseline invoke shape and does not emit tool_done on success', async () => {
+  test('accepts baseline invoke shape and emits tool_done on chat success', async () => {
     const prompts = [];
     const runtime = new BridgeRuntime({
       client: {
@@ -70,7 +70,10 @@ describe('runtime protocol strictness', () => {
       path: { id: 'tool-100' },
       body: { parts: [{ type: 'text', text: 'hello' }] },
     });
-    expect(sent).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('tool_done');
+    expect(sent[0].toolSessionId).toBe('tool-100');
+    expect(sent[0].welinkSessionId).toBe('100');
   });
 
   test('rejects permission_reply payloads with unsupported response values', async () => {
@@ -195,6 +198,42 @@ describe('runtime protocol strictness', () => {
     });
 
     expect(postCalls).toHaveLength(1);
+    expect(sent).toHaveLength(0);
+  });
+
+  test('does not emit tool_done on permission_reply success', async () => {
+    const permissionCalls = [];
+    const runtime = new BridgeRuntime({
+      client: {
+        session: {
+          create: async () => ({}),
+          abort: async () => ({}),
+          prompt: async () => ({ data: { ok: true } }),
+        },
+        postSessionIdPermissionsPermissionId: async (options) => {
+          permissionCalls.push(options);
+          return {};
+        },
+      },
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      welinkSessionId: 'perm-1',
+      action: 'permission_reply',
+      payload: { toolSessionId: 'tool-perm-1', permissionId: 'perm-a', response: 'once' },
+    });
+
+    expect(permissionCalls).toEqual([
+      {
+        path: { id: 'tool-perm-1', permissionID: 'perm-a' },
+        body: { response: 'once' },
+      },
+    ]);
     expect(sent).toHaveLength(0);
   });
 
@@ -533,7 +572,7 @@ describe('runtime protocol strictness', () => {
     expect(sent[0].context.opencodePartId).toBe('part-1');
   });
 
-  test('forwards session.idle as tool_event and never emits tool_done', async () => {
+  test('forwards session.idle as tool_event and emits fallback tool_done', async () => {
     const runtime = new BridgeRuntime({ client: {} });
     const sent = [];
 
@@ -550,10 +589,129 @@ describe('runtime protocol strictness', () => {
       },
     });
 
-    expect(sent).toHaveLength(1);
+    expect(sent).toHaveLength(2);
     expect(sent[0].message.type).toBe('tool_event');
     expect(sent[0].message.toolSessionId).toBe('tool-idle-1');
-    expect(sent.some((entry) => entry.message.type === 'tool_done')).toBe(false);
+    expect(sent[1].message.type).toBe('tool_done');
+    expect(sent[1].message.toolSessionId).toBe('tool-idle-1');
+  });
+
+  test('does not emit duplicate tool_done when session.idle follows chat success', async () => {
+    const runtime = new BridgeRuntime({
+      client: {
+        session: {
+          create: async () => ({}),
+          abort: async () => ({}),
+          prompt: async () => ({ data: { ok: true } }),
+        },
+        postSessionIdPermissionsPermissionId: async () => ({}),
+      },
+    });
+    const sent = [];
+
+    runtime.gatewayConnection = {
+      send: (message, context) => sent.push({ message, context }),
+    };
+    runtime.eventFilter = new EventFilter(['session.idle']);
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      welinkSessionId: '42',
+      action: 'chat',
+      payload: { toolSessionId: 'tool-idle-2', text: 'hello' },
+    });
+
+    await runtime.handleEvent({
+      type: 'session.idle',
+      properties: {
+        sessionID: 'tool-idle-2',
+      },
+    });
+
+    expect(sent.filter((entry) => entry.message.type === 'tool_done')).toHaveLength(1);
+    expect(sent.filter((entry) => entry.message.type === 'tool_event')).toHaveLength(1);
+  });
+
+  test('defers session.idle tool_done while chat prompt is still pending', async () => {
+    let resolvePrompt;
+    const promptPromise = new Promise((resolve) => {
+      resolvePrompt = resolve;
+    });
+    const runtime = new BridgeRuntime({
+      client: {
+        session: {
+          create: async () => ({}),
+          abort: async () => ({}),
+          prompt: async () => {
+            await promptPromise;
+            return { data: { ok: true } };
+          },
+        },
+        postSessionIdPermissionsPermissionId: async () => ({}),
+      },
+    });
+    const sent = [];
+
+    runtime.gatewayConnection = {
+      send: (message, context) => sent.push({ message, context }),
+    };
+    runtime.eventFilter = new EventFilter(['session.idle']);
+    runtime.stateManager.setState('READY');
+
+    const invokeTask = runtime.handleDownstreamMessage({
+      type: 'invoke',
+      welinkSessionId: '43',
+      action: 'chat',
+      payload: { toolSessionId: 'tool-idle-3', text: 'hello' },
+    });
+
+    await runtime.handleEvent({
+      type: 'session.idle',
+      properties: {
+        sessionID: 'tool-idle-3',
+      },
+    });
+
+    expect(sent.filter((entry) => entry.message.type === 'tool_done')).toHaveLength(0);
+    expect(sent.filter((entry) => entry.message.type === 'tool_event')).toHaveLength(1);
+
+    resolvePrompt({ data: { ok: true } });
+    await invokeTask;
+
+    expect(sent.filter((entry) => entry.message.type === 'tool_done')).toHaveLength(1);
+  });
+
+  test('does not emit tool_done for close_session success', async () => {
+    const deleteCalls = [];
+    const runtime = new BridgeRuntime({
+      client: {
+        session: {
+          create: async () => ({}),
+          abort: async () => ({}),
+          delete: async (options) => {
+            deleteCalls.push(options);
+            return {};
+          },
+          prompt: async () => ({ data: { ok: true } }),
+        },
+        postSessionIdPermissionsPermissionId: async () => ({}),
+      },
+    });
+    const sent = [];
+
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      welinkSessionId: 'close-1',
+      action: 'close_session',
+      payload: { toolSessionId: 'tool-close-1' },
+    });
+
+    expect(deleteCalls).toEqual([{ path: { id: 'tool-close-1' } }]);
+    expect(sent).toHaveLength(0);
   });
 
   test('runtime.start sends register with macAddress and normalized toolType', async () => {

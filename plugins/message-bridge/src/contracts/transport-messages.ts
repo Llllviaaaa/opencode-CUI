@@ -7,6 +7,7 @@ export const TRANSPORT_UPSTREAM_MESSAGE_TYPES = [
   'register',
   'heartbeat',
   'tool_event',
+  'tool_done',
   'tool_error',
   'session_created',
   'status_response',
@@ -34,6 +35,13 @@ export interface ToolEventMessage {
   event: SupportedUpstreamEvent;
 }
 
+export interface ToolDoneMessage {
+  type: 'tool_done';
+  toolSessionId: string;
+  welinkSessionId?: string;
+  usage?: unknown;
+}
+
 export interface ToolErrorMessage {
   type: 'tool_error';
   welinkSessionId?: string;
@@ -57,6 +65,7 @@ export type UpstreamMessage =
   | RegisterMessage
   | HeartbeatMessage
   | ToolEventMessage
+  | ToolDoneMessage
   | ToolErrorMessage
   | SessionCreatedMessage
   | StatusResponseMessage;
