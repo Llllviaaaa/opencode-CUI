@@ -15,6 +15,7 @@ DB_USER="${DB_USER:-opencode}"
 DB_PASSWORD="${DB_PASSWORD:-opencode}"
 AI_DB="${AI_DB:-ai_gateway}"
 SKILL_DB="${SKILL_DB:-skill_server}"
+RESET_DB="${RESET_DB:-0}"
 MINIAPP_PORT="${MINIAPP_PORT:-3001}"
 SIMULATOR_PORT="${SIMULATOR_PORT:-5173}"
 START_TEST_SIMULATOR="${START_TEST_SIMULATOR:-0}"
@@ -41,6 +42,19 @@ fi
 run_sql() {
   local sql="$1"
   printf "%s\n" "${sql}" | "${MYSQL_CMD[@]}"
+}
+
+reset_local_databases() {
+  if [[ "${RESET_DB}" != "1" ]]; then
+    return 0
+  fi
+
+  echo "[db] RESET_DB=1, dropping and recreating local databases"
+  echo "[db] This removes all local data in ${AI_DB} and ${SKILL_DB}"
+  run_sql "DROP DATABASE IF EXISTS ${AI_DB};"
+  run_sql "DROP DATABASE IF EXISTS ${SKILL_DB};"
+  run_sql "CREATE DATABASE ${AI_DB} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+  run_sql "CREATE DATABASE ${SKILL_DB} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 }
 
 table_exists() {
@@ -235,6 +249,7 @@ start_bg() {
 preflight_cleanup
 
 echo "[1/4] Prepare databases"
+reset_local_databases
 run_sql "CREATE DATABASE IF NOT EXISTS ${AI_DB} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 run_sql "CREATE DATABASE IF NOT EXISTS ${SKILL_DB} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
@@ -357,6 +372,9 @@ if [[ "${START_TEST_SIMULATOR}" == "1" ]]; then
   echo "  test-simulator: http://localhost:${SIMULATOR_PORT}"
 fi
 echo "Logs: ${LOG_DIR}"
+if [[ "${RESET_DB}" == "1" ]]; then
+  echo "Database reset: enabled (RESET_DB=1)"
+fi
 echo
 echo "Active listener PIDs:"
 print_listener_pid "ai-gateway" "8081"
