@@ -37,7 +37,7 @@
 
 ### 技术栈
 - **语言**: TypeScript
-- **依赖**: `@opencode-ai/sdk@^1.2.15`, `ws@^8.x`, `jsonc-parser`
+- **依赖**: `@opencode-ai/sdk@1.2.15`, `@opencode-ai/plugin@1.2.15`, `jsonc-parser`
 - **构建**: TypeScript 编译, npm scripts
 - **测试**: 单元测试 + 集成测试 + E2E 测试
 
@@ -228,7 +228,7 @@ Max Concurrent: 5 (Wave 2 & 3 have 5 parallel tasks each)
 
   **What to do**:
   - 创建 `plugins/message-bridge/` 目录结构
-  - 初始化 package.json (dependencies: @opencode-ai/sdk@^1.2.15, ws@^8.x, jsonc-parser)
+  - 初始化 package.json (dependencies: @opencode-ai/sdk@1.2.15, @opencode-ai/plugin@1.2.15, jsonc-parser)
   - 配置 tsconfig.json (target: ES2020, module: commonjs)
   - 设置 npm scripts (build, test, typecheck)
   - 创建基础目录结构:

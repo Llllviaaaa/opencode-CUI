@@ -35,17 +35,16 @@ let linesHit = 0;
 let branchesFound = 0;
 let branchesHit = 0;
 
-for (const rawLine of lcov.split('\n')) {
-  const line = rawLine.trim();
-  if (line.startsWith('LF:')) {
-    linesFound += Number(line.slice(3)) || 0;
-  } else if (line.startsWith('LH:')) {
-    linesHit += Number(line.slice(3)) || 0;
-  } else if (line.startsWith('BRF:')) {
-    branchesFound += Number(line.slice(4)) || 0;
-  } else if (line.startsWith('BRH:')) {
-    branchesHit += Number(line.slice(4)) || 0;
+for (const block of lcov.split('end_of_record')) {
+  const sourceFile = block.match(/^SF:(.+)$/m)?.[1];
+  if (!sourceFile?.startsWith('src/')) {
+    continue;
   }
+
+  linesFound += Number(block.match(/^LF:(\d+)$/m)?.[1] || 0);
+  linesHit += Number(block.match(/^LH:(\d+)$/m)?.[1] || 0);
+  branchesFound += Number(block.match(/^BRF:(\d+)$/m)?.[1] || 0);
+  branchesHit += Number(block.match(/^BRH:(\d+)$/m)?.[1] || 0);
 }
 
 if (linesFound === 0) {

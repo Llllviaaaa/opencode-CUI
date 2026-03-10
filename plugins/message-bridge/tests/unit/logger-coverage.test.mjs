@@ -1,5 +1,5 @@
 import { describe, test, expect, spyOn, beforeEach, afterEach } from 'bun:test';
-import { AppLogger } from '../../dist/runtime/AppLogger.js';
+import { AppLogger } from '../../src/runtime/AppLogger.ts';
 
 describe('AppLogger coverage', () => {
   const oldDebug = process.env.BRIDGE_DEBUG;

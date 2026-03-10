@@ -3,8 +3,8 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { BridgeRuntime } from '../../dist/runtime/BridgeRuntime.js';
-import { EventFilter } from '../../dist/event/EventFilter.js';
+import { BridgeRuntime } from '../../src/runtime/BridgeRuntime.ts';
+import { EventFilter } from '../../src/event/EventFilter.ts';
 
 describe('runtime protocol strictness', () => {
   test('rejects non-baseline nested invoke payload and returns tool_error without code', async () => {

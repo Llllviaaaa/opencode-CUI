@@ -994,6 +994,7 @@ class DefaultActionRegistry {
     return new Map(this.actions);
   }
 }
+
 // src/config/ConfigResolver.ts
 import { homedir } from "os";
 import { dirname, join, resolve } from "path";
@@ -3981,5 +3982,5 @@ export {
   MessageBridgePlugin
 };
 
-//# debugId=614CB8084BAC618164756E2164756E21
+//# debugId=393A7672A8107D4D64756E2164756E21
 //# sourceMappingURL=message-bridge.plugin.js.map

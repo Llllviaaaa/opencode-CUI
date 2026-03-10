@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { normalizeDownstreamMessage } from '../../dist/protocol/downstream/DownstreamMessageNormalizer.js';
+import { normalizeDownstreamMessage } from '../../src/protocol/downstream/DownstreamMessageNormalizer.ts';
 
 function createLogger() {
   const entries = [];

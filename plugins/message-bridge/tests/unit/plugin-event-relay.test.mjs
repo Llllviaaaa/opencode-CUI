@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 
-import { BridgeRuntime } from '../../dist/runtime/BridgeRuntime.js';
-import { EventFilter } from '../../dist/event/EventFilter.js';
+import { BridgeRuntime } from '../../src/runtime/BridgeRuntime.ts';
+import { EventFilter } from '../../src/event/EventFilter.ts';
 
 describe('event uplink via hook boundary', () => {
   test('unsupported upstream events fail closed before forwarding', async () => {

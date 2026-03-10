@@ -1,4 +1,4 @@
-import { BridgeConfig, ConfigValidationError } from '../types';
+import type { BridgeConfig, ConfigValidationError } from '../types';
 import { AppLogger, type BridgeLogger } from '../runtime/AppLogger';
 import { ConfigResolver } from './ConfigResolver';
 import { ConfigValidator } from './ConfigValidator';

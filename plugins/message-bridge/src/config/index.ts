@@ -1,4 +1,4 @@
-export { BridgeConfig, ConfigValidationError } from '../types';
+export type { BridgeConfig, ConfigValidationError } from '../types';
 export { ConfigResolver } from './ConfigResolver';
 export { ConfigValidator } from './ConfigValidator';
 export { JsoncParser } from './JsoncParser';
