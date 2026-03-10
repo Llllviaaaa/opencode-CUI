@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { ConnectionState, HeartbeatMessage, RegisterMessage } from '../types';
 import type { BridgeLogger } from '../runtime/AppLogger';
+import type { AkSkAuthPayload } from './AkSkAuth';
 import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
 export interface GatewayConnectionEvents {
@@ -54,12 +55,23 @@ export interface GatewayConnectionOptions {
   heartbeatIntervalMs?: number;
   pongTimeoutMs?: number;
   abortSignal?: AbortSignal;
-  queryParamsProvider?: () => URLSearchParams;
+  authPayloadProvider?: () => AkSkAuthPayload;
   registerMessage: RegisterMessage;
   logger?: BridgeLogger;
 }
 
 type WsMessageEvent = { data: string | ArrayBuffer | Blob | Uint8Array };
+type GatewayControlMessage = RegisterOkMessage | RegisterRejectedMessage;
+const GATEWAY_REJECTION_CLOSE_CODES = new Set([4403, 4408, 4409]);
+
+interface RegisterOkMessage {
+  type: 'register_ok';
+}
+
+interface RegisterRejectedMessage {
+  type: 'register_rejected';
+  reason?: string;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object';
@@ -94,6 +106,29 @@ function extractWebSocketErrorDetails(event: unknown): Record<string, unknown> {
   }
 
   return details;
+}
+
+function encodeBase64Url(value: string): string {
+  return Buffer.from(value, 'utf8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function buildAuthSubprotocol(payload: AkSkAuthPayload): string {
+  return `auth.${encodeBase64Url(JSON.stringify(payload))}`;
+}
+
+function isGatewayControlMessage(message: unknown): message is GatewayControlMessage {
+  if (!isRecord(message) || typeof message.type !== 'string') {
+    return false;
+  }
+  return message.type === 'register_ok' || message.type === 'register_rejected';
+}
+
+function isGatewayRejectedCloseCode(code: number | undefined): boolean {
+  return typeof code === 'number' && GATEWAY_REJECTION_CLOSE_CODES.has(code);
 }
 
 export class DefaultGatewayConnection extends EventEmitter implements GatewayConnection {
@@ -171,14 +206,9 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
 
       try {
         const url = new URL(this.options.url);
-        const queryParams = this.options.queryParamsProvider?.();
-        if (queryParams) {
-          for (const [key, value] of queryParams.entries()) {
-            url.searchParams.set(key, value);
-          }
-        }
-
-        const ws = new WebSocket(url.toString());
+        const authPayload = this.options.authPayloadProvider?.();
+        const protocols = authPayload ? [buildAuthSubprotocol(authPayload)] : undefined;
+        const ws = protocols ? new WebSocket(url.toString(), protocols) : new WebSocket(url.toString());
         this.ws = ws;
         this.manuallyDisconnected = false;
 
@@ -193,17 +223,16 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
             toolType: this.options.registerMessage.toolType,
             toolVersion: this.options.registerMessage.toolVersion,
           });
-          this.setState('READY');
-          this.options.logger?.info('gateway.ready');
-          this.setupHeartbeat();
           finalizeResolve();
         };
 
         ws.onclose = (event?: CloseEvent) => {
+          const rejected = isGatewayRejectedCloseCode(event?.code);
           this.options.logger?.warn('gateway.close', {
             opened,
             manuallyDisconnected: this.manuallyDisconnected,
             aborted: !!this.options.abortSignal?.aborted,
+            rejected,
             code: event?.code,
             reason: event?.reason,
             wasClean: event?.wasClean,
@@ -219,6 +248,15 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
           }
           this.teardownTimers();
           this.setState('DISCONNECTED');
+
+          if (rejected) {
+            this.options.logger?.warn('gateway.close.rejected', {
+              code: event?.code,
+              reason: event?.reason,
+              rejected: true,
+            });
+            return;
+          }
 
           if (opened && !this.manuallyDisconnected && !this.options.abortSignal?.aborted) {
             this.attemptReconnect();
@@ -289,6 +327,15 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
       message && typeof message === 'object' && 'type' in (message as { type?: unknown })
         ? String((message as { type?: unknown }).type ?? '')
         : 'unknown';
+    const isControlMessage = messageType === 'register' || messageType === 'heartbeat';
+
+    if (this.state !== 'READY' && !isControlMessage) {
+      this.options.logger?.warn('gateway.send.rejected_not_ready', {
+        state: this.state,
+        messageType,
+      });
+      throw new Error('Gateway connection is not ready. Cannot send business message.');
+    }
     const serialized = JSON.stringify(message);
     const payloadBytes = Buffer.byteLength(serialized, 'utf8');
     this.lastMessageSummary = {
@@ -409,6 +456,18 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
         payloadBytes: frameBytes,
       };
       this.options.logger?.debug('gateway.message.received', { messageType, frameBytes, gatewayMessageId });
+      if (isGatewayControlMessage(message)) {
+        this.handleControlMessage(message);
+        return;
+      }
+      if (this.state !== 'READY') {
+        this.options.logger?.warn('gateway.message.ignored_not_ready', {
+          state: this.state,
+          messageType,
+          gatewayMessageId,
+        });
+        return;
+      }
       this.emit('message', message);
     } catch {
       this.options.logger?.debug('gateway.message.ignored_non_json', {
@@ -424,6 +483,27 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
       return undefined;
     }
     return typeof message.messageId === 'string' ? message.messageId : undefined;
+  }
+
+  private handleControlMessage(message: GatewayControlMessage): void {
+    if (message.type === 'register_ok') {
+      if (this.state === 'READY') {
+        this.options.logger?.warn('gateway.register.duplicate_ok');
+        return;
+      }
+      this.setState('READY');
+      this.options.logger?.info('gateway.register.accepted');
+      this.setupHeartbeat();
+      this.options.logger?.info('gateway.ready');
+      return;
+    }
+
+    const reason = typeof message.reason === 'string' ? message.reason : undefined;
+    this.options.logger?.error('gateway.register.rejected', { reason });
+    this.manuallyDisconnected = true;
+    if (this.ws) {
+      this.ws.close();
+    }
   }
 
   private setState(next: ConnectionState): void {
