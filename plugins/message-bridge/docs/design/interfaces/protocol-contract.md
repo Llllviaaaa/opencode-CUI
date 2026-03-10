@@ -7,7 +7,6 @@ The current protocol contract is split into:
 - `contracts/upstream-events.ts`
 - `contracts/downstream-messages.ts`
 - `contracts/transport-messages.ts`
-- `contracts/envelope.ts`
 
 The `protocol/` layer normalizes raw messages against these contracts.
 
@@ -25,10 +24,9 @@ Shape:
 ```ts
 {
   type: 'invoke';
-  sessionId?: string;
+  welinkSessionId?: string;
   action: InvokeAction;
   payload: InvokePayloadByAction[InvokeAction];
-  envelope?: Envelope;
 }
 ```
 
@@ -38,7 +36,6 @@ Supported `action` values:
 - `create_session`
 - `close_session`
 - `permission_reply`
-- `status_query`
 - `abort_session`
 - `question_reply`
 
@@ -62,11 +59,7 @@ type CloseSessionPayload = {
 type PermissionReplyPayload = {
   permissionId: string;
   toolSessionId: string;
-  response: 'allow' | 'always' | 'deny';
-};
-
-type StatusQueryPayload = {
-  sessionId?: string;
+  response: 'once' | 'always' | 'reject';
 };
 
 type AbortSessionPayload = {
@@ -82,7 +75,7 @@ type QuestionReplyPayload = {
 
 Notes:
 
-- `close_session` currently preserves bridge behavior by calling `session.abort()`
+- `close_session` calls `session.delete()`
 - `abort_session` also calls `session.abort()`
 - `question_reply` resolves a pending question through the raw question API chain
 
@@ -93,12 +86,8 @@ Standalone shape:
 ```ts
 {
   type: 'status_query';
-  sessionId?: string;
-  envelope?: Envelope;
 }
 ```
-
-The bridge also accepts `invoke.action = 'status_query'` for compatibility.
 
 ## 3. Upstream Event Contract
 
@@ -137,7 +126,6 @@ type UpstreamMessage =
   | RegisterMessage
   | HeartbeatMessage
   | ToolEventMessage
-  | ToolDoneMessage
   | ToolErrorMessage
   | SessionCreatedMessage
   | StatusResponseMessage;
@@ -148,34 +136,28 @@ Key shapes:
 ```ts
 type ToolErrorMessage = {
   type: 'tool_error';
-  sessionId?: string;
   welinkSessionId?: string;
+  toolSessionId?: string;
   error: string;
-  envelope: Envelope;
 };
 
 type SessionCreatedMessage = {
   type: 'session_created';
-  sessionId: string;
   welinkSessionId?: string;
   toolSessionId?: string;
   session?: CreateSessionResultData;
-  envelope: Envelope;
 };
 
 type StatusResponseMessage = {
   type: 'status_response';
   opencodeOnline: boolean;
-  sessionId?: string;
-  welinkSessionId?: string;
-  envelope: Envelope;
 };
 ```
 
-Compatibility behavior:
+Completion behavior:
 
-- `welinkSessionId` remains optional on response messages
-- `tool_event` remains envelope-free
+- `session.idle` is the only completion signal forwarded upstream
+- the bridge does not synthesize `tool_done`
 
 ## 5. Failure Semantics
 

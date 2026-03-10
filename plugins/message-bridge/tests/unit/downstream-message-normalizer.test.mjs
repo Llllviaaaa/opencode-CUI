@@ -27,7 +27,6 @@ describe('downstream message normalizer', () => {
     const result = normalizeDownstreamMessage(
       {
         type: 'status_query',
-        sessionId: 'session-1',
       },
       logger,
     );
@@ -35,8 +34,6 @@ describe('downstream message normalizer', () => {
     expect(result.ok).toBe(true);
     expect(result.value).toEqual({
       type: 'status_query',
-      sessionId: 'session-1',
-      envelope: undefined,
     });
   });
 
@@ -45,7 +42,7 @@ describe('downstream message normalizer', () => {
     const result = normalizeDownstreamMessage(
       {
         type: 'invoke',
-        sessionId: 'skill-1',
+        welinkSessionId: 'skill-1',
         action: 'chat',
         payload: {
           toolSessionId: 'tool-1',
@@ -59,8 +56,7 @@ describe('downstream message normalizer', () => {
     expect(result.value).toEqual({
       type: 'invoke',
       action: 'chat',
-      sessionId: 'skill-1',
-      envelope: undefined,
+      welinkSessionId: 'skill-1',
       payload: {
         toolSessionId: 'tool-1',
         text: 'hello',
@@ -68,30 +64,17 @@ describe('downstream message normalizer', () => {
     });
   });
 
-  test('normalizes enveloped invoke/permission_reply payload', () => {
+  test('normalizes invoke/permission_reply payload', () => {
     const { logger } = createLogger();
-    const envelope = {
-      version: '1.0',
-      messageId: 'm-1',
-      timestamp: Date.now(),
-      source: 'message-bridge',
-      agentId: 'agent-1',
-      sessionId: 'skill-2',
-      sequenceNumber: 1,
-      sequenceScope: 'session',
-    };
     const result = normalizeDownstreamMessage(
       {
         type: 'invoke',
-        envelope,
+        welinkSessionId: 'skill-2',
+        action: 'permission_reply',
         payload: {
-          sessionId: 'skill-2',
-          action: 'permission_reply',
-          payload: {
-            permissionId: 'perm-1',
-            toolSessionId: 'tool-2',
-            response: 'allow',
-          },
+          permissionId: 'perm-1',
+          toolSessionId: 'tool-2',
+          response: 'once',
         },
       },
       logger,
@@ -101,12 +84,11 @@ describe('downstream message normalizer', () => {
     expect(result.value).toEqual({
       type: 'invoke',
       action: 'permission_reply',
-      sessionId: 'skill-2',
-      envelope,
+      welinkSessionId: 'skill-2',
       payload: {
         permissionId: 'perm-1',
         toolSessionId: 'tool-2',
-        response: 'allow',
+        response: 'once',
       },
     });
   });
@@ -116,7 +98,7 @@ describe('downstream message normalizer', () => {
     const result = normalizeDownstreamMessage(
       {
         type: 'invoke',
-        sessionId: '42',
+        welinkSessionId: '42',
         payload: {
           action: 'chat',
           payload: { toolSessionId: 'tool-1', text: 'hello' },
@@ -128,7 +110,7 @@ describe('downstream message normalizer', () => {
     expect(result.ok).toBe(false);
     expect(result.error.code).toBe('missing_required_field');
     expect(result.error.messageType).toBe('invoke');
-    expect(result.error.sessionId).toBe('42');
+    expect(result.error.welinkSessionId).toBe('42');
     expect(entries).toHaveLength(1);
     expect(entries[0].message).toBe('downstream.normalization_failed');
   });
@@ -138,7 +120,7 @@ describe('downstream message normalizer', () => {
     const result = normalizeDownstreamMessage(
       {
         type: 'invoke',
-        sessionId: '77',
+        welinkSessionId: '77',
         action: 'delete_session',
         payload: {},
       },
@@ -157,12 +139,12 @@ describe('downstream message normalizer', () => {
     const result = normalizeDownstreamMessage(
       {
         type: 'invoke',
-        sessionId: 'skill-3',
+        welinkSessionId: 'skill-3',
         action: 'permission_reply',
         payload: {
           permissionId: 'perm-3',
           toolSessionId: 'tool-3',
-          response: 'maybe',
+          response: 'allow',
         },
       },
       logger,
@@ -171,6 +153,23 @@ describe('downstream message normalizer', () => {
     expect(result.ok).toBe(false);
     expect(result.error.code).toBe('invalid_field_type');
     expect(result.error.field).toBe('payload.response');
+  });
+
+  test('rejects invoke/status_query compatibility shape', () => {
+    const { logger } = createLogger();
+    const result = normalizeDownstreamMessage(
+      {
+        type: 'invoke',
+        welinkSessionId: 'status-1',
+        action: 'status_query',
+        payload: {},
+      },
+      logger,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('unsupported_action');
+    expect(result.error.action).toBe('status_query');
   });
 
   test('normalizes invoke/abort_session payload', () => {
@@ -193,8 +192,7 @@ describe('downstream message normalizer', () => {
       payload: {
         toolSessionId: 'tool-42',
       },
-      sessionId: undefined,
-      envelope: undefined,
+      welinkSessionId: undefined,
     });
   });
 
@@ -222,8 +220,7 @@ describe('downstream message normalizer', () => {
         toolCallId: 'call-7',
         answer: 'approved',
       },
-      sessionId: undefined,
-      envelope: undefined,
+      welinkSessionId: undefined,
     });
   });
 });

@@ -1,17 +1,12 @@
 import type {
-  ActionResultData,
   CreateSessionResultData,
 } from './downstream-messages';
-import type { Envelope, MessageSource } from './envelope';
 import type { SupportedUpstreamEvent } from './upstream-events';
-
-export type { Envelope, MessageSource } from './envelope';
 
 export const TRANSPORT_UPSTREAM_MESSAGE_TYPES = [
   'register',
   'heartbeat',
   'tool_event',
-  'tool_done',
   'tool_error',
   'session_created',
   'status_response',
@@ -38,44 +33,29 @@ export interface ToolEventMessage {
   event: SupportedUpstreamEvent;
 }
 
-export interface ToolDoneMessage {
-  type: 'tool_done';
-  sessionId?: string;
-  welinkSessionId?: string;
-  result?: ActionResultData;
-  envelope: Envelope;
-}
-
 export interface ToolErrorMessage {
   type: 'tool_error';
-  sessionId?: string;
   welinkSessionId?: string;
+  toolSessionId?: string;
   error: string;
-  envelope: Envelope;
 }
 
 export interface SessionCreatedMessage {
   type: 'session_created';
-  sessionId: string;
   welinkSessionId?: string;
   toolSessionId?: string;
   session?: CreateSessionResultData;
-  envelope: Envelope;
 }
 
 export interface StatusResponseMessage {
   type: 'status_response';
   opencodeOnline: boolean;
-  sessionId?: string;
-  welinkSessionId?: string;
-  envelope: Envelope;
 }
 
 export type UpstreamMessage =
   | RegisterMessage
   | HeartbeatMessage
   | ToolEventMessage
-  | ToolDoneMessage
   | ToolErrorMessage
   | SessionCreatedMessage
   | StatusResponseMessage;

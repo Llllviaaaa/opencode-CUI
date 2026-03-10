@@ -1,8 +1,11 @@
 export type {
   AbortSessionPayload,
   AbortSessionResultData,
+  ActionName,
+  ActionPayloadByName,
   ActionResultData,
   ActionResultDataByAction,
+  ActionResultDataByName,
   ChatPayload,
   CloseSessionPayload,
   CreateSessionPayload,

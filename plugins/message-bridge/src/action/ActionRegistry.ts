@@ -1,9 +1,9 @@
-import { Action, ActionResultDataByAction, InvokeAction, InvokePayloadByAction } from '../types';
+import { Action, ActionResultDataByName, ActionName, ActionPayloadByName } from '../types';
 
 export interface ActionRegistry {
   register(action: Action): void;
   unregister(name: string): void;
-  get<K extends InvokeAction>(name: K): Action<K, InvokePayloadByAction[K], ActionResultDataByAction[K]> | undefined;
+  get<K extends ActionName>(name: K): Action<K, ActionPayloadByName[K], ActionResultDataByName[K]> | undefined;
   has(name: string): boolean;
   list(): string[];
   getAllActions(): Map<string, Action>;
@@ -23,8 +23,8 @@ export class DefaultActionRegistry implements ActionRegistry {
     this.actions.delete(name);
   }
 
-  get<K extends InvokeAction>(name: K): Action<K, InvokePayloadByAction[K], ActionResultDataByAction[K]> | undefined {
-    return this.actions.get(name) as Action<K, InvokePayloadByAction[K], ActionResultDataByAction[K]> | undefined;
+  get<K extends ActionName>(name: K): Action<K, ActionPayloadByName[K], ActionResultDataByName[K]> | undefined {
+    return this.actions.get(name) as Action<K, ActionPayloadByName[K], ActionResultDataByName[K]> | undefined;
   }
 
   has(name: string): boolean {

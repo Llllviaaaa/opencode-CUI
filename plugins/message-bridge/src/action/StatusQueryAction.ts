@@ -20,11 +20,10 @@ export class StatusQueryAction implements Action<'status_query', StatusQueryPayl
   async execute(payload: StatusQueryPayload, context: ActionContext): Promise<ActionResult<StatusQueryResultData>> {
     const startedAt = Date.now();
     context.logger?.debug('action.status_query.started', {
-      sessionId: payload.sessionId,
       state: context.connectionState,
     });
     try {
-      let opencodeOnline = context.connectionState === 'READY';
+      let opencodeOnline = false;
       const app = (context.client as { app?: { health?: () => Promise<unknown> | unknown } } | null | undefined)?.app;
       if (app?.health) {
         try {
@@ -39,9 +38,6 @@ export class StatusQueryAction implements Action<'status_query', StatusQueryPayl
         success: true,
         data: {
           opencodeOnline,
-          connectionState: context.connectionState,
-          sessionId: payload.sessionId,
-          timestamp: new Date().toISOString()
         }
       };
     } catch (error) {

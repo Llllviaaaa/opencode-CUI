@@ -74,8 +74,9 @@ Verified compatibility constraints:
 
 - external transport message shapes remain stable
 - `tool_event` remains envelope-free
-- `tool_error`, `session_created`, and `status_response` remain available with existing semantics
-- compatibility fields such as `welinkSessionId` remain supported on response messages
+- `tool_error`, `session_created`, and `status_response` remain available with strict protocol semantics
+- `status_response` only contains `opencodeOnline`
+- `session.idle` remains the only completion signal forwarded upstream
 - allowlist defaults remain exact-event based and do not revert to wildcard behavior
 
 ## 6. Residual Notes

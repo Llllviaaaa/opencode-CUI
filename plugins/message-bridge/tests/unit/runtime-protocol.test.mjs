@@ -93,7 +93,7 @@ describe('runtime protocol strictness', () => {
       type: 'invoke',
       welinkSessionId: 'perm-42',
       action: 'permission_reply',
-      payload: { toolSessionId: 'tool-42', permissionId: 'perm-1', response: 'once' },
+      payload: { toolSessionId: 'tool-42', permissionId: 'perm-1', response: 'allow' },
     });
 
     expect(sent).toHaveLength(1);
@@ -359,7 +359,38 @@ describe('runtime protocol strictness', () => {
     expect(sent[0].welinkSessionId).toBe('q-45');
   });
 
-  test('accepts invoke status_query variant and responds with status_response', async () => {
+  test('responds to standalone status_query with envelope-free status_response', async () => {
+    const runtime = new BridgeRuntime({
+      client: {
+        app: {
+          health: async () => ({ ok: true }),
+        },
+        session: {
+          create: async () => ({}),
+          abort: async () => ({}),
+          prompt: async () => ({}),
+        },
+        postSessionIdPermissionsPermissionId: async () => ({}),
+      },
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'status_query',
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('status_response');
+    expect(sent[0]).toEqual({
+      type: 'status_response',
+      opencodeOnline: true,
+    });
+  });
+
+  test('rejects invoke status_query compatibility variant', async () => {
     const runtime = new BridgeRuntime({
       client: {
         session: {
@@ -377,14 +408,14 @@ describe('runtime protocol strictness', () => {
 
     await runtime.handleDownstreamMessage({
       type: 'invoke',
-      welinkSessionId: 'status-42',
+      welinkSessionId: 'status-compat',
       action: 'status_query',
-      payload: { sessionId: 'status-42' },
+      payload: {},
     });
 
     expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('status_response');
-    expect(sent[0].welinkSessionId).toBe('status-42');
+    expect(sent[0].type).toBe('tool_error');
+    expect(sent[0].welinkSessionId).toBe('status-compat');
   });
 
   test('applies config.debug to runtime fallback logging after config load', async () => {

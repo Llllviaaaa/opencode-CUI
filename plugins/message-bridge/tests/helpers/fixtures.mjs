@@ -47,23 +47,9 @@ export function createRegisterMessage(overrides = {}) {
 export function createInvokeMessage(overrides = {}) {
   return {
     type: 'invoke',
-    sessionId: overrides.sessionId || generateTestId('sess'),
+    welinkSessionId: overrides.welinkSessionId || generateTestId('sess'),
     action: overrides.action || 'chat',
     payload: overrides.payload || { toolSessionId: generateTestId('oc-sess'), text: 'Hello' },
-    timestamp: Date.now(),
-    ...overrides
-  };
-}
-
-/**
- * Create a tool_done message for testing
- */
-export function createToolDoneMessage(overrides = {}) {
-  return {
-    type: 'tool_done',
-    sessionId: overrides.sessionId || generateTestId('sess'),
-    payload: overrides.payload || { success: true },
-    envelope: createEnvelope(overrides.envelope),
     timestamp: Date.now(),
     ...overrides
   };
@@ -76,8 +62,8 @@ export function createToolErrorMessage(overrides = {}) {
   return {
     type: 'tool_error',
     error: overrides.error || 'Test error',
-    sessionId: overrides.sessionId || generateTestId('sess'),
-    envelope: createEnvelope(overrides.envelope),
+    welinkSessionId: overrides.welinkSessionId || generateTestId('sess'),
+    toolSessionId: overrides.toolSessionId || null,
     timestamp: Date.now(),
     ...overrides
   };
@@ -89,7 +75,6 @@ export function createToolErrorMessage(overrides = {}) {
 export function createStatusQueryMessage(overrides = {}) {
   return {
     type: 'status_query',
-    sessionId: overrides.sessionId || null,
     timestamp: Date.now(),
     ...overrides
   };
@@ -102,8 +87,6 @@ export function createStatusResponseMessage(overrides = {}) {
   return {
     type: 'status_response',
     opencodeOnline: overrides.opencodeOnline !== undefined ? overrides.opencodeOnline : true,
-    envelope: createEnvelope(overrides.envelope),
-    sessionId: overrides.sessionId || null,
     timestamp: Date.now(),
     ...overrides
   };
@@ -147,7 +130,7 @@ export function createPermissionReplyPayload(overrides = {}) {
   return {
     permissionId: overrides.permissionId || generateTestId('perm'),
     toolSessionId: overrides.toolSessionId || generateTestId('oc-sess'),
-    response: overrides.response || 'allow',
+    response: overrides.response || 'once',
     ...overrides
   };
 }

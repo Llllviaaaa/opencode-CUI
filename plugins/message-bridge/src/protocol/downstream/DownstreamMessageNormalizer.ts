@@ -9,10 +9,7 @@ import type {
   InvokeAction,
   PermissionReplyPayload,
   QuestionReplyPayload,
-  StatusQueryPayload,
 } from '../../contracts/downstream-messages';
-import type { Envelope } from '../../contracts/envelope';
-import { hasEnvelope } from '../../contracts/envelope';
 import { isSupportedDownstreamMessageType, isSupportedInvokeAction } from './SupportedDownstreamMessages';
 import type {
   DownstreamNormalizationError,
@@ -43,7 +40,7 @@ function missingRequiredField(
   field: string,
   messageType?: string,
   action?: string,
-  sessionId?: string,
+  welinkSessionId?: string,
 ): NormalizeResult<never> {
   return fail({
     stage,
@@ -52,7 +49,7 @@ function missingRequiredField(
     message: `${field} is required`,
     messageType,
     action,
-    sessionId,
+    welinkSessionId,
   });
 }
 
@@ -62,7 +59,7 @@ function invalidFieldType(
   expectedType: string,
   messageType?: string,
   action?: string,
-  sessionId?: string,
+  welinkSessionId?: string,
 ): NormalizeResult<never> {
   return fail({
     stage,
@@ -71,7 +68,7 @@ function invalidFieldType(
     message: `${field} must be ${expectedType}`,
     messageType,
     action,
-    sessionId,
+    welinkSessionId,
   });
 }
 
@@ -85,7 +82,7 @@ function unsupportedMessage(messageType: string): NormalizeResult<never> {
   });
 }
 
-function unsupportedAction(action: string, sessionId?: string): NormalizeResult<never> {
+function unsupportedAction(action: string, welinkSessionId?: string): NormalizeResult<never> {
   return fail({
     stage: 'payload',
     code: 'unsupported_action',
@@ -93,7 +90,7 @@ function unsupportedAction(action: string, sessionId?: string): NormalizeResult<
     message: `Unsupported invoke action: ${action}`,
     messageType: 'invoke',
     action,
-    sessionId,
+    welinkSessionId,
   });
 }
 
@@ -110,41 +107,18 @@ function requireNonEmptyString(
   field: string,
   messageType?: string,
   action?: string,
-  sessionId?: string,
+  welinkSessionId?: string,
 ): NormalizeResult<string> {
   if (value === undefined) {
-    return missingRequiredField(stage, field, messageType, action, sessionId);
+    return missingRequiredField(stage, field, messageType, action, welinkSessionId);
   }
   if (typeof value !== 'string') {
-    return invalidFieldType(stage, field, 'a non-empty string', messageType, action, sessionId);
+    return invalidFieldType(stage, field, 'a non-empty string', messageType, action, welinkSessionId);
   }
   if (!value.trim()) {
-    return missingRequiredField(stage, field, messageType, action, sessionId);
+    return missingRequiredField(stage, field, messageType, action, welinkSessionId);
   }
   return ok(value);
-}
-
-function extractEnvelope(raw: Record<string, unknown>): Envelope | undefined {
-  return hasEnvelope(raw) ? raw.envelope : undefined;
-}
-
-function extractSessionId(raw: Record<string, unknown>): string | undefined {
-  if (typeof raw.sessionId === 'string') {
-    return raw.sessionId;
-  }
-  return typeof raw.welinkSessionId === 'string' ? raw.welinkSessionId : undefined;
-}
-
-function unwrapMessage(raw: Record<string, unknown>): Record<string, unknown> {
-  if (!hasEnvelope(raw)) {
-    return raw;
-  }
-  const envelopeCarrier = raw as Record<string, unknown> & { envelope: Envelope };
-  return {
-    type: envelopeCarrier.type,
-    ...(isRecord(envelopeCarrier.payload) ? envelopeCarrier.payload : { payload: envelopeCarrier.payload }),
-    envelope: envelopeCarrier.envelope,
-  };
 }
 
 function buildEventPreview(raw: unknown): Record<string, unknown> {
@@ -169,18 +143,18 @@ export function logDownstreamNormalizationFailure(
     message: error.message,
     messageType: error.messageType,
     action: error.action,
-    sessionId: error.sessionId,
+    welinkSessionId: error.welinkSessionId,
     messagePreview: buildEventPreview(raw),
   });
 }
 
-export function normalizeChatPayload(payload: unknown, sessionId?: string): NormalizeResult<ChatPayload> {
+export function normalizeChatPayload(payload: unknown, welinkSessionId?: string): NormalizeResult<ChatPayload> {
   if (!isRecord(payload)) {
-    return invalidFieldType('payload', 'payload', 'an object', 'invoke', 'chat', sessionId);
+    return invalidFieldType('payload', 'payload', 'an object', 'invoke', 'chat', welinkSessionId);
   }
-  const toolSessionId = requireNonEmptyString(payload.toolSessionId, 'payload', 'payload.toolSessionId', 'invoke', 'chat', sessionId);
+  const toolSessionId = requireNonEmptyString(payload.toolSessionId, 'payload', 'payload.toolSessionId', 'invoke', 'chat', welinkSessionId);
   if (!toolSessionId.ok) return toolSessionId;
-  const text = requireNonEmptyString(payload.text, 'payload', 'payload.text', 'invoke', 'chat', sessionId);
+  const text = requireNonEmptyString(payload.text, 'payload', 'payload.text', 'invoke', 'chat', welinkSessionId);
   if (!text.ok) return text;
   return ok({
     toolSessionId: toolSessionId.value,
@@ -188,9 +162,9 @@ export function normalizeChatPayload(payload: unknown, sessionId?: string): Norm
   });
 }
 
-export function normalizeCreateSessionPayload(payload: unknown, sessionId?: string): NormalizeResult<CreateSessionPayload> {
+export function normalizeCreateSessionPayload(payload: unknown, welinkSessionId?: string): NormalizeResult<CreateSessionPayload> {
   if (!isRecord(payload)) {
-    return invalidFieldType('payload', 'payload', 'an object', 'invoke', 'create_session', sessionId);
+    return invalidFieldType('payload', 'payload', 'an object', 'invoke', 'create_session', welinkSessionId);
   }
   return ok({
     sessionId: typeof payload.sessionId === 'string' ? payload.sessionId : undefined,
@@ -198,9 +172,9 @@ export function normalizeCreateSessionPayload(payload: unknown, sessionId?: stri
   });
 }
 
-export function normalizeCloseSessionPayload(payload: unknown, sessionId?: string): NormalizeResult<CloseSessionPayload> {
+export function normalizeCloseSessionPayload(payload: unknown, welinkSessionId?: string): NormalizeResult<CloseSessionPayload> {
   if (!isRecord(payload)) {
-    return invalidFieldType('payload', 'payload', 'an object', 'invoke', 'close_session', sessionId);
+    return invalidFieldType('payload', 'payload', 'an object', 'invoke', 'close_session', welinkSessionId);
   }
   const toolSessionId = requireNonEmptyString(
     payload.toolSessionId,
@@ -208,15 +182,15 @@ export function normalizeCloseSessionPayload(payload: unknown, sessionId?: strin
     'payload.toolSessionId',
     'invoke',
     'close_session',
-    sessionId,
+    welinkSessionId,
   );
   if (!toolSessionId.ok) return toolSessionId;
   return ok({ toolSessionId: toolSessionId.value });
 }
 
-export function normalizePermissionReplyPayload(payload: unknown, sessionId?: string): NormalizeResult<PermissionReplyPayload> {
+export function normalizePermissionReplyPayload(payload: unknown, welinkSessionId?: string): NormalizeResult<PermissionReplyPayload> {
   if (!isRecord(payload)) {
-    return invalidFieldType('payload', 'payload', 'an object', 'invoke', 'permission_reply', sessionId);
+    return invalidFieldType('payload', 'payload', 'an object', 'invoke', 'permission_reply', welinkSessionId);
   }
   const permissionId = requireNonEmptyString(
     payload.permissionId,
@@ -224,7 +198,7 @@ export function normalizePermissionReplyPayload(payload: unknown, sessionId?: st
     'payload.permissionId',
     'invoke',
     'permission_reply',
-    sessionId,
+    welinkSessionId,
   );
   if (!permissionId.ok) return permissionId;
   const toolSessionId = requireNonEmptyString(
@@ -233,11 +207,11 @@ export function normalizePermissionReplyPayload(payload: unknown, sessionId?: st
     'payload.toolSessionId',
     'invoke',
     'permission_reply',
-    sessionId,
+    welinkSessionId,
   );
   if (!toolSessionId.ok) return toolSessionId;
-  if (payload.response !== 'allow' && payload.response !== 'always' && payload.response !== 'deny') {
-    return invalidFieldType('payload', 'payload.response', '"allow", "always", or "deny"', 'invoke', 'permission_reply', sessionId);
+  if (payload.response !== 'once' && payload.response !== 'always' && payload.response !== 'reject') {
+    return invalidFieldType('payload', 'payload.response', '"once", "always", or "reject"', 'invoke', 'permission_reply', welinkSessionId);
   }
   return ok({
     permissionId: permissionId.value,
@@ -246,31 +220,9 @@ export function normalizePermissionReplyPayload(payload: unknown, sessionId?: st
   });
 }
 
-export function normalizeStatusQueryPayload(payload: unknown, sessionId?: string): NormalizeResult<StatusQueryPayload> {
-  if (payload === undefined) {
-    return ok({ sessionId: undefined });
-  }
+export function normalizeAbortSessionPayload(payload: unknown, welinkSessionId?: string): NormalizeResult<AbortSessionPayload> {
   if (!isRecord(payload)) {
-    return invalidFieldType('payload', 'payload', 'an object', 'invoke', 'status_query', sessionId);
-  }
-  if (payload.sessionId !== undefined) {
-    const innerSessionId = requireNonEmptyString(
-      payload.sessionId,
-      'payload',
-      'payload.sessionId',
-      'invoke',
-      'status_query',
-      sessionId,
-    );
-    if (!innerSessionId.ok) return innerSessionId;
-    return ok({ sessionId: innerSessionId.value });
-  }
-  return ok({ sessionId: undefined });
-}
-
-export function normalizeAbortSessionPayload(payload: unknown, sessionId?: string): NormalizeResult<AbortSessionPayload> {
-  if (!isRecord(payload)) {
-    return invalidFieldType('payload', 'payload', 'an object', 'invoke', 'abort_session', sessionId);
+    return invalidFieldType('payload', 'payload', 'an object', 'invoke', 'abort_session', welinkSessionId);
   }
   const toolSessionId = requireNonEmptyString(
     payload.toolSessionId,
@@ -278,15 +230,15 @@ export function normalizeAbortSessionPayload(payload: unknown, sessionId?: strin
     'payload.toolSessionId',
     'invoke',
     'abort_session',
-    sessionId,
+    welinkSessionId,
   );
   if (!toolSessionId.ok) return toolSessionId;
   return ok({ toolSessionId: toolSessionId.value });
 }
 
-export function normalizeQuestionReplyPayload(payload: unknown, sessionId?: string): NormalizeResult<QuestionReplyPayload> {
+export function normalizeQuestionReplyPayload(payload: unknown, welinkSessionId?: string): NormalizeResult<QuestionReplyPayload> {
   if (!isRecord(payload)) {
-    return invalidFieldType('payload', 'payload', 'an object', 'invoke', 'question_reply', sessionId);
+    return invalidFieldType('payload', 'payload', 'an object', 'invoke', 'question_reply', welinkSessionId);
   }
   const toolSessionId = requireNonEmptyString(
     payload.toolSessionId,
@@ -294,7 +246,7 @@ export function normalizeQuestionReplyPayload(payload: unknown, sessionId?: stri
     'payload.toolSessionId',
     'invoke',
     'question_reply',
-    sessionId,
+    welinkSessionId,
   );
   if (!toolSessionId.ok) return toolSessionId;
   const answer = requireNonEmptyString(
@@ -303,7 +255,7 @@ export function normalizeQuestionReplyPayload(payload: unknown, sessionId?: stri
     'payload.answer',
     'invoke',
     'question_reply',
-    sessionId,
+    welinkSessionId,
   );
   if (!answer.ok) return answer;
 
@@ -314,7 +266,7 @@ export function normalizeQuestionReplyPayload(payload: unknown, sessionId?: stri
       'payload.toolCallId',
       'invoke',
       'question_reply',
-      sessionId,
+      welinkSessionId,
     );
     if (!toolCallId.ok) return toolCallId;
     return ok({
@@ -333,43 +285,38 @@ export function normalizeQuestionReplyPayload(payload: unknown, sessionId?: stri
 function normalizeInvokePayload(
   action: InvokeAction,
   payload: unknown,
-  sessionId?: string,
+  welinkSessionId?: string,
 ): NormalizeResult<NormalizedInvokeMessage> {
   switch (action) {
     case 'chat': {
-      const normalized = normalizeChatPayload(payload, sessionId);
+      const normalized = normalizeChatPayload(payload, welinkSessionId);
       if (!normalized.ok) return normalized;
-      return ok({ type: 'invoke', action, payload: normalized.value, sessionId });
+      return ok({ type: 'invoke', action, payload: normalized.value, welinkSessionId });
     }
     case 'create_session': {
-      const normalized = normalizeCreateSessionPayload(payload, sessionId);
+      const normalized = normalizeCreateSessionPayload(payload, welinkSessionId);
       if (!normalized.ok) return normalized;
-      return ok({ type: 'invoke', action, payload: normalized.value, sessionId });
+      return ok({ type: 'invoke', action, payload: normalized.value, welinkSessionId });
     }
     case 'close_session': {
-      const normalized = normalizeCloseSessionPayload(payload, sessionId);
+      const normalized = normalizeCloseSessionPayload(payload, welinkSessionId);
       if (!normalized.ok) return normalized;
-      return ok({ type: 'invoke', action, payload: normalized.value, sessionId });
+      return ok({ type: 'invoke', action, payload: normalized.value, welinkSessionId });
     }
     case 'permission_reply': {
-      const normalized = normalizePermissionReplyPayload(payload, sessionId);
+      const normalized = normalizePermissionReplyPayload(payload, welinkSessionId);
       if (!normalized.ok) return normalized;
-      return ok({ type: 'invoke', action, payload: normalized.value, sessionId });
-    }
-    case 'status_query': {
-      const normalized = normalizeStatusQueryPayload(payload, sessionId);
-      if (!normalized.ok) return normalized;
-      return ok({ type: 'invoke', action, payload: normalized.value, sessionId });
+      return ok({ type: 'invoke', action, payload: normalized.value, welinkSessionId });
     }
     case 'abort_session': {
-      const normalized = normalizeAbortSessionPayload(payload, sessionId);
+      const normalized = normalizeAbortSessionPayload(payload, welinkSessionId);
       if (!normalized.ok) return normalized;
-      return ok({ type: 'invoke', action, payload: normalized.value, sessionId });
+      return ok({ type: 'invoke', action, payload: normalized.value, welinkSessionId });
     }
     case 'question_reply': {
-      const normalized = normalizeQuestionReplyPayload(payload, sessionId);
+      const normalized = normalizeQuestionReplyPayload(payload, welinkSessionId);
       if (!normalized.ok) return normalized;
-      return ok({ type: 'invoke', action, payload: normalized.value, sessionId });
+      return ok({ type: 'invoke', action, payload: normalized.value, welinkSessionId });
     }
   }
 }
@@ -384,9 +331,7 @@ export function normalizeDownstreamMessage(
     return fail(error);
   }
 
-  const envelope = extractEnvelope(raw);
-  const unwrapped = unwrapMessage(raw);
-  const messageTypeValue = unwrapped.type;
+  const messageTypeValue = raw.type;
 
   if (typeof messageTypeValue !== 'string') {
     const error = errorOf(missingRequiredField('message', 'type'));
@@ -400,36 +345,31 @@ export function normalizeDownstreamMessage(
     return fail(error);
   }
 
-  const sessionId = extractSessionId(unwrapped);
+  const welinkSessionId = typeof raw.welinkSessionId === 'string' ? raw.welinkSessionId : undefined;
 
   if (messageTypeValue === 'status_query') {
     return ok({
       type: 'status_query',
-      sessionId,
-      envelope,
     });
   }
 
-  const actionValue = unwrapped.action;
+  const actionValue = raw.action;
   if (typeof actionValue !== 'string') {
-    const error = errorOf(missingRequiredField('payload', 'action', 'invoke', undefined, sessionId));
+    const error = errorOf(missingRequiredField('payload', 'action', 'invoke', undefined, welinkSessionId));
     logDownstreamNormalizationFailure(logger, raw, error);
     return fail(error);
   }
   if (!isSupportedInvokeAction(actionValue)) {
-    const error = errorOf(unsupportedAction(actionValue, sessionId));
+    const error = errorOf(unsupportedAction(actionValue, welinkSessionId));
     logDownstreamNormalizationFailure(logger, raw, error);
     return fail(error);
   }
 
-  const normalized = normalizeInvokePayload(actionValue, unwrapped.payload, sessionId);
+  const normalized = normalizeInvokePayload(actionValue, raw.payload, welinkSessionId);
   if (!normalized.ok) {
     logDownstreamNormalizationFailure(logger, raw, normalized.error);
     return normalized;
   }
 
-  return ok({
-    ...normalized.value,
-    envelope,
-  });
+  return ok(normalized.value as NormalizedDownstreamMessage);
 }
