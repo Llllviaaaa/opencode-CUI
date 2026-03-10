@@ -10,10 +10,10 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ part, onAnswer }) =>
     const [customInput, setCustomInput] = useState('');
     const [answered, setAnswered] = useState(part.answered ?? false);
 
-    const handleSelect = (option: string) => {
+    const handleSelect = (label: string) => {
         if (answered) return;
         setAnswered(true);
-        onAnswer?.(option, part.toolCallId);
+        onAnswer?.(label, part.toolCallId);
     };
 
     const handleSubmit = () => {
@@ -38,10 +38,13 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ part, onAnswer }) =>
                         <button
                             key={i}
                             className="question-card__option"
-                            onClick={() => handleSelect(opt)}
+                            onClick={() => handleSelect(opt.label)}
                             disabled={answered}
                         >
-                            {opt}
+                            <span className="question-card__option-label">{opt.label}</span>
+                            {opt.description && (
+                                <span className="question-card__option-desc">{opt.description}</span>
+                            )}
                         </button>
                     ))}
                 </div>

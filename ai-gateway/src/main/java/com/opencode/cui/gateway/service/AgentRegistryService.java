@@ -17,8 +17,8 @@ import java.util.List;
  * transitions.
  *
  * Key behaviors:
- * - Same AK + same toolType -> kick old connection (only one active connection
- * per AK+toolType)
+ * - Same AK + same toolType -> reuse existing record (identity persistence)
+ * - Duplicate active connection check is done BEFORE calling register
  * - Heartbeat updates last_seen_at
  * - Scheduled task marks stale agents offline
  */
@@ -39,33 +39,44 @@ public class AgentRegistryService {
     }
 
     /**
-     * Register a new agent connection. If an existing ONLINE connection with the
-     * same AK and toolType exists, it will be kicked (marked offline) first.
+     * Register an agent connection. Reuses existing record for the same
+     * AK + toolType (identity persistence) or creates a new one.
      *
-     * @return the newly created AgentConnection (with generated id)
+     * Duplicate active connection check should be done BEFORE calling this method.
+     *
+     * @return the AgentConnection (reused or newly created)
      */
     @Transactional
     public AgentConnection register(Long userId, String akId, String deviceName,
-            String os, String toolType, String toolVersion) {
-        // Kick old connection with same AK + toolType
-        AgentConnection existing = repository
-                .findByAkIdAndToolTypeAndStatus(akId, toolType, AgentStatus.ONLINE);
-        if (existing != null) {
-            log.info("Kicking old agent connection: id={}, ak={}, toolType={}",
-                    existing.getId(), akId, toolType);
-            repository.updateStatus(existing.getId(), AgentStatus.OFFLINE);
+            String macAddress, String os, String toolType, String toolVersion) {
+        String effectiveToolType = toolType != null ? toolType : "OPENCODE";
 
-            // Close the old WebSocket session and notify Skill Server
-            eventRelayService.removeAgentSession(String.valueOf(existing.getId()));
+        // Look for existing record with same AK + toolType (any status)
+        AgentConnection existing = repository.findByAkIdAndToolType(akId, effectiveToolType);
+
+        if (existing != null) {
+            // Reuse existing record: update to ONLINE with fresh metadata
+            existing.setStatus(AgentStatus.ONLINE);
+            existing.setDeviceName(deviceName);
+            existing.setMacAddress(macAddress);
+            existing.setOs(os);
+            existing.setToolVersion(toolVersion);
+            existing.setLastSeenAt(LocalDateTime.now());
+            repository.updateAgentInfo(existing);
+
+            log.info("Agent re-registered (reused): id={}, ak={}, device={}, tool={}/{}",
+                    existing.getId(), akId, deviceName, effectiveToolType, toolVersion);
+            return existing;
         }
 
-        // Create new connection record
+        // First-time registration: create new record
         AgentConnection agent = AgentConnection.builder()
                 .userId(userId)
                 .akId(akId)
                 .deviceName(deviceName)
+                .macAddress(macAddress)
                 .os(os)
-                .toolType(toolType != null ? toolType : "OPENCODE")
+                .toolType(effectiveToolType)
                 .toolVersion(toolVersion)
                 .status(AgentStatus.ONLINE)
                 .lastSeenAt(LocalDateTime.now())
@@ -73,8 +84,8 @@ public class AgentRegistryService {
                 .build();
         repository.insert(agent);
 
-        log.info("Agent registered: id={}, userId={}, ak={}, device={}, os={}, tool={}/{}",
-                agent.getId(), userId, akId, deviceName, os, toolType, toolVersion);
+        log.info("Agent registered (new): id={}, userId={}, ak={}, device={}, tool={}/{}",
+                agent.getId(), userId, akId, deviceName, effectiveToolType, toolVersion);
         return agent;
     }
 

@@ -1,24 +1,27 @@
-import type { StreamMessage, MessagePart } from './types';
+import type { StreamMessage, MessagePart, QuestionOption } from './types';
 
-function normalizeQuestionOptions(options: unknown): string[] | undefined {
+function normalizeQuestionOptions(options: unknown): QuestionOption[] | undefined {
   if (!Array.isArray(options)) {
     return undefined;
   }
 
-  const labels = options
-    .map((option) => {
-      if (typeof option === 'string') {
-        return option;
+  const result: QuestionOption[] = [];
+  for (const option of options) {
+    if (typeof option === 'string') {
+      result.push({ label: option });
+    } else if (option && typeof option === 'object') {
+      const obj = option as Record<string, unknown>;
+      const label = typeof obj.label === 'string' ? obj.label : '';
+      if (label) {
+        result.push({
+          label,
+          description: typeof obj.description === 'string' ? obj.description : undefined,
+        });
       }
-      if (option && typeof option === 'object') {
-        const label = (option as { label?: unknown }).label;
-        return typeof label === 'string' ? label : '';
-      }
-      return '';
-    })
-    .filter((option): option is string => Boolean(option));
+    }
+  }
 
-  return labels.length > 0 ? labels : undefined;
+  return result.length > 0 ? result : undefined;
 }
 
 function extractQuestionFields(input?: Record<string, unknown>): Pick<MessagePart, 'header' | 'question' | 'options'> {
@@ -184,7 +187,7 @@ export class StreamAssembler {
         }
         part.header = msg.header ?? questionFields.header ?? part.header;
         part.question = msg.question ?? questionFields.question ?? part.question;
-        part.options = msg.options ?? questionFields.options ?? part.options;
+        part.options = questionFields.options ?? normalizeQuestionOptions(msg.options) ?? part.options;
         if (msg.content !== undefined && msg.content !== '') {
           part.content = msg.content;
         } else if (part.question && !part.content) {

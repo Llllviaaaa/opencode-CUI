@@ -577,7 +577,7 @@ export class EventRelay {
       this.gateway.send({
         type: 'status_response',
         opencodeOnline: online,
-      }, 'status_query:status_response');
+      });
     } catch (err) {
       this.onError('status_query', err);
     }
@@ -598,7 +598,7 @@ export class EventRelay {
         welinkSessionId,
         toolSessionId,
         error: errorMsg,
-      }, 'tool_error');
+      });
     } catch {
       // If the gateway is disconnected we cannot report the error upstream.
     }

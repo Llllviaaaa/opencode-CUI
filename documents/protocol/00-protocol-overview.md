@@ -44,7 +44,7 @@ graph LR
 | --- | ------------------------- | ---------------- | ------------------------ | ---------------- |
 | ①   | Miniapp ↔ Skill Server    | 10 REST API      | 19 种 StreamMessage (WS) | WeLink Cookie    |
 | ②   | Skill Server ↔ AI-Gateway | 6 种 invoke (WS) | 6 种事件 (WS) + 3 REST   | 内部 Token       |
-| ③   | AI-Gateway ↔ PC Agent     | 7 种消息 (WS)    | 7 种消息 (WS)            | AK/SK 签名       |
+| ③   | AI-Gateway ↔ PC Agent     | 7 种消息 (WS)    | 7 种消息 (WS)            | AK/SK 子协议签名 |
 | ④   | PC Agent ↔ OpenCode       | 7 SDK 调用       | 17 种事件 + 12 种 Part   | 无（本机进程间） |
 
 ---
@@ -300,11 +300,12 @@ sequenceDiagram
 
     Note over PA: PC Agent 启动
 
-    PA->>GW: [WS 握手] ws://gateway/ws/agent?ak=...&ts=...&nonce=...&sign=...
-    GW->>GW: AK/SK 签名校验
-    GW-->>PA: 握手成功
-    PA->>GW: [WS] register<br/>{type:"register", deviceName, os, toolType, toolVersion}
-    GW->>GW: 注册 Agent, 分配 agentId
+    PA->>GW: [WS 握手] Sec-WebSocket-Protocol: auth.{base64url(ak,ts,nonce,sign)}
+    GW->>GW: Base64URL 解码 → AK/SK 签名校验
+    GW-->>PA: 握手成功（回显完整子协议值）
+    PA->>GW: [WS] register<br/>{type:"register", deviceName, os, toolType, toolVersion, macAddress}
+    GW->>GW: 设备绑定校验 + 重复连接检测 + 身份持久化
+    GW-->>PA: [WS] register_ok
     GW->>SS: [WS] agent_online<br/>{type:"agent_online", ak}
     SS-->>SS: 更新 Agent 状态 → 通知前端
 
