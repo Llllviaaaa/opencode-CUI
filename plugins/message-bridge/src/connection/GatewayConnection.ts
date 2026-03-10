@@ -27,6 +27,7 @@ export interface GatewaySendLogContext {
   sessionId?: string;
   welinkSessionId?: string;
   toolSessionId?: string;
+  source?: string;
   eventType?: string;
   action?: string;
   opencodeMessageId?: string;

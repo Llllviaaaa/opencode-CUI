@@ -32,6 +32,7 @@ import {
 import { BridgeEvent } from './types';
 import { createSdkAdapter } from './SdkAdapter';
 import { AppLogger, type BridgeLogger } from './AppLogger';
+import { ToolDoneCompat, type ToolDoneSource } from './compat/ToolDoneCompat';
 
 export interface BridgeRuntimeOptions {
   workspacePath?: string;
@@ -113,6 +114,7 @@ export class BridgeRuntime {
   private started = false;
   private readonly sdkClient: unknown;
   private logger: BridgeLogger;
+  private readonly toolDoneCompat = new ToolDoneCompat();
 
   constructor(private readonly options: BridgeRuntimeOptions) {
     this.logger = new AppLogger(options.client, { component: 'runtime' }, undefined, undefined, options.debug);
@@ -289,6 +291,20 @@ export class BridgeRuntime {
       },
     );
     forwardingLogger.debug('event.forwarded');
+
+    if (normalized.common.eventType === 'session.idle') {
+      const decision = this.toolDoneCompat.handleSessionIdle({
+        toolSessionId: normalized.common.toolSessionId,
+        logger: forwardingLogger,
+      });
+      if (decision.emit && decision.source) {
+        this.sendToolDone(normalized.common.toolSessionId, undefined, decision.source, {
+          logger: forwardingLogger,
+          traceId: bridgeMessageId,
+          gatewayMessageId: bridgeMessageId,
+        });
+      }
+    }
   }
 
   getStarted(): boolean {
@@ -469,6 +485,10 @@ export class BridgeRuntime {
       return;
     }
 
+    this.toolDoneCompat.handleInvokeStarted({
+      action: message.action,
+      toolSessionId,
+    });
     const result = await this.actionRouter.route(
       message.action,
       message.payload,
@@ -476,6 +496,10 @@ export class BridgeRuntime {
     );
 
     if (!result.success) {
+      this.toolDoneCompat.handleInvokeFailed({
+        action: message.action,
+        toolSessionId,
+      });
       this.sendToolError(result, welinkSessionId, {
         logger: invokeLogger,
         traceId,
@@ -492,6 +516,20 @@ export class BridgeRuntime {
       toolSessionId,
       latencyMs: Date.now() - startedAt,
     });
+
+    const decision = this.toolDoneCompat.handleInvokeCompleted({
+      action: message.action,
+      toolSessionId,
+      logger: invokeLogger,
+    });
+    if (decision.emit && toolSessionId && decision.source) {
+      this.sendToolDone(toolSessionId, welinkSessionId, decision.source, {
+        logger: invokeLogger,
+        traceId,
+        gatewayMessageId: downstreamFields.gatewayMessageId,
+        action: message.action,
+      });
+    }
   }
 
   private buildActionContext(welinkSessionId?: string, logger: BridgeLogger = this.logger) {
@@ -632,6 +670,45 @@ export class BridgeRuntime {
       welinkSessionId,
       action: logOptions?.action,
       toolSessionId: logOptions?.toolSessionId,
+    });
+  }
+
+  private sendToolDone(
+    toolSessionId: string,
+    welinkSessionId: string | undefined,
+    source: ToolDoneSource,
+    logOptions?: {
+      logger?: BridgeLogger;
+      traceId?: string;
+      gatewayMessageId?: string;
+      action?: string;
+    },
+  ): void {
+    if (!this.gatewayConnection) {
+      this.logger.warn('runtime.tool_done.skipped_no_connection', { toolSessionId, welinkSessionId, source });
+      return;
+    }
+
+    const logger = logOptions?.logger ?? this.logger;
+    logger.info('runtime.tool_done.sending', {
+      toolSessionId,
+      welinkSessionId,
+      source,
+      action: logOptions?.action,
+    });
+
+    this.gatewayConnection.send({
+      type: 'tool_done',
+      toolSessionId,
+      welinkSessionId,
+    }, {
+      traceId: logOptions?.traceId,
+      runtimeTraceId: this.logger.getTraceId(),
+      gatewayMessageId: logOptions?.gatewayMessageId,
+      welinkSessionId,
+      action: logOptions?.action,
+      toolSessionId,
+      source,
     });
   }
 }
