@@ -9,7 +9,7 @@ export interface ActionContext {
   client: unknown;
   connectionState: ConnectionState;
   agentId: string;
-  sessionId?: string;
+  welinkSessionId?: string;
   logger?: {
     debug(message: string, extra?: Record<string, unknown>): void;
     info(message: string, extra?: Record<string, unknown>): void;

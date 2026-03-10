@@ -30,7 +30,7 @@ export class DefaultActionRouter implements ActionRouter {
     const startedAt = Date.now();
     context.logger?.info('router.route.received', {
       action: actionType,
-      sessionId: context.sessionId,
+      welinkSessionId: context.welinkSessionId,
       state: context.connectionState,
       payloadType: Array.isArray(payload) ? 'array' : typeof payload,
     });
