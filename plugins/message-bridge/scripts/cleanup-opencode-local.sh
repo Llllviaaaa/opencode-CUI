@@ -23,8 +23,17 @@ describe_pid() {
 
 collect_candidate_pids() {
   {
-    pgrep -f "opencode serve" || true
-    pgrep -f "opencode-server" || true
+    ps -axo pid=,command= | awk '
+      {
+        pid = $1
+        $1 = ""
+        sub(/^[[:space:]]+/, "", $0)
+        cmd = $0
+        if ((cmd ~ /(^|[[:space:]\/])opencode([[:space:]]|$)/ && cmd ~ /(^|[[:space:]])serve([[:space:]]|$)/) || cmd ~ /opencode-server/) {
+          print pid
+        }
+      }
+    ' || true
     lsof -t -nP -iTCP:"${OPENCODE_SERVER_PORT}" -sTCP:LISTEN 2>/dev/null || true
   } | sort -u
 }
