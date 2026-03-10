@@ -1,7 +1,7 @@
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { promises } from 'fs';
-import { BridgeConfig } from '../types';
+import type { BridgeConfig } from '../types';
 import type { BridgeLogger } from '../runtime/AppLogger';
 import { DEFAULT_EVENT_ALLOWLIST } from '../contracts/upstream-events';
 import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';

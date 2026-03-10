@@ -201,20 +201,29 @@ Important normalization and extraction failures are logged as:
 ## Build and Test
 
 ```bash
-npm install
-npm run typecheck
-npm run build
-npm run build:plugin
-npm run test
-npm run test:unit
-npm run test:integration
-npm run test:e2e
-npm run test:coverage
+bun install
+bun run typecheck
+bun run build
+bun run test
+bun run test:unit
+bun run test:integration
+bun run test:e2e
+bun run test:coverage
 ```
 
 Distribution and load verification:
 
 ```bash
 bun test tests/integration/plugin-distribution.test.mjs
-./scripts/verify-opencode-load.sh
+bun run verify:opencode-load
 ```
+
+Package installation is the primary path for OpenCode:
+
+```json
+{
+  "plugin": ["@opencode-cui/message-bridge"]
+}
+```
+
+Single-file copy into `.opencode/plugins/` remains available as a compatibility path after `bun run build`.

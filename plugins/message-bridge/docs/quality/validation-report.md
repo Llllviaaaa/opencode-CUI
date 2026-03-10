@@ -62,10 +62,10 @@ Validated upstream default allowlist:
 Validated successfully:
 
 ```bash
-npm run typecheck
-npm run test:unit
+bun run typecheck
+bun run test:unit
 bun test tests/integration/plugin-distribution.test.mjs
-./scripts/verify-opencode-load.sh
+bun run verify:opencode-load
 ```
 
 ## 5. Compatibility Conclusions

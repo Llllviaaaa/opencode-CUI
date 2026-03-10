@@ -1,7 +1,7 @@
 import { createHmac } from 'crypto';
 import { describe, expect, test } from 'bun:test';
 
-import { DefaultAkSkAuth } from '../../dist/connection/AkSkAuth.js';
+import { DefaultAkSkAuth } from '../../src/connection/AkSkAuth.ts';
 
 describe('DefaultAkSkAuth', () => {
   test('generates gateway-compatible auth payload', () => {

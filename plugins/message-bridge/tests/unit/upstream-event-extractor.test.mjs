@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import {
   extractUpstreamEvent,
   UPSTREAM_EVENT_EXTRACTORS,
-} from '../../dist/event/UpstreamEventExtractor.js';
-import { SUPPORTED_UPSTREAM_EVENT_TYPES } from '../../dist/event/SupportedUpstreamEvents.js';
+} from '../../src/event/UpstreamEventExtractor.ts';
+import { SUPPORTED_UPSTREAM_EVENT_TYPES } from '../../src/event/SupportedUpstreamEvents.ts';
 
 function createLogger() {
   const entries = [];

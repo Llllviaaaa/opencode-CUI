@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 
-import { BridgeRuntime } from '../../dist/runtime/BridgeRuntime.js';
+import { BridgeRuntime } from '../../src/runtime/BridgeRuntime.ts';
 
 function createRuntimeHarness({ state = 'READY', routeResult } = {}) {
   const runtime = new BridgeRuntime({ client: {} });
@@ -18,7 +18,7 @@ function createRuntimeHarness({ state = 'READY', routeResult } = {}) {
 }
 
 describe('downlink -> uplink protocol', () => {
-  test('invoke/chat success -> no immediate uplink ack', async () => {
+  test('invoke/chat success -> emits compatibility tool_done uplink', async () => {
     const { runtime, sent } = createRuntimeHarness({
       routeResult: { success: true, data: { text: 'ok' } },
     });
@@ -30,7 +30,9 @@ describe('downlink -> uplink protocol', () => {
       payload: { toolSessionId: 'tool-1', text: 'hi' },
     });
 
-    expect(sent).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe('tool_done');
+    expect(sent[0].welinkSessionId).toBe('s-1');
   });
 
   test('invoke/create_session -> session_created', async () => {

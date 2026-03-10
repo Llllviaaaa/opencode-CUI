@@ -1,8 +1,8 @@
 import { describe, test, expect } from 'bun:test';
 
-import { DefaultActionRouter } from '../../dist/action/ActionRouter.js';
-import { DefaultActionRegistry } from '../../dist/action/ActionRegistry.js';
-import { createSdkAdapter } from '../../dist/runtime/SdkAdapter.js';
+import { DefaultActionRouter } from '../../src/action/ActionRouter.ts';
+import { DefaultActionRegistry } from '../../src/action/ActionRegistry.ts';
+import { createSdkAdapter } from '../../src/runtime/SdkAdapter.ts';
 
 describe('DefaultActionRouter coverage', () => {
   const context = {

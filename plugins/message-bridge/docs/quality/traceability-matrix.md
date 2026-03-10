@@ -44,10 +44,10 @@
 
 | Verification goal | Evidence |
 |---|---|
-| Type safety for contracts and protocol | `npm run typecheck` |
-| Unit coverage for protocol/runtime/action | `npm run test:unit` |
+| Type safety for contracts and protocol | `bun run typecheck` |
+| Unit coverage for protocol/runtime/action | `bun run test:unit` |
 | Distribution artifact validation | `tests/integration/plugin-distribution.test.mjs` |
-| Plugin load verification | `scripts/verify-opencode-load.sh` |
+| Plugin load verification | `bun run verify:opencode-load` |
 
 ## 5. Current Conclusions
 

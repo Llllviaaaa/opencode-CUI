@@ -5,8 +5,8 @@ import {
   getErrorDetailsForLog,
   getErrorMessage,
   safeStringify,
-} from '../../dist/utils/error.js';
-import { safeExecute } from '../../dist/types/index.js';
+} from '../../src/utils/error.ts';
+import { safeExecute } from '../../src/types/index.ts';
 
 describe('error utils', () => {
   test('extracts details from Error instances', () => {

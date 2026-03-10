@@ -7,8 +7,8 @@ import {
   ConfigValidationAggregateError,
   loadConfig,
   validateConfig,
-} from '../../dist/config/index.js';
-import { AppLogger } from '../../dist/runtime/AppLogger.js';
+} from '../../src/config/index.ts';
+import { AppLogger } from '../../src/runtime/AppLogger.ts';
 
 const originalHome = process.env.HOME;
 

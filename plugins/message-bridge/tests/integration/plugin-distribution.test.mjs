@@ -7,7 +7,7 @@ import { resolve } from 'node:path';
 
 describe('plugin distribution artifact', () => {
   test('builds single-file artifact with default and named exports', async () => {
-    execFileSync('node', ['./scripts/build-plugin.mjs'], {
+    execFileSync('node', ['./scripts/build.mjs'], {
       cwd: process.cwd(),
       stdio: 'pipe',
       env: process.env,
@@ -21,5 +21,20 @@ describe('plugin distribution artifact', () => {
     expect(typeof mod.default).toBe('function');
     expect(typeof mod.MessageBridgePlugin).toBe('function');
     expect(mod.default).toBe(mod.MessageBridgePlugin);
+  });
+
+  test('builds package entrypoint for Bun package loading', async () => {
+    execFileSync('node', ['./scripts/build.mjs'], {
+      cwd: process.cwd(),
+      stdio: 'pipe',
+      env: process.env,
+    });
+
+    const packageEntrypoint = resolve('dist/index.js');
+    await access(packageEntrypoint, constants.R_OK);
+
+    const mod = await import(pathToFileURL(packageEntrypoint).href);
+    expect(typeof mod.default).toBe('function');
+    expect(typeof mod.MessageBridgePlugin).toBe('function');
   });
 });

@@ -1,9 +1,9 @@
 import { describe, test, expect } from 'bun:test';
 
-import { ChatAction } from '../../dist/action/ChatAction.js';
-import { CreateSessionAction } from '../../dist/action/CreateSessionAction.js';
-import { CloseSessionAction } from '../../dist/action/CloseSessionAction.js';
-import { PermissionReplyAction } from '../../dist/action/PermissionReplyAction.js';
+import { ChatAction } from '../../src/action/ChatAction.ts';
+import { CreateSessionAction } from '../../src/action/CreateSessionAction.ts';
+import { CloseSessionAction } from '../../src/action/CloseSessionAction.ts';
+import { PermissionReplyAction } from '../../src/action/PermissionReplyAction.ts';
 
 const actions = [
   new ChatAction(),

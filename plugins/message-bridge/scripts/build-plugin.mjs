@@ -66,11 +66,10 @@ async function main() {
 
   console.log('Built plugin distribution artifact:');
   console.log(`- ${OUTFILE}`);
-  console.log('Copy example:');
-  console.log(`cp ${JSON.stringify(OUTFILE)} /path/to/your-project/.opencode/plugins/message-bridge.plugin.js`);
+  console.log('Compatibility install path: copy the file into .opencode/plugins if package loading is unavailable.');
 }
 
 main().catch((err) => {
-  console.error('[build:plugin] failed:', err instanceof Error ? err.message : String(err));
+  console.error('[build-release] failed:', err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

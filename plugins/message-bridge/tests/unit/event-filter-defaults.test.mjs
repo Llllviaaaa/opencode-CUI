@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { EventFilter } from '../../dist/event/EventFilter.js';
+import { EventFilter } from '../../src/event/EventFilter.ts';
 
 describe('EventFilter defaults', () => {
   test('default allowlist keeps exact supported events and rejects unsupported variants', () => {

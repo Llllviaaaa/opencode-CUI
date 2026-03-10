@@ -3,8 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { MessageBridgePlugin, default as DefaultPlugin } from '../../dist/index.js';
-import { __resetRuntimeForTests, getOrCreateRuntime, getRuntime, stopRuntime } from '../../dist/runtime/singleton.js';
+import { MessageBridgePlugin, default as DefaultPlugin } from '../../src/index.ts';
+import { __resetRuntimeForTests, getOrCreateRuntime, getRuntime, stopRuntime } from '../../src/runtime/singleton.ts';
 
 function mockInput(overrides = {}) {
   return {
@@ -48,7 +48,7 @@ describe('plugin contract', () => {
   });
 
   test('loader semantics: Object.entries + duplicate function references only init once', async () => {
-    const mod = await import('../../dist/index.js');
+    const mod = await import('../../src/index.ts');
     const seen = new Set();
     const hooks = [];
 

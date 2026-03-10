@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 
-import { DefaultGatewayConnection } from '../../dist/connection/GatewayConnection.js';
+import { DefaultGatewayConnection } from '../../src/connection/GatewayConnection.ts';
 
 class FakeWebSocket {
   static OPEN = 1;
