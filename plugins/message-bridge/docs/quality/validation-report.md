@@ -76,7 +76,8 @@ Verified compatibility constraints:
 - `tool_event` remains envelope-free
 - `tool_error`, `session_created`, and `status_response` remain available with strict protocol semantics
 - `status_response` only contains `opencodeOnline`
-- `session.idle` remains the only completion signal forwarded upstream
+- `session.idle` remains forwarded upstream as `tool_event`
+- compat `tool_done` may be emitted for legacy/UI completion consumers
 - allowlist defaults remain exact-event based and do not revert to wildcard behavior
 
 ## 6. Residual Notes

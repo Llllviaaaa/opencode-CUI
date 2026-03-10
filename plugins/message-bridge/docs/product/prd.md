@@ -71,7 +71,7 @@
 - `welinkSessionId`：技能侧会话标识
 - `toolSessionId`：OpenCode 会话标识
 - `status_query` / `status_response` 不携带会话字段
-- `tool_done` 不作为当前 runtime 的活跃上行消息
+- `tool_done` 在本次兼容恢复落地后保留现有扁平结构
 
 ### 4.5 agentId 绑定规则（P0）
 1. 插件建立 WS 后发送 `register`。  

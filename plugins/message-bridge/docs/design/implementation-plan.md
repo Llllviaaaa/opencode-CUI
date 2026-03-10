@@ -108,6 +108,52 @@
 
 ---
 
+## tool_done compatibility recovery
+
+### Implementation Objective
+- 在不破坏 `contracts -> protocol -> runtime -> action` 主分层的前提下恢复 `tool_done`
+- 行为优先与 `pc-agent` 对齐
+- 兼容逻辑必须独立封装，不能散落在 runtime/action 主流程
+
+### Proposed Implementation Shape
+- 新增 compat 模块，建议路径：`src/runtime/compat/ToolDoneCompat.ts`
+- compat 模块只消费 runtime 已归一化后的上下文，不重新解析原始协议字段
+- compat 模块对 runtime 提供有限判定接口：
+  - 处理 invoke 成功完成
+  - 处理上游 `session.idle`
+  - 返回是否发送 `tool_done`、发送来源、是否命中重复抑制
+- `BridgeRuntime` 只在两个位置接入 compat：
+  - 下游 invoke 成功路径
+  - 上游 `session.idle` 路径
+
+### Concrete Work Items
+1. 定义 compat 层输入输出接口
+2. 在 `chat`、`question_reply`、`permission_reply` 成功后接入 compat 判定，并在需要时发送 `tool_done`
+3. 在 `session.idle` 上游路径保留 `tool_event` 透传，再由 compat 兜底补发 `tool_done`
+4. 在 compat 内部维护“已主动完成，等待 idle 去重”的状态集合
+5. 增加 compat 专属日志，避免与主协议日志混淆
+6. 更新测试、架构说明、日志参考和实施文档中“当前不发送 tool_done”的旧结论
+
+### Test Plan
+- `chat` 成功后发送 `tool_done`
+- `question_reply` 成功后发送 `tool_done`
+- `permission_reply` 成功后发送 `tool_done`
+- `create_session` 成功不发送 `tool_done`
+- `close_session` / `abort_session` 成功不发送 `tool_done`
+- 仅收到 `session.idle` 时会兜底发送 `tool_done`
+- action 成功后再收到 `session.idle` 不重复发送
+- `session.idle` 仍继续透传为 `tool_event`
+- 失败路径只发 `tool_error`，不发 `tool_done`
+
+### Acceptance Criteria
+- UI 在所有完成路径都能收到稳定完成信号
+- 单次执行不会收到重复 `tool_done`
+- 原有 `tool_event(session.idle)` 透传不回归
+- 兼容判定逻辑仅存在于 compat 模块，不散落在 runtime / action 中
+- 文档、日志、测试结论与新行为一致
+
+---
+
 ## Execution Strategy
 
 ### 并行执行波次
@@ -1137,7 +1183,7 @@ Max Concurrent: 5 (Wave 2 & 3 have 5 parallel tasks each)
   - 测试注册、心跳、create+chat+close、permission_reply
   - 测试断连重连、不可达启动失败
   - 测试 Fast Fail 行为
-  - 测试扁平协议字段与不发送 tool_done
+  - 测试扁平协议字段与 compat `tool_done` 行为
 
   **Must NOT do**:
   - 不要实现完整的 E2E 套件（仅 Smoke）
