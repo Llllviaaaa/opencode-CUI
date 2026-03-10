@@ -4,7 +4,7 @@ set -euo pipefail
 # - proactively cleans stale listeners/pids before startup
 # - avoids attaching to old JVM/node processes from previous runs
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 LOG_DIR="${ROOT_DIR}/logs/local-stack"
 PID_DIR="${LOG_DIR}/pids"
 mkdir -p "${LOG_DIR}" "${PID_DIR}"
@@ -16,6 +16,7 @@ DB_PASSWORD="${DB_PASSWORD:-opencode}"
 AI_DB="${AI_DB:-ai_gateway}"
 SKILL_DB="${SKILL_DB:-skill_server}"
 RESET_DB="${RESET_DB:-0}"
+CLEANUP_OPENCODE="${CLEANUP_OPENCODE:-0}"
 MINIAPP_PORT="${MINIAPP_PORT:-3001}"
 SIMULATOR_PORT="${SIMULATOR_PORT:-5173}"
 START_TEST_SIMULATOR="${START_TEST_SIMULATOR:-0}"
@@ -149,9 +150,14 @@ cleanup_port_listeners() {
 
 preflight_cleanup() {
   echo "[0/4] Preflight cleanup (restart by default)"
-  if [[ -x "${ROOT_DIR}/scripts/stop-local-stack.sh" ]]; then
-    echo "[cleanup] run scripts/stop-local-stack.sh (best effort)"
-    "${ROOT_DIR}/scripts/stop-local-stack.sh" >/dev/null 2>&1 || true
+  if [[ -x "${ROOT_DIR}/plugins/message-bridge/scripts/stop-local-stack.sh" ]]; then
+    echo "[cleanup] run plugins/message-bridge/scripts/stop-local-stack.sh (best effort)"
+    "${ROOT_DIR}/plugins/message-bridge/scripts/stop-local-stack.sh" >/dev/null 2>&1 || true
+  fi
+
+  if [[ "${CLEANUP_OPENCODE}" == "1" && -x "${ROOT_DIR}/plugins/message-bridge/scripts/cleanup-opencode-local.sh" ]]; then
+    echo "[cleanup] run plugins/message-bridge/scripts/cleanup-opencode-local.sh"
+    "${ROOT_DIR}/plugins/message-bridge/scripts/cleanup-opencode-local.sh"
   fi
 
   cleanup_port_listeners "8081" "ai-gateway"
@@ -374,6 +380,9 @@ fi
 echo "Logs: ${LOG_DIR}"
 if [[ "${RESET_DB}" == "1" ]]; then
   echo "Database reset: enabled (RESET_DB=1)"
+fi
+if [[ "${CLEANUP_OPENCODE}" == "1" ]]; then
+  echo "OpenCode cleanup: enabled (CLEANUP_OPENCODE=1)"
 fi
 echo
 echo "Active listener PIDs:"

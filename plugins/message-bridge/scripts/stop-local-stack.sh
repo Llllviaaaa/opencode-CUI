@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 PID_DIR="${ROOT_DIR}/logs/local-stack/pids"
 
 stop_by_pid_file() {
@@ -40,4 +40,3 @@ stop_by_pid_file "ai-gateway"
 stop_by_pid_file "test-simulator"
 
 echo "Local stack stop command completed."
-
