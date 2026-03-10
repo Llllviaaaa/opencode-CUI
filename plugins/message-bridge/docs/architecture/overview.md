@@ -119,7 +119,6 @@ Supported `invoke.action` values:
 - `create_session`
 - `close_session`
 - `permission_reply`
-- `status_query`
 - `abort_session`
 - `question_reply`
 
@@ -130,15 +129,15 @@ Bridge-to-gateway transport message types:
 - `register`
 - `heartbeat`
 - `tool_event`
-- `tool_done`
 - `tool_error`
 - `session_created`
 - `status_response`
 
-Compatibility notes:
+Protocol notes:
 
 - `tool_event` remains `{ type: 'tool_event', toolSessionId, event }`
-- response messages may carry `sessionId` and optional `welinkSessionId`
+- response messages no longer carry `sessionId` or `envelope`
+- completion is represented by forwarding `session.idle`, not a synthetic `tool_done`
 - no wildcard upstream allowlist defaults
 
 ## 6. Config and Logging

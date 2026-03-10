@@ -1,5 +1,3 @@
-import type { Envelope } from './envelope';
-
 export const DOWNSTREAM_MESSAGE_TYPES = ['invoke', 'status_query'] as const;
 export type DownstreamMessageType = typeof DOWNSTREAM_MESSAGE_TYPES[number];
 
@@ -8,12 +6,13 @@ export const INVOKE_ACTIONS = [
   'create_session',
   'close_session',
   'permission_reply',
-  'status_query',
   'abort_session',
   'question_reply',
 ] as const;
 
 export type InvokeAction = typeof INVOKE_ACTIONS[number];
+export const ACTION_NAMES = [...INVOKE_ACTIONS, 'status_query'] as const;
+export type ActionName = typeof ACTION_NAMES[number];
 
 export interface ChatPayload {
   toolSessionId: string;
@@ -32,13 +31,12 @@ export interface CloseSessionPayload {
 export interface PermissionReplyPayloadTarget {
   permissionId: string;
   toolSessionId: string;
-  response: 'allow' | 'always' | 'deny';
+  response: 'once' | 'always' | 'reject';
 }
 
 export type PermissionReplyPayload = PermissionReplyPayloadTarget;
 
 export interface StatusQueryPayload {
-  sessionId?: string;
 }
 
 export interface AbortSessionPayload {
@@ -56,9 +54,12 @@ export interface InvokePayloadByAction {
   create_session: CreateSessionPayload;
   close_session: CloseSessionPayload;
   permission_reply: PermissionReplyPayload;
-  status_query: StatusQueryPayload;
   abort_session: AbortSessionPayload;
   question_reply: QuestionReplyPayload;
+}
+
+export interface ActionPayloadByName extends InvokePayloadByAction {
+  status_query: StatusQueryPayload;
 }
 
 export type InvokePayload = InvokePayloadByAction[InvokeAction];
@@ -81,9 +82,6 @@ export interface PermissionReplyResultData {
 
 export interface StatusQueryResultData {
   opencodeOnline: boolean;
-  connectionState: string;
-  sessionId?: string;
-  timestamp: string;
 }
 
 export interface AbortSessionResultData {
@@ -109,24 +107,24 @@ export interface ActionResultDataByAction {
   create_session: CreateSessionResultData;
   close_session: CloseSessionResultData;
   permission_reply: PermissionReplyResultData;
-  status_query: StatusQueryResultData;
   abort_session: AbortSessionResultData;
   question_reply: QuestionReplyResultData;
 }
 
+export interface ActionResultDataByName extends ActionResultDataByAction {
+  status_query: StatusQueryResultData;
+}
+
 export interface StatusQueryMessage {
   type: 'status_query';
-  sessionId?: string;
-  envelope?: Envelope;
 }
 
 export type InvokeMessageByAction = {
   [K in InvokeAction]: {
     type: 'invoke';
-    sessionId?: string;
+    welinkSessionId?: string;
     action: K;
     payload: InvokePayloadByAction[K];
-    envelope?: Envelope;
   };
 };
 

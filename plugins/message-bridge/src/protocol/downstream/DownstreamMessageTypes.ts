@@ -9,7 +9,6 @@ import type {
   PermissionReplyPayload,
   QuestionReplyPayload,
   StatusQueryMessage,
-  StatusQueryPayload,
 } from '../../contracts/downstream-messages';
 
 export type DownstreamNormalizationStage = 'message' | 'payload';
@@ -26,7 +25,7 @@ export interface DownstreamNormalizationError {
   action?: string;
   field: string;
   message: string;
-  sessionId?: string;
+  welinkSessionId?: string;
 }
 
 export type NormalizeResult<T> =
@@ -42,7 +41,6 @@ export type NormalizedInvokeMessageByAction = {
   create_session: Extract<InvokeMessage, { action: 'create_session' }>;
   close_session: Extract<InvokeMessage, { action: 'close_session' }>;
   permission_reply: Extract<InvokeMessage, { action: 'permission_reply' }>;
-  status_query: Extract<InvokeMessage, { action: 'status_query' }>;
   abort_session: Extract<InvokeMessage, { action: 'abort_session' }>;
   question_reply: Extract<InvokeMessage, { action: 'question_reply' }>;
 };
@@ -55,7 +53,6 @@ export type NormalizedPayloadByAction = {
   create_session: CreateSessionPayload;
   close_session: CloseSessionPayload;
   permission_reply: PermissionReplyPayload;
-  status_query: StatusQueryPayload;
   abort_session: AbortSessionPayload;
   question_reply: QuestionReplyPayload;
 };

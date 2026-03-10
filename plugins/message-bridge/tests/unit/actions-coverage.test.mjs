@@ -141,9 +141,10 @@ describe('CloseSessionAction coverage', () => {
     const okClient = {
       session: {
         create: async () => ({}),
-        abort: async (options) => {
+        abort: async () => ({ data: { aborted: true } }),
+        delete: async (options) => {
           calls.push(options);
-          return { data: { aborted: true } };
+          return { data: { deleted: true } };
         },
         prompt: async () => ({}),
       },
@@ -173,7 +174,7 @@ describe('PermissionReplyAction coverage', () => {
     };
 
     const allow = await action.execute(
-      { permissionId: 'p1', toolSessionId: 's-tool', response: 'allow' },
+      { permissionId: 'p1', toolSessionId: 's-tool', response: 'once' },
       readyContext(client),
     );
 
@@ -186,15 +187,19 @@ describe('PermissionReplyAction coverage', () => {
 });
 
 describe('StatusQueryAction coverage', () => {
-  test('execute in ready/non-ready states', async () => {
+  test('execute only returns true when app.health succeeds', async () => {
     const action = new StatusQueryAction();
-    const ready = await action.execute({ sessionId: 's-1' }, readyContext({}));
+    const ready = await action.execute({}, readyContext({
+      app: {
+        health: async () => ({ ok: true }),
+      },
+    }));
     expect(ready.success).toBe(true);
     expect(ready.data.opencodeOnline).toBe(true);
 
     const down = await action.execute(
-      { sessionId: 's-2' },
-      readyContext({}, { connectionState: 'DISCONNECTED' }),
+      {},
+      readyContext({}, { connectionState: 'READY' }),
     );
     expect(down.success).toBe(true);
     expect(down.data.opencodeOnline).toBe(false);

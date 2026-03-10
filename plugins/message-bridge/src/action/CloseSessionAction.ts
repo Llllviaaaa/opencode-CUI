@@ -12,13 +12,13 @@ import {
 } from '../types';
 
 /**
- * Concrete implementation of close_session action (PRD §FR-MB-05: uses abort semantics, not delete)
+ * Concrete implementation of close_session action.
  */
 export class CloseSessionAction implements Action<'close_session', CloseSessionPayload, CloseSessionResultData> {
   name: 'close_session' = 'close_session';
 
   /**
-   * Execute close session action (using abort semantics - PRD §FR-MB-05)
+   * Execute close session action.
    */
   async execute(payload: CloseSessionPayload, context: ActionContext): Promise<ActionResult<CloseSessionResultData>> {
     const startedAt = Date.now();
@@ -45,11 +45,19 @@ export class CloseSessionAction implements Action<'close_session', CloseSessionP
       }
 
       const client = context.client;
+      if (typeof client.session.delete !== 'function') {
+        context.logger?.error('action.close_session.delete_unavailable');
+        return {
+          success: false,
+          errorCode: 'SDK_UNREACHABLE',
+          errorMessage: 'SDK session.delete is not available'
+        };
+      }
       const executionResult = await safeExecute(
-        client.session.abort({
+        client.session.delete({
           path: { id: payload.toolSessionId }
         }),
-        (error) => `Close session (abort) failed: ${error instanceof Error ? error.message : String(error)}`
+        (error) => `Close session failed: ${error instanceof Error ? error.message : String(error)}`
       );
 
       if (executionResult.success) {
@@ -78,7 +86,7 @@ export class CloseSessionAction implements Action<'close_session', CloseSessionP
         return {
           success: false,
           errorCode: 'SDK_UNREACHABLE',
-          errorMessage: `Failed to close session (abort): ${errorMessage}`
+          errorMessage: `Failed to close session: ${errorMessage}`
         };
       }
 

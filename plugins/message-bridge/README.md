@@ -30,7 +30,6 @@ Supported `invoke.action` values:
 - `create_session`
 - `close_session`
 - `permission_reply`
-- `status_query`
 - `abort_session`
 - `question_reply`
 
@@ -60,7 +59,7 @@ payload: {
 }
 ```
 
-Current implementation uses `session.abort()` for `close_session` to preserve existing bridge behavior.
+Current implementation uses `session.delete()` for `close_session`.
 
 ### `permission_reply`
 
@@ -68,7 +67,7 @@ Current implementation uses `session.abort()` for `close_session` to preserve ex
 payload: {
   permissionId: string;
   toolSessionId: string;
-  response: 'allow' | 'always' | 'deny';
+  response: 'once' | 'always' | 'reject';
 }
 ```
 
@@ -77,17 +76,7 @@ payload: {
 Standalone:
 
 ```ts
-{ type: 'status_query', sessionId?: string }
-```
-
-Invoke form:
-
-```ts
-{
-  type: 'invoke',
-  action: 'status_query',
-  payload: { sessionId?: string }
-}
+{ type: 'status_query' }
 ```
 
 ### `abort_session`
@@ -145,15 +134,15 @@ Bridge-to-gateway transport messages currently include:
 - `register`
 - `heartbeat`
 - `tool_event`
-- `tool_done`
 - `tool_error`
 - `session_created`
 - `status_response`
 
-For compatibility, some messages may include both:
+Transport response shapes:
 
-- `sessionId`
-- `welinkSessionId`
+- `tool_error`: `{ type, welinkSessionId?, toolSessionId?, error }`
+- `session_created`: `{ type, welinkSessionId?, toolSessionId?, session }`
+- `status_response`: `{ type, opencodeOnline }`
 
 ## Configuration
 

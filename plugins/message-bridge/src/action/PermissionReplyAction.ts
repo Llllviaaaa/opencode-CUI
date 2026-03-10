@@ -13,20 +13,10 @@ import {
 
 /**
  * Concrete implementation of permission_reply action.
- * Target format only: { permissionId, toolSessionId, response: 'allow'|'always'|'deny' }
+ * Target format only: { permissionId, toolSessionId, response: 'once'|'always'|'reject' }
  */
 export class PermissionReplyAction implements Action<'permission_reply', PermissionReplyPayload, PermissionReplyResultData> {
   name: 'permission_reply' = 'permission_reply';
-
-  private mapResponseToDecision(response: 'allow' | 'always' | 'deny'): 'once' | 'always' | 'reject' {
-    if (response === 'allow') {
-      return 'once';
-    }
-    if (response === 'deny') {
-      return 'reject';
-    }
-    return 'always';
-  }
 
   /**
    * Execute permission reply action
@@ -58,11 +48,10 @@ export class PermissionReplyAction implements Action<'permission_reply', Permiss
         };
       }
 
-      const decision = this.mapResponseToDecision(payload.response);
       const executionResult = await safeExecute(
         context.client.postSessionIdPermissionsPermissionId({
           path: { id: payload.toolSessionId, permissionID: payload.permissionId },
-          body: { response: decision },
+          body: { response: payload.response },
         }),
         (error) => `Permission reply failed: ${error instanceof Error ? error.message : String(error)}`
       );

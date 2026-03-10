@@ -1,8 +1,8 @@
 import type { ConnectionState, ErrorCode } from './common';
 import type {
-  ActionResultDataByAction,
-  InvokeAction,
-  InvokePayloadByAction,
+  ActionName,
+  ActionPayloadByName,
+  ActionResultDataByName,
 } from '../contracts/downstream-messages';
 
 export interface ActionContext {
@@ -32,9 +32,9 @@ export interface ActionFailure {
 export type ActionResult<TData = void> = ActionSuccess<TData> | ActionFailure;
 
 export interface Action<
-  TName extends InvokeAction = InvokeAction,
-  TPayload extends InvokePayloadByAction[TName] = InvokePayloadByAction[TName],
-  TData = ActionResultDataByAction[TName],
+  TName extends ActionName = ActionName,
+  TPayload extends ActionPayloadByName[TName] = ActionPayloadByName[TName],
+  TData = ActionResultDataByName[TName],
 > {
   name: TName;
   execute(payload: TPayload, context: ActionContext): Promise<ActionResult<TData>>;

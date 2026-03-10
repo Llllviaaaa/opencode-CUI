@@ -1,12 +1,12 @@
-import { ActionContext, ActionResult, ActionResultDataByAction, InvokeAction, InvokePayloadByAction } from '../types';
+import { ActionContext, ActionResult, ActionResultDataByName, ActionName, ActionPayloadByName } from '../types';
 import { ActionRegistry } from './ActionRegistry';
 
 export interface ActionRouter {
-  route<K extends InvokeAction>(
+  route<K extends ActionName>(
     actionType: K,
-    payload: InvokePayloadByAction[K],
+    payload: ActionPayloadByName[K],
     context: ActionContext,
-  ): Promise<ActionResult<ActionResultDataByAction[K]>>;
+  ): Promise<ActionResult<ActionResultDataByName[K]>>;
   setRegistry(registry: ActionRegistry): void;
   getRegistry(): ActionRegistry | null;
 }
@@ -22,11 +22,11 @@ export class DefaultActionRouter implements ActionRouter {
     return this.registry;
   }
 
-  async route<K extends InvokeAction>(
+  async route<K extends ActionName>(
     actionType: K,
-    payload: InvokePayloadByAction[K],
+    payload: ActionPayloadByName[K],
     context: ActionContext,
-  ): Promise<ActionResult<ActionResultDataByAction[K]>> {
+  ): Promise<ActionResult<ActionResultDataByName[K]>> {
     const startedAt = Date.now();
     context.logger?.info('router.route.received', {
       action: actionType,

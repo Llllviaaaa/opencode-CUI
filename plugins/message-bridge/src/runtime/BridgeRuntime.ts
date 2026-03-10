@@ -18,7 +18,6 @@ import { loadConfig } from '../config';
 import { DefaultAkSkAuth } from '../connection/AkSkAuth';
 import { DefaultGatewayConnection, GatewayConnection } from '../connection/GatewayConnection';
 import { DefaultStateManager } from '../connection/StateManager';
-import { EnvelopeBuilder } from '../event/EnvelopeBuilder';
 import { EventFilter } from '../event/EventFilter';
 import {
   extractUpstreamEvent,
@@ -60,7 +59,6 @@ interface DownstreamLogFields {
   messageType?: string;
   gatewayMessageId?: string;
   action?: string;
-  sessionId?: string;
   welinkSessionId?: string;
   toolSessionId?: string;
 }
@@ -71,7 +69,6 @@ export class BridgeRuntime {
   private readonly registry = new DefaultActionRegistry();
 
   private gatewayConnection: GatewayConnection | null = null;
-  private envelopeBuilder: EnvelopeBuilder | null = null;
   private eventFilter: EventFilter | null = null;
   private started = false;
   private readonly sdkClient: unknown;
@@ -129,7 +126,6 @@ export class BridgeRuntime {
     }
 
     const agentId = this.stateManager.generateAndBindAgentId();
-    this.envelopeBuilder = new EnvelopeBuilder(agentId);
     this.eventFilter = new EventFilter(config.events.allowlist);
 
     const auth = new DefaultAkSkAuth(config.auth.ak, config.auth.sk);
@@ -159,7 +155,6 @@ export class BridgeRuntime {
       this.logger.info('gateway.state.changed', { state });
       if (state === 'CONNECTING') {
         const nextAgentId = this.stateManager.resetForReconnect();
-        this.envelopeBuilder = new EnvelopeBuilder(nextAgentId);
         this.logger.info('runtime.agent.rebound', { agentId: nextAgentId });
       }
     });
@@ -290,13 +285,13 @@ export class BridgeRuntime {
     if (!normalized.ok) {
       messageLogger.warn('runtime.downstream_ignored_non_protocol', {
         messageType: normalized.error.messageType ?? 'unknown',
-        hasSessionId: !!normalized.error.sessionId,
+        hasWelinkSessionId: !!normalized.error.welinkSessionId,
       });
 
       if (normalized.error.messageType === 'invoke') {
         this.sendToolError(
           { success: false, errorCode: 'INVALID_PAYLOAD', errorMessage: 'Invalid invoke payload shape' },
-          normalized.error.sessionId,
+          normalized.error.welinkSessionId,
           {
             logger: messageLogger,
             traceId,
@@ -312,18 +307,18 @@ export class BridgeRuntime {
 
     if (message.type === 'status_query') {
       const statusLogger = this.createMessageLogger(
-        { ...downstreamFields, sessionId: message.sessionId, welinkSessionId: message.sessionId },
+        { ...downstreamFields },
         traceId,
       );
       statusLogger.info('runtime.status_query.received');
-      const payload: StatusQueryPayload = { sessionId: message.sessionId };
+      const payload: StatusQueryPayload = {};
       const result = await this.actionRouter.route(
         'status_query',
         payload,
-        this.buildActionContext(message.sessionId, statusLogger),
+        this.buildActionContext(undefined, statusLogger),
       );
       if (!result.success) {
-        this.sendToolError(result, message.sessionId, {
+        this.sendToolError(result, undefined, {
           logger: statusLogger,
           traceId,
           gatewayMessageId: downstreamFields.gatewayMessageId,
@@ -335,15 +330,10 @@ export class BridgeRuntime {
       this.gatewayConnection.send({
         type: 'status_response',
         opencodeOnline: result.data.opencodeOnline,
-        sessionId: message.sessionId,
-        welinkSessionId: message.sessionId,
-        envelope: this.ensureEnvelopeBuilder().build(message.sessionId),
       }, {
         traceId,
         runtimeTraceId: this.logger.getTraceId(),
         gatewayMessageId: downstreamFields.gatewayMessageId,
-        sessionId: message.sessionId,
-        welinkSessionId: message.sessionId,
         action: 'status_query',
       });
       statusLogger.info('runtime.status_query.responded', {
@@ -352,9 +342,7 @@ export class BridgeRuntime {
       return;
     }
 
-    const skillSessionId =
-      message.sessionId ??
-      (message.envelope as { sessionId?: string } | undefined)?.sessionId;
+    const welinkSessionId = message.welinkSessionId;
     const toolSessionId =
       'payload' in message &&
       message.payload &&
@@ -366,8 +354,7 @@ export class BridgeRuntime {
     const invokeLogger = this.createMessageLogger(
       {
         ...downstreamFields,
-        sessionId: skillSessionId,
-        welinkSessionId: skillSessionId,
+        welinkSessionId,
         action: message.action,
         toolSessionId,
       },
@@ -379,11 +366,11 @@ export class BridgeRuntime {
       const result = await this.actionRouter.route(
         message.action,
         message.payload,
-        this.buildActionContext(skillSessionId, invokeLogger),
+        this.buildActionContext(welinkSessionId, invokeLogger),
       );
 
       if (!result.success) {
-        this.sendToolError(result, skillSessionId, {
+        this.sendToolError(result, welinkSessionId, {
           logger: invokeLogger,
           traceId,
           gatewayMessageId: downstreamFields.gatewayMessageId,
@@ -396,7 +383,7 @@ export class BridgeRuntime {
       if (!toolSessionId) {
         this.sendToolError(
           { success: false, errorCode: 'SDK_UNREACHABLE', errorMessage: 'create_session returned without sessionId' },
-          skillSessionId,
+          welinkSessionId,
           {
             logger: invokeLogger,
             traceId,
@@ -406,9 +393,9 @@ export class BridgeRuntime {
         );
         return;
       }
-      if (!skillSessionId) {
+      if (!welinkSessionId) {
         this.sendToolError(
-          { success: false, errorCode: 'INVALID_PAYLOAD', errorMessage: 'create_session missing skill sessionId' },
+          { success: false, errorCode: 'INVALID_PAYLOAD', errorMessage: 'create_session missing welinkSessionId' },
           undefined,
           {
             logger: invokeLogger,
@@ -422,23 +409,20 @@ export class BridgeRuntime {
 
       this.gatewayConnection.send({
         type: 'session_created',
-        sessionId: skillSessionId,
-        welinkSessionId: skillSessionId,
+        welinkSessionId,
         toolSessionId,
         session: result.data,
-        envelope: this.ensureEnvelopeBuilder().build(skillSessionId),
       }, {
         traceId,
         runtimeTraceId: this.logger.getTraceId(),
         gatewayMessageId: downstreamFields.gatewayMessageId,
-        sessionId: skillSessionId,
-        welinkSessionId: skillSessionId,
+        welinkSessionId,
         toolSessionId,
         action: message.action,
       });
       invokeLogger.info('runtime.invoke.completed', {
         action: message.action,
-        sessionId: skillSessionId,
+        welinkSessionId,
         toolSessionId,
         latencyMs: Date.now() - startedAt,
       });
@@ -448,11 +432,11 @@ export class BridgeRuntime {
     const result = await this.actionRouter.route(
       message.action,
       message.payload,
-      this.buildActionContext(skillSessionId, invokeLogger),
+      this.buildActionContext(welinkSessionId, invokeLogger),
     );
 
     if (!result.success) {
-      this.sendToolError(result, skillSessionId, {
+      this.sendToolError(result, welinkSessionId, {
         logger: invokeLogger,
         traceId,
         gatewayMessageId: downstreamFields.gatewayMessageId,
@@ -462,34 +446,9 @@ export class BridgeRuntime {
       return;
     }
 
-    if (message.action === 'status_query') {
-      const statusData = result.data as StatusQueryResultData | undefined;
-      this.gatewayConnection.send({
-        type: 'status_response',
-        opencodeOnline: !!statusData?.opencodeOnline,
-        sessionId: skillSessionId,
-        welinkSessionId: skillSessionId,
-        envelope: this.ensureEnvelopeBuilder().build(skillSessionId),
-      }, {
-        traceId,
-        runtimeTraceId: this.logger.getTraceId(),
-        gatewayMessageId: downstreamFields.gatewayMessageId,
-        sessionId: skillSessionId,
-        welinkSessionId: skillSessionId,
-        action: message.action,
-      });
-      invokeLogger.info('runtime.invoke.completed', {
-        action: message.action,
-        sessionId: skillSessionId,
-        toolSessionId,
-        latencyMs: Date.now() - startedAt,
-      });
-      return;
-    }
-
     invokeLogger.info('runtime.invoke.completed', {
       action: message.action,
-      sessionId: skillSessionId,
+      welinkSessionId,
       toolSessionId,
       latencyMs: Date.now() - startedAt,
     });
@@ -573,19 +532,12 @@ export class BridgeRuntime {
     }
     const message = raw as Record<string, unknown>;
     const payload = typeof message.payload === 'object' && message.payload ? (message.payload as Record<string, unknown>) : undefined;
-    const sessionId =
-      typeof message.sessionId === 'string'
-        ? message.sessionId
-        : typeof message.welinkSessionId === 'string'
-          ? message.welinkSessionId
-          : undefined;
 
     return {
       messageType: typeof message.type === 'string' ? message.type : undefined,
       gatewayMessageId: typeof message.messageId === 'string' ? message.messageId : undefined,
       action: typeof message.action === 'string' ? message.action : undefined,
-      sessionId,
-      welinkSessionId: sessionId,
+      welinkSessionId: typeof message.welinkSessionId === 'string' ? message.welinkSessionId : undefined,
       toolSessionId: typeof payload?.toolSessionId === 'string' ? payload.toolSessionId : undefined,
     };
   }
@@ -608,17 +560,9 @@ export class BridgeRuntime {
     };
   }
 
-  private ensureEnvelopeBuilder(): EnvelopeBuilder {
-    if (!this.envelopeBuilder) {
-      const agentId = this.stateManager.getAgentId() ?? this.stateManager.generateAndBindAgentId();
-      this.envelopeBuilder = new EnvelopeBuilder(agentId);
-    }
-    return this.envelopeBuilder;
-  }
-
   private sendToolError(
     result: ActionResult,
-    sessionId?: string,
+    welinkSessionId?: string,
     logOptions?: {
       logger?: BridgeLogger;
       traceId?: string;
@@ -628,26 +572,24 @@ export class BridgeRuntime {
     },
   ): void {
     if (!this.gatewayConnection) {
-      this.logger.warn('runtime.tool_error.skipped_no_connection', { sessionId });
+      this.logger.warn('runtime.tool_error.skipped_no_connection', { welinkSessionId });
       return;
     }
 
     const error = result.success ? 'Unknown error' : result.errorMessage ?? 'Unknown error';
     const logger = logOptions?.logger ?? this.logger;
-    logger.error('runtime.tool_error.sending', { sessionId, welinkSessionId: sessionId, error });
+    logger.error('runtime.tool_error.sending', { welinkSessionId, error });
 
     this.gatewayConnection.send({
       type: 'tool_error',
-      sessionId,
-      welinkSessionId: sessionId,
+      welinkSessionId,
+      toolSessionId: logOptions?.toolSessionId,
       error,
-      envelope: this.ensureEnvelopeBuilder().build(sessionId),
     }, {
       traceId: logOptions?.traceId,
       runtimeTraceId: this.logger.getTraceId(),
       gatewayMessageId: logOptions?.gatewayMessageId,
-      sessionId,
-      welinkSessionId: sessionId,
+      welinkSessionId,
       action: logOptions?.action,
       toolSessionId: logOptions?.toolSessionId,
     });
