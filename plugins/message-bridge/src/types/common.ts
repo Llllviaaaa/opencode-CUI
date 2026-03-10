@@ -19,6 +19,7 @@ export interface ConfigValidationError {
 export interface GatewayConfig {
   url: string;
   deviceName: string;
+  macAddress?: string;
   toolType: string;
   toolVersion: string;
   heartbeatIntervalMs: number;
@@ -28,7 +29,6 @@ export interface GatewayConfig {
 
 export interface PingConfig {
   intervalMs: number;
-  pongTimeoutMs: number;
 }
 
 export interface SDKConfig {
@@ -91,7 +91,6 @@ export const DEFAULT_CONFIG = {
   reconnectMaxMs: 30000,
   sdkTimeoutMs: 10000,
   configVersion: 1,
-  pongTimeoutMs: 10000,
 } as const;
 
 export const AGENT_ID_PREFIX = 'bridge-';

@@ -6,7 +6,7 @@ export const DEFAULT_BRIDGE_CONFIG = {
   config_version: 1,
   gateway: {
     url: 'ws://localhost:8081/ws/agent',
-    toolType: 'opencode',
+    toolType: 'OPENCODE',
     toolVersion: '1.0.0',
     deviceName: 'Local Machine',
     heartbeatIntervalMs: 30000,
@@ -17,7 +17,6 @@ export const DEFAULT_BRIDGE_CONFIG = {
     },
     ping: {
       intervalMs: 30000,
-      pongTimeoutMs: 10000,
     },
   },
   sdk: {

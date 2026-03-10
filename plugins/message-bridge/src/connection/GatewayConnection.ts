@@ -53,7 +53,6 @@ export interface GatewayConnectionOptions {
   reconnectMaxMs?: number;
   reconnectExponential?: boolean;
   heartbeatIntervalMs?: number;
-  pongTimeoutMs?: number;
   abortSignal?: AbortSignal;
   authPayloadProvider?: () => AkSkAuthPayload;
   registerMessage: RegisterMessage;
