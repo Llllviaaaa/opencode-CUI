@@ -24,8 +24,18 @@ export class StatusQueryAction implements Action<'status_query', StatusQueryPayl
     });
     try {
       let opencodeOnline = false;
+      const global = (
+        context.client as { global?: { health?: () => Promise<unknown> | unknown } } | null | undefined
+      )?.global;
       const app = (context.client as { app?: { health?: () => Promise<unknown> | unknown } } | null | undefined)?.app;
-      if (app?.health) {
+      if (global?.health) {
+        try {
+          await global.health();
+          opencodeOnline = true;
+        } catch {
+          opencodeOnline = false;
+        }
+      } else if (app?.health) {
         try {
           await app.health();
           opencodeOnline = true;

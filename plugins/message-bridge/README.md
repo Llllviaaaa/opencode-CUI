@@ -175,9 +175,7 @@ Defaults are defined in:
 | `enabled` | `true` |
 | `config_version` | `1` |
 | `gateway.url` | `ws://localhost:8081/ws/agent` |
-| `gateway.deviceName` | `Local Machine` |
-| `gateway.toolType` | `opencode` |
-| `gateway.toolVersion` | `1.0.0` |
+| `gateway.toolType` | `OPENCODE` |
 | `gateway.heartbeatIntervalMs` | `30000` |
 | `gateway.reconnect.baseMs` | `1000` |
 | `gateway.reconnect.maxMs` | `30000` |
@@ -190,6 +188,13 @@ Defaults are defined in:
 ## Logging
 
 The bridge emits structured logs through `client.app.log()` when available.
+
+Register metadata is auto-collected at runtime:
+
+- `deviceName` comes from `os.hostname()`
+- `toolVersion` comes from `client.global.health().version`
+- `macAddress` comes from the first usable local network interface, or `""` when unavailable
+- `macAddress` is currently a pre-provisioned field for Gateway compatibility; the server must treat `""` as missing
 
 Important normalization and extraction failures are logged as:
 

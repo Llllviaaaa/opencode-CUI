@@ -1,5 +1,10 @@
 import { getErrorMessage } from '../utils/error';
 
+export interface OpencodeHealthResult {
+  healthy: true;
+  version?: string;
+}
+
 export interface OpencodeSessionClient {
   create(options?: { body?: Record<string, unknown> }): Promise<unknown>;
   abort(options: { path: { id: string } }): Promise<unknown>;
@@ -16,6 +21,9 @@ export interface OpencodeClient {
     path: { id: string; permissionID: string };
     body: { response: 'once' | 'always' | 'reject' };
   }) => Promise<unknown>;
+  global?: {
+    health?: (options?: Record<string, unknown>) => Promise<OpencodeHealthResult> | OpencodeHealthResult;
+  };
   app?: {
     health?: (options?: Record<string, unknown>) => Promise<unknown> | unknown;
     log: (options?: {

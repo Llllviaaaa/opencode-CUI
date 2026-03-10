@@ -147,17 +147,8 @@ export class ConfigResolver {
     if (process.env.BRIDGE_GATEWAY_URL) {
       gateway.url = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_URL);
     }
-    if (process.env.BRIDGE_GATEWAY_DEVICE_NAME) {
-      gateway.deviceName = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_DEVICE_NAME);
-    }
-    if (process.env.BRIDGE_GATEWAY_MAC_ADDRESS) {
-      gateway.macAddress = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_MAC_ADDRESS);
-    }
     if (process.env.BRIDGE_GATEWAY_TOOL_TYPE) {
       gateway.toolType = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_TOOL_TYPE);
-    }
-    if (process.env.BRIDGE_GATEWAY_TOOL_VERSION) {
-      gateway.toolVersion = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_TOOL_VERSION);
     }
 
     const reconnect: Record<string, unknown> = {};
@@ -222,22 +213,10 @@ export class ConfigResolver {
       normalized.gateway.url = 'ws://localhost:8081/ws/agent';
     }
 
-    if (!normalized.gateway.deviceName) {
-      normalized.gateway.deviceName = 'Local Machine';
-    }
-
-    if (typeof normalized.gateway.macAddress === 'string') {
-      normalized.gateway.macAddress = normalized.gateway.macAddress.trim() || undefined;
-    }
-
     if (!normalized.gateway.toolType) {
       normalized.gateway.toolType = 'OPENCODE';
     } else {
       normalized.gateway.toolType = normalized.gateway.toolType.trim().toUpperCase();
-    }
-
-    if (!normalized.gateway.toolVersion) {
-      normalized.gateway.toolVersion = '1.0.0';
     }
 
     if (!normalized.gateway.heartbeatIntervalMs) {
@@ -261,6 +240,15 @@ export class ConfigResolver {
         normalized.gateway.reconnect.exponential = true;
       }
     }
+
+    const gatewayMetadata = normalized.gateway as unknown as {
+      deviceName?: unknown;
+      toolVersion?: unknown;
+      macAddress?: unknown;
+    };
+    delete gatewayMetadata.deviceName;
+    delete gatewayMetadata.toolVersion;
+    delete gatewayMetadata.macAddress;
 
     if (!normalized.gateway.ping) {
       normalized.gateway.ping = {

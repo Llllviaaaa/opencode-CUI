@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import os, { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { BridgeRuntime } from '../../dist/runtime/BridgeRuntime.js';
@@ -714,7 +714,7 @@ describe('runtime protocol strictness', () => {
     expect(sent).toHaveLength(0);
   });
 
-  test('runtime.start sends register with macAddress and normalized toolType', async () => {
+  test('runtime.start sends register with runtime-derived metadata', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'mb-runtime-register-'));
     const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
     process.env.HOME = fakeHome;
@@ -779,10 +779,27 @@ describe('runtime protocol strictness', () => {
     }
 
     globalThis.WebSocket = RegisterCaptureWebSocket;
+    const originalNetworkInterfaces = os.networkInterfaces;
+    os.networkInterfaces = () => ({
+      en0: [
+        {
+          address: '127.0.0.1',
+          netmask: '255.0.0.0',
+          family: 'IPv4',
+          mac: '11:22:33:44:55:66',
+          internal: false,
+          cidr: null,
+        },
+      ],
+    });
     try {
       const runtime = new BridgeRuntime({
         workspacePath: workspace,
-        client: {},
+        client: {
+          global: {
+            health: async () => ({ healthy: true, version: '9.9.9' }),
+          },
+        },
       });
 
       await runtime.start();
@@ -791,15 +808,116 @@ describe('runtime protocol strictness', () => {
       const ws = RegisterCaptureWebSocket.instances[0];
       expect(ws.sent[0]).toEqual({
         type: 'register',
-        deviceName: 'dev',
+        deviceName: hostname(),
         macAddress: '11:22:33:44:55:66',
         os: expect.any(String),
         toolType: 'OPENCODE',
-        toolVersion: '1.2.3',
+        toolVersion: '9.9.9',
       });
 
       runtime.stop();
     } finally {
+      os.networkInterfaces = originalNetworkInterfaces;
+      globalThis.WebSocket = originalWebSocket;
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('runtime.start sends empty macAddress when no usable interface is available', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-runtime-register-empty-mac-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    process.env.HOME = fakeHome;
+
+    await mkdir(join(workspace, '.opencode'), { recursive: true });
+    await writeFile(
+      join(workspace, '.opencode', 'message-bridge.json'),
+      JSON.stringify({
+        config_version: 1,
+        enabled: true,
+        gateway: {
+          url: 'ws://localhost:8081/ws/agent',
+          toolType: 'opencode',
+          heartbeatIntervalMs: 30000,
+          reconnect: {
+            baseMs: 1000,
+            maxMs: 30000,
+            exponential: true,
+          },
+        },
+        sdk: {
+          timeoutMs: 10000,
+        },
+        auth: {
+          ak: 'test-ak-001',
+          sk: 'test-sk-secret-001',
+        },
+        events: {
+          allowlist: ['message.updated'],
+        },
+      }),
+      'utf8',
+    );
+
+    const originalWebSocket = globalThis.WebSocket;
+    class RegisterCaptureWebSocket {
+      static OPEN = 1;
+      static instances = [];
+
+      constructor() {
+        this.readyState = 0;
+        this.sent = [];
+        RegisterCaptureWebSocket.instances.push(this);
+        setTimeout(() => {
+          this.readyState = RegisterCaptureWebSocket.OPEN;
+          this.onopen?.();
+          this.onmessage?.({ data: JSON.stringify({ type: 'register_ok' }) });
+        }, 0);
+      }
+
+      send(data) {
+        this.sent.push(JSON.parse(data));
+      }
+
+      close() {
+        this.readyState = 3;
+        this.onclose?.();
+      }
+    }
+
+    globalThis.WebSocket = RegisterCaptureWebSocket;
+    const originalNetworkInterfaces = os.networkInterfaces;
+    os.networkInterfaces = () => ({
+      lo0: [
+        {
+          address: '127.0.0.1',
+          netmask: '255.0.0.0',
+          family: 'IPv4',
+          mac: '00:00:00:00:00:00',
+          internal: true,
+          cidr: null,
+        },
+      ],
+    });
+    try {
+      const runtime = new BridgeRuntime({
+        workspacePath: workspace,
+        client: {
+          global: {
+            health: async () => ({ healthy: true, version: '9.9.9' }),
+          },
+        },
+      });
+
+      await runtime.start();
+      await new Promise((r) => setTimeout(r, 10));
+
+      const ws = RegisterCaptureWebSocket.instances[0];
+      expect(ws.sent[0].macAddress).toBe('');
+
+      runtime.stop();
+    } finally {
+      os.networkInterfaces = originalNetworkInterfaces;
       globalThis.WebSocket = originalWebSocket;
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
