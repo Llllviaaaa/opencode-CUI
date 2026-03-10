@@ -63,6 +63,46 @@ interface DownstreamLogFields {
   toolSessionId?: string;
 }
 
+const UNKNOWN_MAC_ADDRESS = 'unknown';
+
+function isUsableMacAddress(macAddress: string | undefined): macAddress is string {
+  if (!macAddress) {
+    return false;
+  }
+
+  const normalized = macAddress.trim().toLowerCase();
+  return normalized.length > 0 && normalized !== '00:00:00:00:00:00' && normalized !== '00-00-00-00-00-00';
+}
+
+function resolveMacAddress(configuredMacAddress: string | undefined, logger: BridgeLogger): string {
+  if (isUsableMacAddress(configuredMacAddress)) {
+    return configuredMacAddress;
+  }
+
+  const interfaces = os.networkInterfaces();
+  let interfaceCount = 0;
+
+  for (const entries of Object.values(interfaces)) {
+    if (!entries) {
+      continue;
+    }
+
+    interfaceCount += entries.length;
+    for (const entry of entries) {
+      if (entry.internal || !isUsableMacAddress(entry.mac)) {
+        continue;
+      }
+      return entry.mac.trim().toLowerCase();
+    }
+  }
+
+  logger.warn('runtime.mac_address.fallback_unknown', {
+    platform: os.platform(),
+    interfaceCount,
+  });
+  return UNKNOWN_MAC_ADDRESS;
+}
+
 export class BridgeRuntime {
   private readonly actionRouter = new DefaultActionRouter();
   private readonly stateManager = new DefaultStateManager();
@@ -129,7 +169,7 @@ export class BridgeRuntime {
     this.eventFilter = new EventFilter(config.events.allowlist);
 
     const auth = new DefaultAkSkAuth(config.auth.ak, config.auth.sk);
-    const queryParamsProvider = () => auth.generateQueryParams();
+    const authPayloadProvider = () => auth.generateAuthPayload();
 
     const connection = new DefaultGatewayConnection({
       url: config.gateway.url,
@@ -137,12 +177,12 @@ export class BridgeRuntime {
       reconnectMaxMs: config.gateway.reconnect.maxMs,
       reconnectExponential: config.gateway.reconnect.exponential,
       heartbeatIntervalMs: config.gateway.heartbeatIntervalMs,
-      pongTimeoutMs: config.gateway.ping?.pongTimeoutMs,
       abortSignal: options.abortSignal,
-      queryParamsProvider,
+      authPayloadProvider,
       registerMessage: {
         type: 'register',
         deviceName: config.gateway.deviceName,
+        macAddress: resolveMacAddress(config.gateway.macAddress, this.logger),
         os: os.platform(),
         toolType: config.gateway.toolType,
         toolVersion: config.gateway.toolVersion,

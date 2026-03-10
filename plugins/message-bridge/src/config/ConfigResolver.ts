@@ -150,6 +150,9 @@ export class ConfigResolver {
     if (process.env.BRIDGE_GATEWAY_DEVICE_NAME) {
       gateway.deviceName = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_DEVICE_NAME);
     }
+    if (process.env.BRIDGE_GATEWAY_MAC_ADDRESS) {
+      gateway.macAddress = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_MAC_ADDRESS);
+    }
     if (process.env.BRIDGE_GATEWAY_TOOL_TYPE) {
       gateway.toolType = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_TOOL_TYPE);
     }
@@ -169,9 +172,6 @@ export class ConfigResolver {
     const ping: Record<string, unknown> = {};
     if (process.env.BRIDGE_GATEWAY_PING_INTERVAL_MS) {
       ping.intervalMs = parseInt(process.env.BRIDGE_GATEWAY_PING_INTERVAL_MS, 10);
-    }
-    if (process.env.BRIDGE_GATEWAY_PONG_TIMEOUT_MS) {
-      ping.pongTimeoutMs = parseInt(process.env.BRIDGE_GATEWAY_PONG_TIMEOUT_MS, 10);
     }
     if (Object.keys(ping).length > 0) gateway.ping = ping;
 
@@ -226,8 +226,14 @@ export class ConfigResolver {
       normalized.gateway.deviceName = 'Local Machine';
     }
 
+    if (typeof normalized.gateway.macAddress === 'string') {
+      normalized.gateway.macAddress = normalized.gateway.macAddress.trim() || undefined;
+    }
+
     if (!normalized.gateway.toolType) {
-      normalized.gateway.toolType = 'opencode';
+      normalized.gateway.toolType = 'OPENCODE';
+    } else {
+      normalized.gateway.toolType = normalized.gateway.toolType.trim().toUpperCase();
     }
 
     if (!normalized.gateway.toolVersion) {
@@ -259,7 +265,6 @@ export class ConfigResolver {
     if (!normalized.gateway.ping) {
       normalized.gateway.ping = {
         intervalMs: 30000,
-        pongTimeoutMs: 10000,
       };
     }
 
