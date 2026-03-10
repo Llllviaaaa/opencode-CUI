@@ -187,15 +187,26 @@ describe('PermissionReplyAction coverage', () => {
 });
 
 describe('StatusQueryAction coverage', () => {
-  test('execute only returns true when app.health succeeds', async () => {
+  test('execute prefers global.health and falls back to app.health', async () => {
     const action = new StatusQueryAction();
     const ready = await action.execute({}, readyContext({
+      global: {
+        health: async () => ({ healthy: true, version: '9.9.9' }),
+      },
       app: {
         health: async () => ({ ok: true }),
       },
     }));
     expect(ready.success).toBe(true);
     expect(ready.data.opencodeOnline).toBe(true);
+
+    const fallback = await action.execute({}, readyContext({
+      app: {
+        health: async () => ({ ok: true }),
+      },
+    }));
+    expect(fallback.success).toBe(true);
+    expect(fallback.data.opencodeOnline).toBe(true);
 
     const down = await action.execute(
       {},

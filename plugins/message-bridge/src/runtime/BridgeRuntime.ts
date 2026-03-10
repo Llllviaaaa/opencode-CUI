@@ -33,6 +33,7 @@ import { BridgeEvent } from './types';
 import { createSdkAdapter } from './SdkAdapter';
 import { AppLogger, type BridgeLogger } from './AppLogger';
 import { ToolDoneCompat, type ToolDoneSource } from './compat/ToolDoneCompat';
+import { resolveRegisterMetadata } from './RegisterMetadata';
 
 export interface BridgeRuntimeOptions {
   workspacePath?: string;
@@ -62,46 +63,6 @@ interface DownstreamLogFields {
   action?: string;
   welinkSessionId?: string;
   toolSessionId?: string;
-}
-
-const UNKNOWN_MAC_ADDRESS = 'unknown';
-
-function isUsableMacAddress(macAddress: string | undefined): macAddress is string {
-  if (!macAddress) {
-    return false;
-  }
-
-  const normalized = macAddress.trim().toLowerCase();
-  return normalized.length > 0 && normalized !== '00:00:00:00:00:00' && normalized !== '00-00-00-00-00-00';
-}
-
-function resolveMacAddress(configuredMacAddress: string | undefined, logger: BridgeLogger): string {
-  if (isUsableMacAddress(configuredMacAddress)) {
-    return configuredMacAddress;
-  }
-
-  const interfaces = os.networkInterfaces();
-  let interfaceCount = 0;
-
-  for (const entries of Object.values(interfaces)) {
-    if (!entries) {
-      continue;
-    }
-
-    interfaceCount += entries.length;
-    for (const entry of entries) {
-      if (entry.internal || !isUsableMacAddress(entry.mac)) {
-        continue;
-      }
-      return entry.mac.trim().toLowerCase();
-    }
-  }
-
-  logger.warn('runtime.mac_address.fallback_unknown', {
-    platform: os.platform(),
-    interfaceCount,
-  });
-  return UNKNOWN_MAC_ADDRESS;
 }
 
 export class BridgeRuntime {
@@ -169,6 +130,7 @@ export class BridgeRuntime {
 
     const agentId = this.stateManager.generateAndBindAgentId();
     this.eventFilter = new EventFilter(config.events.allowlist);
+    const registerMetadata = await resolveRegisterMetadata(this.options.client, this.logger);
 
     const auth = new DefaultAkSkAuth(config.auth.ak, config.auth.sk);
     const authPayloadProvider = () => auth.generateAuthPayload();
@@ -183,11 +145,11 @@ export class BridgeRuntime {
       authPayloadProvider,
       registerMessage: {
         type: 'register',
-        deviceName: config.gateway.deviceName,
-        macAddress: resolveMacAddress(config.gateway.macAddress, this.logger),
+        deviceName: registerMetadata.deviceName,
+        macAddress: registerMetadata.macAddress,
         os: os.platform(),
         toolType: config.gateway.toolType,
-        toolVersion: config.gateway.toolVersion,
+        toolVersion: registerMetadata.toolVersion,
       },
       logger: this.logger.child({ component: 'gateway' }),
     });

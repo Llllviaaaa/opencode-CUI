@@ -18,7 +18,7 @@ function createRuntimeHarness({ state = 'READY', routeResult } = {}) {
 }
 
 describe('downlink -> uplink protocol', () => {
-  test('invoke/chat success -> emits compatibility tool_done uplink', async () => {
+  test('invoke/chat success -> emits tool_done compat message', async () => {
     const { runtime, sent } = createRuntimeHarness({
       routeResult: { success: true, data: { text: 'ok' } },
     });
@@ -32,6 +32,7 @@ describe('downlink -> uplink protocol', () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0].type).toBe('tool_done');
+    expect(sent[0].toolSessionId).toBe('tool-1');
     expect(sent[0].welinkSessionId).toBe('s-1');
   });
 

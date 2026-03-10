@@ -1,7 +1,7 @@
 // @bun
 // src/runtime/BridgeRuntime.ts
 import { randomUUID as randomUUID4 } from "crypto";
-import os from "os";
+import os2 from "os";
 
 // src/types/common.ts
 var CONNECTION_STATES = ["DISCONNECTED", "CONNECTING", "CONNECTED", "READY"];
@@ -635,8 +635,16 @@ class StatusQueryAction {
     });
     try {
       let opencodeOnline = false;
+      const global = context.client?.global;
       const app = context.client?.app;
-      if (app?.health) {
+      if (global?.health) {
+        try {
+          await global.health();
+          opencodeOnline = true;
+        } catch {
+          opencodeOnline = false;
+        }
+      } else if (app?.health) {
         try {
           await app.health();
           opencodeOnline = true;
@@ -1834,8 +1842,6 @@ var DEFAULT_BRIDGE_CONFIG = {
   gateway: {
     url: "ws://localhost:8081/ws/agent",
     toolType: "OPENCODE",
-    toolVersion: "1.0.0",
-    deviceName: "Local Machine",
     heartbeatIntervalMs: 30000,
     reconnect: {
       baseMs: 1000,
@@ -1975,17 +1981,8 @@ class ConfigResolver {
     if (process.env.BRIDGE_GATEWAY_URL) {
       gateway.url = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_URL);
     }
-    if (process.env.BRIDGE_GATEWAY_DEVICE_NAME) {
-      gateway.deviceName = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_DEVICE_NAME);
-    }
-    if (process.env.BRIDGE_GATEWAY_MAC_ADDRESS) {
-      gateway.macAddress = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_MAC_ADDRESS);
-    }
     if (process.env.BRIDGE_GATEWAY_TOOL_TYPE) {
       gateway.toolType = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_TOOL_TYPE);
-    }
-    if (process.env.BRIDGE_GATEWAY_TOOL_VERSION) {
-      gateway.toolVersion = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_TOOL_VERSION);
     }
     const reconnect = {};
     if (process.env.BRIDGE_GATEWAY_RECONNECT_BASE_MS)
@@ -2043,19 +2040,10 @@ class ConfigResolver {
     if (!normalized.gateway.url) {
       normalized.gateway.url = "ws://localhost:8081/ws/agent";
     }
-    if (!normalized.gateway.deviceName) {
-      normalized.gateway.deviceName = "Local Machine";
-    }
-    if (typeof normalized.gateway.macAddress === "string") {
-      normalized.gateway.macAddress = normalized.gateway.macAddress.trim() || undefined;
-    }
     if (!normalized.gateway.toolType) {
       normalized.gateway.toolType = "OPENCODE";
     } else {
       normalized.gateway.toolType = normalized.gateway.toolType.trim().toUpperCase();
-    }
-    if (!normalized.gateway.toolVersion) {
-      normalized.gateway.toolVersion = "1.0.0";
     }
     if (!normalized.gateway.heartbeatIntervalMs) {
       normalized.gateway.heartbeatIntervalMs = 30000;
@@ -2077,6 +2065,10 @@ class ConfigResolver {
         normalized.gateway.reconnect.exponential = true;
       }
     }
+    const gatewayMetadata = normalized.gateway;
+    delete gatewayMetadata.deviceName;
+    delete gatewayMetadata.toolVersion;
+    delete gatewayMetadata.macAddress;
     if (!normalized.gateway.ping) {
       normalized.gateway.ping = {
         intervalMs: 30000
@@ -3336,6 +3328,7 @@ function createSdkAdapter(client) {
     postSessionIdPermissionsPermissionId: async (options) => {
       return c.postSessionIdPermissionsPermissionId(options);
     },
+    global: c.global,
     _client: rawClient,
     app: c.app
   };
@@ -3413,19 +3406,34 @@ class ToolDoneCompat {
   }
 }
 
-// src/runtime/BridgeRuntime.ts
-var UNKNOWN_MAC_ADDRESS = "unknown";
+// src/runtime/RegisterMetadata.ts
+import os from "os";
+var EMPTY_MAC_ADDRESS = "";
+var ZERO_MAC_ADDRESS = "00:00:00:00:00:00";
+var MAC_ADDRESS_PATTERN = /^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i;
+function normalizeMacAddress(macAddress) {
+  return macAddress.trim().replace(/-/g, ":").toLowerCase();
+}
 function isUsableMacAddress(macAddress) {
   if (!macAddress) {
     return false;
   }
-  const normalized = macAddress.trim().toLowerCase();
-  return normalized.length > 0 && normalized !== "00:00:00:00:00:00" && normalized !== "00-00-00-00-00-00";
+  const normalized = normalizeMacAddress(macAddress);
+  return MAC_ADDRESS_PATTERN.test(normalized) && normalized !== ZERO_MAC_ADDRESS;
 }
-function resolveMacAddress(configuredMacAddress, logger) {
-  if (isUsableMacAddress(configuredMacAddress)) {
-    return configuredMacAddress;
+async function resolveToolVersion(client) {
+  const globalHealth = client?.global?.health;
+  if (!globalHealth) {
+    throw new Error("opencode_global_health_unavailable");
   }
+  const health = await globalHealth();
+  const version = health && typeof health === "object" && typeof health.version === "string" ? health.version.trim() : "";
+  if (!version) {
+    throw new Error("opencode_version_unavailable");
+  }
+  return version;
+}
+function resolveMacAddress(logger) {
   const interfaces = os.networkInterfaces();
   let interfaceCount = 0;
   for (const entries of Object.values(interfaces)) {
@@ -3437,16 +3445,24 @@ function resolveMacAddress(configuredMacAddress, logger) {
       if (entry.internal || !isUsableMacAddress(entry.mac)) {
         continue;
       }
-      return entry.mac.trim().toLowerCase();
+      return normalizeMacAddress(entry.mac);
     }
   }
-  logger.warn("runtime.mac_address.fallback_unknown", {
+  logger.warn("runtime.mac_address.unavailable", {
     platform: os.platform(),
     interfaceCount
   });
-  return UNKNOWN_MAC_ADDRESS;
+  return EMPTY_MAC_ADDRESS;
+}
+async function resolveRegisterMetadata(client, logger) {
+  return {
+    deviceName: os.hostname(),
+    toolVersion: await resolveToolVersion(client),
+    macAddress: resolveMacAddress(logger)
+  };
 }
 
+// src/runtime/BridgeRuntime.ts
 class BridgeRuntime {
   options;
   actionRouter = new DefaultActionRouter;
@@ -3502,6 +3518,7 @@ class BridgeRuntime {
     }
     const agentId = this.stateManager.generateAndBindAgentId();
     this.eventFilter = new EventFilter(config.events.allowlist);
+    const registerMetadata = await resolveRegisterMetadata(this.options.client, this.logger);
     const auth = new DefaultAkSkAuth(config.auth.ak, config.auth.sk);
     const authPayloadProvider = () => auth.generateAuthPayload();
     const connection = new DefaultGatewayConnection({
@@ -3514,11 +3531,11 @@ class BridgeRuntime {
       authPayloadProvider,
       registerMessage: {
         type: "register",
-        deviceName: config.gateway.deviceName,
-        macAddress: resolveMacAddress(config.gateway.macAddress, this.logger),
-        os: os.platform(),
+        deviceName: registerMetadata.deviceName,
+        macAddress: registerMetadata.macAddress,
+        os: os2.platform(),
         toolType: config.gateway.toolType,
-        toolVersion: config.gateway.toolVersion
+        toolVersion: registerMetadata.toolVersion
       },
       logger: this.logger.child({ component: "gateway" })
     });
@@ -3982,5 +3999,5 @@ export {
   MessageBridgePlugin
 };
 
-//# debugId=393A7672A8107D4D64756E2164756E21
+//# debugId=FE92CA1585B804BE64756E2164756E21
 //# sourceMappingURL=message-bridge.plugin.js.map

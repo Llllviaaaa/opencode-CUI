@@ -47,6 +47,7 @@ export function createSdkAdapter(client: unknown): unknown {
       }) => {
       return c.postSessionIdPermissionsPermissionId!(options);
     },
+    global: c.global,
     _client: rawClient,
     app: c.app,
   } as OpencodeClient;
