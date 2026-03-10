@@ -1,6 +1,6 @@
 // @bun
 // src/runtime/BridgeRuntime.ts
-import { randomUUID as randomUUID5 } from "crypto";
+import { randomUUID as randomUUID4 } from "crypto";
 import os from "os";
 
 // src/types/common.ts
@@ -161,10 +161,6 @@ async function safeExecute(promise, errorMapper) {
 function hasError(result) {
   return result !== null && typeof result === "object" && "error" in result && result.error !== undefined;
 }
-// src/contracts/envelope.ts
-function hasEnvelope(message) {
-  return typeof message === "object" && message !== null && "envelope" in message && typeof message.envelope === "object";
-}
 // src/contracts/upstream-events.ts
 var SUPPORTED_UPSTREAM_EVENT_TYPES = [
   "message.updated",
@@ -191,10 +187,10 @@ var INVOKE_ACTIONS = [
   "create_session",
   "close_session",
   "permission_reply",
-  "status_query",
   "abort_session",
   "question_reply"
 ];
+var ACTION_NAMES = [...INVOKE_ACTIONS, "status_query"];
 // src/action/ChatAction.ts
 class ChatAction {
   name = "chat";
@@ -447,9 +443,17 @@ class CloseSessionAction {
         };
       }
       const client = context.client;
-      const executionResult = await safeExecute(client.session.abort({
+      if (typeof client.session.delete !== "function") {
+        context.logger?.error("action.close_session.delete_unavailable");
+        return {
+          success: false,
+          errorCode: "SDK_UNREACHABLE",
+          errorMessage: "SDK session.delete is not available"
+        };
+      }
+      const executionResult = await safeExecute(client.session.delete({
         path: { id: payload.toolSessionId }
-      }), (error) => `Close session (abort) failed: ${error instanceof Error ? error.message : String(error)}`);
+      }), (error) => `Close session failed: ${error instanceof Error ? error.message : String(error)}`);
       if (executionResult.success) {
         if (!hasError(executionResult.data)) {
           return {
@@ -474,7 +478,7 @@ class CloseSessionAction {
         return {
           success: false,
           errorCode: "SDK_UNREACHABLE",
-          errorMessage: `Failed to close session (abort): ${errorMessage}`
+          errorMessage: `Failed to close session: ${errorMessage}`
         };
       }
       context.logger?.error("action.close_session.failed", {
@@ -521,15 +525,6 @@ class CloseSessionAction {
 // src/action/PermissionReplyAction.ts
 class PermissionReplyAction {
   name = "permission_reply";
-  mapResponseToDecision(response) {
-    if (response === "allow") {
-      return "once";
-    }
-    if (response === "deny") {
-      return "reject";
-    }
-    return "always";
-  }
   async execute(payload, context) {
     const startedAt = Date.now();
     context.logger?.info("action.permission_reply.started", {
@@ -554,10 +549,9 @@ class PermissionReplyAction {
           errorMessage: "Valid OpenCode client not available in context"
         };
       }
-      const decision = this.mapResponseToDecision(payload.response);
       const executionResult = await safeExecute(context.client.postSessionIdPermissionsPermissionId({
         path: { id: payload.toolSessionId, permissionID: payload.permissionId },
-        body: { response: decision }
+        body: { response: payload.response }
       }), (error) => `Permission reply failed: ${error instanceof Error ? error.message : String(error)}`);
       if (executionResult.success) {
         if (!hasError(executionResult.data)) {
@@ -637,11 +631,10 @@ class StatusQueryAction {
   async execute(payload, context) {
     const startedAt = Date.now();
     context.logger?.debug("action.status_query.started", {
-      sessionId: payload.sessionId,
       state: context.connectionState
     });
     try {
-      let opencodeOnline = context.connectionState === "READY";
+      let opencodeOnline = false;
       const app = context.client?.app;
       if (app?.health) {
         try {
@@ -654,10 +647,7 @@ class StatusQueryAction {
       return {
         success: true,
         data: {
-          opencodeOnline,
-          connectionState: context.connectionState,
-          sessionId: payload.sessionId,
-          timestamp: new Date().toISOString()
+          opencodeOnline
         }
       };
     } catch (error) {
@@ -950,7 +940,7 @@ class DefaultActionRouter {
     const startedAt = Date.now();
     context.logger?.info("router.route.received", {
       action: actionType,
-      sessionId: context.sessionId,
+      welinkSessionId: context.welinkSessionId,
       state: context.connectionState,
       payloadType: Array.isArray(payload) ? "array" : typeof payload
     });
@@ -1842,7 +1832,7 @@ var DEFAULT_BRIDGE_CONFIG = {
   config_version: 1,
   gateway: {
     url: "ws://localhost:8081/ws/agent",
-    toolType: "opencode",
+    toolType: "OPENCODE",
     toolVersion: "1.0.0",
     deviceName: "Local Machine",
     heartbeatIntervalMs: 30000,
@@ -1852,8 +1842,7 @@ var DEFAULT_BRIDGE_CONFIG = {
       exponential: true
     },
     ping: {
-      intervalMs: 30000,
-      pongTimeoutMs: 1e4
+      intervalMs: 30000
     }
   },
   sdk: {
@@ -1988,6 +1977,9 @@ class ConfigResolver {
     if (process.env.BRIDGE_GATEWAY_DEVICE_NAME) {
       gateway.deviceName = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_DEVICE_NAME);
     }
+    if (process.env.BRIDGE_GATEWAY_MAC_ADDRESS) {
+      gateway.macAddress = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_MAC_ADDRESS);
+    }
     if (process.env.BRIDGE_GATEWAY_TOOL_TYPE) {
       gateway.toolType = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_TOOL_TYPE);
     }
@@ -2009,9 +2001,6 @@ class ConfigResolver {
     const ping = {};
     if (process.env.BRIDGE_GATEWAY_PING_INTERVAL_MS) {
       ping.intervalMs = parseInt(process.env.BRIDGE_GATEWAY_PING_INTERVAL_MS, 10);
-    }
-    if (process.env.BRIDGE_GATEWAY_PONG_TIMEOUT_MS) {
-      ping.pongTimeoutMs = parseInt(process.env.BRIDGE_GATEWAY_PONG_TIMEOUT_MS, 10);
     }
     if (Object.keys(ping).length > 0)
       gateway.ping = ping;
@@ -2056,8 +2045,13 @@ class ConfigResolver {
     if (!normalized.gateway.deviceName) {
       normalized.gateway.deviceName = "Local Machine";
     }
+    if (typeof normalized.gateway.macAddress === "string") {
+      normalized.gateway.macAddress = normalized.gateway.macAddress.trim() || undefined;
+    }
     if (!normalized.gateway.toolType) {
-      normalized.gateway.toolType = "opencode";
+      normalized.gateway.toolType = "OPENCODE";
+    } else {
+      normalized.gateway.toolType = normalized.gateway.toolType.trim().toUpperCase();
     }
     if (!normalized.gateway.toolVersion) {
       normalized.gateway.toolVersion = "1.0.0";
@@ -2084,8 +2078,7 @@ class ConfigResolver {
     }
     if (!normalized.gateway.ping) {
       normalized.gateway.ping = {
-        intervalMs: 30000,
-        pongTimeoutMs: 1e4
+        intervalMs: 30000
       };
     }
     if (!normalized.sdk) {
@@ -2363,41 +2356,22 @@ function validateConfig(config) {
 import { createHmac, randomUUID as randomUUID2 } from "crypto";
 
 class DefaultAkSkAuth {
-  _accessKey;
-  _secretKey;
+  accessKey;
+  secretKey;
   constructor(accessKey, secretKey) {
-    this._accessKey = accessKey;
-    this._secretKey = secretKey;
+    this.accessKey = accessKey;
+    this.secretKey = secretKey;
   }
-  generateAuthHeaders() {
-    const query = this.generateQueryParams();
-    return {
-      Authorization: `Bearer ${query.get("sign")}`,
-      "X-Bridge-AK": this._accessKey,
-      "X-Bridge-TS": query.get("ts") ?? "",
-      "X-Bridge-Nonce": query.get("nonce") ?? "",
-      "Content-Type": "application/json"
-    };
-  }
-  generateQueryParams() {
+  generateAuthPayload() {
     const ts = Math.floor(Date.now() / 1000).toString();
     const nonce = randomUUID2();
-    const sign = createHmac("sha256", this._secretKey).update(`${this._accessKey}${ts}${nonce}`).digest("base64");
-    return new URLSearchParams({
-      ak: this._accessKey,
+    const sign = createHmac("sha256", this.secretKey).update(`${this.accessKey}${ts}${nonce}`).digest("base64");
+    return {
+      ak: this.accessKey,
       ts,
       nonce,
       sign
-    });
-  }
-  async validateCredentials() {
-    return Promise.resolve(this._accessKey.length > 0 && this._secretKey.length > 0);
-  }
-  getAccessKey() {
-    return this._accessKey;
-  }
-  getSecretKey() {
-    return this._secretKey;
+    };
   }
 }
 
@@ -2414,6 +2388,7 @@ function buildGatewaySendLogExtra(messageType, payloadBytes, logContext) {
     ...rest
   };
 }
+var GATEWAY_REJECTION_CLOSE_CODES = new Set([4403, 4408, 4409]);
 function isRecord3(value) {
   return value !== null && typeof value === "object";
 }
@@ -2437,6 +2412,21 @@ function extractWebSocketErrorDetails(event) {
     details.readyState = target.readyState;
   }
   return details;
+}
+function encodeBase64Url(value) {
+  return Buffer.from(value, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+function buildAuthSubprotocol(payload) {
+  return `auth.${encodeBase64Url(JSON.stringify(payload))}`;
+}
+function isGatewayControlMessage(message) {
+  if (!isRecord3(message) || typeof message.type !== "string") {
+    return false;
+  }
+  return message.type === "register_ok" || message.type === "register_rejected";
+}
+function isGatewayRejectedCloseCode(code) {
+  return typeof code === "number" && GATEWAY_REJECTION_CLOSE_CODES.has(code);
 }
 
 class DefaultGatewayConnection extends EventEmitter {
@@ -2499,13 +2489,9 @@ class DefaultGatewayConnection extends EventEmitter {
       }
       try {
         const url = new URL(this.options.url);
-        const queryParams = this.options.queryParamsProvider?.();
-        if (queryParams) {
-          for (const [key, value] of queryParams.entries()) {
-            url.searchParams.set(key, value);
-          }
-        }
-        const ws = new WebSocket(url.toString());
+        const authPayload = this.options.authPayloadProvider?.();
+        const protocols = authPayload ? [buildAuthSubprotocol(authPayload)] : undefined;
+        const ws = protocols ? new WebSocket(url.toString(), protocols) : new WebSocket(url.toString());
         this.ws = ws;
         this.manuallyDisconnected = false;
         ws.onopen = () => {
@@ -2518,16 +2504,15 @@ class DefaultGatewayConnection extends EventEmitter {
             toolType: this.options.registerMessage.toolType,
             toolVersion: this.options.registerMessage.toolVersion
           });
-          this.setState("READY");
-          this.options.logger?.info("gateway.ready");
-          this.setupHeartbeat();
           finalizeResolve();
         };
         ws.onclose = (event) => {
+          const rejected = isGatewayRejectedCloseCode(event?.code);
           this.options.logger?.warn("gateway.close", {
             opened,
             manuallyDisconnected: this.manuallyDisconnected,
             aborted: !!this.options.abortSignal?.aborted,
+            rejected,
             code: event?.code,
             reason: event?.reason,
             wasClean: event?.wasClean,
@@ -2543,6 +2528,14 @@ class DefaultGatewayConnection extends EventEmitter {
           }
           this.teardownTimers();
           this.setState("DISCONNECTED");
+          if (rejected) {
+            this.options.logger?.warn("gateway.close.rejected", {
+              code: event?.code,
+              reason: event?.reason,
+              rejected: true
+            });
+            return;
+          }
           if (opened && !this.manuallyDisconnected && !this.options.abortSignal?.aborted) {
             this.attemptReconnect();
           }
@@ -2598,6 +2591,14 @@ class DefaultGatewayConnection extends EventEmitter {
       throw new Error("WebSocket is not connected. Cannot send message.");
     }
     const messageType = message && typeof message === "object" && "type" in message ? String(message.type ?? "") : "unknown";
+    const isControlMessage = messageType === "register" || messageType === "heartbeat";
+    if (this.state !== "READY" && !isControlMessage) {
+      this.options.logger?.warn("gateway.send.rejected_not_ready", {
+        state: this.state,
+        messageType
+      });
+      throw new Error("Gateway connection is not ready. Cannot send business message.");
+    }
     const serialized = JSON.stringify(message);
     const payloadBytes = Buffer.byteLength(serialized, "utf8");
     this.lastMessageSummary = {
@@ -2697,6 +2698,18 @@ class DefaultGatewayConnection extends EventEmitter {
         payloadBytes: frameBytes
       };
       this.options.logger?.debug("gateway.message.received", { messageType, frameBytes, gatewayMessageId });
+      if (isGatewayControlMessage(message)) {
+        this.handleControlMessage(message);
+        return;
+      }
+      if (this.state !== "READY") {
+        this.options.logger?.warn("gateway.message.ignored_not_ready", {
+          state: this.state,
+          messageType,
+          gatewayMessageId
+        });
+        return;
+      }
       this.emit("message", message);
     } catch {
       this.options.logger?.debug("gateway.message.ignored_non_json", {
@@ -2706,10 +2719,29 @@ class DefaultGatewayConnection extends EventEmitter {
     }
   }
   extractGatewayMessageId(message) {
-    if (!isRecord3(message) || !isRecord3(message.envelope)) {
+    if (!isRecord3(message)) {
       return;
     }
-    return typeof message.envelope.messageId === "string" ? message.envelope.messageId : undefined;
+    return typeof message.messageId === "string" ? message.messageId : undefined;
+  }
+  handleControlMessage(message) {
+    if (message.type === "register_ok") {
+      if (this.state === "READY") {
+        this.options.logger?.warn("gateway.register.duplicate_ok");
+        return;
+      }
+      this.setState("READY");
+      this.options.logger?.info("gateway.register.accepted");
+      this.setupHeartbeat();
+      this.options.logger?.info("gateway.ready");
+      return;
+    }
+    const reason = typeof message.reason === "string" ? message.reason : undefined;
+    this.options.logger?.error("gateway.register.rejected", { reason });
+    this.manuallyDisconnected = true;
+    if (this.ws) {
+      this.ws.close();
+    }
   }
   setState(next) {
     this.state = next;
@@ -2741,40 +2773,6 @@ class DefaultStateManager {
   }
   resetForReconnect() {
     return this.generateAndBindAgentId();
-  }
-}
-
-// src/event/EnvelopeBuilder.ts
-import { randomUUID as randomUUID4 } from "crypto";
-
-class EnvelopeBuilder {
-  agentId;
-  globalSequence = 0;
-  sessionSequences = new Map;
-  constructor(agentId) {
-    this.agentId = agentId;
-  }
-  build(sessionId) {
-    const sequenceNumber = sessionId ? this.nextSessionSequence(sessionId) : this.nextGlobalSequence();
-    return {
-      version: "1.0",
-      messageId: randomUUID4(),
-      timestamp: new Date().toISOString(),
-      source: "message-bridge",
-      agentId: this.agentId,
-      sessionId,
-      sequenceNumber,
-      sequenceScope: sessionId ? "session" : "global"
-    };
-  }
-  nextGlobalSequence() {
-    this.globalSequence += 1;
-    return this.globalSequence;
-  }
-  nextSessionSequence(sessionId) {
-    const next = (this.sessionSequences.get(sessionId) ?? 0) + 1;
-    this.sessionSequences.set(sessionId, next);
-    return next;
   }
 }
 
@@ -3055,7 +3053,7 @@ function ok2(value) {
 function fail2(error) {
   return { ok: false, error };
 }
-function missingRequiredField2(stage, field, messageType, action, sessionId) {
+function missingRequiredField2(stage, field, messageType, action, welinkSessionId) {
   return fail2({
     stage,
     code: "missing_required_field",
@@ -3063,10 +3061,10 @@ function missingRequiredField2(stage, field, messageType, action, sessionId) {
     message: `${field} is required`,
     messageType,
     action,
-    sessionId
+    welinkSessionId
   });
 }
-function invalidFieldType2(stage, field, expectedType, messageType, action, sessionId) {
+function invalidFieldType2(stage, field, expectedType, messageType, action, welinkSessionId) {
   return fail2({
     stage,
     code: "invalid_field_type",
@@ -3074,7 +3072,7 @@ function invalidFieldType2(stage, field, expectedType, messageType, action, sess
     message: `${field} must be ${expectedType}`,
     messageType,
     action,
-    sessionId
+    welinkSessionId
   });
 }
 function unsupportedMessage(messageType) {
@@ -3086,7 +3084,7 @@ function unsupportedMessage(messageType) {
     messageType
   });
 }
-function unsupportedAction(action, sessionId) {
+function unsupportedAction(action, welinkSessionId) {
   return fail2({
     stage: "payload",
     code: "unsupported_action",
@@ -3094,7 +3092,7 @@ function unsupportedAction(action, sessionId) {
     message: `Unsupported invoke action: ${action}`,
     messageType: "invoke",
     action,
-    sessionId
+    welinkSessionId
   });
 }
 function errorOf(result) {
@@ -3103,37 +3101,17 @@ function errorOf(result) {
   }
   return result.error;
 }
-function requireNonEmptyString2(value, stage, field, messageType, action, sessionId) {
+function requireNonEmptyString2(value, stage, field, messageType, action, welinkSessionId) {
   if (value === undefined) {
-    return missingRequiredField2(stage, field, messageType, action, sessionId);
+    return missingRequiredField2(stage, field, messageType, action, welinkSessionId);
   }
   if (typeof value !== "string") {
-    return invalidFieldType2(stage, field, "a non-empty string", messageType, action, sessionId);
+    return invalidFieldType2(stage, field, "a non-empty string", messageType, action, welinkSessionId);
   }
   if (!value.trim()) {
-    return missingRequiredField2(stage, field, messageType, action, sessionId);
+    return missingRequiredField2(stage, field, messageType, action, welinkSessionId);
   }
   return ok2(value);
-}
-function extractEnvelope(raw) {
-  return hasEnvelope(raw) ? raw.envelope : undefined;
-}
-function extractSessionId(raw) {
-  if (typeof raw.sessionId === "string") {
-    return raw.sessionId;
-  }
-  return typeof raw.welinkSessionId === "string" ? raw.welinkSessionId : undefined;
-}
-function unwrapMessage(raw) {
-  if (!hasEnvelope(raw)) {
-    return raw;
-  }
-  const envelopeCarrier = raw;
-  return {
-    type: envelopeCarrier.type,
-    ...isRecord4(envelopeCarrier.payload) ? envelopeCarrier.payload : { payload: envelopeCarrier.payload },
-    envelope: envelopeCarrier.envelope
-  };
 }
 function buildEventPreview2(raw) {
   if (!isRecord4(raw)) {
@@ -3152,18 +3130,18 @@ function logDownstreamNormalizationFailure(logger, raw, error) {
     message: error.message,
     messageType: error.messageType,
     action: error.action,
-    sessionId: error.sessionId,
+    welinkSessionId: error.welinkSessionId,
     messagePreview: buildEventPreview2(raw)
   });
 }
-function normalizeChatPayload(payload, sessionId) {
+function normalizeChatPayload(payload, welinkSessionId) {
   if (!isRecord4(payload)) {
-    return invalidFieldType2("payload", "payload", "an object", "invoke", "chat", sessionId);
+    return invalidFieldType2("payload", "payload", "an object", "invoke", "chat", welinkSessionId);
   }
-  const toolSessionId = requireNonEmptyString2(payload.toolSessionId, "payload", "payload.toolSessionId", "invoke", "chat", sessionId);
+  const toolSessionId = requireNonEmptyString2(payload.toolSessionId, "payload", "payload.toolSessionId", "invoke", "chat", welinkSessionId);
   if (!toolSessionId.ok)
     return toolSessionId;
-  const text = requireNonEmptyString2(payload.text, "payload", "payload.text", "invoke", "chat", sessionId);
+  const text = requireNonEmptyString2(payload.text, "payload", "payload.text", "invoke", "chat", welinkSessionId);
   if (!text.ok)
     return text;
   return ok2({
@@ -3171,36 +3149,36 @@ function normalizeChatPayload(payload, sessionId) {
     text: text.value
   });
 }
-function normalizeCreateSessionPayload(payload, sessionId) {
+function normalizeCreateSessionPayload(payload, welinkSessionId) {
   if (!isRecord4(payload)) {
-    return invalidFieldType2("payload", "payload", "an object", "invoke", "create_session", sessionId);
+    return invalidFieldType2("payload", "payload", "an object", "invoke", "create_session", welinkSessionId);
   }
   return ok2({
     sessionId: typeof payload.sessionId === "string" ? payload.sessionId : undefined,
     metadata: isRecord4(payload.metadata) ? payload.metadata : undefined
   });
 }
-function normalizeCloseSessionPayload(payload, sessionId) {
+function normalizeCloseSessionPayload(payload, welinkSessionId) {
   if (!isRecord4(payload)) {
-    return invalidFieldType2("payload", "payload", "an object", "invoke", "close_session", sessionId);
+    return invalidFieldType2("payload", "payload", "an object", "invoke", "close_session", welinkSessionId);
   }
-  const toolSessionId = requireNonEmptyString2(payload.toolSessionId, "payload", "payload.toolSessionId", "invoke", "close_session", sessionId);
+  const toolSessionId = requireNonEmptyString2(payload.toolSessionId, "payload", "payload.toolSessionId", "invoke", "close_session", welinkSessionId);
   if (!toolSessionId.ok)
     return toolSessionId;
   return ok2({ toolSessionId: toolSessionId.value });
 }
-function normalizePermissionReplyPayload(payload, sessionId) {
+function normalizePermissionReplyPayload(payload, welinkSessionId) {
   if (!isRecord4(payload)) {
-    return invalidFieldType2("payload", "payload", "an object", "invoke", "permission_reply", sessionId);
+    return invalidFieldType2("payload", "payload", "an object", "invoke", "permission_reply", welinkSessionId);
   }
-  const permissionId = requireNonEmptyString2(payload.permissionId, "payload", "payload.permissionId", "invoke", "permission_reply", sessionId);
+  const permissionId = requireNonEmptyString2(payload.permissionId, "payload", "payload.permissionId", "invoke", "permission_reply", welinkSessionId);
   if (!permissionId.ok)
     return permissionId;
-  const toolSessionId = requireNonEmptyString2(payload.toolSessionId, "payload", "payload.toolSessionId", "invoke", "permission_reply", sessionId);
+  const toolSessionId = requireNonEmptyString2(payload.toolSessionId, "payload", "payload.toolSessionId", "invoke", "permission_reply", welinkSessionId);
   if (!toolSessionId.ok)
     return toolSessionId;
-  if (payload.response !== "allow" && payload.response !== "always" && payload.response !== "deny") {
-    return invalidFieldType2("payload", "payload.response", '"allow", "always", or "deny"', "invoke", "permission_reply", sessionId);
+  if (payload.response !== "once" && payload.response !== "always" && payload.response !== "reject") {
+    return invalidFieldType2("payload", "payload.response", '"once", "always", or "reject"', "invoke", "permission_reply", welinkSessionId);
   }
   return ok2({
     permissionId: permissionId.value,
@@ -3208,42 +3186,27 @@ function normalizePermissionReplyPayload(payload, sessionId) {
     response: payload.response
   });
 }
-function normalizeStatusQueryPayload(payload, sessionId) {
-  if (payload === undefined) {
-    return ok2({ sessionId: undefined });
-  }
+function normalizeAbortSessionPayload(payload, welinkSessionId) {
   if (!isRecord4(payload)) {
-    return invalidFieldType2("payload", "payload", "an object", "invoke", "status_query", sessionId);
+    return invalidFieldType2("payload", "payload", "an object", "invoke", "abort_session", welinkSessionId);
   }
-  if (payload.sessionId !== undefined) {
-    const innerSessionId = requireNonEmptyString2(payload.sessionId, "payload", "payload.sessionId", "invoke", "status_query", sessionId);
-    if (!innerSessionId.ok)
-      return innerSessionId;
-    return ok2({ sessionId: innerSessionId.value });
-  }
-  return ok2({ sessionId: undefined });
-}
-function normalizeAbortSessionPayload(payload, sessionId) {
-  if (!isRecord4(payload)) {
-    return invalidFieldType2("payload", "payload", "an object", "invoke", "abort_session", sessionId);
-  }
-  const toolSessionId = requireNonEmptyString2(payload.toolSessionId, "payload", "payload.toolSessionId", "invoke", "abort_session", sessionId);
+  const toolSessionId = requireNonEmptyString2(payload.toolSessionId, "payload", "payload.toolSessionId", "invoke", "abort_session", welinkSessionId);
   if (!toolSessionId.ok)
     return toolSessionId;
   return ok2({ toolSessionId: toolSessionId.value });
 }
-function normalizeQuestionReplyPayload(payload, sessionId) {
+function normalizeQuestionReplyPayload(payload, welinkSessionId) {
   if (!isRecord4(payload)) {
-    return invalidFieldType2("payload", "payload", "an object", "invoke", "question_reply", sessionId);
+    return invalidFieldType2("payload", "payload", "an object", "invoke", "question_reply", welinkSessionId);
   }
-  const toolSessionId = requireNonEmptyString2(payload.toolSessionId, "payload", "payload.toolSessionId", "invoke", "question_reply", sessionId);
+  const toolSessionId = requireNonEmptyString2(payload.toolSessionId, "payload", "payload.toolSessionId", "invoke", "question_reply", welinkSessionId);
   if (!toolSessionId.ok)
     return toolSessionId;
-  const answer = requireNonEmptyString2(payload.answer, "payload", "payload.answer", "invoke", "question_reply", sessionId);
+  const answer = requireNonEmptyString2(payload.answer, "payload", "payload.answer", "invoke", "question_reply", welinkSessionId);
   if (!answer.ok)
     return answer;
   if (payload.toolCallId !== undefined) {
-    const toolCallId = requireNonEmptyString2(payload.toolCallId, "payload", "payload.toolCallId", "invoke", "question_reply", sessionId);
+    const toolCallId = requireNonEmptyString2(payload.toolCallId, "payload", "payload.toolCallId", "invoke", "question_reply", welinkSessionId);
     if (!toolCallId.ok)
       return toolCallId;
     return ok2({
@@ -3257,49 +3220,43 @@ function normalizeQuestionReplyPayload(payload, sessionId) {
     answer: answer.value
   });
 }
-function normalizeInvokePayload(action, payload, sessionId) {
+function normalizeInvokePayload(action, payload, welinkSessionId) {
   switch (action) {
     case "chat": {
-      const normalized = normalizeChatPayload(payload, sessionId);
+      const normalized = normalizeChatPayload(payload, welinkSessionId);
       if (!normalized.ok)
         return normalized;
-      return ok2({ type: "invoke", action, payload: normalized.value, sessionId });
+      return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId });
     }
     case "create_session": {
-      const normalized = normalizeCreateSessionPayload(payload, sessionId);
+      const normalized = normalizeCreateSessionPayload(payload, welinkSessionId);
       if (!normalized.ok)
         return normalized;
-      return ok2({ type: "invoke", action, payload: normalized.value, sessionId });
+      return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId });
     }
     case "close_session": {
-      const normalized = normalizeCloseSessionPayload(payload, sessionId);
+      const normalized = normalizeCloseSessionPayload(payload, welinkSessionId);
       if (!normalized.ok)
         return normalized;
-      return ok2({ type: "invoke", action, payload: normalized.value, sessionId });
+      return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId });
     }
     case "permission_reply": {
-      const normalized = normalizePermissionReplyPayload(payload, sessionId);
+      const normalized = normalizePermissionReplyPayload(payload, welinkSessionId);
       if (!normalized.ok)
         return normalized;
-      return ok2({ type: "invoke", action, payload: normalized.value, sessionId });
-    }
-    case "status_query": {
-      const normalized = normalizeStatusQueryPayload(payload, sessionId);
-      if (!normalized.ok)
-        return normalized;
-      return ok2({ type: "invoke", action, payload: normalized.value, sessionId });
+      return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId });
     }
     case "abort_session": {
-      const normalized = normalizeAbortSessionPayload(payload, sessionId);
+      const normalized = normalizeAbortSessionPayload(payload, welinkSessionId);
       if (!normalized.ok)
         return normalized;
-      return ok2({ type: "invoke", action, payload: normalized.value, sessionId });
+      return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId });
     }
     case "question_reply": {
-      const normalized = normalizeQuestionReplyPayload(payload, sessionId);
+      const normalized = normalizeQuestionReplyPayload(payload, welinkSessionId);
       if (!normalized.ok)
         return normalized;
-      return ok2({ type: "invoke", action, payload: normalized.value, sessionId });
+      return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId });
     }
   }
 }
@@ -3309,9 +3266,7 @@ function normalizeDownstreamMessage(raw, logger) {
     logDownstreamNormalizationFailure(logger, raw, error);
     return fail2(error);
   }
-  const envelope2 = extractEnvelope(raw);
-  const unwrapped = unwrapMessage(raw);
-  const messageTypeValue = unwrapped.type;
+  const messageTypeValue = raw.type;
   if (typeof messageTypeValue !== "string") {
     const error = errorOf(missingRequiredField2("message", "type"));
     logDownstreamNormalizationFailure(logger, raw, error);
@@ -3322,34 +3277,29 @@ function normalizeDownstreamMessage(raw, logger) {
     logDownstreamNormalizationFailure(logger, raw, error);
     return fail2(error);
   }
-  const sessionId = extractSessionId(unwrapped);
+  const welinkSessionId = typeof raw.welinkSessionId === "string" ? raw.welinkSessionId : undefined;
   if (messageTypeValue === "status_query") {
     return ok2({
-      type: "status_query",
-      sessionId,
-      envelope: envelope2
+      type: "status_query"
     });
   }
-  const actionValue = unwrapped.action;
+  const actionValue = raw.action;
   if (typeof actionValue !== "string") {
-    const error = errorOf(missingRequiredField2("payload", "action", "invoke", undefined, sessionId));
+    const error = errorOf(missingRequiredField2("payload", "action", "invoke", undefined, welinkSessionId));
     logDownstreamNormalizationFailure(logger, raw, error);
     return fail2(error);
   }
   if (!isSupportedInvokeAction(actionValue)) {
-    const error = errorOf(unsupportedAction(actionValue, sessionId));
+    const error = errorOf(unsupportedAction(actionValue, welinkSessionId));
     logDownstreamNormalizationFailure(logger, raw, error);
     return fail2(error);
   }
-  const normalized = normalizeInvokePayload(actionValue, unwrapped.payload, sessionId);
+  const normalized = normalizeInvokePayload(actionValue, raw.payload, welinkSessionId);
   if (!normalized.ok) {
     logDownstreamNormalizationFailure(logger, raw, normalized.error);
     return normalized;
   }
-  return ok2({
-    ...normalized.value,
-    envelope: envelope2
-  });
+  return ok2(normalized.value);
 }
 // src/runtime/SdkAdapter.ts
 function createSdkAdapter(client) {
@@ -3391,13 +3341,45 @@ function createSdkAdapter(client) {
 }
 
 // src/runtime/BridgeRuntime.ts
+var UNKNOWN_MAC_ADDRESS = "unknown";
+function isUsableMacAddress(macAddress) {
+  if (!macAddress) {
+    return false;
+  }
+  const normalized = macAddress.trim().toLowerCase();
+  return normalized.length > 0 && normalized !== "00:00:00:00:00:00" && normalized !== "00-00-00-00-00-00";
+}
+function resolveMacAddress(configuredMacAddress, logger) {
+  if (isUsableMacAddress(configuredMacAddress)) {
+    return configuredMacAddress;
+  }
+  const interfaces = os.networkInterfaces();
+  let interfaceCount = 0;
+  for (const entries of Object.values(interfaces)) {
+    if (!entries) {
+      continue;
+    }
+    interfaceCount += entries.length;
+    for (const entry of entries) {
+      if (entry.internal || !isUsableMacAddress(entry.mac)) {
+        continue;
+      }
+      return entry.mac.trim().toLowerCase();
+    }
+  }
+  logger.warn("runtime.mac_address.fallback_unknown", {
+    platform: os.platform(),
+    interfaceCount
+  });
+  return UNKNOWN_MAC_ADDRESS;
+}
+
 class BridgeRuntime {
   options;
   actionRouter = new DefaultActionRouter;
   stateManager = new DefaultStateManager;
   registry = new DefaultActionRegistry;
   gatewayConnection = null;
-  envelopeBuilder = null;
   eventFilter = null;
   started = false;
   sdkClient;
@@ -3445,22 +3427,21 @@ class BridgeRuntime {
       return;
     }
     const agentId = this.stateManager.generateAndBindAgentId();
-    this.envelopeBuilder = new EnvelopeBuilder(agentId);
     this.eventFilter = new EventFilter(config.events.allowlist);
     const auth = new DefaultAkSkAuth(config.auth.ak, config.auth.sk);
-    const queryParamsProvider = () => auth.generateQueryParams();
+    const authPayloadProvider = () => auth.generateAuthPayload();
     const connection = new DefaultGatewayConnection({
       url: config.gateway.url,
       reconnectBaseMs: config.gateway.reconnect.baseMs,
       reconnectMaxMs: config.gateway.reconnect.maxMs,
       reconnectExponential: config.gateway.reconnect.exponential,
       heartbeatIntervalMs: config.gateway.heartbeatIntervalMs,
-      pongTimeoutMs: config.gateway.ping?.pongTimeoutMs,
       abortSignal: options.abortSignal,
-      queryParamsProvider,
+      authPayloadProvider,
       registerMessage: {
         type: "register",
         deviceName: config.gateway.deviceName,
+        macAddress: resolveMacAddress(config.gateway.macAddress, this.logger),
         os: os.platform(),
         toolType: config.gateway.toolType,
         toolVersion: config.gateway.toolVersion
@@ -3472,7 +3453,6 @@ class BridgeRuntime {
       this.logger.info("gateway.state.changed", { state });
       if (state === "CONNECTING") {
         const nextAgentId = this.stateManager.resetForReconnect();
-        this.envelopeBuilder = new EnvelopeBuilder(nextAgentId);
         this.logger.info("runtime.agent.rebound", { agentId: nextAgentId });
       }
     });
@@ -3531,7 +3511,7 @@ class BridgeRuntime {
       eventLogger.warn("event.rejected_allowlist");
       return;
     }
-    const bridgeMessageId = randomUUID5();
+    const bridgeMessageId = randomUUID4();
     const forwardingLogger = this.createMessageLogger(eventFields, bridgeMessageId);
     this.logEventForwardingDetail(normalized, forwardingLogger);
     forwardingLogger.info("event.forwarding");
@@ -3581,10 +3561,10 @@ class BridgeRuntime {
     if (!normalized.ok) {
       messageLogger.warn("runtime.downstream_ignored_non_protocol", {
         messageType: normalized.error.messageType ?? "unknown",
-        hasSessionId: !!normalized.error.sessionId
+        hasWelinkSessionId: !!normalized.error.welinkSessionId
       });
       if (normalized.error.messageType === "invoke") {
-        this.sendToolError({ success: false, errorCode: "INVALID_PAYLOAD", errorMessage: "Invalid invoke payload shape" }, normalized.error.sessionId, {
+        this.sendToolError({ success: false, errorCode: "INVALID_PAYLOAD", errorMessage: "Invalid invoke payload shape" }, normalized.error.welinkSessionId, {
           logger: messageLogger,
           traceId,
           gatewayMessageId: downstreamFields.gatewayMessageId,
@@ -3596,12 +3576,12 @@ class BridgeRuntime {
     }
     const message = normalized.value;
     if (message.type === "status_query") {
-      const statusLogger = this.createMessageLogger({ ...downstreamFields, sessionId: message.sessionId, welinkSessionId: message.sessionId }, traceId);
+      const statusLogger = this.createMessageLogger({ ...downstreamFields }, traceId);
       statusLogger.info("runtime.status_query.received");
-      const payload = { sessionId: message.sessionId };
-      const result2 = await this.actionRouter.route("status_query", payload, this.buildActionContext(message.sessionId, statusLogger));
+      const payload = {};
+      const result2 = await this.actionRouter.route("status_query", payload, this.buildActionContext(undefined, statusLogger));
       if (!result2.success) {
-        this.sendToolError(result2, message.sessionId, {
+        this.sendToolError(result2, undefined, {
           logger: statusLogger,
           traceId,
           gatewayMessageId: downstreamFields.gatewayMessageId,
@@ -3611,16 +3591,11 @@ class BridgeRuntime {
       }
       this.gatewayConnection.send({
         type: "status_response",
-        opencodeOnline: result2.data.opencodeOnline,
-        sessionId: message.sessionId,
-        welinkSessionId: message.sessionId,
-        envelope: this.ensureEnvelopeBuilder().build(message.sessionId)
+        opencodeOnline: result2.data.opencodeOnline
       }, {
         traceId,
         runtimeTraceId: this.logger.getTraceId(),
         gatewayMessageId: downstreamFields.gatewayMessageId,
-        sessionId: message.sessionId,
-        welinkSessionId: message.sessionId,
         action: "status_query"
       });
       statusLogger.info("runtime.status_query.responded", {
@@ -3628,20 +3603,19 @@ class BridgeRuntime {
       });
       return;
     }
-    const skillSessionId = message.sessionId ?? message.envelope?.sessionId;
+    const welinkSessionId = message.welinkSessionId;
     const toolSessionId = "payload" in message && message.payload && typeof message.payload === "object" && "toolSessionId" in message.payload && typeof message.payload.toolSessionId === "string" ? message.payload.toolSessionId : undefined;
     const invokeLogger = this.createMessageLogger({
       ...downstreamFields,
-      sessionId: skillSessionId,
-      welinkSessionId: skillSessionId,
+      welinkSessionId,
       action: message.action,
       toolSessionId
     }, traceId);
     invokeLogger.info("runtime.invoke.received");
     if (message.action === "create_session") {
-      const result2 = await this.actionRouter.route(message.action, message.payload, this.buildActionContext(skillSessionId, invokeLogger));
+      const result2 = await this.actionRouter.route(message.action, message.payload, this.buildActionContext(welinkSessionId, invokeLogger));
       if (!result2.success) {
-        this.sendToolError(result2, skillSessionId, {
+        this.sendToolError(result2, welinkSessionId, {
           logger: invokeLogger,
           traceId,
           gatewayMessageId: downstreamFields.gatewayMessageId,
@@ -3651,7 +3625,7 @@ class BridgeRuntime {
       }
       const toolSessionId2 = result2.data.sessionId;
       if (!toolSessionId2) {
-        this.sendToolError({ success: false, errorCode: "SDK_UNREACHABLE", errorMessage: "create_session returned without sessionId" }, skillSessionId, {
+        this.sendToolError({ success: false, errorCode: "SDK_UNREACHABLE", errorMessage: "create_session returned without sessionId" }, welinkSessionId, {
           logger: invokeLogger,
           traceId,
           gatewayMessageId: downstreamFields.gatewayMessageId,
@@ -3659,8 +3633,8 @@ class BridgeRuntime {
         });
         return;
       }
-      if (!skillSessionId) {
-        this.sendToolError({ success: false, errorCode: "INVALID_PAYLOAD", errorMessage: "create_session missing skill sessionId" }, undefined, {
+      if (!welinkSessionId) {
+        this.sendToolError({ success: false, errorCode: "INVALID_PAYLOAD", errorMessage: "create_session missing welinkSessionId" }, undefined, {
           logger: invokeLogger,
           traceId,
           gatewayMessageId: downstreamFields.gatewayMessageId,
@@ -3670,31 +3644,28 @@ class BridgeRuntime {
       }
       this.gatewayConnection.send({
         type: "session_created",
-        sessionId: skillSessionId,
-        welinkSessionId: skillSessionId,
+        welinkSessionId,
         toolSessionId: toolSessionId2,
-        session: result2.data,
-        envelope: this.ensureEnvelopeBuilder().build(skillSessionId)
+        session: result2.data
       }, {
         traceId,
         runtimeTraceId: this.logger.getTraceId(),
         gatewayMessageId: downstreamFields.gatewayMessageId,
-        sessionId: skillSessionId,
-        welinkSessionId: skillSessionId,
+        welinkSessionId,
         toolSessionId: toolSessionId2,
         action: message.action
       });
       invokeLogger.info("runtime.invoke.completed", {
         action: message.action,
-        sessionId: skillSessionId,
+        welinkSessionId,
         toolSessionId: toolSessionId2,
         latencyMs: Date.now() - startedAt
       });
       return;
     }
-    const result = await this.actionRouter.route(message.action, message.payload, this.buildActionContext(skillSessionId, invokeLogger));
+    const result = await this.actionRouter.route(message.action, message.payload, this.buildActionContext(welinkSessionId, invokeLogger));
     if (!result.success) {
-      this.sendToolError(result, skillSessionId, {
+      this.sendToolError(result, welinkSessionId, {
         logger: invokeLogger,
         traceId,
         gatewayMessageId: downstreamFields.gatewayMessageId,
@@ -3703,47 +3674,23 @@ class BridgeRuntime {
       });
       return;
     }
-    if (message.action === "status_query") {
-      const statusData = result.data;
-      this.gatewayConnection.send({
-        type: "status_response",
-        opencodeOnline: !!statusData?.opencodeOnline,
-        sessionId: skillSessionId,
-        welinkSessionId: skillSessionId,
-        envelope: this.ensureEnvelopeBuilder().build(skillSessionId)
-      }, {
-        traceId,
-        runtimeTraceId: this.logger.getTraceId(),
-        gatewayMessageId: downstreamFields.gatewayMessageId,
-        sessionId: skillSessionId,
-        welinkSessionId: skillSessionId,
-        action: message.action
-      });
-      invokeLogger.info("runtime.invoke.completed", {
-        action: message.action,
-        sessionId: skillSessionId,
-        toolSessionId,
-        latencyMs: Date.now() - startedAt
-      });
-      return;
-    }
     invokeLogger.info("runtime.invoke.completed", {
       action: message.action,
-      sessionId: skillSessionId,
+      welinkSessionId,
       toolSessionId,
       latencyMs: Date.now() - startedAt
     });
   }
-  buildActionContext(sessionId, logger = this.logger) {
+  buildActionContext(welinkSessionId, logger = this.logger) {
     return {
       client: this.sdkClient,
       connectionState: this.stateManager.getState(),
       agentId: this.stateManager.getAgentId() ?? "unknown-agent",
-      sessionId,
+      welinkSessionId,
       logger: logger.child({
         component: "action",
         agentId: this.stateManager.getAgentId() ?? "unknown-agent",
-        sessionId
+        welinkSessionId
       })
     };
   }
@@ -3799,13 +3746,11 @@ class BridgeRuntime {
     }
     const message = raw;
     const payload = typeof message.payload === "object" && message.payload ? message.payload : undefined;
-    const sessionId = typeof message.sessionId === "string" ? message.sessionId : typeof message.welinkSessionId === "string" ? message.welinkSessionId : undefined;
     return {
       messageType: typeof message.type === "string" ? message.type : undefined,
       gatewayMessageId: typeof message.messageId === "string" ? message.messageId : undefined,
       action: typeof message.action === "string" ? message.action : undefined,
-      sessionId,
-      welinkSessionId: sessionId,
+      welinkSessionId: typeof message.welinkSessionId === "string" ? message.welinkSessionId : undefined,
       toolSessionId: typeof payload?.toolSessionId === "string" ? payload.toolSessionId : undefined
     };
   }
@@ -3821,33 +3766,24 @@ class BridgeRuntime {
       getTraceId: () => traceId
     };
   }
-  ensureEnvelopeBuilder() {
-    if (!this.envelopeBuilder) {
-      const agentId = this.stateManager.getAgentId() ?? this.stateManager.generateAndBindAgentId();
-      this.envelopeBuilder = new EnvelopeBuilder(agentId);
-    }
-    return this.envelopeBuilder;
-  }
-  sendToolError(result, sessionId, logOptions) {
+  sendToolError(result, welinkSessionId, logOptions) {
     if (!this.gatewayConnection) {
-      this.logger.warn("runtime.tool_error.skipped_no_connection", { sessionId });
+      this.logger.warn("runtime.tool_error.skipped_no_connection", { welinkSessionId });
       return;
     }
     const error = result.success ? "Unknown error" : result.errorMessage ?? "Unknown error";
     const logger = logOptions?.logger ?? this.logger;
-    logger.error("runtime.tool_error.sending", { sessionId, welinkSessionId: sessionId, error });
+    logger.error("runtime.tool_error.sending", { welinkSessionId, error });
     this.gatewayConnection.send({
       type: "tool_error",
-      sessionId,
-      welinkSessionId: sessionId,
-      error,
-      envelope: this.ensureEnvelopeBuilder().build(sessionId)
+      welinkSessionId,
+      toolSessionId: logOptions?.toolSessionId,
+      error
     }, {
       traceId: logOptions?.traceId,
       runtimeTraceId: this.logger.getTraceId(),
       gatewayMessageId: logOptions?.gatewayMessageId,
-      sessionId,
-      welinkSessionId: sessionId,
+      welinkSessionId,
       action: logOptions?.action,
       toolSessionId: logOptions?.toolSessionId
     });
@@ -3912,5 +3848,5 @@ export {
   MessageBridgePlugin
 };
 
-//# debugId=2A0F5459D481C5F464756E2164756E21
+//# debugId=BA18E60660CF2CF464756E2164756E21
 //# sourceMappingURL=message-bridge.plugin.js.map
