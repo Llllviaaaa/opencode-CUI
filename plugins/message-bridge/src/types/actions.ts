@@ -1,4 +1,6 @@
 export type {
+  AbortSessionPayload,
+  AbortSessionResultData,
   ActionResultData,
   ActionResultDataByAction,
   ChatPayload,
@@ -10,6 +12,8 @@ export type {
   PermissionReplyPayload,
   PermissionReplyPayloadTarget,
   PermissionReplyResultData,
+  QuestionReplyPayload,
+  QuestionReplyResultData,
   CreateSessionResultData,
   CloseSessionResultData,
   StatusQueryPayload,

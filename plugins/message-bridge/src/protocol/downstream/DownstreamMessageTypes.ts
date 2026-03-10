@@ -1,4 +1,5 @@
 import type {
+  AbortSessionPayload,
   DownstreamMessage,
   ChatPayload,
   CloseSessionPayload,
@@ -6,6 +7,7 @@ import type {
   InvokeMessage,
   InvokeAction,
   PermissionReplyPayload,
+  QuestionReplyPayload,
   StatusQueryMessage,
   StatusQueryPayload,
 } from '../../contracts/downstream-messages';
@@ -41,6 +43,8 @@ export type NormalizedInvokeMessageByAction = {
   close_session: Extract<InvokeMessage, { action: 'close_session' }>;
   permission_reply: Extract<InvokeMessage, { action: 'permission_reply' }>;
   status_query: Extract<InvokeMessage, { action: 'status_query' }>;
+  abort_session: Extract<InvokeMessage, { action: 'abort_session' }>;
+  question_reply: Extract<InvokeMessage, { action: 'question_reply' }>;
 };
 
 export type NormalizedInvokeMessage<K extends InvokeAction = InvokeAction> = NormalizedInvokeMessageByAction[K];
@@ -52,4 +56,6 @@ export type NormalizedPayloadByAction = {
   close_session: CloseSessionPayload;
   permission_reply: PermissionReplyPayload;
   status_query: StatusQueryPayload;
+  abort_session: AbortSessionPayload;
+  question_reply: QuestionReplyPayload;
 };

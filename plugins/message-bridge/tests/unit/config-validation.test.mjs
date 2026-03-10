@@ -32,7 +32,7 @@ const createValidConfig = (overrides = {}) => ({
     sk: 'test-sk-secret-001',
   },
   events: {
-    allowlist: ['message.*'],
+    allowlist: ['message.updated'],
   },
   ...overrides,
 });
@@ -67,7 +67,7 @@ describe('config validation for sdk.baseUrl removal', () => {
         sk: 'test-sk-secret-001',
       },
       events: {
-        allowlist: ['message.*'],
+        allowlist: ['message.updated'],
       },
     });
 
@@ -96,7 +96,7 @@ describe('config validation for sdk.baseUrl removal', () => {
         sk: 'test-sk-secret-001',
       },
       events: {
-        allowlist: ['message.*'],
+        allowlist: ['message.updated'],
       },
     });
 
@@ -132,7 +132,7 @@ describe('config validation for sdk.baseUrl removal', () => {
           sk: 'test-sk-secret-001',
         },
         events: {
-          allowlist: ['message.*'],
+          allowlist: ['message.updated'],
         },
       }),
       'utf8',
@@ -179,7 +179,7 @@ describe('config validation for sdk.baseUrl removal', () => {
           sk: 'test-sk-secret-001',
         },
         events: {
-          allowlist: ['message.*'],
+          allowlist: ['message.updated'],
         },
       }),
       'utf8',
@@ -252,7 +252,7 @@ describe('config validation for sdk.baseUrl removal', () => {
           sk: 'test-sk-secret-001',
         },
         events: {
-          allowlist: ['message.*'],
+          allowlist: ['message.updated'],
         },
       }),
       'utf8',

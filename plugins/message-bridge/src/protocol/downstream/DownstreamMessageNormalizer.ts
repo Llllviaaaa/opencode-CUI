@@ -1,5 +1,6 @@
 import type { BridgeLogger } from '../../runtime/AppLogger';
 import type {
+  AbortSessionPayload,
   DownstreamMessage,
   ChatPayload,
   CloseSessionPayload,
@@ -7,6 +8,7 @@ import type {
   InvokeMessage,
   InvokeAction,
   PermissionReplyPayload,
+  QuestionReplyPayload,
   StatusQueryPayload,
 } from '../../contracts/downstream-messages';
 import type { Envelope } from '../../contracts/envelope';
@@ -127,7 +129,10 @@ function extractEnvelope(raw: Record<string, unknown>): Envelope | undefined {
 }
 
 function extractSessionId(raw: Record<string, unknown>): string | undefined {
-  return typeof raw.sessionId === 'string' ? raw.sessionId : undefined;
+  if (typeof raw.sessionId === 'string') {
+    return raw.sessionId;
+  }
+  return typeof raw.welinkSessionId === 'string' ? raw.welinkSessionId : undefined;
 }
 
 function unwrapMessage(raw: Record<string, unknown>): Record<string, unknown> {
@@ -263,6 +268,68 @@ export function normalizeStatusQueryPayload(payload: unknown, sessionId?: string
   return ok({ sessionId: undefined });
 }
 
+export function normalizeAbortSessionPayload(payload: unknown, sessionId?: string): NormalizeResult<AbortSessionPayload> {
+  if (!isRecord(payload)) {
+    return invalidFieldType('payload', 'payload', 'an object', 'invoke', 'abort_session', sessionId);
+  }
+  const toolSessionId = requireNonEmptyString(
+    payload.toolSessionId,
+    'payload',
+    'payload.toolSessionId',
+    'invoke',
+    'abort_session',
+    sessionId,
+  );
+  if (!toolSessionId.ok) return toolSessionId;
+  return ok({ toolSessionId: toolSessionId.value });
+}
+
+export function normalizeQuestionReplyPayload(payload: unknown, sessionId?: string): NormalizeResult<QuestionReplyPayload> {
+  if (!isRecord(payload)) {
+    return invalidFieldType('payload', 'payload', 'an object', 'invoke', 'question_reply', sessionId);
+  }
+  const toolSessionId = requireNonEmptyString(
+    payload.toolSessionId,
+    'payload',
+    'payload.toolSessionId',
+    'invoke',
+    'question_reply',
+    sessionId,
+  );
+  if (!toolSessionId.ok) return toolSessionId;
+  const answer = requireNonEmptyString(
+    payload.answer,
+    'payload',
+    'payload.answer',
+    'invoke',
+    'question_reply',
+    sessionId,
+  );
+  if (!answer.ok) return answer;
+
+  if (payload.toolCallId !== undefined) {
+    const toolCallId = requireNonEmptyString(
+      payload.toolCallId,
+      'payload',
+      'payload.toolCallId',
+      'invoke',
+      'question_reply',
+      sessionId,
+    );
+    if (!toolCallId.ok) return toolCallId;
+    return ok({
+      toolSessionId: toolSessionId.value,
+      answer: answer.value,
+      toolCallId: toolCallId.value,
+    });
+  }
+
+  return ok({
+    toolSessionId: toolSessionId.value,
+    answer: answer.value,
+  });
+}
+
 function normalizeInvokePayload(
   action: InvokeAction,
   payload: unknown,
@@ -291,6 +358,16 @@ function normalizeInvokePayload(
     }
     case 'status_query': {
       const normalized = normalizeStatusQueryPayload(payload, sessionId);
+      if (!normalized.ok) return normalized;
+      return ok({ type: 'invoke', action, payload: normalized.value, sessionId });
+    }
+    case 'abort_session': {
+      const normalized = normalizeAbortSessionPayload(payload, sessionId);
+      if (!normalized.ok) return normalized;
+      return ok({ type: 'invoke', action, payload: normalized.value, sessionId });
+    }
+    case 'question_reply': {
+      const normalized = normalizeQuestionReplyPayload(payload, sessionId);
       if (!normalized.ok) return normalized;
       return ok({ type: 'invoke', action, payload: normalized.value, sessionId });
     }

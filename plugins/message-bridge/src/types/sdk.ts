@@ -1,6 +1,9 @@
+import { getErrorMessage } from '../utils/error';
+
 export interface OpencodeSessionClient {
   create(options?: { body?: Record<string, unknown> }): Promise<unknown>;
   abort(options: { path: { id: string } }): Promise<unknown>;
+  delete?(options: { path: { id: string } }): Promise<unknown>;
   prompt(options: {
     path: { id: string };
     body: { parts: Array<{ type: 'text'; text: string }> };
@@ -23,6 +26,10 @@ export interface OpencodeClient {
         extra?: Record<string, unknown>;
       };
     }) => Promise<unknown> | unknown;
+  };
+  _client?: {
+    get?: (options: Record<string, unknown>) => Promise<unknown>;
+    post?: (options: Record<string, unknown>) => Promise<unknown>;
   };
 }
 
@@ -52,9 +59,7 @@ export async function safeExecute<T>(
   } catch (error) {
     const errorMessage = errorMapper
       ? errorMapper(error)
-      : error instanceof Error
-      ? error.message
-      : String(error);
+      : getErrorMessage(error);
     return { success: false, error: errorMessage };
   }
 }

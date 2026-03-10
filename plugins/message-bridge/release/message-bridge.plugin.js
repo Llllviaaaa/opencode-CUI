@@ -1,10 +1,21 @@
 // @bun
 // src/runtime/BridgeRuntime.ts
+import { randomUUID as randomUUID5 } from "crypto";
 import os from "os";
 
-// src/types/index.ts
-import { randomUUID } from "crypto";
-
+// src/types/common.ts
+var CONNECTION_STATES = ["DISCONNECTED", "CONNECTING", "CONNECTED", "READY"];
+function stateToErrorCode(state) {
+  switch (state) {
+    case CONNECTION_STATES[0]:
+    case CONNECTION_STATES[1]:
+      return "GATEWAY_UNREACHABLE";
+    case CONNECTION_STATES[2]:
+    case CONNECTION_STATES[3]:
+      return "AGENT_NOT_READY";
+  }
+}
+var AGENT_ID_PREFIX = "bridge-";
 // src/utils/error.ts
 function isRecord(value) {
   return value !== null && typeof value === "object";
@@ -130,19 +141,7 @@ function getErrorDetailsForLog(error) {
   return logDetails;
 }
 
-// src/types/index.ts
-var PERMISSION_REPLY_RESPONSES = ["once", "always", "reject"];
-function stateToErrorCode(state) {
-  switch (state) {
-    case "DISCONNECTED":
-    case "CONNECTING":
-      return "GATEWAY_UNREACHABLE";
-    case "CONNECTED":
-      return "AGENT_NOT_READY";
-    case "READY":
-      return "AGENT_NOT_READY";
-  }
-}
+// src/types/sdk.ts
 function isOpencodeClient(client) {
   if (!client || typeof client !== "object") {
     return false;
@@ -162,157 +161,55 @@ async function safeExecute(promise, errorMapper) {
 function hasError(result) {
   return result !== null && typeof result === "object" && "error" in result && result.error !== undefined;
 }
-function buildMessageId() {
-  return randomUUID();
+// src/contracts/envelope.ts
+function hasEnvelope(message) {
+  return typeof message === "object" && message !== null && "envelope" in message && typeof message.envelope === "object";
 }
-var DEFAULT_EVENT_ALLOWLIST = [
-  "message.*",
-  "permission.*",
-  "question.*",
-  "session.*",
-  "file.edited",
-  "todo.updated",
-  "command.executed"
+// src/contracts/upstream-events.ts
+var SUPPORTED_UPSTREAM_EVENT_TYPES = [
+  "message.updated",
+  "message.part.updated",
+  "message.part.delta",
+  "message.part.removed",
+  "session.status",
+  "session.idle",
+  "session.updated",
+  "session.error",
+  "permission.updated",
+  "permission.asked",
+  "question.asked"
 ];
-var AGENT_ID_PREFIX = "bridge-";
-
-// src/action/AbortSessionAction.ts
-class AbortSessionAction {
-  name = "abort_session";
-  normalizePayload(payload) {
-    if (!payload || typeof payload !== "object") {
-      return null;
-    }
-    const p = payload;
-    const toolSessionId = typeof p.toolSessionId === "string" && p.toolSessionId.trim() ? p.toolSessionId : null;
-    if (!toolSessionId) {
-      return null;
-    }
-    return { toolSessionId };
-  }
-  validate(payload) {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        valid: false,
-        error: "abort_session payload requires toolSessionId"
-      };
-    }
-    return { valid: true };
-  }
-  async execute(payload, context) {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        success: false,
-        errorCode: "INVALID_PAYLOAD",
-        errorMessage: "abort_session payload requires toolSessionId"
-      };
-    }
-    const startedAt = Date.now();
-    context.logger?.info("action.abort_session.started", {
-      toolSessionId: normalized.toolSessionId
-    });
-    try {
-      if (context.connectionState !== "READY") {
-        context.logger?.warn("action.abort_session.rejected_state", { state: context.connectionState });
-        return {
-          success: false,
-          errorCode: stateToErrorCode(context.connectionState),
-          errorMessage: `Agent not ready. Current state: ${context.connectionState}`
-        };
-      }
-      if (!isOpencodeClient(context.client)) {
-        context.logger?.error("action.abort_session.invalid_client");
-        return {
-          success: false,
-          errorCode: "SDK_UNREACHABLE",
-          errorMessage: "Valid OpenCode client not available in context"
-        };
-      }
-      const client = context.client;
-      const executionResult = await safeExecute(client.session.abort({
-        path: { id: normalized.toolSessionId }
-      }), (error) => `Abort session failed: ${getErrorMessage(error)}`);
-      if (executionResult.success) {
-        if (!hasError(executionResult.data)) {
-          return {
-            success: true,
-            data: { sessionId: normalized.toolSessionId, aborted: true }
-          };
-        }
-        const errorField = executionResult.data && typeof executionResult.data === "object" && "error" in executionResult.data ? executionResult.data.error : undefined;
-        const errorMessage = errorField !== undefined ? getErrorMessage(errorField) : "Unknown error";
-        context.logger?.error("action.abort_session.sdk_error_payload", {
-          toolSessionId: normalized.toolSessionId,
-          error: errorMessage,
-          ...errorField !== undefined ? getErrorDetailsForLog(errorField) : {},
-          latencyMs: Date.now() - startedAt
-        });
-        return {
-          success: false,
-          errorCode: "SDK_UNREACHABLE",
-          errorMessage: `Failed to abort session: ${errorMessage}`
-        };
-      }
-      context.logger?.error("action.abort_session.failed", {
-        toolSessionId: normalized.toolSessionId,
-        error: executionResult.error,
-        latencyMs: Date.now() - startedAt
-      });
-      return {
-        success: false,
-        errorCode: "SDK_UNREACHABLE",
-        errorMessage: executionResult.error
-      };
-    } catch (error) {
-      const errorCode = this.errorMapper(error);
-      const errorMessage = getErrorMessage(error);
-      context.logger?.error("action.abort_session.exception", {
-        toolSessionId: normalized.toolSessionId,
-        error: errorMessage,
-        errorCode,
-        ...getErrorDetailsForLog(error),
-        latencyMs: Date.now() - startedAt
-      });
-      return {
-        success: false,
-        errorCode,
-        errorMessage
-      };
-    } finally {
-      context.logger?.debug("action.abort_session.finished", { latencyMs: Date.now() - startedAt });
-    }
-  }
-  errorMapper(error) {
-    if (error instanceof Error) {
-      const message = error.message.toLowerCase();
-      if (message.includes("timeout") || message.includes("network")) {
-        return "SDK_TIMEOUT";
-      } else if (message.includes("unreachable") || message.includes("connect")) {
-        return "SDK_UNREACHABLE";
-      } else if (message.includes("not found") || message.includes("session")) {
-        return "INVALID_PAYLOAD";
-      }
-    }
-    return "SDK_UNREACHABLE";
-  }
+var SUPPORTED_UPSTREAM_EVENT_TYPE_SET = new Set(SUPPORTED_UPSTREAM_EVENT_TYPES);
+function isSupportedUpstreamEventType(value) {
+  return SUPPORTED_UPSTREAM_EVENT_TYPE_SET.has(value);
 }
-
+var DEFAULT_EVENT_ALLOWLIST = [...SUPPORTED_UPSTREAM_EVENT_TYPES];
+// src/contracts/downstream-messages.ts
+var DOWNSTREAM_MESSAGE_TYPES = ["invoke", "status_query"];
+var INVOKE_ACTIONS = [
+  "chat",
+  "create_session",
+  "close_session",
+  "permission_reply",
+  "status_query",
+  "abort_session",
+  "question_reply"
+];
 // src/action/ChatAction.ts
 class ChatAction {
   name = "chat";
-  normalizePayload(payload) {
-    if (!payload || typeof payload !== "object") {
-      return null;
+  formatUnknownError(error) {
+    if (error instanceof Error) {
+      return error.message;
     }
-    const p = payload;
-    const toolSessionId = typeof p.toolSessionId === "string" && p.toolSessionId.trim() ? p.toolSessionId : null;
-    const text = typeof p.text === "string" && p.text.trim().length > 0 ? p.text : null;
-    if (!toolSessionId || text === null) {
-      return null;
+    if (typeof error === "string") {
+      return error;
     }
-    return { toolSessionId, text };
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
   }
   getErrorMessageFromResult(data) {
     if (data && typeof data === "object" && "error" in data) {
@@ -324,7 +221,7 @@ class ChatAction {
         }
         return String(messageField);
       }
-      return getErrorMessage(errorField);
+      return this.formatUnknownError(errorField);
     }
     return "Unknown error";
   }
@@ -332,7 +229,7 @@ class ChatAction {
     const executionResult = await safeExecute(client.session.prompt({
       path: { id: toolSessionId },
       body: { parts: [{ type: "text", text }] }
-    }), (error) => getErrorMessage(error));
+    }), (error) => this.formatUnknownError(error));
     if (executionResult.success) {
       if (!hasError(executionResult.data)) {
         return { success: true, data: executionResult.data };
@@ -342,31 +239,11 @@ class ChatAction {
     }
     return { success: false, error: `Failed to send message: ${executionResult.error}` };
   }
-  validate(payload) {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        valid: false,
-        error: "chat payload requires toolSessionId and text"
-      };
-    }
-    return {
-      valid: true
-    };
-  }
   async execute(payload, context) {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        success: false,
-        errorCode: "INVALID_PAYLOAD",
-        errorMessage: "chat payload requires toolSessionId and text"
-      };
-    }
     const startedAt = Date.now();
     context.logger?.info("action.chat.started", {
-      toolSessionId: normalized.toolSessionId,
-      messageLength: normalized.text.length
+      toolSessionId: payload.toolSessionId,
+      messageLength: payload.text.length
     });
     if (context.connectionState !== "READY") {
       context.logger?.warn("action.chat.rejected_state", { state: context.connectionState });
@@ -386,15 +263,13 @@ class ChatAction {
     }
     const client = context.client;
     try {
-      const executionResult = await this.sendPrompt(client, normalized.toolSessionId, normalized.text);
+      const executionResult = await this.sendPrompt(client, payload.toolSessionId, payload.text);
       if (executionResult.success) {
         return {
-          success: true,
-          data: executionResult.data
+          success: true
         };
       }
       context.logger?.error("action.chat.failed", {
-        toolSessionId: normalized.toolSessionId,
         error: executionResult.error,
         latencyMs: Date.now() - startedAt
       });
@@ -405,12 +280,10 @@ class ChatAction {
       };
     } catch (error) {
       const errorCode = this.errorMapper(error);
-      const errorMessage = getErrorMessage(error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       context.logger?.error("action.chat.exception", {
-        toolSessionId: normalized.toolSessionId,
         error: errorMessage,
         errorCode,
-        ...getErrorDetailsForLog(error),
         latencyMs: Date.now() - startedAt
       });
       return {
@@ -449,17 +322,6 @@ class ChatAction {
 // src/action/CreateSessionAction.ts
 class CreateSessionAction {
   name = "create_session";
-  validate(payload) {
-    if (!payload || typeof payload !== "object") {
-      return {
-        valid: false,
-        error: "Create session payload must be an object"
-      };
-    }
-    return {
-      valid: true
-    };
-  }
   async execute(payload, context) {
     const startedAt = Date.now();
     context.logger?.info("action.create_session.started", {
@@ -562,41 +424,10 @@ class CreateSessionAction {
 // src/action/CloseSessionAction.ts
 class CloseSessionAction {
   name = "close_session";
-  normalizePayload(payload) {
-    if (!payload || typeof payload !== "object") {
-      return null;
-    }
-    const p = payload;
-    const toolSessionId = typeof p.toolSessionId === "string" && p.toolSessionId.trim() ? p.toolSessionId : null;
-    if (!toolSessionId) {
-      return null;
-    }
-    return { toolSessionId };
-  }
-  validate(payload) {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        valid: false,
-        error: "close_session payload requires toolSessionId"
-      };
-    }
-    return {
-      valid: true
-    };
-  }
   async execute(payload, context) {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        success: false,
-        errorCode: "INVALID_PAYLOAD",
-        errorMessage: "close_session payload requires toolSessionId"
-      };
-    }
     const startedAt = Date.now();
     context.logger?.info("action.close_session.started", {
-      toolSessionId: normalized.toolSessionId
+      toolSessionId: payload.toolSessionId
     });
     try {
       if (context.connectionState !== "READY") {
@@ -616,40 +447,37 @@ class CloseSessionAction {
         };
       }
       const client = context.client;
-      if (typeof client.session.delete !== "function") {
-        context.logger?.error("action.close_session.delete_unavailable");
-        return {
-          success: false,
-          errorCode: "SDK_UNREACHABLE",
-          errorMessage: "session.delete is not available in current OpenCode client"
-        };
-      }
-      const executionResult = await safeExecute(client.session.delete({
-        path: { id: normalized.toolSessionId }
-      }), (error) => `Close session (delete) failed: ${getErrorMessage(error)}`);
+      const executionResult = await safeExecute(client.session.abort({
+        path: { id: payload.toolSessionId }
+      }), (error) => `Close session (abort) failed: ${error instanceof Error ? error.message : String(error)}`);
       if (executionResult.success) {
         if (!hasError(executionResult.data)) {
           return {
             success: true,
-            data: { sessionId: normalized.toolSessionId, closed: true }
+            data: { sessionId: payload.toolSessionId, closed: true }
           };
         }
-        const errorField = executionResult.data && typeof executionResult.data === "object" && "error" in executionResult.data ? executionResult.data.error : undefined;
-        const errorMessage = errorField !== undefined ? getErrorMessage(errorField) : "Unknown error";
+        let errorMessage = "Unknown error";
+        if (executionResult.data && typeof executionResult.data === "object" && "error" in executionResult.data) {
+          const errorField = executionResult.data.error;
+          if (errorField && typeof errorField === "object" && errorField !== null && "message" in errorField) {
+            const messageField = errorField.message;
+            errorMessage = typeof messageField === "string" ? messageField : String(messageField) || "Unknown error";
+          } else {
+            errorMessage = String(errorField) || "Unknown error";
+          }
+        }
         context.logger?.error("action.close_session.sdk_error_payload", {
-          toolSessionId: normalized.toolSessionId,
           error: errorMessage,
-          ...errorField !== undefined ? getErrorDetailsForLog(errorField) : {},
           latencyMs: Date.now() - startedAt
         });
         return {
           success: false,
           errorCode: "SDK_UNREACHABLE",
-          errorMessage: `Failed to close session (delete): ${errorMessage}`
+          errorMessage: `Failed to close session (abort): ${errorMessage}`
         };
       }
       context.logger?.error("action.close_session.failed", {
-        toolSessionId: normalized.toolSessionId,
         error: executionResult.error,
         latencyMs: Date.now() - startedAt
       });
@@ -660,12 +488,10 @@ class CloseSessionAction {
       };
     } catch (error) {
       const errorCode = this.errorMapper(error);
-      const errorMessage = getErrorMessage(error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       context.logger?.error("action.close_session.exception", {
-        toolSessionId: normalized.toolSessionId,
         error: errorMessage,
         errorCode,
-        ...getErrorDetailsForLog(error),
         latencyMs: Date.now() - startedAt
       });
       return {
@@ -695,49 +521,21 @@ class CloseSessionAction {
 // src/action/PermissionReplyAction.ts
 class PermissionReplyAction {
   name = "permission_reply";
-  normalizePayload(payload) {
-    if (!payload || typeof payload !== "object") {
-      return null;
+  mapResponseToDecision(response) {
+    if (response === "allow") {
+      return "once";
     }
-    const typedPayload = payload;
-    const permissionId = typeof typedPayload.permissionId === "string" && typedPayload.permissionId.trim() ? typedPayload.permissionId : null;
-    const toolSessionId = typeof typedPayload.toolSessionId === "string" && typedPayload.toolSessionId.trim() ? typedPayload.toolSessionId : null;
-    const response = typeof typedPayload.response === "string" && PERMISSION_REPLY_RESPONSES.includes(typedPayload.response) ? typedPayload.response : null;
-    if (!permissionId || !toolSessionId || !response) {
-      return null;
+    if (response === "deny") {
+      return "reject";
     }
-    return {
-      permissionId,
-      toolSessionId,
-      response
-    };
-  }
-  validate(payload) {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        valid: false,
-        error: `permission_reply payload requires permissionId, toolSessionId, and response in '${PERMISSION_REPLY_RESPONSES.join("', '")}'`
-      };
-    }
-    return {
-      valid: true
-    };
+    return "always";
   }
   async execute(payload, context) {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        success: false,
-        errorCode: "INVALID_PAYLOAD",
-        errorMessage: `permission_reply payload requires permissionId, toolSessionId, and response in '${PERMISSION_REPLY_RESPONSES.join("', '")}'`
-      };
-    }
     const startedAt = Date.now();
     context.logger?.info("action.permission_reply.started", {
-      permissionId: normalized.permissionId,
-      toolSessionId: normalized.toolSessionId,
-      response: normalized.response
+      permissionId: payload.permissionId,
+      toolSessionId: payload.toolSessionId,
+      response: payload.response
     });
     try {
       if (context.connectionState !== "READY") {
@@ -756,29 +554,34 @@ class PermissionReplyAction {
           errorMessage: "Valid OpenCode client not available in context"
         };
       }
+      const decision = this.mapResponseToDecision(payload.response);
       const executionResult = await safeExecute(context.client.postSessionIdPermissionsPermissionId({
-        path: { id: normalized.toolSessionId, permissionID: normalized.permissionId },
-        body: { response: normalized.response }
-      }), (error) => `Permission reply failed: ${getErrorMessage(error)}`);
+        path: { id: payload.toolSessionId, permissionID: payload.permissionId },
+        body: { response: decision }
+      }), (error) => `Permission reply failed: ${error instanceof Error ? error.message : String(error)}`);
       if (executionResult.success) {
         if (!hasError(executionResult.data)) {
           return {
             success: true,
             data: {
-              permissionId: normalized.permissionId,
-              response: normalized.response,
+              permissionId: payload.permissionId,
+              response: payload.response,
               applied: true
             }
           };
         }
-        const errorField = executionResult.data && typeof executionResult.data === "object" && "error" in executionResult.data ? executionResult.data.error : undefined;
-        const errorMessage = errorField !== undefined ? getErrorMessage(errorField) : "Unknown error";
+        let errorMessage = "Unknown error";
+        if (executionResult.data && typeof executionResult.data === "object" && "error" in executionResult.data) {
+          const errorField = executionResult.data.error;
+          if (errorField && typeof errorField === "object" && errorField !== null && "message" in errorField) {
+            const messageField = errorField.message;
+            errorMessage = typeof messageField === "string" ? messageField : String(messageField) || "Unknown error";
+          } else {
+            errorMessage = String(errorField) || "Unknown error";
+          }
+        }
         context.logger?.error("action.permission_reply.sdk_error_payload", {
-          permissionId: normalized.permissionId,
-          toolSessionId: normalized.toolSessionId,
-          response: normalized.response,
           error: errorMessage,
-          ...errorField !== undefined ? getErrorDetailsForLog(errorField) : {},
           latencyMs: Date.now() - startedAt
         });
         return {
@@ -788,9 +591,6 @@ class PermissionReplyAction {
         };
       }
       context.logger?.error("action.permission_reply.failed", {
-        permissionId: normalized.permissionId,
-        toolSessionId: normalized.toolSessionId,
-        response: normalized.response,
         error: executionResult.error,
         latencyMs: Date.now() - startedAt
       });
@@ -801,14 +601,10 @@ class PermissionReplyAction {
       };
     } catch (error) {
       const errorCode = this.errorMapper(error);
-      const errorMessage = getErrorMessage(error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       context.logger?.error("action.permission_reply.exception", {
-        permissionId: normalized.permissionId,
-        toolSessionId: normalized.toolSessionId,
-        response: normalized.response,
         error: errorMessage,
         errorCode,
-        ...getErrorDetailsForLog(error),
         latencyMs: Date.now() - startedAt
       });
       return {
@@ -835,22 +631,163 @@ class PermissionReplyAction {
   }
 }
 
+// src/action/StatusQueryAction.ts
+class StatusQueryAction {
+  name = "status_query";
+  async execute(payload, context) {
+    const startedAt = Date.now();
+    context.logger?.debug("action.status_query.started", {
+      sessionId: payload.sessionId,
+      state: context.connectionState
+    });
+    try {
+      let opencodeOnline = context.connectionState === "READY";
+      const app = context.client?.app;
+      if (app?.health) {
+        try {
+          await app.health();
+          opencodeOnline = true;
+        } catch {
+          opencodeOnline = false;
+        }
+      }
+      return {
+        success: true,
+        data: {
+          opencodeOnline,
+          connectionState: context.connectionState,
+          sessionId: payload.sessionId,
+          timestamp: new Date().toISOString()
+        }
+      };
+    } catch (error) {
+      const errorCode = this.errorMapper(error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      context.logger?.error("action.status_query.exception", {
+        error: errorMessage,
+        errorCode,
+        latencyMs: Date.now() - startedAt
+      });
+      return {
+        success: false,
+        errorCode,
+        errorMessage
+      };
+    } finally {
+      context.logger?.debug("action.status_query.finished", { latencyMs: Date.now() - startedAt });
+    }
+  }
+  errorMapper(error) {
+    if (error instanceof Error) {
+      const message = error.message.toLowerCase();
+      if (message.includes("timeout") || message.includes("network")) {
+        return "SDK_TIMEOUT";
+      } else if (message.includes("unreachable") || message.includes("connect")) {
+        return "SDK_UNREACHABLE";
+      }
+    }
+    return "SDK_UNREACHABLE";
+  }
+}
+
+// src/action/AbortSessionAction.ts
+class AbortSessionAction {
+  name = "abort_session";
+  async execute(payload, context) {
+    const startedAt = Date.now();
+    context.logger?.info("action.abort_session.started", {
+      toolSessionId: payload.toolSessionId
+    });
+    try {
+      if (context.connectionState !== "READY") {
+        context.logger?.warn("action.abort_session.rejected_state", { state: context.connectionState });
+        return {
+          success: false,
+          errorCode: stateToErrorCode(context.connectionState),
+          errorMessage: `Agent not ready. Current state: ${context.connectionState}`
+        };
+      }
+      if (!isOpencodeClient(context.client)) {
+        context.logger?.error("action.abort_session.invalid_client");
+        return {
+          success: false,
+          errorCode: "SDK_UNREACHABLE",
+          errorMessage: "Valid OpenCode client not available in context"
+        };
+      }
+      const executionResult = await safeExecute(context.client.session.abort({
+        path: { id: payload.toolSessionId }
+      }), (error) => `Abort session failed: ${getErrorMessage(error)}`);
+      if (executionResult.success) {
+        if (!hasError(executionResult.data)) {
+          return {
+            success: true,
+            data: { sessionId: payload.toolSessionId, aborted: true }
+          };
+        }
+        const errorField = executionResult.data && typeof executionResult.data === "object" && "error" in executionResult.data ? executionResult.data.error : undefined;
+        const errorMessage = errorField !== undefined ? getErrorMessage(errorField) : "Unknown error";
+        context.logger?.error("action.abort_session.sdk_error_payload", {
+          toolSessionId: payload.toolSessionId,
+          error: errorMessage,
+          ...errorField !== undefined ? getErrorDetailsForLog(errorField) : {},
+          latencyMs: Date.now() - startedAt
+        });
+        return {
+          success: false,
+          errorCode: "SDK_UNREACHABLE",
+          errorMessage: `Failed to abort session: ${errorMessage}`
+        };
+      }
+      context.logger?.error("action.abort_session.failed", {
+        toolSessionId: payload.toolSessionId,
+        error: executionResult.error,
+        latencyMs: Date.now() - startedAt
+      });
+      return {
+        success: false,
+        errorCode: "SDK_UNREACHABLE",
+        errorMessage: executionResult.error
+      };
+    } catch (error) {
+      const errorCode = this.errorMapper(error);
+      const errorMessage = getErrorMessage(error);
+      context.logger?.error("action.abort_session.exception", {
+        toolSessionId: payload.toolSessionId,
+        error: errorMessage,
+        errorCode,
+        ...getErrorDetailsForLog(error),
+        latencyMs: Date.now() - startedAt
+      });
+      return {
+        success: false,
+        errorCode,
+        errorMessage
+      };
+    } finally {
+      context.logger?.debug("action.abort_session.finished", { latencyMs: Date.now() - startedAt });
+    }
+  }
+  errorMapper(error) {
+    if (error instanceof Error) {
+      const message = error.message.toLowerCase();
+      if (message.includes("timeout") || message.includes("network")) {
+        return "SDK_TIMEOUT";
+      }
+      if (message.includes("unreachable") || message.includes("connect")) {
+        return "SDK_UNREACHABLE";
+      }
+      if (message.includes("not found") || message.includes("session")) {
+        return "INVALID_PAYLOAD";
+      }
+    }
+    return "SDK_UNREACHABLE";
+  }
+}
+
 // src/action/QuestionReplyAction.ts
 class QuestionReplyAction {
   name = "question_reply";
-  normalizePayload(payload) {
-    if (!payload || typeof payload !== "object") {
-      return null;
-    }
-    const p = payload;
-    const toolSessionId = typeof p.toolSessionId === "string" && p.toolSessionId.trim() ? p.toolSessionId : null;
-    const toolCallId = typeof p.toolCallId === "string" && p.toolCallId.trim() ? p.toolCallId : undefined;
-    const answer = typeof p.answer === "string" && p.answer.trim() ? p.answer : null;
-    if (!toolSessionId || !answer) {
-      return null;
-    }
-    return { toolSessionId, toolCallId, answer };
-  }
   readRecord(value) {
     return value !== null && typeof value === "object" ? value : undefined;
   }
@@ -895,30 +832,12 @@ class QuestionReplyAction {
     }
     return this.readString(matchedRequests[0]?.id);
   }
-  validate(payload) {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        valid: false,
-        error: "question_reply payload requires toolSessionId and answer"
-      };
-    }
-    return { valid: true };
-  }
   async execute(payload, context) {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        success: false,
-        errorCode: "INVALID_PAYLOAD",
-        errorMessage: "question_reply payload requires toolSessionId and answer"
-      };
-    }
     const startedAt = Date.now();
     context.logger?.info("action.question_reply.started", {
-      toolSessionId: normalized.toolSessionId,
-      toolCallId: normalized.toolCallId,
-      answerLength: normalized.answer.length
+      toolSessionId: payload.toolSessionId,
+      toolCallId: payload.toolCallId,
+      answerLength: payload.answer.length
     });
     if (context.connectionState !== "READY") {
       context.logger?.warn("action.question_reply.rejected_state", { state: context.connectionState });
@@ -938,12 +857,12 @@ class QuestionReplyAction {
     }
     const client = context.client;
     try {
-      const requestId = await this.findPendingQuestionRequestId(context, normalized.toolSessionId, normalized.toolCallId);
+      const requestId = await this.findPendingQuestionRequestId(context, payload.toolSessionId, payload.toolCallId);
       if (!requestId) {
         return {
           success: false,
           errorCode: "INVALID_PAYLOAD",
-          errorMessage: normalized.toolCallId ? `Unable to resolve pending question request for toolSessionId=${normalized.toolSessionId}, toolCallId=${normalized.toolCallId}` : `Unable to resolve a unique pending question request for toolSessionId=${normalized.toolSessionId}`
+          errorMessage: payload.toolCallId ? `Unable to resolve pending question request for toolSessionId=${payload.toolSessionId}, toolCallId=${payload.toolCallId}` : `Unable to resolve a unique pending question request for toolSessionId=${payload.toolSessionId}`
         };
       }
       const rawClient = this.readRecord(client._client);
@@ -958,7 +877,7 @@ class QuestionReplyAction {
       await postFn({
         url: "/question/{requestID}/reply",
         path: { requestID: requestId },
-        body: { answers: [[normalized.answer]] },
+        body: { answers: [[payload.answer]] },
         headers: {
           "Content-Type": "application/json"
         }
@@ -974,8 +893,8 @@ class QuestionReplyAction {
       const errorCode = this.errorMapper(error);
       const errorMessage = getErrorMessage(error);
       context.logger?.error("action.question_reply.exception", {
-        toolSessionId: normalized.toolSessionId,
-        toolCallId: normalized.toolCallId,
+        toolSessionId: payload.toolSessionId,
+        toolCallId: payload.toolCallId,
         error: errorMessage,
         errorCode,
         ...getErrorDetailsForLog(error),
@@ -995,101 +914,22 @@ class QuestionReplyAction {
       const message = error.message.toLowerCase();
       if (message.includes("timeout") || message.includes("timed out")) {
         return "SDK_TIMEOUT";
-      } else if (message.includes("unreachable") || message.includes("connect") || message.includes("connection")) {
+      }
+      if (message.includes("unreachable") || message.includes("connect") || message.includes("connection")) {
         return "SDK_UNREACHABLE";
-      } else if (message.includes("not found") || message.includes("session") && message.includes("not found")) {
+      }
+      if (message.includes("not found") || message.includes("session") && message.includes("not found")) {
         return "INVALID_PAYLOAD";
-      } else if (message.includes("abort") || message.includes("cancelled")) {
+      }
+      if (message.includes("abort") || message.includes("cancelled")) {
         return "INVALID_PAYLOAD";
       }
     } else if (typeof error === "string") {
       const message = error.toLowerCase();
       if (message.includes("timeout") || message.includes("timed out")) {
         return "SDK_TIMEOUT";
-      } else if (message.includes("unreachable") || message.includes("connect")) {
-        return "SDK_UNREACHABLE";
       }
-    }
-    return "SDK_UNREACHABLE";
-  }
-}
-
-// src/action/StatusQueryAction.ts
-class StatusQueryAction {
-  name = "status_query";
-  validate(payload) {
-    if (!payload) {
-      return {
-        valid: true
-      };
-    }
-    if (typeof payload !== "object") {
-      return {
-        valid: false,
-        error: "Status query payload must be an object or undefined"
-      };
-    }
-    const typedPayload = payload;
-    if (typedPayload.sessionId !== undefined && (typeof typedPayload.sessionId !== "string" || !typedPayload.sessionId.trim())) {
-      return {
-        valid: false,
-        error: "sessionId must be a non-empty string if provided"
-      };
-    }
-    return {
-      valid: true
-    };
-  }
-  async execute(payload, context) {
-    const startedAt = Date.now();
-    context.logger?.debug("action.status_query.started", {
-      sessionId: payload.sessionId,
-      state: context.connectionState
-    });
-    try {
-      let opencodeOnline = context.connectionState === "READY";
-      const app = context.client?.app;
-      if (app?.health) {
-        try {
-          await app.health();
-          opencodeOnline = true;
-        } catch {
-          opencodeOnline = false;
-        }
-      }
-      return {
-        success: true,
-        data: {
-          opencodeOnline,
-          connectionState: context.connectionState,
-          sessionId: payload.sessionId,
-          timestamp: new Date().toISOString()
-        }
-      };
-    } catch (error) {
-      const errorCode = this.errorMapper(error);
-      const errorMessage = getErrorMessage(error);
-      context.logger?.error("action.status_query.exception", {
-        error: errorMessage,
-        errorCode,
-        ...getErrorDetailsForLog(error),
-        latencyMs: Date.now() - startedAt
-      });
-      return {
-        success: false,
-        errorCode,
-        errorMessage
-      };
-    } finally {
-      context.logger?.debug("action.status_query.finished", { latencyMs: Date.now() - startedAt });
-    }
-  }
-  errorMapper(error) {
-    if (error instanceof Error) {
-      const message = error.message.toLowerCase();
-      if (message.includes("timeout") || message.includes("network")) {
-        return "SDK_TIMEOUT";
-      } else if (message.includes("unreachable") || message.includes("connect")) {
+      if (message.includes("unreachable") || message.includes("connect")) {
         return "SDK_UNREACHABLE";
       }
     }
@@ -1131,23 +971,11 @@ class DefaultActionRouter {
         errorMessage: `Action not found: ${actionType}`
       };
     }
-    const validation = action.validate(payload);
-    if (!validation.valid) {
-      context.logger?.warn("router.route.invalid_payload", {
-        action: actionType,
-        error: validation.error
-      });
-      return {
-        success: false,
-        errorCode: "INVALID_PAYLOAD",
-        errorMessage: validation.error ?? `Invalid payload for action: ${actionType}`
-      };
-    }
     const result = await action.execute(payload, context);
     context.logger?.info("router.route.completed", {
       action: actionType,
       success: result.success,
-      errorCode: result.errorCode,
+      errorCode: result.success ? undefined : result.errorCode,
       latencyMs: Date.now() - startedAt
     });
     return result;
@@ -2008,6 +1836,38 @@ class JsoncParser {
   }
 }
 
+// src/config/default-config.ts
+var DEFAULT_BRIDGE_CONFIG = {
+  enabled: true,
+  config_version: 1,
+  gateway: {
+    url: "ws://localhost:8081/ws/agent",
+    toolType: "opencode",
+    toolVersion: "1.0.0",
+    deviceName: "Local Machine",
+    heartbeatIntervalMs: 30000,
+    reconnect: {
+      baseMs: 1000,
+      maxMs: 30000,
+      exponential: true
+    },
+    ping: {
+      intervalMs: 30000,
+      pongTimeoutMs: 1e4
+    }
+  },
+  sdk: {
+    timeoutMs: 1e4
+  },
+  auth: {
+    ak: "",
+    sk: ""
+  },
+  events: {
+    allowlist: [...DEFAULT_EVENT_ALLOWLIST]
+  }
+};
+
 // src/config/ConfigResolver.ts
 var CONFIG_FILE_NAMES = ["message-bridge.jsonc", "message-bridge.json"];
 
@@ -2019,37 +1879,7 @@ class ConfigResolver {
     this.logger = logger;
   }
   async resolveConfig(workspacePath) {
-    const defaultConfig = {
-      enabled: true,
-      config_version: 1,
-      gateway: {
-        url: "ws://localhost:8081/ws/agent",
-        toolType: "opencode",
-        toolVersion: "1.0.0",
-        deviceName: "Local Machine",
-        heartbeatIntervalMs: 30000,
-        reconnect: {
-          baseMs: 1000,
-          maxMs: 30000,
-          exponential: true
-        },
-        ping: {
-          intervalMs: 30000,
-          pongTimeoutMs: 1e4
-        }
-      },
-      sdk: {
-        timeoutMs: 1e4
-      },
-      auth: {
-        ak: "",
-        sk: ""
-      },
-      events: {
-        allowlist: [...DEFAULT_EVENT_ALLOWLIST]
-      }
-    };
-    let config = { ...defaultConfig };
+    let config = this.mergeConfig({}, DEFAULT_BRIDGE_CONFIG);
     const sources = ["default"];
     const workspaceRoot = workspacePath ?? process.cwd();
     this.logger?.info("config.resolve.started", { workspacePath: workspaceRoot });
@@ -2198,12 +2028,12 @@ class ConfigResolver {
     if (Object.keys(auth).length > 0) {
       envConfig.auth = auth;
     }
-    const sdk = {};
+    const sdk2 = {};
     if (process.env.BRIDGE_SDK_TIMEOUT_MS) {
-      sdk.timeoutMs = parseInt(process.env.BRIDGE_SDK_TIMEOUT_MS, 10);
+      sdk2.timeoutMs = parseInt(process.env.BRIDGE_SDK_TIMEOUT_MS, 10);
     }
-    if (Object.keys(sdk).length > 0) {
-      envConfig.sdk = sdk;
+    if (Object.keys(sdk2).length > 0) {
+      envConfig.sdk = sdk2;
     }
     if (process.env.BRIDGE_EVENTS_ALLOWLIST) {
       envConfig.events = {
@@ -2344,6 +2174,25 @@ class ConfigValidator {
     if (c.events?.allowlist !== undefined) {
       if (!Array.isArray(c.events.allowlist)) {
         errors.push({ path: "events.allowlist", code: "INVALID_TYPE", message: "events.allowlist must be an array" });
+      } else {
+        const supported = new Set(SUPPORTED_UPSTREAM_EVENT_TYPES);
+        c.events.allowlist.forEach((item, index) => {
+          if (typeof item !== "string") {
+            errors.push({
+              path: `events.allowlist[${index}]`,
+              code: "INVALID_TYPE",
+              message: "events.allowlist entries must be strings"
+            });
+            return;
+          }
+          if (!supported.has(item)) {
+            errors.push({
+              path: `events.allowlist[${index}]`,
+              code: "UNSUPPORTED_EVENT",
+              message: `Unsupported event type: ${item}`
+            });
+          }
+        });
       }
     }
     return errors;
@@ -2355,7 +2204,7 @@ class ConfigValidator {
   }
 }
 // src/runtime/AppLogger.ts
-import { randomUUID as randomUUID2 } from "crypto";
+import { randomUUID } from "crypto";
 function isRecord2(value) {
   return value !== null && typeof value === "object";
 }
@@ -2399,7 +2248,7 @@ class AppLogger {
     this.appLog = appLog ?? getAppLog(client);
     const envDebugEnabled = ["1", "true", "yes", "on"].includes(String(process.env.BRIDGE_DEBUG || "").toLowerCase());
     this.debugEnabled = debug ?? envDebugEnabled;
-    this.traceId = traceId ?? randomUUID2();
+    this.traceId = traceId ?? randomUUID();
   }
   child(extra) {
     return new AppLogger({}, { ...this.baseExtra, ...extra }, this.traceId, this.appLog, this.debugEnabled);
@@ -2511,7 +2360,7 @@ function validateConfig(config) {
   return validator.validate(config);
 }
 // src/connection/AkSkAuth.ts
-import { createHmac, randomUUID as randomUUID3 } from "crypto";
+import { createHmac, randomUUID as randomUUID2 } from "crypto";
 
 class DefaultAkSkAuth {
   _accessKey;
@@ -2532,7 +2381,7 @@ class DefaultAkSkAuth {
   }
   generateQueryParams() {
     const ts = Math.floor(Date.now() / 1000).toString();
-    const nonce = randomUUID3();
+    const nonce = randomUUID2();
     const sign = createHmac("sha256", this._secretKey).update(`${this._accessKey}${ts}${nonce}`).digest("base64");
     return new URLSearchParams({
       ak: this._accessKey,
@@ -2869,7 +2718,7 @@ class DefaultGatewayConnection extends EventEmitter {
 }
 
 // src/connection/StateManager.ts
-import { randomUUID as randomUUID4 } from "crypto";
+import { randomUUID as randomUUID3 } from "crypto";
 class DefaultStateManager {
   state = "DISCONNECTED";
   agentId = null;
@@ -2886,7 +2735,7 @@ class DefaultStateManager {
     this.state = state;
   }
   generateAndBindAgentId() {
-    const id = `${AGENT_ID_PREFIX}${randomUUID4()}`;
+    const id = `${AGENT_ID_PREFIX}${randomUUID3()}`;
     this.agentId = id;
     return id;
   }
@@ -2895,40 +2744,613 @@ class DefaultStateManager {
   }
 }
 
-// src/event/EventFilter.ts
-class EventFilter {
-  prefixPatterns = [];
-  exactPatterns = new Set;
-  constructor(allowlist = [
-    "message.*",
-    "permission.*",
-    "question.*",
-    "session.*",
-    "file.edited",
-    "todo.updated",
-    "command.executed"
-  ]) {
-    for (const pattern of allowlist) {
-      if (pattern.endsWith("*")) {
-        this.prefixPatterns.push(pattern.slice(0, -1));
-      } else {
-        this.exactPatterns.add(pattern);
-      }
-    }
+// src/event/EnvelopeBuilder.ts
+import { randomUUID as randomUUID4 } from "crypto";
+
+class EnvelopeBuilder {
+  agentId;
+  globalSequence = 0;
+  sessionSequences = new Map;
+  constructor(agentId) {
+    this.agentId = agentId;
   }
-  isAllowed(eventType) {
-    if (this.exactPatterns.has(eventType)) {
-      return true;
-    }
-    for (const prefix of this.prefixPatterns) {
-      if (eventType.startsWith(prefix)) {
-        return true;
-      }
-    }
-    return false;
+  build(sessionId) {
+    const sequenceNumber = sessionId ? this.nextSessionSequence(sessionId) : this.nextGlobalSequence();
+    return {
+      version: "1.0",
+      messageId: randomUUID4(),
+      timestamp: new Date().toISOString(),
+      source: "message-bridge",
+      agentId: this.agentId,
+      sessionId,
+      sequenceNumber,
+      sequenceScope: sessionId ? "session" : "global"
+    };
+  }
+  nextGlobalSequence() {
+    this.globalSequence += 1;
+    return this.globalSequence;
+  }
+  nextSessionSequence(sessionId) {
+    const next = (this.sessionSequences.get(sessionId) ?? 0) + 1;
+    this.sessionSequences.set(sessionId, next);
+    return next;
   }
 }
 
+// src/event/EventFilter.ts
+class EventFilter {
+  exactPatterns = new Set;
+  constructor(allowlist = DEFAULT_EVENT_ALLOWLIST) {
+    for (const pattern of allowlist) {
+      this.exactPatterns.add(pattern);
+    }
+  }
+  isAllowed(eventType) {
+    return this.exactPatterns.has(eventType);
+  }
+}
+// src/protocol/upstream/UpstreamEventExtractor.ts
+var EXTRACTION_LOG_EVENT = "event.extraction_failed";
+function ok(value) {
+  return { ok: true, value };
+}
+function fail(error) {
+  return { ok: false, error };
+}
+function missingRequiredField(eventType, stage, field, messageId, toolSessionId) {
+  return fail({
+    stage,
+    code: "missing_required_field",
+    eventType,
+    field,
+    message: `${field} is required`,
+    messageId,
+    toolSessionId
+  });
+}
+function invalidFieldType(eventType, stage, field, expectedType, messageId, toolSessionId) {
+  return fail({
+    stage,
+    code: "invalid_field_type",
+    eventType,
+    field,
+    message: `${field} must be ${expectedType}`,
+    messageId,
+    toolSessionId
+  });
+}
+function requireNonEmptyString(value, eventType, stage, field, messageId, toolSessionId) {
+  if (value === undefined) {
+    return missingRequiredField(eventType, stage, field, messageId, toolSessionId);
+  }
+  if (typeof value !== "string") {
+    return invalidFieldType(eventType, stage, field, "a non-empty string", messageId, toolSessionId);
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return missingRequiredField(eventType, stage, field, messageId, toolSessionId);
+  }
+  return ok(normalized);
+}
+function requireMessageRole(value, eventType, messageId, toolSessionId) {
+  const roleResult = requireNonEmptyString(value, eventType, "extra", "properties.info.role", messageId, toolSessionId);
+  if (!roleResult.ok) {
+    return roleResult;
+  }
+  if (roleResult.value !== "user" && roleResult.value !== "assistant") {
+    return invalidFieldType(eventType, "extra", "properties.info.role", '"user" or "assistant"', messageId, toolSessionId);
+  }
+  return ok(roleResult.value);
+}
+function noExtra(_event) {
+  return ok(undefined);
+}
+function buildCommon(eventType, toolSessionId) {
+  return { eventType, toolSessionId };
+}
+function extractMessageUpdatedCommon(event) {
+  const sessionResult = requireNonEmptyString(event.properties.info.sessionID, event.type, "common", "properties.info.sessionID");
+  if (!sessionResult.ok)
+    return sessionResult;
+  return ok(buildCommon(event.type, sessionResult.value));
+}
+function extractMessageUpdatedExtra(event, common2) {
+  const messageIdResult = requireNonEmptyString(event.properties.info.id, event.type, "extra", "properties.info.id", undefined, common2.toolSessionId);
+  if (!messageIdResult.ok)
+    return messageIdResult;
+  const roleResult = requireMessageRole(event.properties.info.role, event.type, messageIdResult.value, common2.toolSessionId);
+  if (!roleResult.ok)
+    return roleResult;
+  return ok({
+    kind: "message.updated",
+    messageId: messageIdResult.value,
+    role: roleResult.value
+  });
+}
+function extractMessagePartUpdatedCommon(event) {
+  const sessionResult = requireNonEmptyString(event.properties.part.sessionID, event.type, "common", "properties.part.sessionID");
+  if (!sessionResult.ok)
+    return sessionResult;
+  return ok(buildCommon(event.type, sessionResult.value));
+}
+function extractMessagePartUpdatedExtra(event, common2) {
+  const messageIdResult = requireNonEmptyString(event.properties.part.messageID, event.type, "extra", "properties.part.messageID", undefined, common2.toolSessionId);
+  if (!messageIdResult.ok)
+    return messageIdResult;
+  const partIdResult = requireNonEmptyString(event.properties.part.id, event.type, "extra", "properties.part.id", messageIdResult.value, common2.toolSessionId);
+  if (!partIdResult.ok)
+    return partIdResult;
+  return ok({
+    kind: "message.part.updated",
+    messageId: messageIdResult.value,
+    partId: partIdResult.value
+  });
+}
+function extractMessagePartDeltaCommon(event) {
+  const sessionResult = requireNonEmptyString(event.properties.sessionID, event.type, "common", "properties.sessionID");
+  if (!sessionResult.ok)
+    return sessionResult;
+  return ok(buildCommon(event.type, sessionResult.value));
+}
+function extractMessagePartDeltaExtra(event, common2) {
+  const messageIdResult = requireNonEmptyString(event.properties.messageID, event.type, "extra", "properties.messageID", undefined, common2.toolSessionId);
+  if (!messageIdResult.ok)
+    return messageIdResult;
+  const partIdResult = requireNonEmptyString(event.properties.partID, event.type, "extra", "properties.partID", messageIdResult.value, common2.toolSessionId);
+  if (!partIdResult.ok)
+    return partIdResult;
+  return ok({
+    kind: "message.part.delta",
+    messageId: messageIdResult.value,
+    partId: partIdResult.value
+  });
+}
+function extractMessagePartRemovedCommon(event) {
+  const sessionResult = requireNonEmptyString(event.properties.sessionID, event.type, "common", "properties.sessionID");
+  if (!sessionResult.ok)
+    return sessionResult;
+  return ok(buildCommon(event.type, sessionResult.value));
+}
+function extractMessagePartRemovedExtra(event, common2) {
+  const messageIdResult = requireNonEmptyString(event.properties.messageID, event.type, "extra", "properties.messageID", undefined, common2.toolSessionId);
+  if (!messageIdResult.ok)
+    return messageIdResult;
+  const partIdResult = requireNonEmptyString(event.properties.partID, event.type, "extra", "properties.partID", messageIdResult.value, common2.toolSessionId);
+  if (!partIdResult.ok)
+    return partIdResult;
+  return ok({
+    kind: "message.part.removed",
+    messageId: messageIdResult.value,
+    partId: partIdResult.value
+  });
+}
+function extractSessionStatusCommon(event) {
+  const sessionResult = requireNonEmptyString(event.properties.sessionID, event.type, "common", "properties.sessionID");
+  if (!sessionResult.ok)
+    return sessionResult;
+  return ok(buildCommon(event.type, sessionResult.value));
+}
+function extractSessionStatusExtra(event, common2) {
+  const statusResult = requireNonEmptyString(event.properties.status?.type, event.type, "extra", "properties.status.type", undefined, common2.toolSessionId);
+  if (!statusResult.ok)
+    return statusResult;
+  return ok({
+    kind: "session.status",
+    status: statusResult.value
+  });
+}
+function extractSessionIdleCommon(event) {
+  const sessionResult = requireNonEmptyString(event.properties.sessionID, event.type, "common", "properties.sessionID");
+  if (!sessionResult.ok)
+    return sessionResult;
+  return ok(buildCommon(event.type, sessionResult.value));
+}
+function extractSessionUpdatedCommon(event) {
+  const sessionResult = requireNonEmptyString(event.properties.info.id, event.type, "common", "properties.info.id");
+  if (!sessionResult.ok)
+    return sessionResult;
+  return ok(buildCommon(event.type, sessionResult.value));
+}
+function extractSessionErrorCommon(event) {
+  const sessionResult = requireNonEmptyString(event.properties.sessionID, event.type, "common", "properties.sessionID");
+  if (!sessionResult.ok)
+    return sessionResult;
+  return ok(buildCommon(event.type, sessionResult.value));
+}
+function extractPermissionCommon(event) {
+  const sessionResult = requireNonEmptyString(event.properties.sessionID, event.type, "common", "properties.sessionID");
+  if (!sessionResult.ok)
+    return sessionResult;
+  return ok(buildCommon(event.type, sessionResult.value));
+}
+function extractQuestionAskedCommon(event) {
+  const sessionResult = requireNonEmptyString(event.properties.sessionID, event.type, "common", "properties.sessionID");
+  if (!sessionResult.ok)
+    return sessionResult;
+  return ok(buildCommon(event.type, sessionResult.value));
+}
+var UPSTREAM_EVENT_EXTRACTORS = {
+  "message.updated": { extractCommon: extractMessageUpdatedCommon, extractExtra: extractMessageUpdatedExtra },
+  "message.part.updated": { extractCommon: extractMessagePartUpdatedCommon, extractExtra: extractMessagePartUpdatedExtra },
+  "message.part.delta": { extractCommon: extractMessagePartDeltaCommon, extractExtra: extractMessagePartDeltaExtra },
+  "message.part.removed": { extractCommon: extractMessagePartRemovedCommon, extractExtra: extractMessagePartRemovedExtra },
+  "session.status": { extractCommon: extractSessionStatusCommon, extractExtra: extractSessionStatusExtra },
+  "session.idle": { extractCommon: extractSessionIdleCommon, extractExtra: noExtra },
+  "session.updated": { extractCommon: extractSessionUpdatedCommon, extractExtra: noExtra },
+  "session.error": { extractCommon: extractSessionErrorCommon, extractExtra: noExtra },
+  "permission.updated": { extractCommon: extractPermissionCommon, extractExtra: noExtra },
+  "permission.asked": { extractCommon: extractPermissionCommon, extractExtra: noExtra },
+  "question.asked": { extractCommon: extractQuestionAskedCommon, extractExtra: noExtra }
+};
+function buildEventPreview(event) {
+  const hasProperties = typeof event === "object" && event !== null && "properties" in event && typeof event.properties === "object" && event.properties !== null;
+  return {
+    type: event.type,
+    hasProperties,
+    propertyKeys: hasProperties ? Object.keys(event.properties).slice(0, 8) : []
+  };
+}
+function logExtractionFailure(logger, event, error) {
+  logger.warn(EXTRACTION_LOG_EVENT, {
+    eventType: error.eventType,
+    stage: error.stage,
+    errorCode: error.code,
+    field: error.field,
+    message: error.message,
+    messageId: error.messageId,
+    toolSessionId: error.toolSessionId,
+    eventPreview: buildEventPreview(event)
+  });
+}
+function extractUpstreamEvent(event, logger) {
+  if (!isSupportedUpstreamEventType(event.type)) {
+    const error = {
+      stage: "common",
+      code: "unsupported_event",
+      eventType: event.type,
+      field: "type",
+      message: `Unsupported upstream event type: ${event.type}`
+    };
+    logExtractionFailure(logger, event, error);
+    return fail(error);
+  }
+  const typedEvent = event;
+  const extractor = UPSTREAM_EVENT_EXTRACTORS[event.type];
+  const commonResult = extractor.extractCommon(typedEvent);
+  if (!commonResult.ok) {
+    logExtractionFailure(logger, event, commonResult.error);
+    return commonResult;
+  }
+  const extraResult = extractor.extractExtra(typedEvent, commonResult.value);
+  if (!extraResult.ok) {
+    logExtractionFailure(logger, event, extraResult.error);
+    return extraResult;
+  }
+  return ok({
+    common: commonResult.value,
+    extra: extraResult.value,
+    raw: typedEvent
+  });
+}
+// src/protocol/downstream/SupportedDownstreamMessages.ts
+var SUPPORTED_DOWNSTREAM_MESSAGE_TYPES = DOWNSTREAM_MESSAGE_TYPES;
+var SUPPORTED_INVOKE_ACTIONS = INVOKE_ACTIONS;
+var SUPPORTED_DOWNSTREAM_MESSAGE_TYPE_SET = new Set(SUPPORTED_DOWNSTREAM_MESSAGE_TYPES);
+var SUPPORTED_INVOKE_ACTION_SET = new Set(SUPPORTED_INVOKE_ACTIONS);
+function isSupportedDownstreamMessageType(value) {
+  return SUPPORTED_DOWNSTREAM_MESSAGE_TYPE_SET.has(value);
+}
+function isSupportedInvokeAction(value) {
+  return SUPPORTED_INVOKE_ACTION_SET.has(value);
+}
+// src/protocol/downstream/DownstreamMessageNormalizer.ts
+var DOWNSTREAM_NORMALIZATION_LOG_EVENT = "downstream.normalization_failed";
+function isRecord4(value) {
+  return typeof value === "object" && value !== null;
+}
+function ok2(value) {
+  return { ok: true, value };
+}
+function fail2(error) {
+  return { ok: false, error };
+}
+function missingRequiredField2(stage, field, messageType, action, sessionId) {
+  return fail2({
+    stage,
+    code: "missing_required_field",
+    field,
+    message: `${field} is required`,
+    messageType,
+    action,
+    sessionId
+  });
+}
+function invalidFieldType2(stage, field, expectedType, messageType, action, sessionId) {
+  return fail2({
+    stage,
+    code: "invalid_field_type",
+    field,
+    message: `${field} must be ${expectedType}`,
+    messageType,
+    action,
+    sessionId
+  });
+}
+function unsupportedMessage(messageType) {
+  return fail2({
+    stage: "message",
+    code: "unsupported_message",
+    field: "type",
+    message: `Unsupported downstream message type: ${messageType}`,
+    messageType
+  });
+}
+function unsupportedAction(action, sessionId) {
+  return fail2({
+    stage: "payload",
+    code: "unsupported_action",
+    field: "action",
+    message: `Unsupported invoke action: ${action}`,
+    messageType: "invoke",
+    action,
+    sessionId
+  });
+}
+function errorOf(result) {
+  if (result.ok) {
+    throw new Error("Expected failed normalization result");
+  }
+  return result.error;
+}
+function requireNonEmptyString2(value, stage, field, messageType, action, sessionId) {
+  if (value === undefined) {
+    return missingRequiredField2(stage, field, messageType, action, sessionId);
+  }
+  if (typeof value !== "string") {
+    return invalidFieldType2(stage, field, "a non-empty string", messageType, action, sessionId);
+  }
+  if (!value.trim()) {
+    return missingRequiredField2(stage, field, messageType, action, sessionId);
+  }
+  return ok2(value);
+}
+function extractEnvelope(raw) {
+  return hasEnvelope(raw) ? raw.envelope : undefined;
+}
+function extractSessionId(raw) {
+  if (typeof raw.sessionId === "string") {
+    return raw.sessionId;
+  }
+  return typeof raw.welinkSessionId === "string" ? raw.welinkSessionId : undefined;
+}
+function unwrapMessage(raw) {
+  if (!hasEnvelope(raw)) {
+    return raw;
+  }
+  const envelopeCarrier = raw;
+  return {
+    type: envelopeCarrier.type,
+    ...isRecord4(envelopeCarrier.payload) ? envelopeCarrier.payload : { payload: envelopeCarrier.payload },
+    envelope: envelopeCarrier.envelope
+  };
+}
+function buildEventPreview2(raw) {
+  if (!isRecord4(raw)) {
+    return { kind: typeof raw };
+  }
+  return {
+    type: typeof raw.type === "string" ? raw.type : undefined,
+    keys: Object.keys(raw).slice(0, 8)
+  };
+}
+function logDownstreamNormalizationFailure(logger, raw, error) {
+  logger.warn(DOWNSTREAM_NORMALIZATION_LOG_EVENT, {
+    stage: error.stage,
+    errorCode: error.code,
+    field: error.field,
+    message: error.message,
+    messageType: error.messageType,
+    action: error.action,
+    sessionId: error.sessionId,
+    messagePreview: buildEventPreview2(raw)
+  });
+}
+function normalizeChatPayload(payload, sessionId) {
+  if (!isRecord4(payload)) {
+    return invalidFieldType2("payload", "payload", "an object", "invoke", "chat", sessionId);
+  }
+  const toolSessionId = requireNonEmptyString2(payload.toolSessionId, "payload", "payload.toolSessionId", "invoke", "chat", sessionId);
+  if (!toolSessionId.ok)
+    return toolSessionId;
+  const text = requireNonEmptyString2(payload.text, "payload", "payload.text", "invoke", "chat", sessionId);
+  if (!text.ok)
+    return text;
+  return ok2({
+    toolSessionId: toolSessionId.value,
+    text: text.value
+  });
+}
+function normalizeCreateSessionPayload(payload, sessionId) {
+  if (!isRecord4(payload)) {
+    return invalidFieldType2("payload", "payload", "an object", "invoke", "create_session", sessionId);
+  }
+  return ok2({
+    sessionId: typeof payload.sessionId === "string" ? payload.sessionId : undefined,
+    metadata: isRecord4(payload.metadata) ? payload.metadata : undefined
+  });
+}
+function normalizeCloseSessionPayload(payload, sessionId) {
+  if (!isRecord4(payload)) {
+    return invalidFieldType2("payload", "payload", "an object", "invoke", "close_session", sessionId);
+  }
+  const toolSessionId = requireNonEmptyString2(payload.toolSessionId, "payload", "payload.toolSessionId", "invoke", "close_session", sessionId);
+  if (!toolSessionId.ok)
+    return toolSessionId;
+  return ok2({ toolSessionId: toolSessionId.value });
+}
+function normalizePermissionReplyPayload(payload, sessionId) {
+  if (!isRecord4(payload)) {
+    return invalidFieldType2("payload", "payload", "an object", "invoke", "permission_reply", sessionId);
+  }
+  const permissionId = requireNonEmptyString2(payload.permissionId, "payload", "payload.permissionId", "invoke", "permission_reply", sessionId);
+  if (!permissionId.ok)
+    return permissionId;
+  const toolSessionId = requireNonEmptyString2(payload.toolSessionId, "payload", "payload.toolSessionId", "invoke", "permission_reply", sessionId);
+  if (!toolSessionId.ok)
+    return toolSessionId;
+  if (payload.response !== "allow" && payload.response !== "always" && payload.response !== "deny") {
+    return invalidFieldType2("payload", "payload.response", '"allow", "always", or "deny"', "invoke", "permission_reply", sessionId);
+  }
+  return ok2({
+    permissionId: permissionId.value,
+    toolSessionId: toolSessionId.value,
+    response: payload.response
+  });
+}
+function normalizeStatusQueryPayload(payload, sessionId) {
+  if (payload === undefined) {
+    return ok2({ sessionId: undefined });
+  }
+  if (!isRecord4(payload)) {
+    return invalidFieldType2("payload", "payload", "an object", "invoke", "status_query", sessionId);
+  }
+  if (payload.sessionId !== undefined) {
+    const innerSessionId = requireNonEmptyString2(payload.sessionId, "payload", "payload.sessionId", "invoke", "status_query", sessionId);
+    if (!innerSessionId.ok)
+      return innerSessionId;
+    return ok2({ sessionId: innerSessionId.value });
+  }
+  return ok2({ sessionId: undefined });
+}
+function normalizeAbortSessionPayload(payload, sessionId) {
+  if (!isRecord4(payload)) {
+    return invalidFieldType2("payload", "payload", "an object", "invoke", "abort_session", sessionId);
+  }
+  const toolSessionId = requireNonEmptyString2(payload.toolSessionId, "payload", "payload.toolSessionId", "invoke", "abort_session", sessionId);
+  if (!toolSessionId.ok)
+    return toolSessionId;
+  return ok2({ toolSessionId: toolSessionId.value });
+}
+function normalizeQuestionReplyPayload(payload, sessionId) {
+  if (!isRecord4(payload)) {
+    return invalidFieldType2("payload", "payload", "an object", "invoke", "question_reply", sessionId);
+  }
+  const toolSessionId = requireNonEmptyString2(payload.toolSessionId, "payload", "payload.toolSessionId", "invoke", "question_reply", sessionId);
+  if (!toolSessionId.ok)
+    return toolSessionId;
+  const answer = requireNonEmptyString2(payload.answer, "payload", "payload.answer", "invoke", "question_reply", sessionId);
+  if (!answer.ok)
+    return answer;
+  if (payload.toolCallId !== undefined) {
+    const toolCallId = requireNonEmptyString2(payload.toolCallId, "payload", "payload.toolCallId", "invoke", "question_reply", sessionId);
+    if (!toolCallId.ok)
+      return toolCallId;
+    return ok2({
+      toolSessionId: toolSessionId.value,
+      answer: answer.value,
+      toolCallId: toolCallId.value
+    });
+  }
+  return ok2({
+    toolSessionId: toolSessionId.value,
+    answer: answer.value
+  });
+}
+function normalizeInvokePayload(action, payload, sessionId) {
+  switch (action) {
+    case "chat": {
+      const normalized = normalizeChatPayload(payload, sessionId);
+      if (!normalized.ok)
+        return normalized;
+      return ok2({ type: "invoke", action, payload: normalized.value, sessionId });
+    }
+    case "create_session": {
+      const normalized = normalizeCreateSessionPayload(payload, sessionId);
+      if (!normalized.ok)
+        return normalized;
+      return ok2({ type: "invoke", action, payload: normalized.value, sessionId });
+    }
+    case "close_session": {
+      const normalized = normalizeCloseSessionPayload(payload, sessionId);
+      if (!normalized.ok)
+        return normalized;
+      return ok2({ type: "invoke", action, payload: normalized.value, sessionId });
+    }
+    case "permission_reply": {
+      const normalized = normalizePermissionReplyPayload(payload, sessionId);
+      if (!normalized.ok)
+        return normalized;
+      return ok2({ type: "invoke", action, payload: normalized.value, sessionId });
+    }
+    case "status_query": {
+      const normalized = normalizeStatusQueryPayload(payload, sessionId);
+      if (!normalized.ok)
+        return normalized;
+      return ok2({ type: "invoke", action, payload: normalized.value, sessionId });
+    }
+    case "abort_session": {
+      const normalized = normalizeAbortSessionPayload(payload, sessionId);
+      if (!normalized.ok)
+        return normalized;
+      return ok2({ type: "invoke", action, payload: normalized.value, sessionId });
+    }
+    case "question_reply": {
+      const normalized = normalizeQuestionReplyPayload(payload, sessionId);
+      if (!normalized.ok)
+        return normalized;
+      return ok2({ type: "invoke", action, payload: normalized.value, sessionId });
+    }
+  }
+}
+function normalizeDownstreamMessage(raw, logger) {
+  if (!isRecord4(raw)) {
+    const error = errorOf(invalidFieldType2("message", "message", "an object"));
+    logDownstreamNormalizationFailure(logger, raw, error);
+    return fail2(error);
+  }
+  const envelope2 = extractEnvelope(raw);
+  const unwrapped = unwrapMessage(raw);
+  const messageTypeValue = unwrapped.type;
+  if (typeof messageTypeValue !== "string") {
+    const error = errorOf(missingRequiredField2("message", "type"));
+    logDownstreamNormalizationFailure(logger, raw, error);
+    return fail2(error);
+  }
+  if (!isSupportedDownstreamMessageType(messageTypeValue)) {
+    const error = errorOf(unsupportedMessage(messageTypeValue));
+    logDownstreamNormalizationFailure(logger, raw, error);
+    return fail2(error);
+  }
+  const sessionId = extractSessionId(unwrapped);
+  if (messageTypeValue === "status_query") {
+    return ok2({
+      type: "status_query",
+      sessionId,
+      envelope: envelope2
+    });
+  }
+  const actionValue = unwrapped.action;
+  if (typeof actionValue !== "string") {
+    const error = errorOf(missingRequiredField2("payload", "action", "invoke", undefined, sessionId));
+    logDownstreamNormalizationFailure(logger, raw, error);
+    return fail2(error);
+  }
+  if (!isSupportedInvokeAction(actionValue)) {
+    const error = errorOf(unsupportedAction(actionValue, sessionId));
+    logDownstreamNormalizationFailure(logger, raw, error);
+    return fail2(error);
+  }
+  const normalized = normalizeInvokePayload(actionValue, unwrapped.payload, sessionId);
+  if (!normalized.ok) {
+    logDownstreamNormalizationFailure(logger, raw, normalized.error);
+    return normalized;
+  }
+  return ok2({
+    ...normalized.value,
+    envelope: envelope2
+  });
+}
 // src/runtime/SdkAdapter.ts
 function createSdkAdapter(client) {
   if (!client || typeof client !== "object") {
@@ -2975,6 +3397,7 @@ class BridgeRuntime {
   stateManager = new DefaultStateManager;
   registry = new DefaultActionRegistry;
   gatewayConnection = null;
+  envelopeBuilder = null;
   eventFilter = null;
   started = false;
   sdkClient;
@@ -3009,11 +3432,10 @@ class BridgeRuntime {
         gateway_url: config.gateway.url
       });
     } catch (error) {
-      const errorMessage = getErrorMessage(error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error("runtime.config.loading_failed", {
         error: errorMessage,
-        workspacePath: this.options.workspacePath,
-        ...getErrorDetailsForLog(error)
+        workspacePath: this.options.workspacePath
       });
       throw error;
     }
@@ -3023,6 +3445,7 @@ class BridgeRuntime {
       return;
     }
     const agentId = this.stateManager.generateAndBindAgentId();
+    this.envelopeBuilder = new EnvelopeBuilder(agentId);
     this.eventFilter = new EventFilter(config.events.allowlist);
     const auth = new DefaultAkSkAuth(config.auth.ak, config.auth.sk);
     const queryParamsProvider = () => auth.generateQueryParams();
@@ -3049,18 +3472,16 @@ class BridgeRuntime {
       this.logger.info("gateway.state.changed", { state });
       if (state === "CONNECTING") {
         const nextAgentId = this.stateManager.resetForReconnect();
+        this.envelopeBuilder = new EnvelopeBuilder(nextAgentId);
         this.logger.info("runtime.agent.rebound", { agentId: nextAgentId });
       }
     });
     connection.on("message", (message) => {
-      const downstreamFields = this.extractDownstreamLogFields(message);
-      const traceId = downstreamFields.gatewayMessageId ?? this.logger.getTraceId();
-      const messageLogger = this.createMessageLogger(downstreamFields, traceId);
-      messageLogger.debug("gateway.message.received");
-      this.handleDownstreamMessage(message, messageLogger, traceId, downstreamFields).catch((error) => {
-        messageLogger.error("runtime.downstream_message_error", {
-          error: getErrorMessage(error),
-          ...getErrorDetailsForLog(error)
+      const messageType = message && typeof message === "object" && "type" in message ? String(message.type ?? "") : "unknown";
+      this.logger.debug("gateway.message.received", { messageType });
+      this.handleDownstreamMessage(message).catch((error) => {
+        this.logger.error("runtime.downstream_message_error", {
+          error: error instanceof Error ? error.message : String(error)
         });
       });
     });
@@ -3091,7 +3512,12 @@ class BridgeRuntime {
     this.logger.info("runtime.stop.completed");
   }
   async handleEvent(event) {
-    const eventFields = this.extractEventLogFields(event);
+    const extraction = extractUpstreamEvent(event, this.logger);
+    if (!extraction.ok) {
+      return;
+    }
+    const normalized = extraction.value;
+    const eventFields = this.buildEventLogFields(normalized);
     const eventTraceId = eventFields.opencodeMessageId ?? this.logger.getTraceId();
     const eventLogger = this.createMessageLogger(eventFields, eventTraceId);
     eventLogger.debug("event.received");
@@ -3105,26 +3531,23 @@ class BridgeRuntime {
       eventLogger.warn("event.rejected_allowlist");
       return;
     }
-    const toolSessionId = eventFields.toolSessionId;
-    const bridgeMessageId = buildMessageId();
-    const forwardingLogger = this.createMessageLogger({
-      ...eventFields,
-      toolSessionId
-    }, bridgeMessageId);
+    const bridgeMessageId = randomUUID5();
+    const forwardingLogger = this.createMessageLogger(eventFields, bridgeMessageId);
+    this.logEventForwardingDetail(normalized, forwardingLogger);
     forwardingLogger.info("event.forwarding");
     this.gatewayConnection.send({
       type: "tool_event",
-      toolSessionId,
-      event
+      toolSessionId: normalized.common.toolSessionId,
+      event: normalized.raw
     }, {
       traceId: bridgeMessageId,
       runtimeTraceId: this.logger.getTraceId(),
       gatewayMessageId: bridgeMessageId,
-      toolSessionId,
-      eventType: event.type,
+      toolSessionId: normalized.common.toolSessionId,
+      eventType: normalized.common.eventType,
       opencodeMessageId: eventFields.opencodeMessageId,
       opencodePartId: eventFields.opencodePartId,
-      toolCallId: eventFields.toolCallId
+      toolCallId: eventFields.toolCallId ?? undefined
     });
     forwardingLogger.debug("event.forwarded");
   }
@@ -3132,130 +3555,182 @@ class BridgeRuntime {
     return this.started;
   }
   registerActions() {
-    const actions = [
+    const actions2 = [
       new ChatAction,
       new CreateSessionAction,
-      new AbortSessionAction,
       new CloseSessionAction,
       new PermissionReplyAction,
-      new QuestionReplyAction,
-      new StatusQueryAction
+      new StatusQueryAction,
+      new AbortSessionAction,
+      new QuestionReplyAction
     ];
-    for (const action of actions) {
+    for (const action of actions2) {
       this.registry.register(action);
     }
   }
-  async handleDownstreamMessage(raw, messageLogger = this.logger, traceId = this.logger.getTraceId(), baseFields = {}) {
+  async handleDownstreamMessage(raw) {
     if (!this.gatewayConnection) {
-      messageLogger.warn("runtime.downstream_ignored_no_connection");
+      this.logger.warn("runtime.downstream_ignored_no_connection");
       return;
     }
     const startedAt = Date.now();
-    const message = this.normalizeDownstreamMessage(raw);
-    if (!message) {
-      const rawType = this.extractRawDownstreamType(raw);
-      const fallbackSessionId = raw && typeof raw === "object" && typeof raw.welinkSessionId === "string" ? raw.welinkSessionId : undefined;
+    const downstreamFields = this.extractDownstreamLogFields(raw);
+    const traceId = downstreamFields.gatewayMessageId ?? this.logger.getTraceId();
+    const messageLogger = this.createMessageLogger(downstreamFields, traceId);
+    const normalized = normalizeDownstreamMessage(raw, this.logger);
+    if (!normalized.ok) {
       messageLogger.warn("runtime.downstream_ignored_non_protocol", {
-        messageType: rawType ?? "unknown",
-        hasWelinkSessionId: !!fallbackSessionId
+        messageType: normalized.error.messageType ?? "unknown",
+        hasSessionId: !!normalized.error.sessionId
       });
-      if (rawType === "invoke") {
-        this.sendToolError({ success: false, errorCode: "INVALID_PAYLOAD", errorMessage: "Invalid invoke payload shape" }, fallbackSessionId, undefined, {
+      if (normalized.error.messageType === "invoke") {
+        this.sendToolError({ success: false, errorCode: "INVALID_PAYLOAD", errorMessage: "Invalid invoke payload shape" }, normalized.error.sessionId, {
+          logger: messageLogger,
           traceId,
-          gatewayMessageId: baseFields.gatewayMessageId,
-          logger: messageLogger
+          gatewayMessageId: downstreamFields.gatewayMessageId,
+          action: downstreamFields.action,
+          toolSessionId: downstreamFields.toolSessionId
         });
       }
       return;
     }
-    const rawDownstreamFields = this.extractDownstreamLogFields(raw);
-    const normalizedDownstreamFields = this.extractDownstreamLogFields(message);
-    const downstreamFields = {
-      ...rawDownstreamFields,
-      ...baseFields,
-      ...normalizedDownstreamFields
-    };
-    if (!downstreamFields.gatewayMessageId) {
-      downstreamFields.gatewayMessageId = rawDownstreamFields.gatewayMessageId ?? baseFields.gatewayMessageId;
-    }
-    const downstreamTraceId = downstreamFields.gatewayMessageId ?? traceId;
-    const downstreamLogger = this.createMessageLogger(downstreamFields, downstreamTraceId);
+    const message = normalized.value;
     if (message.type === "status_query") {
-      downstreamLogger.info("runtime.status_query.received");
-      const result2 = await this.actionRouter.route("status_query", {}, this.buildActionContext(undefined, downstreamLogger));
+      const statusLogger = this.createMessageLogger({ ...downstreamFields, sessionId: message.sessionId, welinkSessionId: message.sessionId }, traceId);
+      statusLogger.info("runtime.status_query.received");
+      const payload = { sessionId: message.sessionId };
+      const result2 = await this.actionRouter.route("status_query", payload, this.buildActionContext(message.sessionId, statusLogger));
       if (!result2.success) {
-        this.sendToolError(result2, undefined, undefined, {
-          traceId: downstreamTraceId,
+        this.sendToolError(result2, message.sessionId, {
+          logger: statusLogger,
+          traceId,
           gatewayMessageId: downstreamFields.gatewayMessageId,
-          action: "status_query",
-          logger: downstreamLogger
+          action: "status_query"
         });
         return;
       }
       this.gatewayConnection.send({
         type: "status_response",
-        opencodeOnline: !!result2.data?.opencodeOnline
+        opencodeOnline: result2.data.opencodeOnline,
+        sessionId: message.sessionId,
+        welinkSessionId: message.sessionId,
+        envelope: this.ensureEnvelopeBuilder().build(message.sessionId)
       }, {
-        traceId: downstreamTraceId,
+        traceId,
         runtimeTraceId: this.logger.getTraceId(),
         gatewayMessageId: downstreamFields.gatewayMessageId,
+        sessionId: message.sessionId,
+        welinkSessionId: message.sessionId,
         action: "status_query"
       });
-      downstreamLogger.info("runtime.status_query.responded", {
+      statusLogger.info("runtime.status_query.responded", {
         latencyMs: Date.now() - startedAt
       });
       return;
     }
-    const welinkSessionId = message.welinkSessionId;
-    const toolSessionId = this.extractToolSessionId(message.payload);
+    const skillSessionId = message.sessionId ?? message.envelope?.sessionId;
+    const toolSessionId = "payload" in message && message.payload && typeof message.payload === "object" && "toolSessionId" in message.payload && typeof message.payload.toolSessionId === "string" ? message.payload.toolSessionId : undefined;
     const invokeLogger = this.createMessageLogger({
       ...downstreamFields,
+      sessionId: skillSessionId,
+      welinkSessionId: skillSessionId,
       action: message.action,
-      welinkSessionId,
       toolSessionId
-    }, downstreamTraceId);
+    }, traceId);
     invokeLogger.info("runtime.invoke.received");
-    const result = await this.actionRouter.route(message.action, message.payload, this.buildActionContext(welinkSessionId, invokeLogger));
-    if (!result.success) {
-      this.sendToolError(result, welinkSessionId, toolSessionId, {
-        traceId: downstreamTraceId,
-        gatewayMessageId: downstreamFields.gatewayMessageId,
-        action: message.action,
-        logger: invokeLogger
-      });
-      return;
-    }
     if (message.action === "create_session") {
-      const toolSessionId2 = result.data?.sessionId;
-      if (!toolSessionId2) {
-        this.sendToolError({ success: false, errorCode: "SDK_UNREACHABLE", errorMessage: "create_session returned without sessionId" }, welinkSessionId, undefined, {
-          traceId: downstreamTraceId,
+      const result2 = await this.actionRouter.route(message.action, message.payload, this.buildActionContext(skillSessionId, invokeLogger));
+      if (!result2.success) {
+        this.sendToolError(result2, skillSessionId, {
+          logger: invokeLogger,
+          traceId,
           gatewayMessageId: downstreamFields.gatewayMessageId,
-          action: message.action,
-          logger: invokeLogger
+          action: message.action
         });
         return;
       }
-      const sessionData = result.data?.session ?? result.data;
+      const toolSessionId2 = result2.data.sessionId;
+      if (!toolSessionId2) {
+        this.sendToolError({ success: false, errorCode: "SDK_UNREACHABLE", errorMessage: "create_session returned without sessionId" }, skillSessionId, {
+          logger: invokeLogger,
+          traceId,
+          gatewayMessageId: downstreamFields.gatewayMessageId,
+          action: message.action
+        });
+        return;
+      }
+      if (!skillSessionId) {
+        this.sendToolError({ success: false, errorCode: "INVALID_PAYLOAD", errorMessage: "create_session missing skill sessionId" }, undefined, {
+          logger: invokeLogger,
+          traceId,
+          gatewayMessageId: downstreamFields.gatewayMessageId,
+          action: message.action
+        });
+        return;
+      }
       this.gatewayConnection.send({
         type: "session_created",
-        welinkSessionId,
+        sessionId: skillSessionId,
+        welinkSessionId: skillSessionId,
         toolSessionId: toolSessionId2,
-        session: sessionData
+        session: result2.data,
+        envelope: this.ensureEnvelopeBuilder().build(skillSessionId)
       }, {
-        traceId: downstreamTraceId,
+        traceId,
         runtimeTraceId: this.logger.getTraceId(),
         gatewayMessageId: downstreamFields.gatewayMessageId,
-        welinkSessionId,
+        sessionId: skillSessionId,
+        welinkSessionId: skillSessionId,
         toolSessionId: toolSessionId2,
         action: message.action
       });
       invokeLogger.info("runtime.invoke.completed", {
+        action: message.action,
+        sessionId: skillSessionId,
+        toolSessionId: toolSessionId2,
+        latencyMs: Date.now() - startedAt
+      });
+      return;
+    }
+    const result = await this.actionRouter.route(message.action, message.payload, this.buildActionContext(skillSessionId, invokeLogger));
+    if (!result.success) {
+      this.sendToolError(result, skillSessionId, {
+        logger: invokeLogger,
+        traceId,
+        gatewayMessageId: downstreamFields.gatewayMessageId,
+        action: message.action,
+        toolSessionId
+      });
+      return;
+    }
+    if (message.action === "status_query") {
+      const statusData = result.data;
+      this.gatewayConnection.send({
+        type: "status_response",
+        opencodeOnline: !!statusData?.opencodeOnline,
+        sessionId: skillSessionId,
+        welinkSessionId: skillSessionId,
+        envelope: this.ensureEnvelopeBuilder().build(skillSessionId)
+      }, {
+        traceId,
+        runtimeTraceId: this.logger.getTraceId(),
+        gatewayMessageId: downstreamFields.gatewayMessageId,
+        sessionId: skillSessionId,
+        welinkSessionId: skillSessionId,
+        action: message.action
+      });
+      invokeLogger.info("runtime.invoke.completed", {
+        action: message.action,
+        sessionId: skillSessionId,
+        toolSessionId,
         latencyMs: Date.now() - startedAt
       });
       return;
     }
     invokeLogger.info("runtime.invoke.completed", {
+      action: message.action,
+      sessionId: skillSessionId,
+      toolSessionId,
       latencyMs: Date.now() - startedAt
     });
   }
@@ -3272,262 +3747,110 @@ class BridgeRuntime {
       })
     };
   }
-  extractSessionId(payload) {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const p = payload;
-    if (typeof p.sessionId === "string" && p.sessionId.trim()) {
-      return p.sessionId;
-    }
-    const fromProperties = p.properties?.sessionId ?? p.properties?.sessionID;
-    if (typeof fromProperties === "string" && fromProperties.trim()) {
-      return fromProperties;
-    }
-    const fromPart = p.properties?.part?.sessionID ?? p.properties?.part?.sessionId;
-    if (typeof fromPart === "string" && fromPart.trim()) {
-      return fromPart;
-    }
-    return;
+  logEventForwardingDetail(normalized, logger = this.logger) {
+    const detail = this.buildEventForwardingDetail(normalized);
+    logger.debug("event.forwarding.detail", detail);
   }
-  extractToolSessionId(payload) {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const p = payload;
-    if (typeof p.toolSessionId === "string" && p.toolSessionId.trim()) {
-      return p.toolSessionId;
-    }
-    return;
+  buildEventForwardingDetail(normalized) {
+    const extra = normalized.extra;
+    const raw = normalized.raw;
+    return {
+      eventType: normalized.common.eventType,
+      toolSessionId: normalized.common.toolSessionId,
+      opencodeMessageId: this.getMessageId(extra) ?? undefined,
+      opencodePartId: this.getPartId(extra) ?? undefined,
+      role: this.getRole(extra),
+      status: this.getStatus(extra),
+      partType: typeof raw.properties?.part?.type === "string" ? raw.properties.part.type : null,
+      toolCallId: typeof raw.properties?.part?.callID === "string" ? raw.properties.part.callID : undefined,
+      deltaBytes: typeof raw.properties?.delta === "string" ? Buffer.byteLength(raw.properties.delta, "utf8") : null
+    };
   }
-  normalizeDownstreamMessage(raw) {
+  getMessageId(extra) {
+    if (!extra) {
+      return null;
+    }
+    if (extra.kind === "message.updated" || extra.kind === "message.part.updated" || extra.kind === "message.part.delta" || extra.kind === "message.part.removed") {
+      return extra.messageId;
+    }
+    return null;
+  }
+  getPartId(extra) {
+    if (!extra) {
+      return null;
+    }
+    if (extra.kind === "message.part.updated" || extra.kind === "message.part.delta" || extra.kind === "message.part.removed") {
+      return extra.partId;
+    }
+    return null;
+  }
+  getRole(extra) {
+    return extra && extra.kind === "message.updated" ? extra.role : null;
+  }
+  getStatus(extra) {
+    return extra && extra.kind === "session.status" ? extra.status : null;
+  }
+  buildEventLogFields(normalized) {
+    return this.buildEventForwardingDetail(normalized);
+  }
+  extractDownstreamLogFields(raw) {
     if (!raw || typeof raw !== "object") {
-      return null;
+      return {};
     }
-    const msg = raw;
-    const type = typeof msg.type === "string" ? msg.type : undefined;
-    if (!type) {
-      return null;
-    }
-    if (type === "status_query") {
-      return this.normalizeStatusQueryMessage();
-    }
-    if (type !== "invoke") {
-      return null;
-    }
-    return this.normalizeInvokeMessage(msg);
-  }
-  normalizeStatusQueryMessage() {
+    const message = raw;
+    const payload = typeof message.payload === "object" && message.payload ? message.payload : undefined;
+    const sessionId = typeof message.sessionId === "string" ? message.sessionId : typeof message.welinkSessionId === "string" ? message.welinkSessionId : undefined;
     return {
-      type: "status_query"
+      messageType: typeof message.type === "string" ? message.type : undefined,
+      gatewayMessageId: typeof message.messageId === "string" ? message.messageId : undefined,
+      action: typeof message.action === "string" ? message.action : undefined,
+      sessionId,
+      welinkSessionId: sessionId,
+      toolSessionId: typeof payload?.toolSessionId === "string" ? payload.toolSessionId : undefined
     };
   }
-  normalizeInvokeMessage(msg) {
-    const action = typeof msg.action === "string" ? msg.action : undefined;
-    if (!action) {
-      return null;
-    }
-    switch (action) {
-      case "chat":
-        return this.normalizeChatInvokeMessage(msg);
-      case "create_session":
-        return this.normalizeCreateSessionInvokeMessage(msg);
-      case "abort_session":
-        return this.normalizeAbortSessionInvokeMessage(msg);
-      case "close_session":
-        return this.normalizeCloseSessionInvokeMessage(msg);
-      case "permission_reply":
-        return this.normalizePermissionReplyInvokeMessage(msg);
-      case "question_reply":
-        return this.normalizeQuestionReplyInvokeMessage(msg);
-      default:
-        return null;
-    }
-  }
-  normalizeChatInvokeMessage(msg) {
-    const payload = this.extractInvokePayload(msg);
-    const toolSessionId = this.readNonEmptyString(payload?.toolSessionId);
-    const text = this.readNonEmptyString(payload?.text);
-    if (!payload || !toolSessionId || !text) {
-      return null;
-    }
+  createMessageLogger(baseFields, traceId) {
+    const baseLogger = this.logger.child(baseFields);
+    const withTrace = (method) => (message, extra) => baseLogger[method](message, { traceId, ...extra ?? {} });
     return {
-      type: "invoke",
-      action: "chat",
-      payload: { toolSessionId, text },
-      welinkSessionId: this.readNonEmptyString(msg.welinkSessionId)
+      debug: withTrace("debug"),
+      info: withTrace("info"),
+      warn: withTrace("warn"),
+      error: withTrace("error"),
+      child: (extra) => this.createMessageLogger({ ...baseFields, ...extra }, traceId),
+      getTraceId: () => traceId
     };
   }
-  normalizeCreateSessionInvokeMessage(msg) {
-    const payload = this.extractInvokePayload(msg);
-    if (!payload) {
-      return null;
+  ensureEnvelopeBuilder() {
+    if (!this.envelopeBuilder) {
+      const agentId = this.stateManager.getAgentId() ?? this.stateManager.generateAndBindAgentId();
+      this.envelopeBuilder = new EnvelopeBuilder(agentId);
     }
-    return {
-      type: "invoke",
-      action: "create_session",
-      payload: { ...payload },
-      welinkSessionId: this.readNonEmptyString(msg.welinkSessionId)
-    };
+    return this.envelopeBuilder;
   }
-  normalizeAbortSessionInvokeMessage(msg) {
-    const payload = this.extractInvokePayload(msg);
-    const toolSessionId = this.readNonEmptyString(payload?.toolSessionId);
-    if (!payload || !toolSessionId) {
-      return null;
-    }
-    return {
-      type: "invoke",
-      action: "abort_session",
-      payload: { toolSessionId },
-      welinkSessionId: this.readNonEmptyString(msg.welinkSessionId)
-    };
-  }
-  normalizeCloseSessionInvokeMessage(msg) {
-    const payload = this.extractInvokePayload(msg);
-    const toolSessionId = this.readNonEmptyString(payload?.toolSessionId);
-    if (!payload || !toolSessionId) {
-      return null;
-    }
-    return {
-      type: "invoke",
-      action: "close_session",
-      payload: { toolSessionId },
-      welinkSessionId: this.readNonEmptyString(msg.welinkSessionId)
-    };
-  }
-  normalizePermissionReplyInvokeMessage(msg) {
-    const payload = this.extractInvokePayload(msg);
-    const toolSessionId = this.readNonEmptyString(payload?.toolSessionId);
-    const permissionId = this.readNonEmptyString(payload?.permissionId);
-    const response = this.readNonEmptyString(payload?.response);
-    if (!payload || !toolSessionId || !permissionId || !response) {
-      return null;
-    }
-    const normalizedResponse = PERMISSION_REPLY_RESPONSES.find((candidate) => candidate === response);
-    if (!normalizedResponse) {
-      return null;
-    }
-    return {
-      type: "invoke",
-      action: "permission_reply",
-      payload: { toolSessionId, permissionId, response: normalizedResponse },
-      welinkSessionId: this.readNonEmptyString(msg.welinkSessionId)
-    };
-  }
-  normalizeQuestionReplyInvokeMessage(msg) {
-    const payload = this.extractInvokePayload(msg);
-    const toolSessionId = this.readNonEmptyString(payload?.toolSessionId);
-    const toolCallId = this.readNonEmptyString(payload?.toolCallId);
-    const answer = this.readNonEmptyString(payload?.answer);
-    if (!payload || !toolSessionId || !answer) {
-      return null;
-    }
-    return {
-      type: "invoke",
-      action: "question_reply",
-      payload: { toolSessionId, toolCallId, answer },
-      welinkSessionId: this.readNonEmptyString(msg.welinkSessionId)
-    };
-  }
-  extractInvokePayload(msg) {
-    if (!("payload" in msg)) {
-      return null;
-    }
-    if (!msg.payload || typeof msg.payload !== "object") {
-      return null;
-    }
-    return msg.payload;
-  }
-  readNonEmptyString(value) {
-    return typeof value === "string" && value.trim() ? value : undefined;
-  }
-  extractRawDownstreamType(raw) {
-    if (!raw || typeof raw !== "object") {
-      return;
-    }
-    const msg = raw;
-    return typeof msg.type === "string" ? msg.type : undefined;
-  }
-  sendToolError(result, welinkSessionId, toolSessionId, options = {}) {
+  sendToolError(result, sessionId, logOptions) {
     if (!this.gatewayConnection) {
-      (options.logger ?? this.logger).warn("runtime.tool_error.skipped_no_connection", {
-        welinkSessionId,
-        toolSessionId
-      });
+      this.logger.warn("runtime.tool_error.skipped_no_connection", { sessionId });
       return;
     }
-    const error = result.errorMessage ?? "Unknown error";
-    const bridgeMessageId = buildMessageId();
-    const errorLogger = options.logger ?? this.createMessageLogger({
-      gatewayMessageId: options.gatewayMessageId,
-      welinkSessionId,
-      toolSessionId: toolSessionId ?? options.toolSessionId,
-      action: options.action
-    }, options.traceId ?? bridgeMessageId);
-    errorLogger.error("runtime.tool_error.sending", {
-      welinkSessionId,
-      toolSessionId: toolSessionId ?? options.toolSessionId,
-      error,
-      errorCode: result.errorCode,
-      state: this.stateManager.getState()
-    });
+    const error = result.success ? "Unknown error" : result.errorMessage ?? "Unknown error";
+    const logger = logOptions?.logger ?? this.logger;
+    logger.error("runtime.tool_error.sending", { sessionId, welinkSessionId: sessionId, error });
     this.gatewayConnection.send({
       type: "tool_error",
-      welinkSessionId,
-      toolSessionId: toolSessionId ?? options.toolSessionId,
-      error
+      sessionId,
+      welinkSessionId: sessionId,
+      error,
+      envelope: this.ensureEnvelopeBuilder().build(sessionId)
     }, {
-      traceId: options.traceId,
+      traceId: logOptions?.traceId,
       runtimeTraceId: this.logger.getTraceId(),
-      bridgeMessageId,
-      gatewayMessageId: options.gatewayMessageId,
-      welinkSessionId,
-      toolSessionId: toolSessionId ?? options.toolSessionId,
-      action: options.action,
-      opencodeMessageId: options.opencodeMessageId
+      gatewayMessageId: logOptions?.gatewayMessageId,
+      sessionId,
+      welinkSessionId: sessionId,
+      action: logOptions?.action,
+      toolSessionId: logOptions?.toolSessionId
     });
-  }
-  createMessageLogger(extra, traceId) {
-    if (traceId && traceId !== this.logger.getTraceId()) {
-      return this.logger.child({ ...extra, traceId });
-    }
-    return this.logger.child(extra);
-  }
-  extractEventLogFields(event) {
-    const properties = this.getRecord(event.properties);
-    const part = this.getRecord(properties?.part);
-    const eventType = typeof event.type === "string" ? event.type : "unknown";
-    const toolSessionId = this.readNonEmptyString(part?.sessionID) ?? this.readNonEmptyString(part?.sessionId) ?? this.readNonEmptyString(properties?.sessionID) ?? this.readNonEmptyString(properties?.sessionId) ?? this.extractSessionId(event);
-    const opencodeMessageId = this.readNonEmptyString(part?.messageID) ?? this.readNonEmptyString(part?.messageId) ?? this.readNonEmptyString(properties?.messageID) ?? this.readNonEmptyString(properties?.messageId) ?? this.readNonEmptyString(this.getRecord(properties?.info)?.id);
-    const opencodePartId = this.readNonEmptyString(part?.id) ?? this.readNonEmptyString(properties?.partID) ?? this.readNonEmptyString(properties?.partId);
-    const delta = this.readNonEmptyString(properties?.delta) ?? this.readNonEmptyString(part?.delta);
-    const diff = Array.isArray(properties?.diff) ? properties.diff : undefined;
-    return {
-      eventType,
-      toolSessionId,
-      opencodeMessageId,
-      opencodePartId,
-      partType: this.readNonEmptyString(part?.type),
-      toolCallId: this.readNonEmptyString(part?.callID) ?? this.readNonEmptyString(part?.callId) ?? this.readNonEmptyString(properties?.toolCallId),
-      deltaField: this.readNonEmptyString(properties?.field),
-      deltaBytes: delta ? Buffer.byteLength(delta, "utf8") : undefined,
-      diffCount: diff?.length
-    };
-  }
-  extractDownstreamLogFields(message) {
-    const record = this.getRecord(message);
-    const payload = this.getRecord(record?.payload);
-    return {
-      messageType: this.readNonEmptyString(record?.type) ?? "unknown",
-      gatewayMessageId: this.readNonEmptyString(record?.messageId),
-      action: this.readNonEmptyString(record?.action),
-      welinkSessionId: this.readNonEmptyString(record?.welinkSessionId) ?? this.readNonEmptyString(payload?.welinkSessionId),
-      toolSessionId: this.readNonEmptyString(payload?.toolSessionId) ?? this.readNonEmptyString(record?.toolSessionId)
-    };
-  }
-  getRecord(value) {
-    return value && typeof value === "object" ? value : undefined;
   }
 }
 
@@ -3589,5 +3912,5 @@ export {
   MessageBridgePlugin
 };
 
-//# debugId=DC0DD91A53DE23EF64756E2164756E21
+//# debugId=2A0F5459D481C5F464756E2164756E21
 //# sourceMappingURL=message-bridge.plugin.js.map

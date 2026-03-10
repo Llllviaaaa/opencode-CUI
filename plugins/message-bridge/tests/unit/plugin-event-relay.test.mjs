@@ -5,7 +5,7 @@ import { EnvelopeBuilder } from '../../dist/event/EnvelopeBuilder.js';
 import { EventFilter } from '../../dist/event/EventFilter.js';
 
 describe('event uplink via hook boundary', () => {
-  test('allowlist reject records unsupported_event', async () => {
+  test('unsupported upstream events fail closed before forwarding', async () => {
     const logs = [];
     const runtime = new BridgeRuntime({
       debug: true,
@@ -29,7 +29,7 @@ describe('event uplink via hook boundary', () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(sent).toHaveLength(0);
-    const warnEntry = logs.find((item) => item?.body?.message === 'event.rejected_allowlist');
+    const warnEntry = logs.find((item) => item?.body?.message === 'event.extraction_failed');
     expect(!!warnEntry).toBe(true);
   });
 

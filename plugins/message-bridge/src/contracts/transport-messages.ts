@@ -41,6 +41,7 @@ export interface ToolEventMessage {
 export interface ToolDoneMessage {
   type: 'tool_done';
   sessionId?: string;
+  welinkSessionId?: string;
   result?: ActionResultData;
   envelope: Envelope;
 }
@@ -48,6 +49,7 @@ export interface ToolDoneMessage {
 export interface ToolErrorMessage {
   type: 'tool_error';
   sessionId?: string;
+  welinkSessionId?: string;
   error: string;
   envelope: Envelope;
 }
@@ -55,6 +57,7 @@ export interface ToolErrorMessage {
 export interface SessionCreatedMessage {
   type: 'session_created';
   sessionId: string;
+  welinkSessionId?: string;
   toolSessionId?: string;
   session?: CreateSessionResultData;
   envelope: Envelope;
@@ -64,6 +67,7 @@ export interface StatusResponseMessage {
   type: 'status_response';
   opencodeOnline: boolean;
   sessionId?: string;
+  welinkSessionId?: string;
   envelope: Envelope;
 }
 
