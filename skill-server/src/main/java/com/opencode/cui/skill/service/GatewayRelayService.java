@@ -300,7 +300,15 @@ public class GatewayRelayService {
 
         // Activate session if currently IDLE (IDLE → ACTIVE on first successful event)
         try {
-            sessionService.activateSession(Long.parseLong(sessionId));
+            boolean activated = sessionService.activateSession(Long.parseLong(sessionId));
+            if (activated) {
+                // Notify frontend that session is now active
+                StreamMessage activeMsg = StreamMessage.builder()
+                        .type(StreamMessage.Types.SESSION_STATUS)
+                        .sessionStatus("active")
+                        .build();
+                broadcastStreamMessage(sessionId, activeMsg);
+            }
         } catch (NumberFormatException e) {
             // ignore non-numeric sessionId
         }

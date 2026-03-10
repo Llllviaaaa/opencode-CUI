@@ -11,6 +11,7 @@ export interface UseSkillSessionReturn {
   loadSessions: () => Promise<void>;
   switchSession: (sessionId: string) => void;
   closeSession: (sessionId: string) => Promise<void>;
+  updateSessionStatus: (sessionId: string, status: Session['status']) => void;
 }
 
 export function useSkillSession(): UseSkillSessionReturn {
@@ -83,6 +84,18 @@ export function useSkillSession(): UseSkillSessionReturn {
     [currentSession],
   );
 
+  const updateSessionStatus = useCallback(
+    (sessionId: string, status: Session['status']) => {
+      setSessions((prev) =>
+        prev.map((s) => (s.id === sessionId ? { ...s, status } : s)),
+      );
+      setCurrentSession((prev) =>
+        prev && prev.id === sessionId ? { ...prev, status } : prev,
+      );
+    },
+    [],
+  );
+
   // Auto-load sessions on mount
   useEffect(() => {
     void loadSessions();
@@ -97,5 +110,6 @@ export function useSkillSession(): UseSkillSessionReturn {
     loadSessions,
     switchSession,
     closeSession: closeSessionFn,
+    updateSessionStatus,
   };
 }
