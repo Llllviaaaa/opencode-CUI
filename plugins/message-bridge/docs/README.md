@@ -1,7 +1,7 @@
 # Message-Bridge 文档入口
 
-**Version:** 2.1  
-**Date:** 2026-03-07  
+**Version:** 2.2  
+**Date:** 2026-03-10  
 **Status:** Active  
 **Owner:** message-bridge maintainers  
 **Related:** `./AGENTS.md`, `./migration/path-mapping.md`
@@ -28,8 +28,9 @@
 ### 架构
 
 1. [架构总览](./architecture/overview.md)
-2. [ADR 索引](./architecture/adr/README.md)
-3. [方案设计](./design/solution-design.md)
+2. [源码目录说明](./architecture/source-layout.md)
+3. [ADR 索引](./architecture/adr/README.md)
+4. [方案设计](./design/solution-design.md)
 
 ### 开发
 
@@ -37,6 +38,7 @@
 2. [实施计划](./design/implementation-plan.md)
 3. [协议契约](./design/interfaces/protocol-contract.md)
 4. [配置契约](./design/interfaces/config-contract.md)
+5. [源码目录说明](./architecture/source-layout.md)
 
 ### 测试
 
