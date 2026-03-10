@@ -1,57 +1,21 @@
 import {
   Action,
   QuestionReplyPayload,
-  ValidationResult,
+  QuestionReplyResultData,
   ActionResult,
   ActionContext,
   ErrorCode,
   isOpencodeClient,
-  stateToErrorCode
+  stateToErrorCode,
 } from '../types';
 import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
-/**
- * Concrete implementation of question_reply action.
- * Accepts payload: { toolSessionId, toolCallId?, answer }.
- * Uses raw question APIs: GET /question + POST /question/{requestID}/reply.
- */
-export class QuestionReplyAction implements Action<QuestionReplyPayload> {
-  name: string = 'question_reply';
-
-  private normalizePayload(payload: unknown): QuestionReplyPayload | null {
-    if (!payload || typeof payload !== 'object') {
-      return null;
-    }
-
-    const p = payload as {
-      toolSessionId?: unknown;
-      toolCallId?: unknown;
-      answer?: unknown;
-    };
-
-    const toolSessionId =
-      typeof p.toolSessionId === 'string' && p.toolSessionId.trim()
-        ? p.toolSessionId
-        : null;
-    const toolCallId =
-      typeof p.toolCallId === 'string' && p.toolCallId.trim()
-        ? p.toolCallId
-        : undefined;
-    const answer =
-      typeof p.answer === 'string' && p.answer.trim()
-        ? p.answer
-        : null;
-
-    if (!toolSessionId || !answer) {
-      return null;
-    }
-
-    return { toolSessionId, toolCallId, answer };
-  }
+export class QuestionReplyAction implements Action<'question_reply', QuestionReplyPayload, QuestionReplyResultData> {
+  name: 'question_reply' = 'question_reply';
 
   private readRecord(value: unknown): Record<string, unknown> | undefined {
     return value !== null && typeof value === 'object'
-      ? value as Record<string, unknown>
+      ? (value as Record<string, unknown>)
       : undefined;
   }
 
@@ -112,33 +76,15 @@ export class QuestionReplyAction implements Action<QuestionReplyPayload> {
     return this.readString(matchedRequests[0]?.id);
   }
 
-  validate(payload: unknown): ValidationResult {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        valid: false,
-        error: 'question_reply payload requires toolSessionId and answer'
-      };
-    }
-
-    return { valid: true };
-  }
-
-  async execute(payload: QuestionReplyPayload, context: ActionContext): Promise<ActionResult> {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        success: false,
-        errorCode: 'INVALID_PAYLOAD',
-        errorMessage: 'question_reply payload requires toolSessionId and answer'
-      };
-    }
-
+  async execute(
+    payload: QuestionReplyPayload,
+    context: ActionContext,
+  ): Promise<ActionResult<QuestionReplyResultData>> {
     const startedAt = Date.now();
     context.logger?.info('action.question_reply.started', {
-      toolSessionId: normalized.toolSessionId,
-      toolCallId: normalized.toolCallId,
-      answerLength: normalized.answer.length,
+      toolSessionId: payload.toolSessionId,
+      toolCallId: payload.toolCallId,
+      answerLength: payload.answer.length,
     });
 
     if (context.connectionState !== 'READY') {
@@ -146,7 +92,7 @@ export class QuestionReplyAction implements Action<QuestionReplyPayload> {
       return {
         success: false,
         errorCode: stateToErrorCode(context.connectionState),
-        errorMessage: `Agent not ready. Current state: ${context.connectionState}`
+        errorMessage: `Agent not ready. Current state: ${context.connectionState}`,
       };
     }
 
@@ -155,7 +101,7 @@ export class QuestionReplyAction implements Action<QuestionReplyPayload> {
       return {
         success: false,
         errorCode: 'SDK_UNREACHABLE',
-        errorMessage: 'OpenCode client not available or invalid in context'
+        errorMessage: 'OpenCode client not available or invalid in context',
       };
     }
 
@@ -164,17 +110,16 @@ export class QuestionReplyAction implements Action<QuestionReplyPayload> {
     try {
       const requestId = await this.findPendingQuestionRequestId(
         context,
-        normalized.toolSessionId,
-        normalized.toolCallId,
+        payload.toolSessionId,
+        payload.toolCallId,
       );
       if (!requestId) {
         return {
           success: false,
           errorCode: 'INVALID_PAYLOAD',
-          errorMessage:
-            normalized.toolCallId
-              ? `Unable to resolve pending question request for toolSessionId=${normalized.toolSessionId}, toolCallId=${normalized.toolCallId}`
-              : `Unable to resolve a unique pending question request for toolSessionId=${normalized.toolSessionId}`
+          errorMessage: payload.toolCallId
+            ? `Unable to resolve pending question request for toolSessionId=${payload.toolSessionId}, toolCallId=${payload.toolCallId}`
+            : `Unable to resolve a unique pending question request for toolSessionId=${payload.toolSessionId}`,
         };
       }
 
@@ -184,14 +129,14 @@ export class QuestionReplyAction implements Action<QuestionReplyPayload> {
         return {
           success: false,
           errorCode: 'SDK_UNREACHABLE',
-          errorMessage: 'raw client POST unavailable on client'
+          errorMessage: 'raw client POST unavailable on client',
         };
       }
 
       await postFn({
         url: '/question/{requestID}/reply',
         path: { requestID: requestId },
-        body: { answers: [[normalized.answer]] },
+        body: { answers: [[payload.answer]] },
         headers: {
           'Content-Type': 'application/json',
         },
@@ -208,8 +153,8 @@ export class QuestionReplyAction implements Action<QuestionReplyPayload> {
       const errorCode = this.errorMapper(error);
       const errorMessage = getErrorMessage(error);
       context.logger?.error('action.question_reply.exception', {
-        toolSessionId: normalized.toolSessionId,
-        toolCallId: normalized.toolCallId,
+        toolSessionId: payload.toolSessionId,
+        toolCallId: payload.toolCallId,
         error: errorMessage,
         errorCode,
         ...getErrorDetailsForLog(error),
@@ -218,7 +163,7 @@ export class QuestionReplyAction implements Action<QuestionReplyPayload> {
       return {
         success: false,
         errorCode,
-        errorMessage
+        errorMessage,
       };
     } finally {
       context.logger?.debug('action.question_reply.finished', { latencyMs: Date.now() - startedAt });
@@ -231,18 +176,22 @@ export class QuestionReplyAction implements Action<QuestionReplyPayload> {
 
       if (message.includes('timeout') || message.includes('timed out')) {
         return 'SDK_TIMEOUT';
-      } else if (message.includes('unreachable') || message.includes('connect') || message.includes('connection')) {
+      }
+      if (message.includes('unreachable') || message.includes('connect') || message.includes('connection')) {
         return 'SDK_UNREACHABLE';
-      } else if (message.includes('not found') || message.includes('session') && message.includes('not found')) {
+      }
+      if (message.includes('not found') || (message.includes('session') && message.includes('not found'))) {
         return 'INVALID_PAYLOAD';
-      } else if (message.includes('abort') || message.includes('cancelled')) {
+      }
+      if (message.includes('abort') || message.includes('cancelled')) {
         return 'INVALID_PAYLOAD';
       }
     } else if (typeof error === 'string') {
       const message = error.toLowerCase();
       if (message.includes('timeout') || message.includes('timed out')) {
         return 'SDK_TIMEOUT';
-      } else if (message.includes('unreachable') || message.includes('connect')) {
+      }
+      if (message.includes('unreachable') || message.includes('connect')) {
         return 'SDK_UNREACHABLE';
       }
     }

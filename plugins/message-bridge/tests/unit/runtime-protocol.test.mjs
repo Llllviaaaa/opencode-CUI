@@ -73,7 +73,7 @@ describe('runtime protocol strictness', () => {
     expect(sent).toHaveLength(0);
   });
 
-  test('rejects permission_reply payloads with legacy response values', async () => {
+  test('rejects permission_reply payloads with unsupported response values', async () => {
     const runtime = new BridgeRuntime({
       client: {
         session: {
@@ -93,7 +93,7 @@ describe('runtime protocol strictness', () => {
       type: 'invoke',
       welinkSessionId: 'perm-42',
       action: 'permission_reply',
-      payload: { toolSessionId: 'tool-42', permissionId: 'perm-1', response: 'allow' },
+      payload: { toolSessionId: 'tool-42', permissionId: 'perm-1', response: 'once' },
     });
 
     expect(sent).toHaveLength(1);
@@ -359,7 +359,7 @@ describe('runtime protocol strictness', () => {
     expect(sent[0].welinkSessionId).toBe('q-45');
   });
 
-  test('rejects invoke status_query variant', async () => {
+  test('accepts invoke status_query variant and responds with status_response', async () => {
     const runtime = new BridgeRuntime({
       client: {
         session: {
@@ -383,7 +383,7 @@ describe('runtime protocol strictness', () => {
     });
 
     expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_error');
+    expect(sent[0].type).toBe('status_response');
     expect(sent[0].welinkSessionId).toBe('status-42');
   });
 
@@ -413,7 +413,7 @@ describe('runtime protocol strictness', () => {
           sk: '',
         },
         events: {
-          allowlist: ['message.*'],
+          allowlist: ['message.updated'],
         },
       }),
       'utf8',
@@ -458,7 +458,7 @@ describe('runtime protocol strictness', () => {
     runtime.gatewayConnection = {
       send: (message, context) => sent.push({ message, context }),
     };
-    runtime.eventFilter = new EventFilter(['message.*']);
+    runtime.eventFilter = new EventFilter(['message.part.updated']);
     runtime.stateManager.setState('READY');
 
     await runtime.handleEvent({
@@ -509,7 +509,7 @@ describe('runtime protocol strictness', () => {
     runtime.gatewayConnection = {
       send: (message, context) => sent.push({ message, context }),
     };
-    runtime.eventFilter = new EventFilter(['session.*']);
+    runtime.eventFilter = new EventFilter(['session.idle']);
     runtime.stateManager.setState('READY');
 
     await runtime.handleEvent({

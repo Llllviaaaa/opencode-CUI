@@ -1,66 +1,27 @@
 import {
   Action,
   AbortSessionPayload,
-  ValidationResult,
+  AbortSessionResultData,
   ActionResult,
   ActionContext,
   ErrorCode,
   isOpencodeClient,
   hasError,
   safeExecute,
-  stateToErrorCode
+  stateToErrorCode,
 } from '../types';
 import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
-/**
- * Concrete implementation of abort_session action.
- */
-export class AbortSessionAction implements Action<AbortSessionPayload> {
-  name: string = 'abort_session';
+export class AbortSessionAction implements Action<'abort_session', AbortSessionPayload, AbortSessionResultData> {
+  name: 'abort_session' = 'abort_session';
 
-  private normalizePayload(payload: unknown): { toolSessionId: string } | null {
-    if (!payload || typeof payload !== 'object') {
-      return null;
-    }
-
-    const p = payload as { toolSessionId?: unknown };
-    const toolSessionId =
-      typeof p.toolSessionId === 'string' && p.toolSessionId.trim()
-        ? p.toolSessionId
-        : null;
-
-    if (!toolSessionId) {
-      return null;
-    }
-
-    return { toolSessionId };
-  }
-
-  validate(payload: unknown): ValidationResult {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        valid: false,
-        error: 'abort_session payload requires toolSessionId'
-      };
-    }
-
-    return { valid: true };
-  }
-
-  async execute(payload: AbortSessionPayload, context: ActionContext): Promise<ActionResult> {
-    const normalized = this.normalizePayload(payload);
-    if (!normalized) {
-      return {
-        success: false,
-        errorCode: 'INVALID_PAYLOAD',
-        errorMessage: 'abort_session payload requires toolSessionId'
-      };
-    }
-
+  async execute(
+    payload: AbortSessionPayload,
+    context: ActionContext,
+  ): Promise<ActionResult<AbortSessionResultData>> {
     const startedAt = Date.now();
     context.logger?.info('action.abort_session.started', {
-      toolSessionId: normalized.toolSessionId,
+      toolSessionId: payload.toolSessionId,
     });
 
     try {
@@ -69,7 +30,7 @@ export class AbortSessionAction implements Action<AbortSessionPayload> {
         return {
           success: false,
           errorCode: stateToErrorCode(context.connectionState),
-          errorMessage: `Agent not ready. Current state: ${context.connectionState}`
+          errorMessage: `Agent not ready. Current state: ${context.connectionState}`,
         };
       }
 
@@ -78,23 +39,22 @@ export class AbortSessionAction implements Action<AbortSessionPayload> {
         return {
           success: false,
           errorCode: 'SDK_UNREACHABLE',
-          errorMessage: 'Valid OpenCode client not available in context'
+          errorMessage: 'Valid OpenCode client not available in context',
         };
       }
 
-      const client = context.client;
       const executionResult = await safeExecute(
-        client.session.abort({
-          path: { id: normalized.toolSessionId }
+        context.client.session.abort({
+          path: { id: payload.toolSessionId },
         }),
-        (error) => `Abort session failed: ${getErrorMessage(error)}`
+        (error) => `Abort session failed: ${getErrorMessage(error)}`,
       );
 
       if (executionResult.success) {
         if (!hasError(executionResult.data)) {
           return {
             success: true,
-            data: { sessionId: normalized.toolSessionId, aborted: true }
+            data: { sessionId: payload.toolSessionId, aborted: true },
           };
         }
 
@@ -105,7 +65,7 @@ export class AbortSessionAction implements Action<AbortSessionPayload> {
         const errorMessage = errorField !== undefined ? getErrorMessage(errorField) : 'Unknown error';
 
         context.logger?.error('action.abort_session.sdk_error_payload', {
-          toolSessionId: normalized.toolSessionId,
+          toolSessionId: payload.toolSessionId,
           error: errorMessage,
           ...(errorField !== undefined ? getErrorDetailsForLog(errorField) : {}),
           latencyMs: Date.now() - startedAt,
@@ -113,35 +73,34 @@ export class AbortSessionAction implements Action<AbortSessionPayload> {
         return {
           success: false,
           errorCode: 'SDK_UNREACHABLE',
-          errorMessage: `Failed to abort session: ${errorMessage}`
+          errorMessage: `Failed to abort session: ${errorMessage}`,
         };
       }
 
       context.logger?.error('action.abort_session.failed', {
-        toolSessionId: normalized.toolSessionId,
+        toolSessionId: payload.toolSessionId,
         error: executionResult.error,
         latencyMs: Date.now() - startedAt,
       });
       return {
         success: false,
         errorCode: 'SDK_UNREACHABLE',
-        errorMessage: executionResult.error
+        errorMessage: executionResult.error,
       };
     } catch (error) {
       const errorCode = this.errorMapper(error);
       const errorMessage = getErrorMessage(error);
       context.logger?.error('action.abort_session.exception', {
-        toolSessionId: normalized.toolSessionId,
+        toolSessionId: payload.toolSessionId,
         error: errorMessage,
         errorCode,
         ...getErrorDetailsForLog(error),
         latencyMs: Date.now() - startedAt,
       });
-
       return {
         success: false,
         errorCode,
-        errorMessage
+        errorMessage,
       };
     } finally {
       context.logger?.debug('action.abort_session.finished', { latencyMs: Date.now() - startedAt });
@@ -154,9 +113,11 @@ export class AbortSessionAction implements Action<AbortSessionPayload> {
 
       if (message.includes('timeout') || message.includes('network')) {
         return 'SDK_TIMEOUT';
-      } else if (message.includes('unreachable') || message.includes('connect')) {
+      }
+      if (message.includes('unreachable') || message.includes('connect')) {
         return 'SDK_UNREACHABLE';
-      } else if (message.includes('not found') || message.includes('session')) {
+      }
+      if (message.includes('not found') || message.includes('session')) {
         return 'INVALID_PAYLOAD';
       }
     }

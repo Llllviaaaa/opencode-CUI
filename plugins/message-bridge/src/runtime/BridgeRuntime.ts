@@ -1,13 +1,17 @@
+import { randomUUID } from 'crypto';
 import os from 'os';
 import {
   ActionResult,
   StatusQueryPayload,
+  StatusQueryResultData,
 } from '../types';
 import { ChatAction } from '../action/ChatAction';
 import { CreateSessionAction } from '../action/CreateSessionAction';
 import { CloseSessionAction } from '../action/CloseSessionAction';
 import { PermissionReplyAction } from '../action/PermissionReplyAction';
 import { StatusQueryAction } from '../action/StatusQueryAction';
+import { AbortSessionAction } from '../action/AbortSessionAction';
+import { QuestionReplyAction } from '../action/QuestionReplyAction';
 import { DefaultActionRouter } from '../action/ActionRouter';
 import { DefaultActionRegistry } from '../action/ActionRegistry';
 import { loadConfig } from '../config';
@@ -40,6 +44,27 @@ export interface BridgeRuntimeStartOptions {
   abortSignal?: AbortSignal;
 }
 
+interface EventLogFields {
+  eventType: string;
+  toolSessionId: string;
+  opencodeMessageId?: string;
+  opencodePartId?: string;
+  role?: string | null;
+  status?: string | null;
+  partType?: string | null;
+  toolCallId?: string | null;
+  deltaBytes?: number | null;
+}
+
+interface DownstreamLogFields {
+  messageType?: string;
+  gatewayMessageId?: string;
+  action?: string;
+  sessionId?: string;
+  welinkSessionId?: string;
+  toolSessionId?: string;
+}
+
 export class BridgeRuntime {
   private readonly actionRouter = new DefaultActionRouter();
   private readonly stateManager = new DefaultStateManager();
@@ -50,7 +75,7 @@ export class BridgeRuntime {
   private eventFilter: EventFilter | null = null;
   private started = false;
   private readonly sdkClient: unknown;
-  private readonly logger: BridgeLogger;
+  private logger: BridgeLogger;
 
   constructor(private readonly options: BridgeRuntimeOptions) {
     this.logger = new AppLogger(options.client, { component: 'runtime' }, undefined, undefined, options.debug);
@@ -74,7 +99,16 @@ export class BridgeRuntime {
     let config;
     try {
       this.logger.info('runtime.config.loading', { workspacePath: this.options.workspacePath });
-      config = await loadConfig(this.options.workspacePath);
+      config = await loadConfig(this.options.workspacePath, this.logger);
+      if (this.options.debug === undefined && typeof config.debug === 'boolean') {
+        this.logger = new AppLogger(
+          this.options.client,
+          { component: 'runtime' },
+          this.logger.getTraceId(),
+          undefined,
+          config.debug,
+        );
+      }
       this.logger.info('runtime.config.loaded_successfully', {
         config_version: config.config_version,
         enabled: config.enabled,
@@ -175,41 +209,51 @@ export class BridgeRuntime {
   }
 
   async handleEvent(event: BridgeEvent): Promise<void> {
-    this.logger.debug('event.received', {
-      eventType: event.type,
-    });
-    if (!this.stateManager.isReady() || !this.gatewayConnection || !this.eventFilter) {
-      this.logger.debug('event.ignored_not_ready', {
-        state: this.stateManager.getState(),
-      });
-      return;
-    }
-
-    if (!this.eventFilter.isAllowed(event.type)) {
-      this.logger.warn('event.rejected_allowlist', { eventType: event.type });
-      return;
-    }
-
     const extraction = extractUpstreamEvent(event, this.logger);
     if (!extraction.ok) {
       return;
     }
 
     const normalized = extraction.value;
-    this.logEventForwardingDetail(normalized);
-    this.logger.info('event.forwarding', {
-      eventType: normalized.common.eventType,
-      toolSessionId: normalized.common.toolSessionId,
-    });
-    this.gatewayConnection.send({
-      type: 'tool_event',
-      toolSessionId: normalized.common.toolSessionId,
-      event: normalized.raw,
-    });
-    this.logger.debug('event.forwarded', {
-      eventType: normalized.common.eventType,
-      toolSessionId: normalized.common.toolSessionId,
-    });
+    const eventFields = this.buildEventLogFields(normalized);
+    const eventTraceId = eventFields.opencodeMessageId ?? this.logger.getTraceId();
+    const eventLogger = this.createMessageLogger(eventFields, eventTraceId);
+    eventLogger.debug('event.received');
+
+    if (!this.stateManager.isReady() || !this.gatewayConnection || !this.eventFilter) {
+      eventLogger.debug('event.ignored_not_ready', {
+        state: this.stateManager.getState(),
+      });
+      return;
+    }
+
+    if (!this.eventFilter.isAllowed(event.type)) {
+      eventLogger.warn('event.rejected_allowlist');
+      return;
+    }
+
+    const bridgeMessageId = randomUUID();
+    const forwardingLogger = this.createMessageLogger(eventFields, bridgeMessageId);
+    this.logEventForwardingDetail(normalized, forwardingLogger);
+    forwardingLogger.info('event.forwarding');
+    this.gatewayConnection.send(
+      {
+        type: 'tool_event',
+        toolSessionId: normalized.common.toolSessionId,
+        event: normalized.raw,
+      },
+      {
+        traceId: bridgeMessageId,
+        runtimeTraceId: this.logger.getTraceId(),
+        gatewayMessageId: bridgeMessageId,
+        toolSessionId: normalized.common.toolSessionId,
+        eventType: normalized.common.eventType,
+        opencodeMessageId: eventFields.opencodeMessageId,
+        opencodePartId: eventFields.opencodePartId,
+        toolCallId: eventFields.toolCallId ?? undefined,
+      },
+    );
+    forwardingLogger.debug('event.forwarded');
   }
 
   getStarted(): boolean {
@@ -223,6 +267,8 @@ export class BridgeRuntime {
       new CloseSessionAction(),
       new PermissionReplyAction(),
       new StatusQueryAction(),
+      new AbortSessionAction(),
+      new QuestionReplyAction(),
     ] as const;
 
     for (const action of actions) {
@@ -232,14 +278,17 @@ export class BridgeRuntime {
 
   private async handleDownstreamMessage(raw: unknown): Promise<void> {
     // Runtime orchestrates protocol flow but does not own raw schema parsing.
-    if (!this.gatewayConnection || !this.envelopeBuilder) {
+    if (!this.gatewayConnection) {
       this.logger.warn('runtime.downstream_ignored_no_connection');
       return;
     }
     const startedAt = Date.now();
+    const downstreamFields = this.extractDownstreamLogFields(raw);
+    const traceId = downstreamFields.gatewayMessageId ?? this.logger.getTraceId();
+    const messageLogger = this.createMessageLogger(downstreamFields, traceId);
     const normalized = normalizeDownstreamMessage(raw, this.logger);
     if (!normalized.ok) {
-      this.logger.warn('runtime.downstream_ignored_non_protocol', {
+      messageLogger.warn('runtime.downstream_ignored_non_protocol', {
         messageType: normalized.error.messageType ?? 'unknown',
         hasSessionId: !!normalized.error.sessionId,
       });
@@ -248,6 +297,13 @@ export class BridgeRuntime {
         this.sendToolError(
           { success: false, errorCode: 'INVALID_PAYLOAD', errorMessage: 'Invalid invoke payload shape' },
           normalized.error.sessionId,
+          {
+            logger: messageLogger,
+            traceId,
+            gatewayMessageId: downstreamFields.gatewayMessageId,
+            action: downstreamFields.action,
+            toolSessionId: downstreamFields.toolSessionId,
+          },
         );
       }
       return;
@@ -255,11 +311,24 @@ export class BridgeRuntime {
     const message = normalized.value;
 
     if (message.type === 'status_query') {
-      this.logger.info('runtime.status_query.received', { sessionId: message.sessionId });
+      const statusLogger = this.createMessageLogger(
+        { ...downstreamFields, sessionId: message.sessionId, welinkSessionId: message.sessionId },
+        traceId,
+      );
+      statusLogger.info('runtime.status_query.received');
       const payload: StatusQueryPayload = { sessionId: message.sessionId };
-      const result = await this.actionRouter.route('status_query', payload, this.buildActionContext(message.sessionId));
+      const result = await this.actionRouter.route(
+        'status_query',
+        payload,
+        this.buildActionContext(message.sessionId, statusLogger),
+      );
       if (!result.success) {
-        this.sendToolError(result, message.sessionId);
+        this.sendToolError(result, message.sessionId, {
+          logger: statusLogger,
+          traceId,
+          gatewayMessageId: downstreamFields.gatewayMessageId,
+          action: 'status_query',
+        });
         return;
       }
 
@@ -267,29 +336,59 @@ export class BridgeRuntime {
         type: 'status_response',
         opencodeOnline: result.data.opencodeOnline,
         sessionId: message.sessionId,
-        envelope: this.envelopeBuilder.build(message.sessionId),
-      });
-      this.logger.info('runtime.status_query.responded', {
+        welinkSessionId: message.sessionId,
+        envelope: this.ensureEnvelopeBuilder().build(message.sessionId),
+      }, {
+        traceId,
+        runtimeTraceId: this.logger.getTraceId(),
+        gatewayMessageId: downstreamFields.gatewayMessageId,
         sessionId: message.sessionId,
+        welinkSessionId: message.sessionId,
+        action: 'status_query',
+      });
+      statusLogger.info('runtime.status_query.responded', {
         latencyMs: Date.now() - startedAt,
       });
       return;
     }
 
-    this.logger.info('runtime.invoke.received', { action: message.action });
     const skillSessionId =
       message.sessionId ??
       (message.envelope as { sessionId?: string } | undefined)?.sessionId;
+    const toolSessionId =
+      'payload' in message &&
+      message.payload &&
+      typeof message.payload === 'object' &&
+      'toolSessionId' in message.payload &&
+      typeof (message.payload as { toolSessionId?: unknown }).toolSessionId === 'string'
+        ? (message.payload as { toolSessionId: string }).toolSessionId
+        : undefined;
+    const invokeLogger = this.createMessageLogger(
+      {
+        ...downstreamFields,
+        sessionId: skillSessionId,
+        welinkSessionId: skillSessionId,
+        action: message.action,
+        toolSessionId,
+      },
+      traceId,
+    );
+    invokeLogger.info('runtime.invoke.received');
 
     if (message.action === 'create_session') {
       const result = await this.actionRouter.route(
         message.action,
         message.payload,
-        this.buildActionContext(skillSessionId),
+        this.buildActionContext(skillSessionId, invokeLogger),
       );
 
       if (!result.success) {
-        this.sendToolError(result, skillSessionId);
+        this.sendToolError(result, skillSessionId, {
+          logger: invokeLogger,
+          traceId,
+          gatewayMessageId: downstreamFields.gatewayMessageId,
+          action: message.action,
+        });
         return;
       }
 
@@ -298,6 +397,12 @@ export class BridgeRuntime {
         this.sendToolError(
           { success: false, errorCode: 'SDK_UNREACHABLE', errorMessage: 'create_session returned without sessionId' },
           skillSessionId,
+          {
+            logger: invokeLogger,
+            traceId,
+            gatewayMessageId: downstreamFields.gatewayMessageId,
+            action: message.action,
+          },
         );
         return;
       }
@@ -305,6 +410,12 @@ export class BridgeRuntime {
         this.sendToolError(
           { success: false, errorCode: 'INVALID_PAYLOAD', errorMessage: 'create_session missing skill sessionId' },
           undefined,
+          {
+            logger: invokeLogger,
+            traceId,
+            gatewayMessageId: downstreamFields.gatewayMessageId,
+            action: message.action,
+          },
         );
         return;
       }
@@ -312,11 +423,20 @@ export class BridgeRuntime {
       this.gatewayConnection.send({
         type: 'session_created',
         sessionId: skillSessionId,
+        welinkSessionId: skillSessionId,
         toolSessionId,
         session: result.data,
-        envelope: this.envelopeBuilder.build(skillSessionId),
+        envelope: this.ensureEnvelopeBuilder().build(skillSessionId),
+      }, {
+        traceId,
+        runtimeTraceId: this.logger.getTraceId(),
+        gatewayMessageId: downstreamFields.gatewayMessageId,
+        sessionId: skillSessionId,
+        welinkSessionId: skillSessionId,
+        toolSessionId,
+        action: message.action,
       });
-      this.logger.info('runtime.invoke.completed', {
+      invokeLogger.info('runtime.invoke.completed', {
         action: message.action,
         sessionId: skillSessionId,
         toolSessionId,
@@ -328,28 +448,60 @@ export class BridgeRuntime {
     const result = await this.actionRouter.route(
       message.action,
       message.payload,
-      this.buildActionContext(skillSessionId),
+      this.buildActionContext(skillSessionId, invokeLogger),
     );
 
     if (!result.success) {
-      this.sendToolError(result, skillSessionId);
+      this.sendToolError(result, skillSessionId, {
+        logger: invokeLogger,
+        traceId,
+        gatewayMessageId: downstreamFields.gatewayMessageId,
+        action: message.action,
+        toolSessionId,
+      });
       return;
     }
 
-    this.logger.info('runtime.invoke.completed', {
+    if (message.action === 'status_query') {
+      const statusData = result.data as StatusQueryResultData | undefined;
+      this.gatewayConnection.send({
+        type: 'status_response',
+        opencodeOnline: !!statusData?.opencodeOnline,
+        sessionId: skillSessionId,
+        welinkSessionId: skillSessionId,
+        envelope: this.ensureEnvelopeBuilder().build(skillSessionId),
+      }, {
+        traceId,
+        runtimeTraceId: this.logger.getTraceId(),
+        gatewayMessageId: downstreamFields.gatewayMessageId,
+        sessionId: skillSessionId,
+        welinkSessionId: skillSessionId,
+        action: message.action,
+      });
+      invokeLogger.info('runtime.invoke.completed', {
+        action: message.action,
+        sessionId: skillSessionId,
+        toolSessionId,
+        latencyMs: Date.now() - startedAt,
+      });
+      return;
+    }
+
+    invokeLogger.info('runtime.invoke.completed', {
       action: message.action,
       sessionId: skillSessionId,
+      toolSessionId,
       latencyMs: Date.now() - startedAt,
     });
   }
 
-  private buildActionContext(sessionId?: string) {
+  private buildActionContext(sessionId?: string, logger: BridgeLogger = this.logger) {
     return {
       client: this.sdkClient,
       connectionState: this.stateManager.getState(),
       agentId: this.stateManager.getAgentId() ?? 'unknown-agent',
       sessionId,
-      logger: this.logger.child({
+      logger: logger.child({
         component: 'action',
         agentId: this.stateManager.getAgentId() ?? 'unknown-agent',
         sessionId,
@@ -357,20 +509,29 @@ export class BridgeRuntime {
     };
   }
 
-  private logEventForwardingDetail(normalized: NormalizedUpstreamEvent): void {
+  private logEventForwardingDetail(normalized: NormalizedUpstreamEvent, logger: BridgeLogger = this.logger): void {
     const detail = this.buildEventForwardingDetail(normalized);
-    this.logger.debug('event.forwarding.detail', detail);
+    logger.debug('event.forwarding.detail', detail as unknown as Record<string, unknown>);
   }
 
-  private buildEventForwardingDetail(normalized: NormalizedUpstreamEvent): Record<string, unknown> {
+  private buildEventForwardingDetail(normalized: NormalizedUpstreamEvent): EventLogFields {
     const extra = normalized.extra;
+    const raw = normalized.raw as {
+      properties?: {
+        delta?: unknown;
+        part?: { type?: unknown; callID?: unknown };
+      };
+    };
     return {
       eventType: normalized.common.eventType,
       toolSessionId: normalized.common.toolSessionId,
-      messageId: this.getMessageId(extra),
-      partId: this.getPartId(extra),
+      opencodeMessageId: this.getMessageId(extra) ?? undefined,
+      opencodePartId: this.getPartId(extra) ?? undefined,
       role: this.getRole(extra),
       status: this.getStatus(extra),
+      partType: typeof raw.properties?.part?.type === 'string' ? raw.properties.part.type : null,
+      toolCallId: typeof raw.properties?.part?.callID === 'string' ? raw.properties.part.callID : undefined,
+      deltaBytes: typeof raw.properties?.delta === 'string' ? Buffer.byteLength(raw.properties.delta, 'utf8') : null,
     };
   }
 
@@ -402,20 +563,93 @@ export class BridgeRuntime {
     return extra && extra.kind === 'session.status' ? extra.status : null;
   }
 
-  private sendToolError(result: ActionResult, sessionId?: string): void {
-    if (!this.gatewayConnection || !this.envelopeBuilder) {
+  private buildEventLogFields(normalized: NormalizedUpstreamEvent): EventLogFields {
+    return this.buildEventForwardingDetail(normalized);
+  }
+
+  private extractDownstreamLogFields(raw: unknown): DownstreamLogFields {
+    if (!raw || typeof raw !== 'object') {
+      return {};
+    }
+    const message = raw as Record<string, unknown>;
+    const payload = typeof message.payload === 'object' && message.payload ? (message.payload as Record<string, unknown>) : undefined;
+    const sessionId =
+      typeof message.sessionId === 'string'
+        ? message.sessionId
+        : typeof message.welinkSessionId === 'string'
+          ? message.welinkSessionId
+          : undefined;
+
+    return {
+      messageType: typeof message.type === 'string' ? message.type : undefined,
+      gatewayMessageId: typeof message.messageId === 'string' ? message.messageId : undefined,
+      action: typeof message.action === 'string' ? message.action : undefined,
+      sessionId,
+      welinkSessionId: sessionId,
+      toolSessionId: typeof payload?.toolSessionId === 'string' ? payload.toolSessionId : undefined,
+    };
+  }
+
+  private createMessageLogger(
+    baseFields: EventLogFields | DownstreamLogFields | Record<string, unknown>,
+    traceId: string,
+  ): BridgeLogger {
+    const baseLogger = this.logger.child(baseFields as Record<string, unknown>);
+    const withTrace = (method: 'debug' | 'info' | 'warn' | 'error') =>
+      (message: string, extra?: Record<string, unknown>) => baseLogger[method](message, { traceId, ...(extra ?? {}) });
+
+    return {
+      debug: withTrace('debug'),
+      info: withTrace('info'),
+      warn: withTrace('warn'),
+      error: withTrace('error'),
+      child: (extra: Record<string, unknown>) => this.createMessageLogger({ ...baseFields, ...extra }, traceId),
+      getTraceId: () => traceId,
+    };
+  }
+
+  private ensureEnvelopeBuilder(): EnvelopeBuilder {
+    if (!this.envelopeBuilder) {
+      const agentId = this.stateManager.getAgentId() ?? this.stateManager.generateAndBindAgentId();
+      this.envelopeBuilder = new EnvelopeBuilder(agentId);
+    }
+    return this.envelopeBuilder;
+  }
+
+  private sendToolError(
+    result: ActionResult,
+    sessionId?: string,
+    logOptions?: {
+      logger?: BridgeLogger;
+      traceId?: string;
+      gatewayMessageId?: string;
+      action?: string;
+      toolSessionId?: string;
+    },
+  ): void {
+    if (!this.gatewayConnection) {
       this.logger.warn('runtime.tool_error.skipped_no_connection', { sessionId });
       return;
     }
 
     const error = result.success ? 'Unknown error' : result.errorMessage ?? 'Unknown error';
-    this.logger.error('runtime.tool_error.sending', { sessionId, error });
+    const logger = logOptions?.logger ?? this.logger;
+    logger.error('runtime.tool_error.sending', { sessionId, welinkSessionId: sessionId, error });
 
     this.gatewayConnection.send({
       type: 'tool_error',
       sessionId,
+      welinkSessionId: sessionId,
       error,
-      envelope: this.envelopeBuilder.build(sessionId),
+      envelope: this.ensureEnvelopeBuilder().build(sessionId),
+    }, {
+      traceId: logOptions?.traceId,
+      runtimeTraceId: this.logger.getTraceId(),
+      gatewayMessageId: logOptions?.gatewayMessageId,
+      sessionId,
+      welinkSessionId: sessionId,
+      action: logOptions?.action,
+      toolSessionId: logOptions?.toolSessionId,
     });
   }
 }

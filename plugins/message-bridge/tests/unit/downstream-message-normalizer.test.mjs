@@ -172,4 +172,58 @@ describe('downstream message normalizer', () => {
     expect(result.error.code).toBe('invalid_field_type');
     expect(result.error.field).toBe('payload.response');
   });
+
+  test('normalizes invoke/abort_session payload', () => {
+    const { logger } = createLogger();
+    const result = normalizeDownstreamMessage(
+      {
+        type: 'invoke',
+        action: 'abort_session',
+        payload: {
+          toolSessionId: 'tool-42',
+        },
+      },
+      logger,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.value).toEqual({
+      type: 'invoke',
+      action: 'abort_session',
+      payload: {
+        toolSessionId: 'tool-42',
+      },
+      sessionId: undefined,
+      envelope: undefined,
+    });
+  });
+
+  test('normalizes invoke/question_reply payload', () => {
+    const { logger } = createLogger();
+    const result = normalizeDownstreamMessage(
+      {
+        type: 'invoke',
+        action: 'question_reply',
+        payload: {
+          toolSessionId: 'tool-42',
+          toolCallId: 'call-7',
+          answer: 'approved',
+        },
+      },
+      logger,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.value).toEqual({
+      type: 'invoke',
+      action: 'question_reply',
+      payload: {
+        toolSessionId: 'tool-42',
+        toolCallId: 'call-7',
+        answer: 'approved',
+      },
+      sessionId: undefined,
+      envelope: undefined,
+    });
+  });
 });

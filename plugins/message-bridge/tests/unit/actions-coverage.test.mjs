@@ -5,6 +5,8 @@ import { CreateSessionAction } from '../../dist/action/CreateSessionAction.js';
 import { CloseSessionAction } from '../../dist/action/CloseSessionAction.js';
 import { PermissionReplyAction } from '../../dist/action/PermissionReplyAction.js';
 import { StatusQueryAction } from '../../dist/action/StatusQueryAction.js';
+import { AbortSessionAction } from '../../dist/action/AbortSessionAction.js';
+import { QuestionReplyAction } from '../../dist/action/QuestionReplyAction.js';
 
 function readyContext(client, overrides = {}) {
   return {
@@ -196,5 +198,77 @@ describe('StatusQueryAction coverage', () => {
     );
     expect(down.success).toBe(true);
     expect(down.data.opencodeOnline).toBe(false);
+  });
+});
+
+describe('AbortSessionAction coverage', () => {
+  test('execute success path', async () => {
+    const action = new AbortSessionAction();
+    const calls = [];
+    const client = {
+      session: {
+        create: async () => ({}),
+        abort: async (options) => {
+          calls.push(options);
+          return { data: { aborted: true } };
+        },
+        prompt: async () => ({}),
+      },
+      postSessionIdPermissionsPermissionId: async () => ({}),
+    };
+
+    const result = await action.execute({ toolSessionId: 'abort-1' }, readyContext(client));
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual({ sessionId: 'abort-1', aborted: true });
+    expect(calls[0]).toEqual({ path: { id: 'abort-1' } });
+  });
+});
+
+describe('QuestionReplyAction coverage', () => {
+  test('execute resolves pending request and replies through raw question API', async () => {
+    const action = new QuestionReplyAction();
+    const getCalls = [];
+    const postCalls = [];
+    const client = {
+      session: {
+        create: async () => ({}),
+        abort: async () => ({}),
+        prompt: async () => ({}),
+      },
+      _client: {
+        get: async (options) => {
+          getCalls.push(options);
+          return {
+            data: [
+              {
+                id: 'req-1',
+                sessionID: 'tool-9',
+                tool: { callID: 'call-1' },
+              },
+            ],
+          };
+        },
+        post: async (options) => {
+          postCalls.push(options);
+          return { data: { ok: true } };
+        },
+      },
+      postSessionIdPermissionsPermissionId: async () => ({}),
+    };
+
+    const result = await action.execute(
+      { toolSessionId: 'tool-9', toolCallId: 'call-1', answer: 'ship it' },
+      readyContext(client),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual({ requestId: 'req-1', replied: true });
+    expect(getCalls[0]).toEqual({ url: '/question' });
+    expect(postCalls[0]).toEqual({
+      url: '/question/{requestID}/reply',
+      path: { requestID: 'req-1' },
+      body: { answers: [['ship it']] },
+      headers: { 'Content-Type': 'application/json' },
+    });
   });
 });
