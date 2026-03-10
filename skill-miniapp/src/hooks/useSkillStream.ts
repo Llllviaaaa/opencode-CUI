@@ -258,6 +258,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   const assemblersRef = useRef(new Map<string, StreamAssembler>());
   const activeMessageIdsRef = useRef(new Set<string>());
   const knownUserMessageIdsRef = useRef(new Set<string>());
+  const pendingTurnRef = useRef(false);
   const sessionIdRef = useRef<string | null>(sessionId);
 
   useEffect(() => {
@@ -272,9 +273,46 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
     );
   }, [messages]);
 
+  useEffect(() => {
+    if (!isStreaming) {
+      return;
+    }
+
+    const hasStreamingMessages = messages.some((message) => {
+      if (message.isStreaming) {
+        return true;
+      }
+
+      return Array.isArray(message.parts) && message.parts.some((part) => part.isStreaming);
+    });
+
+    if (!hasStreamingMessages && !pendingTurnRef.current) {
+      assemblersRef.current.clear();
+      activeMessageIdsRef.current.clear();
+      setIsStreaming(false);
+    }
+  }, [isStreaming, messages]);
+
   const resetStreamingState = useCallback(() => {
+    pendingTurnRef.current = false;
     assemblersRef.current.clear();
     activeMessageIdsRef.current.clear();
+    setIsStreaming(false);
+  }, []);
+
+  const forceFinishStreamingState = useCallback(() => {
+    pendingTurnRef.current = false;
+    assemblersRef.current.clear();
+    activeMessageIdsRef.current.clear();
+    setMessages((prev) =>
+      prev.map((message) => ({
+        ...message,
+        isStreaming: false,
+        parts: Array.isArray(message.parts)
+          ? message.parts.map((part) => ({ ...part, isStreaming: false }))
+          : message.parts,
+      })),
+    );
     setIsStreaming(false);
   }, []);
 
@@ -308,15 +346,17 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
     }
 
     activeMessageIdsRef.current.delete(messageId);
-    if (activeMessageIdsRef.current.size === 0) {
-      setIsStreaming(false);
-    }
+    setIsStreaming(pendingTurnRef.current || activeMessageIdsRef.current.size > 0);
   }, []);
 
   const finalizeAllStreamingMessages = useCallback(() => {
     const activeIds = Array.from(activeMessageIdsRef.current);
+    if (activeIds.length === 0) {
+      forceFinishStreamingState();
+      return;
+    }
     activeIds.forEach((messageId) => finalizeMessage(messageId));
-  }, [finalizeMessage]);
+  }, [finalizeMessage, forceFinishStreamingState]);
 
   const applyStreamedMessage = useCallback((msg: StreamMessage) => {
     const messageId = msg.messageId ?? msg.sourceMessageId ?? genId('stream');
@@ -338,7 +378,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
     } else {
       activeMessageIdsRef.current.delete(messageId);
     }
-    setIsStreaming(activeMessageIdsRef.current.size > 0);
+    setIsStreaming(pendingTurnRef.current || activeMessageIdsRef.current.size > 0);
 
     const content = assembler.getText();
     const parts = assembler.getParts();
@@ -442,6 +482,12 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
 
       case 'step.done':
         if (msg.messageId) {
+          const assembler = assemblersRef.current.get(msg.messageId);
+          const hasActiveStreaming = assembler?.hasActiveStreaming() ?? false;
+          if (!hasActiveStreaming) {
+            activeMessageIdsRef.current.delete(msg.messageId);
+            setIsStreaming(pendingTurnRef.current || activeMessageIdsRef.current.size > 0);
+          }
           setMessages((prev) =>
             prev.map((message) =>
               message.id === msg.messageId
@@ -462,14 +508,14 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
 
       case 'session.status':
         if (msg.sessionStatus === 'idle' || msg.sessionStatus === 'completed') {
-          finalizeAllStreamingMessages();
+          forceFinishStreamingState();
         } else if (msg.sessionStatus === 'busy' || msg.sessionStatus === 'retry') {
           setIsStreaming(true);
         }
         break;
 
       case 'session.error':
-        finalizeAllStreamingMessages();
+        forceFinishStreamingState();
         setError(msg.error ?? 'Session error');
         break;
 
@@ -485,7 +531,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
         break;
 
       case 'error':
-        finalizeAllStreamingMessages();
+        forceFinishStreamingState();
         setError(msg.error ?? 'Unknown stream error');
         break;
 
@@ -503,7 +549,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
       default:
         break;
     }
-  }, [applyStreamedMessage, finalizeAllStreamingMessages, resetStreamingState, restoreStreamingMessage]);
+  }, [applyStreamedMessage, finalizeAllStreamingMessages, forceFinishStreamingState, resetStreamingState, restoreStreamingMessage]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -611,6 +657,8 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
 
       setError(null);
       finalizeAllStreamingMessages();
+      pendingTurnRef.current = true;
+      setIsStreaming(true);
 
       const tempId = genId('user');
       const optimisticMessage: Message = {
@@ -641,6 +689,8 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
           return upsertMessage(nextMessages, normalized);
         });
       } catch (err) {
+        pendingTurnRef.current = false;
+        setIsStreaming(activeMessageIdsRef.current.size > 0);
         const message = err instanceof Error ? err.message : 'Failed to send message';
         setError(message);
       }
@@ -655,9 +705,13 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
       }
 
       setError(null);
+      pendingTurnRef.current = true;
+      setIsStreaming(true);
       try {
         await api.replyPermission(sessionId, permissionId, response);
       } catch (err) {
+        pendingTurnRef.current = false;
+        setIsStreaming(activeMessageIdsRef.current.size > 0);
         const message = err instanceof Error ? err.message : 'Failed to reply permission';
         setError(message);
       }

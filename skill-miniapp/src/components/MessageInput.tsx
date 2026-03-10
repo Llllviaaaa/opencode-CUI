@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 
 interface MessageInputProps {
-  onSend: (text: string) => void;
+  onSend: (text: string) => void | Promise<void>;
   disabled?: boolean;
   placeholder?: string;
 }
@@ -31,13 +31,13 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
     if (!trimmed || disabled) return;
-    onSend(trimmed);
     setText('');
     requestAnimationFrame(() => {
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
     });
+    void Promise.resolve(onSend(trimmed));
   }, [text, disabled, onSend]);
 
   const handleKeyDown = useCallback(
