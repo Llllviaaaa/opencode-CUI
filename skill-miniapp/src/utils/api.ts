@@ -254,6 +254,31 @@ export function getSession(id: string): Promise<Session> {
   return request<BackendSession>(`/api/skill/sessions/${id}`).then(normalizeSession);
 }
 
+export async function waitForSessionToolSessionId(
+  id: string,
+  options?: {
+    timeoutMs?: number;
+    intervalMs?: number;
+  },
+): Promise<Session> {
+  const timeoutMs = options?.timeoutMs ?? 10000;
+  const intervalMs = options?.intervalMs ?? 300;
+  const startedAt = Date.now();
+
+  while (true) {
+    const session = await getSession(id);
+    if (session.toolSessionId) {
+      return session;
+    }
+
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error('Timed out waiting for toolSessionId');
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 /** DELETE /api/skill/sessions/{id} */
 export function closeSession(id: string): Promise<void> {
   return request<void>(`/api/skill/sessions/${id}`, { method: 'DELETE' });
