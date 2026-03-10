@@ -156,8 +156,8 @@ type StatusResponseMessage = {
 
 Completion behavior:
 
-- `session.idle` is the only completion signal forwarded upstream
-- the bridge does not synthesize `tool_done`
+- `session.idle` continues to be forwarded upstream as `tool_event`
+- the bridge may synthesize a compat `tool_done` for legacy/UI completion consumers
 
 ## 5. Failure Semantics
 

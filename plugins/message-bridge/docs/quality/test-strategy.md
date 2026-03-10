@@ -186,7 +186,7 @@
 | UT-ENVL-002 | invoke 使用 welinkSessionId | 单元测试 | P0 | §4.4 |
 | UT-ENVL-003 | tool_error 使用扁平路由字段 | 单元测试 | P0 | §4.4 |
 | UT-ENVL-004 | status_response 仅含 opencodeOnline | 单元测试 | P0 | §4.4 |
-| UT-ENVL-005 | tool_done 不再作为活跃上行消息 | 单元测试 | P0 | §4.4 |
+| UT-ENVL-005 | tool_done 作为兼容完成消息恢复发送 | 单元测试 | P0 | §4.4 |
 | UT-ENVL-006 | tool_event 不透传 sessionId | 单元测试 | P1 | §4.4 |
 | INT-ENVL-001 | 扁平协议完整链路 | 集成测试 | P0 | §4.4 |
 | E2E-ENVL-001 | 扁平协议端到端验证 | E2E Smoke | P0 | §4.4 |
@@ -935,12 +935,12 @@ describe('INT-CONN-001', () => {
 2. 插件接收并路由到 ChatAction
 3. ChatAction 调用 SDK session.prompt()
 4. 模拟 SDK 返回成功
-5. 验证插件不会发送 tool_done，完成态仍通过事件流向 Gateway 透传
+5. 验证插件会在兼容层发送 tool_done，并保留完成态事件透传
 
 **预期结果:**
 - SDK session.prompt 被正确调用
-- 不会发送 tool_done
-- `session.idle` 或其他完成事件以 `tool_event` 发送
+- 发送单个 `tool_done`
+- `session.idle` 或其他完成事件仍以 `tool_event` 发送
 
 **测试代码:**
 ```typescript
@@ -965,8 +965,8 @@ describe('INT-ACTN-002', () => {
     // 模拟 SDK 成功回调
     await simulateSDKSuccess();
     
-    // 验证不会发送 tool_done
-    expect(gateway.receivedMessages.some((msg) => msg.type === 'tool_done')).toBe(false);
+    // 验证发送了 tool_done
+    expect(gateway.receivedMessages.some((msg) => msg.type === 'tool_done')).toBe(true);
   });
 });
 ```
@@ -1127,7 +1127,7 @@ $ docker start ai-gateway
 
 **预期结果:**
 - 完整链路时延 < 5s
-- 不发送 tool_done
+- compat 层发送单个 tool_done
 - 完成态事件仍可被 Gateway/Skill 消费
 
 **验证方式:**
@@ -1159,12 +1159,12 @@ $ curl -X POST http://skill-server/api/sessions/sess-123/chat \
 2. Gateway 转发 invoke(close_session)
 3. 插件调用 OpenCode session.delete()
 4. 单独验证 abort_session 走 session.abort()
-5. 插件不发送 tool_done
+5. 插件不为 close_session / abort_session 发送 tool_done
 
 **预期结果:**
 - close_session 触发 delete
 - abort_session 触发 abort
-- 两条路径都不发送 tool_done
+- 两条路径都不发送额外 tool_done
 
 **验证方式:**
 ```bash
@@ -1172,7 +1172,7 @@ $ curl -X POST http://skill-server/api/sessions/sess-123/chat \
 [DEBUG] Received invoke: close_session
 [DEBUG] Calling session.delete with toolSessionId: oc-xxx
 [DEBUG] session.delete completed successfully
-[INFO] No tool_done emitted
+[DEBUG] No compat.tool_done.* log expected for close_session
 ```
 
 ---
@@ -1306,7 +1306,7 @@ Release Build:
 
 **关键路径定义:**
 1. 连接建立 -> 注册 -> READY
-2. invoke(chat) -> SDK.chat -> tool_event/session.idle
+2. invoke(chat) -> SDK.chat -> tool_done + tool_event/session.idle
 3. 连接断开 -> 重连 -> 重新注册
 
 **回归频率:**

@@ -213,7 +213,15 @@ sequenceDiagram
 | `event.forwarding` | info | runtime 上行发送前 | `traceId`,`runtimeTraceId`,`eventType`,`sessionId`,`toolSessionId`,`opencodeMessageId`,`opencodePartId` | `src/runtime/BridgeRuntime.ts` |
 | `event.forwarded` | debug | runtime 上行发送后 | `traceId`,`runtimeTraceId`,`eventType`,`sessionId`,`toolSessionId`,`opencodeMessageId`,`opencodePartId` | `src/runtime/BridgeRuntime.ts` |
 
-### 4.4 router.*
+### 4.4 compat.*
+
+| message | level | 触发时机 | 关键 extra | 源码位置 |
+|---|---|---|---|---|
+| `compat.tool_done.sent` | info | compat 层发送 `tool_done` | `traceId`,`runtimeTraceId`,`toolSessionId`,`action`,`source` | `src/runtime/compat/ToolDoneCompat.ts` |
+| `compat.tool_done.skipped_duplicate` | debug | compat 层抑制重复 `tool_done` | `traceId`,`runtimeTraceId`,`toolSessionId`,`action`,`source` | `src/runtime/compat/ToolDoneCompat.ts` |
+| `compat.tool_done.fallback_from_idle` | info | `session.idle` 触发兜底 `tool_done` | `traceId`,`runtimeTraceId`,`toolSessionId`,`source` | `src/runtime/compat/ToolDoneCompat.ts` |
+
+### 4.5 router.*
 
 | message | level | 触发时机 | 关键 extra | 源码位置 |
 |---|---|---|---|---|
@@ -223,7 +231,7 @@ sequenceDiagram
 | `router.route.invalid_payload` | warn | action 参数校验失败 | `action`,`error` | `src/action/ActionRouter.ts:50` |
 | `router.route.completed` | info | action 执行完成 | `action`,`success`,`errorCode?` | `src/action/ActionRouter.ts:62` |
 
-### 4.5 action.*
+### 4.6 action.*
 
 | message | level | 触发时机 | 关键 extra | 源码位置 |
 |---|---|---|---|---|
