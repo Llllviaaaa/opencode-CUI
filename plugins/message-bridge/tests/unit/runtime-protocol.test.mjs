@@ -556,6 +556,98 @@ describe('runtime protocol strictness', () => {
     expect(sent.some((entry) => entry.message.type === 'tool_done')).toBe(false);
   });
 
+  test('runtime.start sends register with macAddress and normalized toolType', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-runtime-register-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    process.env.HOME = fakeHome;
+
+    await mkdir(join(workspace, '.opencode'), { recursive: true });
+    await writeFile(
+      join(workspace, '.opencode', 'message-bridge.json'),
+      JSON.stringify({
+        config_version: 1,
+        enabled: true,
+        gateway: {
+          url: 'ws://localhost:8081/ws/agent',
+          deviceName: 'dev',
+          macAddress: '11:22:33:44:55:66',
+          toolType: 'opencode',
+          toolVersion: '1.2.3',
+          heartbeatIntervalMs: 30000,
+          reconnect: {
+            baseMs: 1000,
+            maxMs: 30000,
+            exponential: true,
+          },
+        },
+        sdk: {
+          timeoutMs: 10000,
+        },
+        auth: {
+          ak: 'test-ak-001',
+          sk: 'test-sk-secret-001',
+        },
+        events: {
+          allowlist: ['message.updated'],
+        },
+      }),
+      'utf8',
+    );
+
+    const originalWebSocket = globalThis.WebSocket;
+    class RegisterCaptureWebSocket {
+      static OPEN = 1;
+      static instances = [];
+
+      constructor() {
+        this.readyState = 0;
+        this.sent = [];
+        RegisterCaptureWebSocket.instances.push(this);
+        setTimeout(() => {
+          this.readyState = RegisterCaptureWebSocket.OPEN;
+          this.onopen?.();
+          this.onmessage?.({ data: JSON.stringify({ type: 'register_ok' }) });
+        }, 0);
+      }
+
+      send(data) {
+        this.sent.push(JSON.parse(data));
+      }
+
+      close() {
+        this.readyState = 3;
+        this.onclose?.();
+      }
+    }
+
+    globalThis.WebSocket = RegisterCaptureWebSocket;
+    try {
+      const runtime = new BridgeRuntime({
+        workspacePath: workspace,
+        client: {},
+      });
+
+      await runtime.start();
+      await new Promise((r) => setTimeout(r, 10));
+
+      const ws = RegisterCaptureWebSocket.instances[0];
+      expect(ws.sent[0]).toEqual({
+        type: 'register',
+        deviceName: 'dev',
+        macAddress: '11:22:33:44:55:66',
+        os: expect.any(String),
+        toolType: 'OPENCODE',
+        toolVersion: '1.2.3',
+      });
+
+      runtime.stop();
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
   test('uses gatewayMessageId as traceId across downstream invoke handling', async () => {
     const appLogs = [];
     const runtime = new BridgeRuntime({

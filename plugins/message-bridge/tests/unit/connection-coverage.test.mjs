@@ -8,8 +8,9 @@ class ScriptedWebSocket {
   static instances = [];
   static scripts = [];
 
-  constructor(url) {
+  constructor(url, protocols) {
     this.url = url;
+    this.protocols = protocols;
     this.readyState = 0;
     this.sent = [];
     this.script = ScriptedWebSocket.scripts.shift() ?? { open: true };
@@ -27,10 +28,24 @@ class ScriptedWebSocket {
       }
       this.readyState = ScriptedWebSocket.OPEN;
       this.onopen?.();
+      if (this.script.autoRegisterOk !== false) {
+        const emitRegisterOk = () => {
+          this.onmessage?.({ data: JSON.stringify({ type: 'register_ok' }) });
+        };
+        if (this.script.registerOkDelayMs !== undefined) {
+          setTimeout(emitRegisterOk, this.script.registerOkDelayMs);
+        } else {
+          emitRegisterOk();
+        }
+      }
       if (this.script.closeAfterOpenMs !== undefined) {
         setTimeout(() => {
           this.readyState = ScriptedWebSocket.CLOSED;
-          this.onclose?.();
+          this.onclose?.(this.script.closeEvent ?? {
+            code: this.script.closeCode,
+            reason: this.script.closeReason,
+            wasClean: this.script.wasClean,
+          });
         }, this.script.closeAfterOpenMs);
       }
     }, this.script.openDelayMs ?? 0);
@@ -57,8 +72,9 @@ function registerMessage() {
   return {
     type: 'register',
     deviceName: 'dev',
+    macAddress: 'aa:bb:cc:dd:ee:ff',
     os: 'darwin',
-    toolType: 'opencode',
+    toolType: 'OPENCODE',
     toolVersion: '1.0.0',
   };
 }
@@ -128,6 +144,93 @@ describe('DefaultGatewayConnection coverage', () => {
     conn.disconnect();
     expect(conn.getState()).toBe('DISCONNECTED');
     expect(() => conn.send({ type: 'x' })).toThrow();
+  });
+
+  test('passes gateway auth via websocket subprotocol instead of query params', async () => {
+    const conn = new DefaultGatewayConnection({
+      url: 'ws://localhost:8081/ws/agent',
+      authPayloadProvider: () => ({
+        ak: 'test-ak-001',
+        ts: '1700000000',
+        nonce: 'nonce-001',
+        sign: 'sig+/=',
+      }),
+      registerMessage: registerMessage(),
+    });
+
+    await conn.connect();
+
+    const ws = ScriptedWebSocket.instances[0];
+    expect(ws.url).toBe('ws://localhost:8081/ws/agent');
+    expect(ws.protocols).toHaveLength(1);
+    expect(ws.protocols[0].startsWith('auth.')).toBe(true);
+
+    const encoded = ws.protocols[0].slice('auth.'.length);
+    const decoded = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    expect(decoded).toEqual({
+      ak: 'test-ak-001',
+      ts: '1700000000',
+      nonce: 'nonce-001',
+      sign: 'sig+/=',
+    });
+
+    conn.disconnect();
+  });
+
+  test('waits for register_ok before entering READY', async () => {
+    ScriptedWebSocket.scripts.push({ autoRegisterOk: false });
+    const states = [];
+    const messages = [];
+    const conn = new DefaultGatewayConnection({
+      url: 'ws://localhost:8081/ws/agent',
+      registerMessage: registerMessage(),
+    });
+    conn.on('stateChange', (state) => states.push(state));
+    conn.on('message', (message) => messages.push(message));
+
+    await conn.connect();
+
+    const ws = ScriptedWebSocket.instances[0];
+    expect(conn.getState()).toBe('CONNECTED');
+    expect(ws.sent).toContainEqual(registerMessage());
+    expect(() => conn.send({ type: 'tool_event', payload: 1 })).toThrow();
+
+    ws.emitMessage(JSON.stringify({ type: 'invoke', action: 'chat', payload: { toolSessionId: 's-1', text: 'hi' } }));
+    expect(messages).toEqual([]);
+
+    ws.emitMessage(JSON.stringify({ type: 'register_ok' }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(conn.getState()).toBe('READY');
+    expect(states).toEqual(['CONNECTING', 'CONNECTED', 'READY']);
+
+    conn.disconnect();
+  });
+
+  test('closes on register_rejected and never becomes READY', async () => {
+    ScriptedWebSocket.scripts.push({ autoRegisterOk: false });
+    const { logger, entries } = createLoggerRecorder();
+    const states = [];
+    const conn = new DefaultGatewayConnection({
+      url: 'ws://localhost:8081/ws/agent',
+      registerMessage: registerMessage(),
+      logger,
+    });
+    conn.on('stateChange', (state) => states.push(state));
+
+    await conn.connect();
+
+    const ws = ScriptedWebSocket.instances[0];
+    ws.emitMessage(JSON.stringify({ type: 'register_rejected', reason: 'device_conflict' }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(conn.getState()).toBe('DISCONNECTED');
+    expect(states).toEqual(['CONNECTING', 'CONNECTED', 'DISCONNECTED']);
+    expect(entries).toContainEqual({
+      level: 'error',
+      message: 'gateway.register.rejected',
+      extra: { reason: 'device_conflict' },
+    });
   });
 
   test('rejects on invalid url and websocket error', async () => {
@@ -244,6 +347,40 @@ describe('DefaultGatewayConnection coverage', () => {
     conn.disconnect();
   });
 
+  for (const closeCode of [4403, 4408, 4409]) {
+    test(`does not reconnect on gateway rejection close code ${closeCode}`, async () => {
+      const { logger, entries } = createLoggerRecorder();
+      ScriptedWebSocket.scripts.push({
+        closeAfterOpenMs: 0,
+        closeCode,
+        closeReason: `rejected-${closeCode}`,
+        wasClean: true,
+      });
+      const conn = new DefaultGatewayConnection({
+        url: 'ws://localhost:8081/ws/agent',
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        registerMessage: registerMessage(),
+        logger,
+      });
+
+      await conn.connect();
+      await new Promise((r) => setTimeout(r, 30));
+
+      expect(ScriptedWebSocket.instances.length).toBe(1);
+      expect(conn.getState()).toBe('DISCONNECTED');
+      expect(entries).toContainEqual({
+        level: 'warn',
+        message: 'gateway.close.rejected',
+        extra: {
+          code: closeCode,
+          reason: `rejected-${closeCode}`,
+          rejected: true,
+        },
+      });
+    });
+  }
+
   test('does not reconnect when aborted after open', async () => {
     const controller = new AbortController();
     ScriptedWebSocket.scripts.push({ open: true });
@@ -346,7 +483,9 @@ describe('DefaultGatewayConnection coverage', () => {
     );
     await new Promise((r) => setTimeout(r, 10));
 
-    const receivedLog = entries.find((entry) => entry.message === 'gateway.message.received');
+    const receivedLog = [...entries].reverse().find(
+      (entry) => entry.message === 'gateway.message.received' && entry.extra.messageType === 'invoke',
+    );
     expect(receivedLog).toBeDefined();
     expect(receivedLog.extra.messageType).toBe('invoke');
     expect(receivedLog.extra.gatewayMessageId).toBe('gw-1');

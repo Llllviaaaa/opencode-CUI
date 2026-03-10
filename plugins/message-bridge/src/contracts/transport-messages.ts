@@ -17,6 +17,7 @@ export type UpstreamMessageType = typeof TRANSPORT_UPSTREAM_MESSAGE_TYPES[number
 export interface RegisterMessage {
   type: 'register';
   deviceName: string;
+  macAddress: string;
   os: string;
   toolType: string;
   toolVersion: string;
