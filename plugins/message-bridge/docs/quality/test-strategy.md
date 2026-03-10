@@ -72,7 +72,7 @@
 
 | 测试用例 ID | 用例名称 | 测试类型 | 优先级 | 关联 PRD 章节 |
 |-------------|----------|----------|--------|---------------|
-| UT-EVNT-001 | 白名单前缀匹配（message.*） | 单元测试 | P0 | §5 FR-MB-02 |
+| UT-EVNT-001 | 白名单精确匹配（message.updated） | 单元测试 | P0 | §5 FR-MB-02 |
 | UT-EVNT-002 | 白名单精确匹配（file.edited） | 单元测试 | P0 | §5 FR-MB-02 |
 | UT-EVNT-003 | 白名单拒绝路径 | 单元测试 | P0 | §5 FR-MB-02 |
 | UT-EVNT-004 | 不支持事件记录 | 单元测试 | P1 | §5 FR-MB-02 |
@@ -85,7 +85,7 @@
 |-------------|----------|----------|--------|---------------|
 | UT-ACTN-001 | Action Registry 注册与查找 | 单元测试 | P0 | §5 FR-MB-03 |
 | UT-ACTN-002 | 新增 action 不修改核心引擎 | 单元测试 | P0 | §5 FR-MB-03 |
-| UT-ACTN-003 | Action validator 执行 | 单元测试 | P0 | §5 FR-MB-03 |
+| UT-ACTN-003 | Downstream normalizer 执行 | 单元测试 | P0 | §5 FR-MB-03 |
 | UT-ACTN-004 | Action executor 执行 | 单元测试 | P0 | §5 FR-MB-03 |
 | UT-ACTN-005 | Action errorMapper 执行 | 单元测试 | P0 | §5 FR-MB-03 |
 | INT-ACTN-001 | 自定义 action 扩展验证 | 集成测试 | P1 | §5 FR-MB-03 |
@@ -386,10 +386,10 @@ describe('UT-CONN-005', () => {
 
 ### 3.2 事件层测试 (UT-EVNT)
 
-#### UT-EVNT-001: 白名单前缀匹配（message.*）
+#### UT-EVNT-001: 白名单精确匹配（message.updated）
 
 **前置条件:**
-- 白名单配置: `["message.*", "permission.*"]`
+- 白名单配置: `["message.updated", "permission.asked"]`
 
 **测试步骤:**
 1. 创建 EventFilter 实例
@@ -405,15 +405,16 @@ describe('UT-CONN-005', () => {
 **测试代码:**
 ```typescript
 describe('UT-EVNT-001', () => {
-  it('should match prefix patterns correctly', () => {
-    const filter = new EventFilter({
-      allowlist: ['message.*', 'permission.*']
-    });
+  it('should match exact patterns correctly', () => {
+    const filter = new EventFilter([
+      'message.updated',
+      'permission.asked'
+    ]);
     
-    expect(filter.isAllowed('message.created')).toBe(true);
     expect(filter.isAllowed('message.updated')).toBe(true);
-    expect(filter.isAllowed('message.deleted')).toBe(true);
-    expect(filter.isAllowed('permission.request')).toBe(true);
+    expect(filter.isAllowed('message.created')).toBe(false);
+    expect(filter.isAllowed('permission.asked')).toBe(true);
+    expect(filter.isAllowed('permission.updated')).toBe(false);
     expect(filter.isAllowed('file.edited')).toBe(false);
   });
 });
@@ -1438,12 +1439,17 @@ export class MockOpenCodeSDK {
   },
   "events": {
     "allowlist": [
-      "message.*",
-      "permission.*",
-      "session.*",
-      "file.edited",
-      "todo.updated",
-      "command.executed"
+      "message.updated",
+      "message.part.updated",
+      "message.part.delta",
+      "message.part.removed",
+      "session.status",
+      "session.idle",
+      "session.updated",
+      "session.error",
+      "permission.updated",
+      "permission.asked",
+      "question.asked"
     ]
   }
 }

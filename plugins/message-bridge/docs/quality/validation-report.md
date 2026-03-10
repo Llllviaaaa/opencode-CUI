@@ -1,343 +1,86 @@
-# Architecture Validation Report
+# Validation Report
 
-**Version:** 1.0  
-**Date:** 2026-03-07  
-**Status:** Draft  
-**Owner:** message-bridge maintainers  
-**Related:** `../architecture/overview.md`, `../design/solution-design.md`, `./traceability-matrix.md`  
-**Scope**: `plugins/message-bridge`  
+## 1. Scope
 
-This document validates architecture alignment for key design decisions: pass-through behavior, action routing, fast-fail implementation, close-to-delete semantics, canonical permission reply support, and test framework choices.
+This report reflects the integrated `message-bridge` implementation on top of the refactored boundary architecture and the `feat/message-bridge-dev` feature set.
 
----
+Validated areas:
 
-## 1. Executive Summary
+- contracts / protocol / runtime / action layering
+- downstream action coverage
+- exact upstream allowlist behavior
+- config resolution and validation
+- distribution build and load verification
 
-| Architecture Principle | Status | Evidence Count |
-|------------------------|--------|----------------|
-| Pass-Through (Transparent Relay) | **VALIDATED** | 4 |
-| Action Routing (Registry Pattern) | **VALIDATED** | 5 |
-| Fast Fail | **VALIDATED** | 6 |
-| Close -> Delete | **VALIDATED** | 3 |
-| Permission Canonical Protocol | **VALIDATED** | 5 |
-| Test Framework (bun test + coverage gate) | **VALIDATED** | 4 |
+## 2. Architecture Validation
 
-**Overall**: Architecture implementation aligns with design documents. All core principles have concrete code evidence.
+### 2.1 Schema ownership
 
----
+Validated conclusion:
 
-## 2. Pass-Through Validation (Transparent Relay)
+- upstream schema owner: `protocol/upstream`
+- downstream schema owner: `protocol/downstream`
+- `runtime` no longer parses raw downstream payloads
+- `action` mainline execution no longer normalizes payloads
 
-### Principle
-Per `overview.md` §1.2 and §1.3: Events must be relayed transparently without business transformation. Runtime may add flat routing fields, but does not wrap events in `envelope`.
+### 2.2 Boundary contract visibility
 
-### Evidence
+Validated conclusion:
 
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `src/runtime/BridgeRuntime.ts` | current | `handleEvent()` forwards the original `event` object as `tool_event.event` without business mutation |
-| `src/runtime/BridgeRuntime.ts` | current | Upstream message shape is flat: `type`, optional `toolSessionId`, and raw `event` |
-| `src/event/EventFilter.ts` | current | Filter only checks allowlist, does not modify event content |
-| `src/types/index.ts` | current | Active upstream types omit `envelope` and `tool_done` |
+- upstream event contracts are centralized in `contracts/upstream-events.ts`
+- downstream message contracts are centralized in `contracts/downstream-messages.ts`
+- transport messages are centralized in `contracts/transport-messages.ts`
 
-### Validation Result: **PASSED**
+## 3. Functional Validation
 
-The implementation correctly:
-1. Subscribes to raw OpenCode events without preprocessing
-2. Filters by type only (no content inspection)
-3. Adds only flat routing fields without event mutation
-4. Sends original event in `tool_event` message
+Validated downstream actions:
 
----
+- `chat`
+- `create_session`
+- `close_session`
+- `permission_reply`
+- `status_query`
+- `abort_session`
+- `question_reply`
 
-## 3. Action Routing Validation
+Validated upstream default allowlist:
 
-### Principle
-Per `overview.md` §3.4 and `solution-design.md` §5: Actions must be registered in a registry and routed without core engine modification.
+- `message.updated`
+- `message.part.updated`
+- `message.part.delta`
+- `message.part.removed`
+- `session.status`
+- `session.idle`
+- `session.updated`
+- `session.error`
+- `permission.updated`
+- `permission.asked`
+- `question.asked`
 
-### Evidence
+## 4. Verification Evidence
 
-#### 3.1 Registry Pattern
+Validated successfully:
 
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `src/action/ActionRegistry.ts` | 1-10 | Interface defines `register()`, `get()`, `has()`, `list()` |
-| `src/action/ActionRegistry.ts` | 15-41 | `DefaultActionRegistry` implements Map-based storage |
-| `src/action/ActionRegistry.ts` | 18-20 | `register(action)` adds to Map by action.name |
+```bash
+npm run typecheck
+npm run test:unit
+bun test tests/integration/plugin-distribution.test.mjs
+./scripts/verify-opencode-load.sh
+```
 
-#### 3.2 Router Implementation
+## 5. Compatibility Conclusions
 
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `src/action/ActionRouter.ts` | 4-8 | Interface with `route()`, `setRegistry()`, `getRegistry()` |
-| `src/action/ActionRouter.ts` | 21-35 | `route()` gets action from registry, validates, executes |
-| `src/action/ActionRouter.ts` | 26-29 | Throws `Action not found` if not in registry - no hardcoded actions |
+Verified compatibility constraints:
 
-#### 3.3 Action Base Interface
+- external transport message shapes remain stable
+- `tool_event` remains envelope-free
+- `tool_error`, `session_created`, and `status_response` remain available with existing semantics
+- compatibility fields such as `welinkSessionId` remain supported on response messages
+- allowlist defaults remain exact-event based and do not revert to wildcard behavior
 
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `src/types/index.ts` | 639-651 | `Action<TPayload>` interface with name, validate, execute, errorMapper |
+## 6. Residual Notes
 
-#### 3.4 Plugin Registration
+The implementation still keeps a small number of compatibility re-export entrypoints to avoid breaking older imports. These do not change the architectural baseline:
 
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `src/plugin/MessageBridgePlugin.ts` | 23-35 | `registerActions()` iterates array and registers each action - new actions added to array only |
-
-### Extension Test
-
-Adding a new action requires only:
-1. Create class extending `Action` interface
-2. Add instance to array in `MessageBridgePlugin.registerActions()`
-
-No changes needed to:
-- Connection layer
-- Event relay
-- Router logic
-- Core plugin
-
-### Validation Result: **PASSED**
-
-The implementation correctly uses the Registry pattern, enabling new actions without core engine modification.
-
----
-
-## 4. Fast Fail Validation
-
-### Principle
-Per `overview.md` §3.5 and `../product/prd.md` §FR-MB-07: Connection failures must be detected within 100ms and return immediate error without queuing.
-
-### Evidence
-
-#### 4.1 Fast Fail Detector
-
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `src/error/FastFailDetector.ts` | 4 | `connectionCheckTimeoutMs = 100` - matches PRD 100ms requirement |
-| `src/error/FastFailDetector.ts` | 6-18 | `checkState()` returns error codes for non-READY states |
-| `src/error/FastFailDetector.ts` | 8-10 | DISCONNECTED/CONNECTING -> GATEWAY_UNREACHABLE |
-| `src/error/FastFailDetector.ts` | 11-12 | CONNECTED -> AGENT_NOT_READY |
-
-#### 4.2 State Checking in Actions
-
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `src/action/ChatAction.ts` | 54-61 | Checks `context.connectionState !== 'READY'` before execution |
-| `src/action/ChatAction.ts` | 55-61 | Returns `AGENT_NOT_READY` immediately if not READY |
-| `src/action/CreateSessionAction.ts` | 56-65 | Same pattern: state check -> immediate error return |
-| `src/action/CloseSessionAction.ts` | 47-56 | Same pattern: state check -> immediate error return |
-| `src/action/PermissionReplyAction.ts` | 86-95 | Same pattern: state check -> immediate error return |
-
-#### 4.3 No Queuing Evidence
-
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `src/runtime/BridgeRuntime.ts` | current | `handleEvent()` returns early when not READY or no connection is available |
-| `src/connection/GatewayConnection.ts` | 111-117 | `send()` throws if not connected - no internal queue |
-
-#### 4.4 Error Code Mapping
-
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `src/types/index.ts` | 455-465 | `stateToErrorCode()` function maps all states per PRD |
-
-### Validation Result: **PASSED**
-
-The implementation correctly:
-1. Uses 100ms timeout constant
-2. Returns GATEWAY_UNREACHABLE for DISCONNECTED/CONNECTING
-3. Returns AGENT_NOT_READY for CONNECTED
-4. Checks state at action entry points
-5. Does not queue events or messages
-
----
-
-## 5. Close Session -> Delete Validation
-
-### Principle
-Per `../product/prd.md` §FR-MB-05 and `overview.md` §3.4.3: `close_session` action must use `session.delete()`, while `abort_session` remains mapped to `session.abort()`.
-
-### Evidence
-
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `src/action/CloseSessionAction.ts` | current | Class comment states `close_session` maps to `session.delete` |
-| `src/action/CloseSessionAction.ts` | current | Runtime checks `typeof client.session.delete === 'function'` before execution |
-| `src/action/CloseSessionAction.ts` | current | Code calls `client.session.delete({ path: { id: toolSessionId } })` |
-
-### Verification
-
-Search for delete references in CloseSessionAction:
-- `delete`: active execution path present
-- `abort`: no longer used in `close_session`
-
-### Validation Result: **PASSED**
-
-The implementation correctly uses `session.delete()` for `close_session`. `abort_session` remains the separate abort path.
-
----
-
-## 6. Permission Reply Protocol Validation
-
-### Principle
-Per PRD §FR-MB-06: `permission_reply` uses the canonical protocol field `response: once|always|reject`. Legacy payload drift is rejected during runtime parsing.
-
-### Evidence
-
-#### 6.1 Type Definitions
-
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `src/types/index.ts` | current | `PermissionReplyPayload` with `response: 'once' \| 'always' \| 'reject'` |
-| `src/types/index.ts` | current | `PERMISSION_REPLY_RESPONSES` constant drives runtime validation |
-
-#### 6.2 Runtime Parsing
-
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `src/runtime/BridgeRuntime.ts` | current | `normalizePermissionReplyInvokeMessage()` accepts only canonical fields and values |
-
-#### 6.3 Validation
-
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `src/action/PermissionReplyAction.ts` | current | `normalizePayload()` + `validate()` require permissionId/toolSessionId/response |
-
-#### 6.4 Execution
-
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `src/action/PermissionReplyAction.ts` | current | `execute()` forwards canonical response directly to SDK |
-
-### Value Verification
-
-Per PRD §FR-MB-06:
-- `response=once`: **IMPLEMENTED**
-- `response=always`: **IMPLEMENTED**
-- `response=reject`: **IMPLEMENTED**
-
-### Validation Result: **PASSED**
-
-The implementation correctly:
-1. Defines canonical protocol payload types
-2. Rejects legacy payload drift during runtime parsing
-3. Validates canonical fields before execution
-4. Forwards canonical response values directly to SDK
-
----
-
-## 7. Test Framework Validation
-
-### Principle
-Per `overview.md` §8 and `../product/prd.md` §9: Tests use `bun test`, coverage is generated by Bun and threshold-checked by script.
-
-### Evidence
-
-#### 7.1 Test Runner
-
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `package.json` | scripts | `"test": "npm run build && bun test"` |
-| `package.json` | scripts | unit/integration/e2e scripts all use `bun test` |
-| `tests/**` | runtime | Test files executed by Bun test runner |
-
-#### 7.2 Coverage Tool
-
-| Location | Lines | Evidence |
-|----------|-------|----------|
-| `package.json` | scripts | `"test:coverage": "npm run build && node ./scripts/check-coverage.mjs"` |
-| `scripts/check-coverage.mjs` | - | Parses Bun coverage and enforces threshold |
-
-#### 7.3 Coverage Thresholds
-
-| Requirement | Configured | Evidence |
-|-------------|------------|----------|
-| Lines >= 80% | Yes | `package.json` line 15: `--lines 80` |
-| Branches >= 70% | Yes | `package.json` line 15: `--branches 70` |
-
-#### 7.4 Test Categories
-
-| Category | File | Evidence |
-|----------|------|----------|
-| Unit | `tests/unit/example.test.mjs` | 405 lines, tests for actions, utilities |
-| Integration | `tests/integration/plugin.test.mjs` | 159 lines, tests registry and routing |
-| E2E | `tests/e2e/example.test.mjs` | File exists |
-
-#### 7.5 Test Coverage by Component
-
-| Component | Unit Tests | Integration Tests |
-|-----------|------------|-------------------|
-| ChatAction | Yes (lines 52-111) | Via registry |
-| CreateSessionAction | Yes (lines 113-148) | Via registry |
-| CloseSessionAction | Yes (lines 150-192) | Via registry |
-| PermissionReplyAction | Yes (lines 194-256) | Via registry |
-| StatusQueryAction | Yes (lines 258-290) | Via registry |
-| FastFailDetector | Yes (lines 294-310) | - |
-| ErrorMapper | Yes (lines 312-330) | - |
-| EventFilter | Yes (lines 332-355) | - |
-| ActionRegistry | - | Yes (lines 7-28) |
-| ActionRouter | - | Yes (lines 30-67) |
-
-### Validation Result: **PASSED**
-
-The implementation correctly:
-1. Uses Bun test runner (`bun test`)
-2. Uses Bun coverage with enforced threshold script
-3. Has unit tests for all actions and utilities
-4. Has integration tests for registry and routing
-5. Has E2E test file present
-
----
-
-## 8. Cross-Reference: Architecture Docs -> Code
-
-| Architecture Doc Section | Implementation File | Alignment |
-|--------------------------|---------------------|-----------|
-| `overview.md` §3.1 Config Layer | `src/config/ConfigResolver.ts`, `ConfigValidator.ts` | Direct mapping |
-| `overview.md` §3.2 Connection Layer | `src/connection/GatewayConnection.ts`, `StateManager.ts`, `AkSkAuth.ts` | Direct mapping |
-| `overview.md` §3.3 Event Layer | `src/runtime/BridgeRuntime.ts`, `EventFilter.ts` | Direct mapping |
-| `overview.md` §3.4 Action Layer | `src/action/ActionRouter.ts`, `ActionRegistry.ts`, `*Action.ts` | Direct mapping |
-| `overview.md` §3.5 Error Layer | `src/error/FastFailDetector.ts`, `ErrorMapper.ts` | Direct mapping |
-| `solution-design.md` §2.5.2 Built-in Actions | 5 action files in `src/action/` | All 5 implemented |
-| `solution-design.md` §3.1 Fast Fail | `src/error/FastFailDetector.ts` | Direct implementation |
-| `solution-design.md` §6.1.1 Permission Reply | `src/action/PermissionReplyAction.ts` | Canonical `response` protocol enforced |
-| `solution-design.md` §6.1.2 Close Session | `src/action/CloseSessionAction.ts` | Delete semantics confirmed |
-
----
-
-## 9. Deviations and Notes
-
-### 9.1 Accepted Deviations (Documented)
-
-| Deviation | Location | Rationale |
-|-----------|----------|-----------|
-| No gatewayAgentId from server | `overview.md` §9.1 | ai-gateway does not return register_success; plugin uses local agentId |
-| READY state on register send (not response) | `overview.md` §9.1 | No explicit register_success from gateway; connection keep-alive implies success |
-
-### 9.2 Minor Gaps (Non-blocking)
-
-| Gap | Impact | Recommendation |
-|-----|--------|----------------|
-| Config tests not found | Config logic not explicitly unit tested | Add tests for ConfigResolver/Validator |
-
----
-
-## 10. Conclusion
-
-### Architecture Alignment: **VALIDATED**
-
-The `plugins/message-bridge` implementation aligns with the architecture design documents:
-
-1. **Pass-Through**: Events are relayed transparently with flat routing fields only
-2. **Action Routing**: Registry pattern enables extension without core modification
-3. **Fast Fail**: 100ms detection, immediate error return, no queuing
-4. **Close->Delete**: Uses `session.delete()` for `close_session`
-5. **Permission Protocol Alignment**: Uses canonical `response` values and rejects legacy payloads
-6. **Test Framework**: bun test with coverage threshold gate
-
-All core architectural principles have concrete evidence in the codebase.
-
----
-
-**Document End**
+- new development should enter through `contracts/` and `protocol/`
+- runtime and action layers should not reintroduce raw protocol parsing

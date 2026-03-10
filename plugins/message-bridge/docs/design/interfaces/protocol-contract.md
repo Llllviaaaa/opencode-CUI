@@ -1,121 +1,192 @@
-# Message-Bridge 协议契约（当前生效）
+# Protocol Contract
 
-**Version:** 1.2
-**Date:** 2026-03-09
-**Status:** Active
-**Owner:** message-bridge maintainers  
-**Related:** `../../product/prd.md`, `../../architecture/overview.md`
+## 1. Boundary Layers
 
-## 1. 范围
+The current protocol contract is split into:
 
-- 仅定义 `message-bridge <-> ai-gateway` 边界协议。
-- 不定义 Gateway/Skill-Server 内部路由与持久化。
+- `contracts/upstream-events.ts`
+- `contracts/downstream-messages.ts`
+- `contracts/transport-messages.ts`
+- `contracts/envelope.ts`
 
-## 2. 消息类型
+The `protocol/` layer normalizes raw messages against these contracts.
 
-| 方向 | 类型 |
-|---|---|
-| 下行 | `invoke`, `status_query` |
-| 上行 | `register`, `heartbeat`, `tool_event`, `tool_error`, `session_created`, `status_response` |
+## 2. Downstream Contract
 
-## 3. 字段约定（关键）
+Supported downstream message types:
 
-1. **不再使用 `envelope`**；边界报文全部改为扁平字段。
-2. `welinkSessionId`：技能侧会话标识（Gateway/Skill 侧语义）。
-3. `toolSessionId`：OpenCode 会话标识（SDK 侧语义）。
-4. `status_query`/`status_response` 不携带会话字段。
-5. 当前 runtime 不主动发送 `tool_done`；完成态通过 `tool_event` 透传的 `session.idle` / `session.status` 等事件体现。
+- `invoke`
+- `status_query`
 
-## 4. 下行协议（Gateway -> 插件）
+### 2.1 `invoke`
 
-### 4.1 `invoke`
+Shape:
 
-```json
+```ts
 {
-  "type": "invoke",
-  "welinkSessionId": "wlk-001",
-  "action": "chat",
-  "payload": {
-    "toolSessionId": "ses_001",
-    "text": "继续"
-  }
+  type: 'invoke';
+  sessionId?: string;
+  action: InvokeAction;
+  payload: InvokePayloadByAction[InvokeAction];
+  envelope?: Envelope;
 }
 ```
 
-`action` 取值：
+Supported `action` values:
 
 - `chat`
 - `create_session`
-- `abort_session`
 - `close_session`
 - `permission_reply`
+- `status_query`
+- `abort_session`
 - `question_reply`
 
-### 4.2 `status_query`
+Payloads:
 
-```json
+```ts
+type ChatPayload = {
+  toolSessionId: string;
+  text: string;
+};
+
+type CreateSessionPayload = {
+  sessionId?: string;
+  metadata?: Record<string, unknown>;
+};
+
+type CloseSessionPayload = {
+  toolSessionId: string;
+};
+
+type PermissionReplyPayload = {
+  permissionId: string;
+  toolSessionId: string;
+  response: 'allow' | 'always' | 'deny';
+};
+
+type StatusQueryPayload = {
+  sessionId?: string;
+};
+
+type AbortSessionPayload = {
+  toolSessionId: string;
+};
+
+type QuestionReplyPayload = {
+  toolSessionId: string;
+  answer: string;
+  toolCallId?: string;
+};
+```
+
+Notes:
+
+- `close_session` currently preserves bridge behavior by calling `session.abort()`
+- `abort_session` also calls `session.abort()`
+- `question_reply` resolves a pending question through the raw question API chain
+
+### 2.2 `status_query`
+
+Standalone shape:
+
+```ts
 {
-  "type": "status_query"
+  type: 'status_query';
+  sessionId?: string;
+  envelope?: Envelope;
 }
 ```
 
-## 5. 上行协议（插件 -> Gateway）
+The bridge also accepts `invoke.action = 'status_query'` for compatibility.
 
-### 5.1 `tool_event`
+## 3. Upstream Event Contract
 
-```json
+Supported upstream event types:
+
+- `message.updated`
+- `message.part.updated`
+- `message.part.delta`
+- `message.part.removed`
+- `session.status`
+- `session.idle`
+- `session.updated`
+- `session.error`
+- `permission.updated`
+- `permission.asked`
+- `question.asked`
+
+Default allowlist is the same exact list.
+
+The bridge extracts `toolSessionId` from the normalized event and then emits:
+
+```ts
 {
-  "type": "tool_event",
-  "toolSessionId": "ses_001",
-  "event": { "type": "message.part.updated" }
+  type: 'tool_event';
+  toolSessionId: string;
+  event: SupportedUpstreamEvent;
 }
 ```
 
-### 5.2 `tool_error`
+## 4. Transport Contract
 
-```json
-{
-  "type": "tool_error",
-  "welinkSessionId": "wlk-001",
-  "toolSessionId": "ses_001",
-  "error": "error message"
-}
+Bridge-to-gateway transport messages:
+
+```ts
+type UpstreamMessage =
+  | RegisterMessage
+  | HeartbeatMessage
+  | ToolEventMessage
+  | ToolDoneMessage
+  | ToolErrorMessage
+  | SessionCreatedMessage
+  | StatusResponseMessage;
 ```
 
-`welinkSessionId` 与 `toolSessionId` 允许按可用性单独出现，但至少应携带一个可路由标识。
+Key shapes:
 
-### 5.3 `session_created`
+```ts
+type ToolErrorMessage = {
+  type: 'tool_error';
+  sessionId?: string;
+  welinkSessionId?: string;
+  error: string;
+  envelope: Envelope;
+};
 
-```json
-{
-  "type": "session_created",
-  "welinkSessionId": "wlk-001",
-  "toolSessionId": "ses_new_001",
-  "session": { "id": "ses_new_001" }
-}
+type SessionCreatedMessage = {
+  type: 'session_created';
+  sessionId: string;
+  welinkSessionId?: string;
+  toolSessionId?: string;
+  session?: CreateSessionResultData;
+  envelope: Envelope;
+};
+
+type StatusResponseMessage = {
+  type: 'status_response';
+  opencodeOnline: boolean;
+  sessionId?: string;
+  welinkSessionId?: string;
+  envelope: Envelope;
+};
 ```
 
-### 5.4 `status_response`
+Compatibility behavior:
 
-```json
-{
-  "type": "status_response",
-  "opencodeOnline": true
-}
-```
+- `welinkSessionId` remains optional on response messages
+- `tool_event` remains envelope-free
 
-## 6. Action 与 SDK 映射
+## 5. Failure Semantics
 
-| Action | SDK 调用 |
-|---|---|
-| `chat` | `session.prompt` |
-| `create_session` | `session.create`（payload 透传） |
-| `abort_session` | `session.abort` |
-| `close_session` | `session.delete` |
-| `permission_reply` | `postSessionIdPermissionsPermissionId` |
-| `question_reply` | `GET /question` + `POST /question/{requestID}/reply` |
+Protocol parsing is fail-closed.
 
-## 7. 兼容性声明
+Upstream normalization failure:
 
-- 本文件定义的是当前唯一有效契约。
-- 历史 `envelope/sessionId` 形态视为废弃，不再作为兼容输入输出。
+- log event: `event.extraction_failed`
+- event is dropped
+
+Downstream normalization failure:
+
+- log event: `downstream.normalization_failed`
+- bridge returns existing `tool_error` semantics
