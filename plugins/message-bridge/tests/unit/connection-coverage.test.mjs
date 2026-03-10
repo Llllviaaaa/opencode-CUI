@@ -337,11 +337,11 @@ describe('DefaultGatewayConnection coverage', () => {
     const ws = ScriptedWebSocket.instances[0];
     ws.emitMessage(
       JSON.stringify({
+        messageId: 'gw-1',
         type: 'invoke',
         action: 'chat',
-        sessionId: 'skill-1',
+        welinkSessionId: 'skill-1',
         payload: { toolSessionId: 'tool-1', text: 'hello' },
-        envelope: { messageId: 'gw-1' },
       }),
     );
     await new Promise((r) => setTimeout(r, 10));

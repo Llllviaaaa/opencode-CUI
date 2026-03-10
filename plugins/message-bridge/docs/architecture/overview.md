@@ -32,7 +32,6 @@ Defines external boundary shapes:
 - `contracts/upstream-events.ts`
 - `contracts/downstream-messages.ts`
 - `contracts/transport-messages.ts`
-- `contracts/envelope.ts`
 
 This layer answers what the bridge exchanges with OpenCode and the gateway.
 

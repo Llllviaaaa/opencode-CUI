@@ -763,7 +763,7 @@ describe('UT-ACTN-002', () => {
       }
       
       mapError(error: Error, context: ActionContext) {
-        return { type: 'tool_error', code: 'SDK_UNREACHABLE', error: error.message, welinkSessionId: context.sessionId };
+        return { type: 'tool_error', code: 'SDK_UNREACHABLE', error: error.message, welinkSessionId: context.welinkSessionId };
       }
     }
     

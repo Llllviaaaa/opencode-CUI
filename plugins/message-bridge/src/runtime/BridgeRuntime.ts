@@ -454,16 +454,16 @@ export class BridgeRuntime {
     });
   }
 
-  private buildActionContext(sessionId?: string, logger: BridgeLogger = this.logger) {
+  private buildActionContext(welinkSessionId?: string, logger: BridgeLogger = this.logger) {
     return {
       client: this.sdkClient,
       connectionState: this.stateManager.getState(),
       agentId: this.stateManager.getAgentId() ?? 'unknown-agent',
-      sessionId,
+      welinkSessionId,
       logger: logger.child({
         component: 'action',
         agentId: this.stateManager.getAgentId() ?? 'unknown-agent',
-        sessionId,
+        welinkSessionId,
       }),
     };
   }

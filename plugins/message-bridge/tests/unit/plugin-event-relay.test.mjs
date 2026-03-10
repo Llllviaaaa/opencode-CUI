@@ -1,7 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 
 import { BridgeRuntime } from '../../dist/runtime/BridgeRuntime.js';
-import { EnvelopeBuilder } from '../../dist/event/EnvelopeBuilder.js';
 import { EventFilter } from '../../dist/event/EventFilter.js';
 
 describe('event uplink via hook boundary', () => {
@@ -21,7 +20,6 @@ describe('event uplink via hook boundary', () => {
     const sent = [];
 
     runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
-    runtime.envelopeBuilder = new EnvelopeBuilder('agent-1');
     runtime.eventFilter = new EventFilter(['session.idle']);
     runtime.stateManager.setState('READY');
 
@@ -38,7 +36,6 @@ describe('event uplink via hook boundary', () => {
     const sent = [];
 
     runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
-    runtime.envelopeBuilder = new EnvelopeBuilder('agent-2');
     runtime.eventFilter = new EventFilter(['message.updated']);
     runtime.stateManager.setState('READY');
 
@@ -76,7 +73,6 @@ describe('event uplink via hook boundary', () => {
     const sent = [];
 
     runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
-    runtime.envelopeBuilder = new EnvelopeBuilder('agent-3');
     runtime.eventFilter = new EventFilter(['message.updated']);
     runtime.stateManager.setState('READY');
 

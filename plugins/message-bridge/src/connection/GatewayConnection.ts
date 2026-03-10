@@ -420,10 +420,10 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
   }
 
   private extractGatewayMessageId(message: unknown): string | undefined {
-    if (!isRecord(message) || !isRecord(message.envelope)) {
+    if (!isRecord(message)) {
       return undefined;
     }
-    return typeof message.envelope.messageId === 'string' ? message.envelope.messageId : undefined;
+    return typeof message.messageId === 'string' ? message.messageId : undefined;
   }
 
   private setState(next: ConnectionState): void {
