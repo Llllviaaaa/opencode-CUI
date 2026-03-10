@@ -652,7 +652,18 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
       setMessages((prev) => upsertMessage(prev, optimisticMessage));
 
       try {
-        const saved = await api.sendMessage(sessionId, text, options?.toolCallId);
+        let saved;
+        try {
+          saved = await api.sendMessage(sessionId, text, options?.toolCallId);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (!message.includes('No toolSessionId available')) {
+            throw err;
+          }
+
+          await api.waitForSessionToolSessionId(sessionId);
+          saved = await api.sendMessage(sessionId, text, options?.toolCallId);
+        }
         const normalized = normalizeHistoryMessage(saved as unknown as Record<string, unknown>);
         setMessages((prev) => {
           const nextMessages = prev.filter((message) => message.id !== tempId && message.id !== normalized.id);

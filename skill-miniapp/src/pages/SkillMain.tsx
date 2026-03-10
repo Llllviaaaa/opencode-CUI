@@ -8,6 +8,7 @@ import { useSkillSession } from '../hooks/useSkillSession';
 import { useSkillStream } from '../hooks/useSkillStream';
 import { useSendToIm } from '../hooks/useSendToIm';
 import { useAgentSelector } from '../hooks/useAgentSelector';
+import { waitForSessionToolSessionId } from '../utils/api';
 
 interface SkillMainProps {
   onCollapse: () => void;
@@ -179,8 +180,26 @@ export const SkillMain: React.FC<SkillMainProps> = ({
     }
 
     const text = pendingInitialMessageRef.current;
-    pendingInitialMessageRef.current = null;
-    void sendMessage(text);
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        await waitForSessionToolSessionId(activeSessionId);
+      } catch {
+        // Let the normal send path surface the backend error if readiness never arrives.
+      }
+
+      if (cancelled) {
+        return;
+      }
+
+      pendingInitialMessageRef.current = null;
+      await sendMessage(text);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeSessionId, socketReady, sendMessage]);
 
   const handleSendMessage = useCallback(
