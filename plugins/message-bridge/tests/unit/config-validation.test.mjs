@@ -492,4 +492,64 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
       await rm(fakeHome, { recursive: true, force: true });
     }
   });
+
+  test('normalizes default toolType to OPENCODE', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-json-defaults-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    process.env.HOME = fakeHome;
+
+    await mkdir(join(workspace, '.opencode'), { recursive: true });
+    await writeFile(
+      join(workspace, '.opencode', 'message-bridge.json'),
+      JSON.stringify(createValidConfig({
+        gateway: {
+          url: 'ws://localhost:8081/ws/agent',
+          heartbeatIntervalMs: 30000,
+          reconnect: {
+            baseMs: 1000,
+            maxMs: 30000,
+            exponential: true,
+          },
+          toolType: 'opencode',
+        },
+      })),
+      'utf8',
+    );
+
+    try {
+      const config = await loadConfig(workspace);
+      expect(config.gateway.toolType).toBe('OPENCODE');
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('supports overriding gateway.macAddress from environment', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-json-mac-env-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    const originalMacAddress = process.env.BRIDGE_GATEWAY_MAC_ADDRESS;
+    process.env.HOME = fakeHome;
+    process.env.BRIDGE_GATEWAY_MAC_ADDRESS = '11:22:33:44:55:66';
+
+    await mkdir(join(workspace, '.opencode'), { recursive: true });
+    await writeFile(
+      join(workspace, '.opencode', 'message-bridge.json'),
+      JSON.stringify(createValidConfig()),
+      'utf8',
+    );
+
+    try {
+      const config = await loadConfig(workspace);
+      expect(config.gateway.macAddress).toBe('11:22:33:44:55:66');
+    } finally {
+      if (originalMacAddress === undefined) {
+        delete process.env.BRIDGE_GATEWAY_MAC_ADDRESS;
+      } else {
+        process.env.BRIDGE_GATEWAY_MAC_ADDRESS = originalMacAddress;
+      }
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
 });

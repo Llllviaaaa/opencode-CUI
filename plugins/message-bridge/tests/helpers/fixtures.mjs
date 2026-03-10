@@ -33,6 +33,7 @@ export function createRegisterMessage(overrides = {}) {
   return {
     type: 'register',
     deviceName: overrides.deviceName || 'test-device',
+    macAddress: overrides.macAddress || 'aa:bb:cc:dd:ee:ff',
     os: overrides.os || 'darwin',
     toolType: 'OPENCODE',
     toolVersion: overrides.toolVersion || '1.0.0',

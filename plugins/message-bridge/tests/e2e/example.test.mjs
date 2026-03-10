@@ -20,6 +20,7 @@ class FakeWebSocket {
       }
       this.readyState = FakeWebSocket.OPEN;
       this.onopen?.();
+      this.onmessage?.({ data: JSON.stringify({ type: 'register_ok' }) });
     }, 0);
   }
 
@@ -53,8 +54,9 @@ describe('gateway connection bun-only contract', () => {
       registerMessage: {
         type: 'register',
         deviceName: 'dev',
+        macAddress: 'aa:bb:cc:dd:ee:ff',
         os: 'darwin',
-        toolType: 'opencode',
+        toolType: 'OPENCODE',
         toolVersion: '1.0.0',
       },
     });
@@ -65,8 +67,9 @@ describe('gateway connection bun-only contract', () => {
     expect(ws.sent[0]).toEqual({
       type: 'register',
       deviceName: 'dev',
+      macAddress: 'aa:bb:cc:dd:ee:ff',
       os: 'darwin',
-      toolType: 'opencode',
+      toolType: 'OPENCODE',
       toolVersion: '1.0.0',
     });
 
@@ -80,8 +83,9 @@ describe('gateway connection bun-only contract', () => {
       registerMessage: {
         type: 'register',
         deviceName: 'dev',
+        macAddress: 'aa:bb:cc:dd:ee:ff',
         os: 'darwin',
-        toolType: 'opencode',
+        toolType: 'OPENCODE',
         toolVersion: '1.0.0',
       },
     });
@@ -108,8 +112,9 @@ describe('gateway connection bun-only contract', () => {
       registerMessage: {
         type: 'register',
         deviceName: 'dev',
+        macAddress: 'aa:bb:cc:dd:ee:ff',
         os: 'darwin',
-        toolType: 'opencode',
+        toolType: 'OPENCODE',
         toolVersion: '1.0.0',
       },
     });
