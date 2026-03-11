@@ -319,8 +319,12 @@ export class BridgeRuntime {
       });
 
       if (normalized.error.messageType === 'invoke') {
+        const errorMessage =
+          normalized.error.action === 'create_session' && normalized.error.field === 'welinkSessionId'
+            ? normalized.error.message
+            : 'Invalid invoke payload shape';
         this.sendToolError(
-          { success: false, errorCode: 'INVALID_PAYLOAD', errorMessage: 'Invalid invoke payload shape' },
+          { success: false, errorCode: 'INVALID_PAYLOAD', errorMessage: errorMessage },
           normalized.error.welinkSessionId,
           {
             logger: messageLogger,
@@ -414,19 +418,6 @@ export class BridgeRuntime {
         this.sendToolError(
           { success: false, errorCode: 'SDK_UNREACHABLE', errorMessage: 'create_session returned without sessionId' },
           welinkSessionId,
-          {
-            logger: invokeLogger,
-            traceId,
-            gatewayMessageId: downstreamFields.gatewayMessageId,
-            action: message.action,
-          },
-        );
-        return;
-      }
-      if (!welinkSessionId) {
-        this.sendToolError(
-          { success: false, errorCode: 'INVALID_PAYLOAD', errorMessage: 'create_session missing welinkSessionId' },
-          undefined,
           {
             logger: invokeLogger,
             traceId,

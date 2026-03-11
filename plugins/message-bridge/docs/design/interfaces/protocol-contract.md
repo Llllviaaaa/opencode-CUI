@@ -73,6 +73,8 @@ type QuestionReplyPayload = {
 };
 ```
 
+`create_session` also requires a non-empty top-level `welinkSessionId`; if it is missing, runtime returns `tool_error` and does not call the SDK create path.
+
 Notes:
 
 - `close_session` calls `session.delete()`
