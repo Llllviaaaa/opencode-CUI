@@ -450,6 +450,73 @@ describe('runtime protocol strictness', () => {
     });
   });
 
+  test('rejects create_session without welinkSessionId before calling SDK', async () => {
+    const createCalls = [];
+    const runtime = new BridgeRuntime({
+      client: createRuntimeClient({
+        session: {
+          create: async (options) => {
+            createCalls.push(options);
+            return { data: { id: 'created-1' } };
+          },
+        },
+      }),
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      action: 'create_session',
+      payload: {},
+    });
+
+    expect(createCalls).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toEqual({
+      type: 'tool_error',
+      welinkSessionId: undefined,
+      toolSessionId: undefined,
+      error: 'create_session missing welinkSessionId',
+    });
+  });
+
+  test('rejects create_session with blank welinkSessionId before calling SDK', async () => {
+    const createCalls = [];
+    const runtime = new BridgeRuntime({
+      client: createRuntimeClient({
+        session: {
+          create: async (options) => {
+            createCalls.push(options);
+            return { data: { id: 'created-1' } };
+          },
+        },
+      }),
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      welinkSessionId: '   ',
+      action: 'create_session',
+      payload: {},
+    });
+
+    expect(createCalls).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toEqual({
+      type: 'tool_error',
+      welinkSessionId: undefined,
+      toolSessionId: undefined,
+      error: 'create_session missing welinkSessionId',
+    });
+  });
+
   test('rejects invoke status_query compatibility variant', async () => {
     const runtime = new BridgeRuntime({
       client: createRuntimeClient(),

@@ -121,6 +121,40 @@ function requireNonEmptyString(
   return ok(value);
 }
 
+function requireCreateSessionWelinkSessionId(value: unknown): NormalizeResult<string> {
+  if (value === undefined) {
+    return fail({
+      stage: 'message',
+      code: 'missing_required_field',
+      field: 'welinkSessionId',
+      message: 'create_session missing welinkSessionId',
+      messageType: 'invoke',
+      action: 'create_session',
+    });
+  }
+  if (typeof value !== 'string') {
+    return fail({
+      stage: 'message',
+      code: 'invalid_field_type',
+      field: 'welinkSessionId',
+      message: 'create_session missing welinkSessionId',
+      messageType: 'invoke',
+      action: 'create_session',
+    });
+  }
+  if (!value.trim()) {
+    return fail({
+      stage: 'message',
+      code: 'missing_required_field',
+      field: 'welinkSessionId',
+      message: 'create_session missing welinkSessionId',
+      messageType: 'invoke',
+      action: 'create_session',
+    });
+  }
+  return ok(value);
+}
+
 function buildEventPreview(raw: unknown): Record<string, unknown> {
   if (!isRecord(raw)) {
     return { kind: typeof raw };
@@ -294,9 +328,11 @@ function normalizeInvokePayload(
       return ok({ type: 'invoke', action, payload: normalized.value, welinkSessionId });
     }
     case 'create_session': {
+      const requiredWelinkSessionId = requireCreateSessionWelinkSessionId(welinkSessionId);
+      if (!requiredWelinkSessionId.ok) return requiredWelinkSessionId;
       const normalized = normalizeCreateSessionPayload(payload, welinkSessionId);
       if (!normalized.ok) return normalized;
-      return ok({ type: 'invoke', action, payload: normalized.value, welinkSessionId });
+      return ok({ type: 'invoke', action, payload: normalized.value, welinkSessionId: requiredWelinkSessionId.value });
     }
     case 'close_session': {
       const normalized = normalizeCloseSessionPayload(payload, welinkSessionId);
@@ -345,7 +381,10 @@ export function normalizeDownstreamMessage(
     return fail(error);
   }
 
-  const welinkSessionId = typeof raw.welinkSessionId === 'string' ? raw.welinkSessionId : undefined;
+  const welinkSessionId =
+    typeof raw.welinkSessionId === 'string' && raw.welinkSessionId.trim()
+      ? raw.welinkSessionId
+      : undefined;
 
   if (messageTypeValue === 'status_query') {
     return ok({
