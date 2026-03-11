@@ -142,13 +142,6 @@ function getErrorDetailsForLog(error) {
 }
 
 // src/types/sdk.ts
-function isOpencodeClient(client) {
-  if (!client || typeof client !== "object") {
-    return false;
-  }
-  const c = client;
-  return !!c.session && typeof c.session === "object" && typeof c.session.create === "function" && typeof c.session.abort === "function" && typeof c.session.prompt === "function" && typeof c.postSessionIdPermissionsPermissionId === "function";
-}
 async function safeExecute(promise, errorMapper) {
   try {
     const data = await promise;
@@ -249,14 +242,6 @@ class ChatAction {
         errorMessage: `Agent not ready. Current state: ${context.connectionState}`
       };
     }
-    if (!isOpencodeClient(context.client)) {
-      context.logger?.error("action.chat.invalid_client");
-      return {
-        success: false,
-        errorCode: "SDK_UNREACHABLE",
-        errorMessage: "OpenCode client not available or invalid in context"
-      };
-    }
     const client = context.client;
     try {
       const executionResult = await this.sendPrompt(client, payload.toolSessionId, payload.text);
@@ -330,14 +315,6 @@ class CreateSessionAction {
           success: false,
           errorCode: stateToErrorCode(context.connectionState),
           errorMessage: `Agent not ready. Current state: ${context.connectionState}`
-        };
-      }
-      if (!isOpencodeClient(context.client)) {
-        context.logger?.error("action.create_session.invalid_client");
-        return {
-          success: false,
-          errorCode: "SDK_UNREACHABLE",
-          errorMessage: "Valid OpenCode client not available in context"
         };
       }
       const executionResult = await safeExecute(context.client.session.create({ body: payload }), (error) => `Create session failed: ${getErrorMessage(error)}`);
@@ -434,23 +411,7 @@ class CloseSessionAction {
           errorMessage: `Agent not ready. Current state: ${context.connectionState}`
         };
       }
-      if (!isOpencodeClient(context.client)) {
-        context.logger?.error("action.close_session.invalid_client");
-        return {
-          success: false,
-          errorCode: "SDK_UNREACHABLE",
-          errorMessage: "Valid OpenCode client not available in context"
-        };
-      }
       const client = context.client;
-      if (typeof client.session.delete !== "function") {
-        context.logger?.error("action.close_session.delete_unavailable");
-        return {
-          success: false,
-          errorCode: "SDK_UNREACHABLE",
-          errorMessage: "SDK session.delete is not available"
-        };
-      }
       const executionResult = await safeExecute(client.session.delete({
         path: { id: payload.toolSessionId }
       }), (error) => `Close session failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -541,14 +502,6 @@ class PermissionReplyAction {
           errorMessage: `Agent not ready. Current state: ${context.connectionState}`
         };
       }
-      if (!isOpencodeClient(context.client)) {
-        context.logger?.error("action.permission_reply.invalid_client");
-        return {
-          success: false,
-          errorCode: "SDK_UNREACHABLE",
-          errorMessage: "Valid OpenCode client not available in context"
-        };
-      }
       const executionResult = await safeExecute(context.client.postSessionIdPermissionsPermissionId({
         path: { id: payload.toolSessionId, permissionID: payload.permissionId },
         body: { response: payload.response }
@@ -635,27 +588,9 @@ class StatusQueryAction {
     });
     try {
       let opencodeOnline = false;
-      const global = context.client?.global;
-      const app = context.client?.app;
-      if (global?.health) {
+      if (context.hostClient.global?.health) {
         try {
-          await global.health();
-          opencodeOnline = true;
-        } catch {
-          if (app?.health) {
-            try {
-              await app.health();
-              opencodeOnline = true;
-            } catch {
-              opencodeOnline = false;
-            }
-          } else {
-            opencodeOnline = false;
-          }
-        }
-      } else if (app?.health) {
-        try {
-          await app.health();
+          await context.hostClient.global.health();
           opencodeOnline = true;
         } catch {
           opencodeOnline = false;
@@ -689,7 +624,8 @@ class StatusQueryAction {
       const message = error.message.toLowerCase();
       if (message.includes("timeout") || message.includes("network")) {
         return "SDK_TIMEOUT";
-      } else if (message.includes("unreachable") || message.includes("connect")) {
+      }
+      if (message.includes("unreachable") || message.includes("connect")) {
         return "SDK_UNREACHABLE";
       }
     }
@@ -712,14 +648,6 @@ class AbortSessionAction {
           success: false,
           errorCode: stateToErrorCode(context.connectionState),
           errorMessage: `Agent not ready. Current state: ${context.connectionState}`
-        };
-      }
-      if (!isOpencodeClient(context.client)) {
-        context.logger?.error("action.abort_session.invalid_client");
-        return {
-          success: false,
-          errorCode: "SDK_UNREACHABLE",
-          errorMessage: "Valid OpenCode client not available in context"
         };
       }
       const executionResult = await safeExecute(context.client.session.abort({
@@ -812,12 +740,7 @@ class QuestionReplyAction {
     return result;
   }
   async findPendingQuestionRequestId(context, toolSessionId, toolCallId) {
-    const rawClient = this.readRecord(context.client?._client);
-    const getFn = rawClient?.get;
-    if (!getFn) {
-      throw new Error("raw client GET unavailable on client");
-    }
-    const listResult = await getFn({ url: "/question" });
+    const listResult = await context.client._client.get({ url: "/question" });
     const pendingQuestions = this.extractResultData(listResult);
     const requests = Array.isArray(pendingQuestions) ? pendingQuestions.filter((item) => item !== null && typeof item === "object") : [];
     const matchedRequests = requests.filter((request) => {
@@ -854,14 +777,6 @@ class QuestionReplyAction {
         errorMessage: `Agent not ready. Current state: ${context.connectionState}`
       };
     }
-    if (!isOpencodeClient(context.client)) {
-      context.logger?.error("action.question_reply.invalid_client");
-      return {
-        success: false,
-        errorCode: "SDK_UNREACHABLE",
-        errorMessage: "OpenCode client not available or invalid in context"
-      };
-    }
     const client = context.client;
     try {
       const requestId = await this.findPendingQuestionRequestId(context, payload.toolSessionId, payload.toolCallId);
@@ -872,16 +787,7 @@ class QuestionReplyAction {
           errorMessage: payload.toolCallId ? `Unable to resolve pending question request for toolSessionId=${payload.toolSessionId}, toolCallId=${payload.toolCallId}` : `Unable to resolve a unique pending question request for toolSessionId=${payload.toolSessionId}`
         };
       }
-      const rawClient = this.readRecord(client._client);
-      const postFn = rawClient?.post;
-      if (!postFn) {
-        return {
-          success: false,
-          errorCode: "SDK_UNREACHABLE",
-          errorMessage: "raw client POST unavailable on client"
-        };
-      }
-      await postFn({
+      await client._client.post({
         url: "/question/{requestID}/reply",
         path: { requestID: requestId },
         body: { answers: [[payload.answer]] },
@@ -3303,42 +3209,79 @@ function normalizeDownstreamMessage(raw, logger) {
   return ok2(normalized.value);
 }
 // src/runtime/SdkAdapter.ts
+var REQUIRED_SDK_CAPABILITIES = [
+  "session.create",
+  "session.prompt",
+  "session.abort",
+  "session.delete",
+  "postSessionIdPermissionsPermissionId",
+  "_client.get",
+  "_client.post"
+];
+function isRecord5(value) {
+  return value !== null && typeof value === "object";
+}
+function asFunction(value, bindTarget) {
+  if (typeof value !== "function") {
+    return;
+  }
+  return bindTarget ? value.bind(bindTarget) : value;
+}
+function getMissingSdkCapabilities(client) {
+  const root = isRecord5(client) ? client : undefined;
+  const session = isRecord5(root?.session) ? root.session : undefined;
+  const rawClient = isRecord5(root?._client) ? root._client : undefined;
+  return REQUIRED_SDK_CAPABILITIES.filter((capability) => {
+    switch (capability) {
+      case "session.create":
+        return typeof session?.create !== "function";
+      case "session.prompt":
+        return typeof session?.prompt !== "function";
+      case "session.abort":
+        return typeof session?.abort !== "function";
+      case "session.delete":
+        return typeof session?.delete !== "function";
+      case "postSessionIdPermissionsPermissionId":
+        return typeof root?.postSessionIdPermissionsPermissionId !== "function";
+      case "_client.get":
+        return typeof rawClient?.get !== "function";
+      case "_client.post":
+        return typeof rawClient?.post !== "function";
+      default:
+        return true;
+    }
+  });
+}
+function toHostClientLike(client) {
+  const root = isRecord5(client) ? client : undefined;
+  const global = isRecord5(root?.global) ? root.global : undefined;
+  const app = isRecord5(root?.app) ? root.app : undefined;
+  return {
+    global: {
+      health: asFunction(global?.health, global)
+    },
+    app: {
+      log: asFunction(app?.log, app)
+    }
+  };
+}
 function createSdkAdapter(client) {
-  if (!client || typeof client !== "object") {
-    return client;
+  if (getMissingSdkCapabilities(client).length > 0) {
+    return null;
   }
-  const c = client;
-  if (!c.session || !c.postSessionIdPermissionsPermissionId) {
-    return client;
-  }
-  const rawClient = c._client && typeof c._client === "object" ? {
-    get: typeof c._client.get === "function" ? c._client.get.bind(c._client) : undefined,
-    post: typeof c._client.post === "function" ? c._client.post.bind(c._client) : undefined
-  } : undefined;
+  const root = client;
   return {
     session: {
-      create: async (options) => {
-        return c.session.create(options);
-      },
-      abort: async (options) => {
-        return c.session.abort(options);
-      },
-      delete: async (options) => {
-        if (!c.session.delete) {
-          throw new Error("SDK session.delete is not available");
-        }
-        return c.session.delete(options);
-      },
-      prompt: async (options) => {
-        return c.session.prompt(options);
-      }
+      create: root.session.create.bind(root.session),
+      prompt: root.session.prompt.bind(root.session),
+      abort: root.session.abort.bind(root.session),
+      delete: root.session.delete.bind(root.session)
     },
-    postSessionIdPermissionsPermissionId: async (options) => {
-      return c.postSessionIdPermissionsPermissionId(options);
-    },
-    global: c.global,
-    _client: rawClient,
-    app: c.app
+    postSessionIdPermissionsPermissionId: root.postSessionIdPermissionsPermissionId.bind(root),
+    _client: {
+      get: root._client.get.bind(root._client),
+      post: root._client.post.bind(root._client)
+    }
   };
 }
 
@@ -3429,31 +3372,6 @@ function isUsableMacAddress(macAddress) {
   const normalized = normalizeMacAddress(macAddress);
   return MAC_ADDRESS_PATTERN.test(normalized) && normalized !== ZERO_MAC_ADDRESS;
 }
-async function resolveToolVersion(client, logger) {
-  const globalHealth = client?.global?.health;
-  if (!globalHealth) {
-    logger.warn("runtime.tool_version.unavailable", {
-      reason: "opencode_global_health_unavailable"
-    });
-    return "";
-  }
-  try {
-    const health = await globalHealth();
-    const version = health && typeof health === "object" && typeof health.version === "string" ? health.version.trim() : "";
-    if (!version) {
-      logger.warn("runtime.tool_version.unavailable", {
-        reason: "opencode_version_unavailable"
-      });
-      return "";
-    }
-    return version;
-  } catch (error) {
-    logger.warn("runtime.tool_version.unavailable", {
-      reason: error instanceof Error ? error.message : String(error)
-    });
-    return "";
-  }
-}
 function resolveMacAddress(logger) {
   const interfaces = os.networkInterfaces();
   let interfaceCount = 0;
@@ -3475,35 +3393,105 @@ function resolveMacAddress(logger) {
   });
   return EMPTY_MAC_ADDRESS;
 }
-async function resolveRegisterMetadata(client, logger) {
+function resolveRegisterMetadata(toolVersion, logger) {
   return {
     deviceName: os.hostname(),
-    toolVersion: await resolveToolVersion(client, logger),
+    toolVersion,
     macAddress: resolveMacAddress(logger)
   };
 }
 
+// src/runtime/Startup.ts
+function describeResponseShape(response) {
+  if (response === null) {
+    return "null";
+  }
+  if (Array.isArray(response)) {
+    return "array";
+  }
+  if (typeof response !== "object") {
+    return typeof response;
+  }
+  const keys = Object.keys(response).sort();
+  return keys.length > 0 ? `object:${keys.join(",")}` : "object:empty";
+}
+async function validateBridgeStartup(rawClient, sdkClient, missingCapabilities) {
+  if (!sdkClient) {
+    throw {
+      code: "SDK_CLIENT_CAPABILITIES_MISSING",
+      message: "OpenCode client is missing required action capabilities",
+      details: { missingCapabilities }
+    };
+  }
+  if (typeof rawClient.global?.health !== "function") {
+    throw {
+      code: "GLOBAL_HEALTH_UNAVAILABLE",
+      message: "OpenCode client.global.health is not available",
+      details: { missingCapability: "global.health" }
+    };
+  }
+  let health;
+  try {
+    health = await rawClient.global.health();
+  } catch (error) {
+    throw {
+      code: "GLOBAL_HEALTH_FAILED",
+      message: "OpenCode global.health check failed during startup",
+      details: { cause: getErrorMessage(error) }
+    };
+  }
+  const version = health && typeof health === "object" && typeof health.version === "string" ? health.version.trim() : "";
+  if (!version) {
+    const responseShape = describeResponseShape(health);
+    throw {
+      code: "GLOBAL_HEALTH_VERSION_MISSING",
+      message: "OpenCode global.health returned without version",
+      details: responseShape ? { responseShape } : {}
+    };
+  }
+  return {
+    sdkClient,
+    health: {
+      ...health,
+      version
+    }
+  };
+}
+function isBridgeStartupError(error) {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const candidate = error;
+  return typeof candidate.code === "string" && typeof candidate.message === "string" && !!candidate.details;
+}
+
 // src/runtime/BridgeRuntime.ts
 class BridgeRuntime {
-  options;
   actionRouter = new DefaultActionRouter;
   stateManager = new DefaultStateManager;
   registry = new DefaultActionRegistry;
   gatewayConnection = null;
   eventFilter = null;
   started = false;
+  rawClient;
   sdkClient;
+  missingSdkCapabilities;
+  workspacePath;
+  debug;
   logger;
   toolDoneCompat = new ToolDoneCompat;
   constructor(options) {
-    this.options = options;
-    this.logger = new AppLogger(options.client, { component: "runtime" }, undefined, undefined, options.debug);
+    this.workspacePath = options.workspacePath;
+    this.debug = options.debug;
+    this.rawClient = toHostClientLike(options.client);
+    this.missingSdkCapabilities = getMissingSdkCapabilities(options.client);
+    this.logger = new AppLogger(this.rawClient, { component: "runtime" }, undefined, undefined, options.debug);
     this.sdkClient = createSdkAdapter(options.client);
     this.registerActions();
     this.actionRouter.setRegistry(this.registry);
   }
   async start(options = {}) {
-    this.logger.info("runtime.start.requested", { workspacePath: this.options.workspacePath });
+    this.logger.info("runtime.start.requested", { workspacePath: this.workspacePath });
     if (this.started) {
       this.logger.debug("runtime.start.skipped_already_started");
       return;
@@ -3514,10 +3502,10 @@ class BridgeRuntime {
     }
     let config;
     try {
-      this.logger.info("runtime.config.loading", { workspacePath: this.options.workspacePath });
-      config = await loadConfig(this.options.workspacePath, this.logger);
-      if (this.options.debug === undefined && typeof config.debug === "boolean") {
-        this.logger = new AppLogger(this.options.client, { component: "runtime" }, this.logger.getTraceId(), undefined, config.debug);
+      this.logger.info("runtime.config.loading", { workspacePath: this.workspacePath });
+      config = await loadConfig(this.workspacePath, this.logger);
+      if (this.debug === undefined && typeof config.debug === "boolean") {
+        this.logger = new AppLogger(this.rawClient, { component: "runtime" }, this.logger.getTraceId(), undefined, config.debug);
       }
       this.logger.info("runtime.config.loaded_successfully", {
         config_version: config.config_version,
@@ -3528,7 +3516,7 @@ class BridgeRuntime {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error("runtime.config.loading_failed", {
         error: errorMessage,
-        workspacePath: this.options.workspacePath
+        workspacePath: this.workspacePath
       });
       throw error;
     }
@@ -3537,9 +3525,11 @@ class BridgeRuntime {
       this.started = true;
       return;
     }
+    const startupValidation = await this.validateStartupPrerequisites();
+    this.sdkClient = startupValidation.sdkClient;
     const agentId = this.stateManager.generateAndBindAgentId();
     this.eventFilter = new EventFilter(config.events.allowlist);
-    const registerMetadata = await resolveRegisterMetadata(this.options.client, this.logger);
+    const registerMetadata = resolveRegisterMetadata(startupValidation.health.version, this.logger);
     const auth = new DefaultAkSkAuth(config.auth.ak, config.auth.sk);
     const authPayloadProvider = () => auth.generateAuthPayload();
     const connection = new DefaultGatewayConnection({
@@ -3828,8 +3818,12 @@ class BridgeRuntime {
     }
   }
   buildActionContext(welinkSessionId, logger = this.logger) {
+    if (!this.sdkClient) {
+      throw new Error("runtime.sdk_client_unavailable");
+    }
     return {
       client: this.sdkClient,
+      hostClient: this.rawClient,
       connectionState: this.stateManager.getState(),
       agentId: this.stateManager.getAgentId() ?? "unknown-agent",
       welinkSessionId,
@@ -3839,6 +3833,32 @@ class BridgeRuntime {
         welinkSessionId
       })
     };
+  }
+  async validateStartupPrerequisites() {
+    try {
+      return await validateBridgeStartup(this.rawClient, this.sdkClient, this.missingSdkCapabilities);
+    } catch (error) {
+      if (isBridgeStartupError(error)) {
+        this.logStartupFailure(error);
+      }
+      throw error;
+    }
+  }
+  logStartupFailure(error) {
+    const payload = {
+      errorCode: error.code,
+      errorMessage: error.message,
+      ...error.details
+    };
+    if (error.code === "SDK_CLIENT_CAPABILITIES_MISSING") {
+      this.logger.error("runtime.start.failed_capabilities", payload);
+      return;
+    }
+    if (error.code === "GLOBAL_HEALTH_VERSION_MISSING") {
+      this.logger.error("runtime.start.failed_health_version", payload);
+      return;
+    }
+    this.logger.error("runtime.start.failed_health", payload);
   }
   logEventForwardingDetail(normalized, logger = this.logger) {
     const detail = this.buildEventForwardingDetail(normalized);
@@ -4020,5 +4040,5 @@ export {
   MessageBridgePlugin
 };
 
-//# debugId=DEBED9A51BD28BA464756E2164756E21
+//# debugId=D3A585842093BDEB64756E2164756E21
 //# sourceMappingURL=message-bridge.plugin.js.map

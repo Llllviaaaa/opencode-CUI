@@ -18,41 +18,22 @@ export class StatusQueryAction implements Action<'status_query', StatusQueryPayl
    * Returns online status from health check
    */
   async execute(payload: StatusQueryPayload, context: ActionContext): Promise<ActionResult<StatusQueryResultData>> {
+    void payload;
     const startedAt = Date.now();
     context.logger?.debug('action.status_query.started', {
       state: context.connectionState,
     });
     try {
       let opencodeOnline = false;
-      const global = (
-        context.client as { global?: { health?: () => Promise<unknown> | unknown } } | null | undefined
-      )?.global;
-      const app = (context.client as { app?: { health?: () => Promise<unknown> | unknown } } | null | undefined)?.app;
-      if (global?.health) {
+      if (context.hostClient.global?.health) {
         try {
-          await global.health();
-          opencodeOnline = true;
-        } catch {
-          if (app?.health) {
-            try {
-              await app.health();
-              opencodeOnline = true;
-            } catch {
-              opencodeOnline = false;
-            }
-          } else {
-            opencodeOnline = false;
-          }
-        }
-      } else if (app?.health) {
-        try {
-          await app.health();
+          await context.hostClient.global.health();
           opencodeOnline = true;
         } catch {
           opencodeOnline = false;
         }
       }
-      
+
       return {
         success: true,
         data: {
@@ -71,7 +52,7 @@ export class StatusQueryAction implements Action<'status_query', StatusQueryPayl
       return {
         success: false,
         errorCode,
-        errorMessage
+        errorMessage,
       };
     } finally {
       context.logger?.debug('action.status_query.finished', { latencyMs: Date.now() - startedAt });
@@ -85,14 +66,15 @@ export class StatusQueryAction implements Action<'status_query', StatusQueryPayl
     // Status queries are lightweight checks, so most errors would map to internal issues
     if (error instanceof Error) {
       const message = error.message.toLowerCase();
-      
+
       if (message.includes('timeout') || message.includes('network')) {
         return 'SDK_TIMEOUT';
-      } else if (message.includes('unreachable') || message.includes('connect')) {
+      }
+      if (message.includes('unreachable') || message.includes('connect')) {
         return 'SDK_UNREACHABLE';
       }
     }
-    
+
     return 'SDK_UNREACHABLE';
   }
 }

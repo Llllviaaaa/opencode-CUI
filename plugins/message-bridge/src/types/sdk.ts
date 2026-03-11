@@ -5,10 +5,26 @@ export interface OpencodeHealthResult {
   version?: string;
 }
 
+export interface HostClientLike {
+  global?: {
+    health?: (options?: Record<string, unknown>) => Promise<OpencodeHealthResult> | OpencodeHealthResult;
+  };
+  app?: {
+    log?: (options?: {
+      body?: {
+        service: string;
+        level: 'debug' | 'info' | 'warn' | 'error';
+        message: string;
+        extra?: Record<string, unknown>;
+      };
+    }) => Promise<unknown> | unknown;
+  };
+}
+
 export interface OpencodeSessionClient {
   create(options?: { body?: Record<string, unknown> }): Promise<unknown>;
   abort(options: { path: { id: string } }): Promise<unknown>;
-  delete?(options: { path: { id: string } }): Promise<unknown>;
+  delete(options: { path: { id: string } }): Promise<unknown>;
   prompt(options: {
     path: { id: string };
     body: { parts: Array<{ type: 'text'; text: string }> };
@@ -21,40 +37,10 @@ export interface OpencodeClient {
     path: { id: string; permissionID: string };
     body: { response: 'once' | 'always' | 'reject' };
   }) => Promise<unknown>;
-  global?: {
-    health?: (options?: Record<string, unknown>) => Promise<OpencodeHealthResult> | OpencodeHealthResult;
+  _client: {
+    get: (options: Record<string, unknown>) => Promise<unknown>;
+    post: (options: Record<string, unknown>) => Promise<unknown>;
   };
-  app?: {
-    health?: (options?: Record<string, unknown>) => Promise<unknown> | unknown;
-    log: (options?: {
-      body?: {
-        service: string;
-        level: 'debug' | 'info' | 'warn' | 'error';
-        message: string;
-        extra?: Record<string, unknown>;
-      };
-    }) => Promise<unknown> | unknown;
-  };
-  _client?: {
-    get?: (options: Record<string, unknown>) => Promise<unknown>;
-    post?: (options: Record<string, unknown>) => Promise<unknown>;
-  };
-}
-
-export function isOpencodeClient(client: unknown): client is OpencodeClient {
-  if (!client || typeof client !== 'object') {
-    return false;
-  }
-
-  const c = client as Partial<OpencodeClient>;
-  return (
-    !!c.session &&
-    typeof c.session === 'object' &&
-    typeof c.session.create === 'function' &&
-    typeof c.session.abort === 'function' &&
-    typeof c.session.prompt === 'function' &&
-    typeof c.postSessionIdPermissionsPermissionId === 'function'
-  );
 }
 
 export async function safeExecute<T>(

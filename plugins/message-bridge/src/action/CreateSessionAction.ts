@@ -5,7 +5,6 @@ import {
   ActionResult,
   ActionContext,
   ErrorCode,
-  isOpencodeClient,
   hasError,
   safeExecute,
   stateToErrorCode
@@ -34,15 +33,6 @@ export class CreateSessionAction implements Action<'create_session', CreateSessi
           success: false,
           errorCode: stateToErrorCode(context.connectionState),
           errorMessage: `Agent not ready. Current state: ${context.connectionState}`
-        };
-      }
-
-      if (!isOpencodeClient(context.client)) {
-        context.logger?.error('action.create_session.invalid_client');
-        return {
-          success: false,
-          errorCode: 'SDK_UNREACHABLE',
-          errorMessage: 'Valid OpenCode client not available in context'
         };
       }
 

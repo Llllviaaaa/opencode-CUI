@@ -5,7 +5,6 @@ import {
   ActionResult,
   ActionContext,
   ErrorCode,
-  isOpencodeClient,
   hasError,
   safeExecute,
   stateToErrorCode
@@ -35,24 +34,7 @@ export class CloseSessionAction implements Action<'close_session', CloseSessionP
         };
       }
 
-      if (!isOpencodeClient(context.client)) {
-        context.logger?.error('action.close_session.invalid_client');
-        return {
-          success: false,
-          errorCode: 'SDK_UNREACHABLE',
-          errorMessage: 'Valid OpenCode client not available in context'
-        };
-      }
-
       const client = context.client;
-      if (typeof client.session.delete !== 'function') {
-        context.logger?.error('action.close_session.delete_unavailable');
-        return {
-          success: false,
-          errorCode: 'SDK_UNREACHABLE',
-          errorMessage: 'SDK session.delete is not available'
-        };
-      }
       const executionResult = await safeExecute(
         client.session.delete({
           path: { id: payload.toolSessionId }

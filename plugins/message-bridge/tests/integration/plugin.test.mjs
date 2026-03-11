@@ -6,6 +6,33 @@ import { join } from 'node:path';
 import { MessageBridgePlugin, default as DefaultPlugin } from '../../src/index.ts';
 import { __resetRuntimeForTests, getOrCreateRuntime, getRuntime, stopRuntime } from '../../src/runtime/singleton.ts';
 
+function createPluginClient(overrides = {}) {
+  const base = {
+    global: {
+      health: async () => ({ healthy: true, version: '9.9.9' }),
+    },
+    session: {
+      create: async () => ({}),
+      abort: async () => ({}),
+      delete: async () => ({}),
+      prompt: async () => ({}),
+    },
+    postSessionIdPermissionsPermissionId: async () => ({}),
+    _client: {
+      get: async () => ({ data: [] }),
+      post: async () => ({ data: undefined }),
+    },
+  };
+
+  return {
+    ...base,
+    ...overrides,
+    global: { ...base.global, ...(overrides.global ?? {}) },
+    session: { ...base.session, ...(overrides.session ?? {}) },
+    _client: { ...base._client, ...(overrides._client ?? {}) },
+  };
+}
+
 function mockInput(overrides = {}) {
   return {
     client: {},
@@ -154,7 +181,7 @@ describe('plugin contract', () => {
 
     globalThis.WebSocket = SlowOpenWebSocket;
     try {
-      const initializingPromise = getOrCreateRuntime(mockInput());
+      const initializingPromise = getOrCreateRuntime(mockInput({ client: createPluginClient() }));
       stopRuntime();
       await expect(initializingPromise).rejects.toBeDefined();
       await new Promise((r) => setTimeout(r, 80));

@@ -1,5 +1,4 @@
 import os from 'os';
-import type { OpencodeClient } from '../types';
 import type { BridgeLogger } from './AppLogger';
 
 export interface RegisterMetadata {
@@ -23,37 +22,6 @@ function isUsableMacAddress(macAddress: string | undefined): macAddress is strin
 
   const normalized = normalizeMacAddress(macAddress);
   return MAC_ADDRESS_PATTERN.test(normalized) && normalized !== ZERO_MAC_ADDRESS;
-}
-
-async function resolveToolVersion(client: unknown, logger: BridgeLogger): Promise<string> {
-  const globalHealth = (client as Partial<OpencodeClient> | null | undefined)?.global?.health;
-  if (!globalHealth) {
-    logger.warn('runtime.tool_version.unavailable', {
-      reason: 'opencode_global_health_unavailable',
-    });
-    return '';
-  }
-
-  try {
-    const health = await globalHealth();
-    const version =
-      health && typeof health === 'object' && typeof (health as { version?: unknown }).version === 'string'
-        ? (health as { version: string }).version.trim()
-        : '';
-    if (!version) {
-      logger.warn('runtime.tool_version.unavailable', {
-        reason: 'opencode_version_unavailable',
-      });
-      return '';
-    }
-
-    return version;
-  } catch (error) {
-    logger.warn('runtime.tool_version.unavailable', {
-      reason: error instanceof Error ? error.message : String(error),
-    });
-    return '';
-  }
 }
 
 function resolveMacAddress(logger: BridgeLogger): string {
@@ -81,10 +49,10 @@ function resolveMacAddress(logger: BridgeLogger): string {
   return EMPTY_MAC_ADDRESS;
 }
 
-export async function resolveRegisterMetadata(client: unknown, logger: BridgeLogger): Promise<RegisterMetadata> {
+export function resolveRegisterMetadata(toolVersion: string, logger: BridgeLogger): RegisterMetadata {
   return {
     deviceName: os.hostname(),
-    toolVersion: await resolveToolVersion(client, logger),
+    toolVersion,
     macAddress: resolveMacAddress(logger),
   };
 }
