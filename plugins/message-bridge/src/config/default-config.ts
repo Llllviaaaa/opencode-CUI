@@ -7,8 +7,6 @@ export const DEFAULT_BRIDGE_CONFIG = {
   gateway: {
     url: 'ws://localhost:8081/ws/agent',
     toolType: 'OPENCODE',
-    toolVersion: '1.0.0',
-    deviceName: 'Local Machine',
     heartbeatIntervalMs: 30000,
     reconnect: {
       baseMs: 1000,

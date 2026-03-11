@@ -11,6 +11,7 @@ import { QuestionReplyAction } from '../../src/action/QuestionReplyAction.ts';
 function readyContext(client, overrides = {}) {
   return {
     client,
+    hostClient: overrides.hostClient ?? client,
     connectionState: 'READY',
     agentId: 'agent-1',
     sessionId: 'ctx-session',
@@ -187,15 +188,25 @@ describe('PermissionReplyAction coverage', () => {
 });
 
 describe('StatusQueryAction coverage', () => {
-  test('execute only returns true when app.health succeeds', async () => {
+  test('execute only uses global.health', async () => {
     const action = new StatusQueryAction();
     const ready = await action.execute({}, readyContext({
-      app: {
-        health: async () => ({ ok: true }),
+      global: {
+        health: async () => ({ healthy: true, version: '9.9.9' }),
       },
     }));
     expect(ready.success).toBe(true);
     expect(ready.data.opencodeOnline).toBe(true);
+
+    const downAfterGlobalFailure = await action.execute({}, readyContext({
+      global: {
+        health: async () => {
+          throw new Error('global unavailable');
+        },
+      },
+    }));
+    expect(downAfterGlobalFailure.success).toBe(true);
+    expect(downAfterGlobalFailure.data.opencodeOnline).toBe(false);
 
     const down = await action.execute(
       {},

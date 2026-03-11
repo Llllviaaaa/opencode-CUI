@@ -1,22 +1,111 @@
 import { describe, test, expect } from 'bun:test';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import os, { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { BridgeRuntime } from '../../src/runtime/BridgeRuntime.ts';
 import { EventFilter } from '../../src/event/EventFilter.ts';
 
+function createRuntimeClient(overrides = {}) {
+  const base = {
+    global: {
+      health: async () => ({ healthy: true, version: '9.9.9' }),
+    },
+    session: {
+      create: async () => ({}),
+      abort: async () => ({}),
+      delete: async () => ({}),
+      prompt: async () => ({}),
+    },
+    postSessionIdPermissionsPermissionId: async () => ({}),
+    _client: {
+      get: async () => ({ data: [] }),
+      post: async () => ({ data: undefined }),
+    },
+  };
+
+  const hasOwn = (key) => Object.prototype.hasOwnProperty.call(overrides, key);
+
+  return {
+    ...base,
+    ...overrides,
+    global: hasOwn('global')
+      ? (overrides.global ? { ...base.global, ...overrides.global } : overrides.global)
+      : base.global,
+    session: {
+      ...base.session,
+      ...(overrides.session ?? {}),
+    },
+    _client: hasOwn('_client')
+      ? (overrides._client ? { ...base._client, ...overrides._client } : overrides._client)
+      : base._client,
+    app: hasOwn('app') ? (overrides.app ? { ...overrides.app } : overrides.app) : undefined,
+  };
+}
+
+async function writeEnabledConfig(workspace) {
+  await mkdir(join(workspace, '.opencode'), { recursive: true });
+  await writeFile(
+    join(workspace, '.opencode', 'message-bridge.json'),
+    JSON.stringify({
+      config_version: 1,
+      enabled: true,
+      gateway: {
+        url: 'ws://localhost:8081/ws/agent',
+        toolType: 'opencode',
+        heartbeatIntervalMs: 30000,
+        reconnect: {
+          baseMs: 1000,
+          maxMs: 30000,
+          exponential: true,
+        },
+      },
+      sdk: {
+        timeoutMs: 10000,
+      },
+      auth: {
+        ak: 'test-ak-001',
+        sk: 'test-sk-secret-001',
+      },
+      events: {
+        allowlist: ['message.updated'],
+      },
+    }),
+    'utf8',
+  );
+}
+
+function createRegisterCaptureWebSocket() {
+  return class RegisterCaptureWebSocket {
+    static OPEN = 1;
+    static instances = [];
+
+    constructor() {
+      this.readyState = 0;
+      this.sent = [];
+      RegisterCaptureWebSocket.instances.push(this);
+      setTimeout(() => {
+        this.readyState = RegisterCaptureWebSocket.OPEN;
+        this.onopen?.();
+        this.onmessage?.({ data: JSON.stringify({ type: 'register_ok' }) });
+      }, 0);
+    }
+
+    send(data) {
+      this.sent.push(JSON.parse(data));
+    }
+
+    close() {
+      this.readyState = 3;
+      this.onclose?.();
+    }
+  };
+}
+
 describe('runtime protocol strictness', () => {
   test('rejects non-baseline nested invoke payload and returns tool_error without code', async () => {
     const runtime = new BridgeRuntime({
-      client: {
-        session: {
-          create: async () => ({}),
-          abort: async () => ({}),
-          prompt: async () => ({}),
-        },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
+      client: createRuntimeClient(),
     });
 
     const sent = [];
@@ -41,17 +130,14 @@ describe('runtime protocol strictness', () => {
   test('accepts baseline invoke shape and emits tool_done on chat success', async () => {
     const prompts = [];
     const runtime = new BridgeRuntime({
-      client: {
+      client: createRuntimeClient({
         session: {
-          create: async () => ({}),
-          abort: async () => ({}),
           prompt: async (options) => {
             prompts.push(options);
             return { data: { ok: true } };
           },
         },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
+      }),
     });
 
     const sent = [];
@@ -78,14 +164,7 @@ describe('runtime protocol strictness', () => {
 
   test('rejects permission_reply payloads with unsupported response values', async () => {
     const runtime = new BridgeRuntime({
-      client: {
-        session: {
-          create: async () => ({}),
-          abort: async () => ({}),
-          prompt: async () => ({}),
-        },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
+      client: createRuntimeClient(),
     });
 
     const sent = [];
@@ -108,10 +187,8 @@ describe('runtime protocol strictness', () => {
     const getCalls = [];
     const postCalls = [];
     const runtime = new BridgeRuntime({
-      client: {
+      client: createRuntimeClient({
         session: {
-          create: async () => ({}),
-          abort: async () => ({}),
           prompt: async () => ({ data: { ok: true } }),
         },
         _client: {
@@ -132,8 +209,7 @@ describe('runtime protocol strictness', () => {
             return { data: undefined };
           },
         },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
+      }),
     });
 
     const sent = [];
@@ -162,10 +238,8 @@ describe('runtime protocol strictness', () => {
   test('accepts question_reply payloads missing toolCallId', async () => {
     const postCalls = [];
     const runtime = new BridgeRuntime({
-      client: {
+      client: createRuntimeClient({
         session: {
-          create: async () => ({}),
-          abort: async () => ({}),
           prompt: async () => ({ data: { ok: true } }),
         },
         _client: {
@@ -182,8 +256,7 @@ describe('runtime protocol strictness', () => {
             return { data: undefined };
           },
         },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
+      }),
     });
 
     const sent = [];
@@ -204,17 +277,15 @@ describe('runtime protocol strictness', () => {
   test('does not emit tool_done on permission_reply success', async () => {
     const permissionCalls = [];
     const runtime = new BridgeRuntime({
-      client: {
+      client: createRuntimeClient({
         session: {
-          create: async () => ({}),
-          abort: async () => ({}),
           prompt: async () => ({ data: { ok: true } }),
         },
         postSessionIdPermissionsPermissionId: async (options) => {
           permissionCalls.push(options);
           return {};
         },
-      },
+      }),
     });
 
     const sent = [];
@@ -239,10 +310,8 @@ describe('runtime protocol strictness', () => {
 
   test('rejects question_reply when toolCallId is omitted and pending request is not unique', async () => {
     const runtime = new BridgeRuntime({
-      client: {
+      client: createRuntimeClient({
         session: {
-          create: async () => ({}),
-          abort: async () => ({}),
           prompt: async () => ({ data: { ok: true } }),
         },
         _client: {
@@ -254,8 +323,7 @@ describe('runtime protocol strictness', () => {
           }),
           post: async () => ({ data: undefined }),
         },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
+      }),
     });
 
     const sent = [];
@@ -276,10 +344,8 @@ describe('runtime protocol strictness', () => {
 
   test('rejects question_reply when no pending request matches', async () => {
     const runtime = new BridgeRuntime({
-      client: {
+      client: createRuntimeClient({
         session: {
-          create: async () => ({}),
-          abort: async () => ({}),
           prompt: async () => ({ data: { ok: true } }),
         },
         _client: {
@@ -294,8 +360,7 @@ describe('runtime protocol strictness', () => {
           }),
           post: async () => ({ data: undefined }),
         },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
+      }),
     });
 
     const sent = [];
@@ -314,44 +379,13 @@ describe('runtime protocol strictness', () => {
     expect(sent[0].welinkSessionId).toBe('q-46');
   });
 
-  test('rejects question_reply when raw client is unavailable', async () => {
-    const runtime = new BridgeRuntime({
-      client: {
-        session: {
-          create: async () => ({}),
-          abort: async () => ({}),
-          prompt: async () => ({ data: { ok: true } }),
-        },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
-    });
-
-    const sent = [];
-    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
-    runtime.stateManager.setState('READY');
-
-    await runtime.handleDownstreamMessage({
-      type: 'invoke',
-      welinkSessionId: 'q-47',
-      action: 'question_reply',
-      payload: { toolSessionId: 'tool-47', toolCallId: 'call-47', answer: 'Vite' },
-    });
-
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].error).toContain('raw client GET unavailable');
-  });
-
   test('rejects question_reply payloads missing toolSessionId', async () => {
     const runtime = new BridgeRuntime({
-      client: {
+      client: createRuntimeClient({
         session: {
-          create: async () => ({}),
-          abort: async () => ({}),
           prompt: async () => ({ data: { ok: true } }),
         },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
+      }),
     });
 
     const sent = [];
@@ -372,14 +406,11 @@ describe('runtime protocol strictness', () => {
 
   test('rejects question_reply payloads missing answer', async () => {
     const runtime = new BridgeRuntime({
-      client: {
+      client: createRuntimeClient({
         session: {
-          create: async () => ({}),
-          abort: async () => ({}),
           prompt: async () => ({ data: { ok: true } }),
         },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
+      }),
     });
 
     const sent = [];
@@ -400,17 +431,7 @@ describe('runtime protocol strictness', () => {
 
   test('responds to standalone status_query with envelope-free status_response', async () => {
     const runtime = new BridgeRuntime({
-      client: {
-        app: {
-          health: async () => ({ ok: true }),
-        },
-        session: {
-          create: async () => ({}),
-          abort: async () => ({}),
-          prompt: async () => ({}),
-        },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
+      client: createRuntimeClient(),
     });
 
     const sent = [];
@@ -431,14 +452,7 @@ describe('runtime protocol strictness', () => {
 
   test('rejects invoke status_query compatibility variant', async () => {
     const runtime = new BridgeRuntime({
-      client: {
-        session: {
-          create: async () => ({}),
-          abort: async () => ({}),
-          prompt: async () => ({}),
-        },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
+      client: createRuntimeClient(),
     });
 
     const sent = [];
@@ -598,14 +612,11 @@ describe('runtime protocol strictness', () => {
 
   test('does not emit duplicate tool_done when session.idle follows chat success', async () => {
     const runtime = new BridgeRuntime({
-      client: {
+      client: createRuntimeClient({
         session: {
-          create: async () => ({}),
-          abort: async () => ({}),
           prompt: async () => ({ data: { ok: true } }),
         },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
+      }),
     });
     const sent = [];
 
@@ -639,17 +650,14 @@ describe('runtime protocol strictness', () => {
       resolvePrompt = resolve;
     });
     const runtime = new BridgeRuntime({
-      client: {
+      client: createRuntimeClient({
         session: {
-          create: async () => ({}),
-          abort: async () => ({}),
           prompt: async () => {
             await promptPromise;
             return { data: { ok: true } };
           },
         },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
+      }),
     });
     const sent = [];
 
@@ -685,18 +693,15 @@ describe('runtime protocol strictness', () => {
   test('does not emit tool_done for close_session success', async () => {
     const deleteCalls = [];
     const runtime = new BridgeRuntime({
-      client: {
+      client: createRuntimeClient({
         session: {
-          create: async () => ({}),
-          abort: async () => ({}),
           delete: async (options) => {
             deleteCalls.push(options);
             return {};
           },
           prompt: async () => ({ data: { ok: true } }),
         },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
+      }),
     });
     const sent = [];
 
@@ -714,7 +719,7 @@ describe('runtime protocol strictness', () => {
     expect(sent).toHaveLength(0);
   });
 
-  test('runtime.start sends register with macAddress and normalized toolType', async () => {
+  test('runtime.start sends register with runtime-derived metadata', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'mb-runtime-register-'));
     const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
     process.env.HOME = fakeHome;
@@ -779,10 +784,23 @@ describe('runtime protocol strictness', () => {
     }
 
     globalThis.WebSocket = RegisterCaptureWebSocket;
+    const originalNetworkInterfaces = os.networkInterfaces;
+    os.networkInterfaces = () => ({
+      en0: [
+        {
+          address: '127.0.0.1',
+          netmask: '255.0.0.0',
+          family: 'IPv4',
+          mac: '11:22:33:44:55:66',
+          internal: false,
+          cidr: null,
+        },
+      ],
+    });
     try {
       const runtime = new BridgeRuntime({
         workspacePath: workspace,
-        client: {},
+        client: createRuntimeClient(),
       });
 
       await runtime.start();
@@ -791,15 +809,341 @@ describe('runtime protocol strictness', () => {
       const ws = RegisterCaptureWebSocket.instances[0];
       expect(ws.sent[0]).toEqual({
         type: 'register',
-        deviceName: 'dev',
+        deviceName: hostname(),
         macAddress: '11:22:33:44:55:66',
         os: expect.any(String),
         toolType: 'OPENCODE',
-        toolVersion: '1.2.3',
+        toolVersion: '9.9.9',
       });
 
       runtime.stop();
     } finally {
+      os.networkInterfaces = originalNetworkInterfaces;
+      globalThis.WebSocket = originalWebSocket;
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('runtime.start sends empty macAddress when no usable interface is available', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-runtime-register-empty-mac-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    process.env.HOME = fakeHome;
+
+    await mkdir(join(workspace, '.opencode'), { recursive: true });
+    await writeFile(
+      join(workspace, '.opencode', 'message-bridge.json'),
+      JSON.stringify({
+        config_version: 1,
+        enabled: true,
+        gateway: {
+          url: 'ws://localhost:8081/ws/agent',
+          toolType: 'opencode',
+          heartbeatIntervalMs: 30000,
+          reconnect: {
+            baseMs: 1000,
+            maxMs: 30000,
+            exponential: true,
+          },
+        },
+        sdk: {
+          timeoutMs: 10000,
+        },
+        auth: {
+          ak: 'test-ak-001',
+          sk: 'test-sk-secret-001',
+        },
+        events: {
+          allowlist: ['message.updated'],
+        },
+      }),
+      'utf8',
+    );
+
+    const originalWebSocket = globalThis.WebSocket;
+    class RegisterCaptureWebSocket {
+      static OPEN = 1;
+      static instances = [];
+
+      constructor() {
+        this.readyState = 0;
+        this.sent = [];
+        RegisterCaptureWebSocket.instances.push(this);
+        setTimeout(() => {
+          this.readyState = RegisterCaptureWebSocket.OPEN;
+          this.onopen?.();
+          this.onmessage?.({ data: JSON.stringify({ type: 'register_ok' }) });
+        }, 0);
+      }
+
+      send(data) {
+        this.sent.push(JSON.parse(data));
+      }
+
+      close() {
+        this.readyState = 3;
+        this.onclose?.();
+      }
+    }
+
+    globalThis.WebSocket = RegisterCaptureWebSocket;
+    const originalNetworkInterfaces = os.networkInterfaces;
+    os.networkInterfaces = () => ({
+      lo0: [
+        {
+          address: '127.0.0.1',
+          netmask: '255.0.0.0',
+          family: 'IPv4',
+          mac: '00:00:00:00:00:00',
+          internal: true,
+          cidr: null,
+        },
+      ],
+    });
+    try {
+      const runtime = new BridgeRuntime({
+        workspacePath: workspace,
+        client: createRuntimeClient(),
+      });
+
+      await runtime.start();
+      await new Promise((r) => setTimeout(r, 10));
+
+      const ws = RegisterCaptureWebSocket.instances[0];
+      expect(ws.sent[0].macAddress).toBe('');
+
+      runtime.stop();
+    } finally {
+      os.networkInterfaces = originalNetworkInterfaces;
+      globalThis.WebSocket = originalWebSocket;
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('runtime.start fails on missing sdk capability before connect', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-runtime-start-missing-cap-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    const originalHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+    await writeEnabledConfig(workspace);
+
+    const appLogs = [];
+    const originalWebSocket = globalThis.WebSocket;
+    const RegisterCaptureWebSocket = createRegisterCaptureWebSocket();
+    globalThis.WebSocket = RegisterCaptureWebSocket;
+
+    try {
+      const runtime = new BridgeRuntime({
+        workspacePath: workspace,
+        client: createRuntimeClient({
+          app: {
+            log: async (options) => {
+              appLogs.push(options.body);
+              return true;
+            },
+          },
+          session: {
+            delete: undefined,
+          },
+        }),
+      });
+
+      await expect(runtime.start()).rejects.toEqual({
+        code: 'SDK_CLIENT_CAPABILITIES_MISSING',
+        message: 'OpenCode client is missing required action capabilities',
+        details: {
+          missingCapabilities: ['session.delete'],
+        },
+      });
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(RegisterCaptureWebSocket.instances).toHaveLength(0);
+      const failureLog = appLogs.find((entry) => entry.message === 'runtime.start.failed_capabilities');
+      expect(failureLog.extra.errorCode).toBe('SDK_CLIENT_CAPABILITIES_MISSING');
+      expect(failureLog.extra.errorMessage).toBe('OpenCode client is missing required action capabilities');
+      expect(failureLog.extra.missingCapabilities).toEqual(['session.delete']);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      globalThis.WebSocket = originalWebSocket;
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('runtime.start fails when global.health is unavailable before connect', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-runtime-start-no-health-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    const originalHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+    await writeEnabledConfig(workspace);
+
+    const appLogs = [];
+    const originalWebSocket = globalThis.WebSocket;
+    const RegisterCaptureWebSocket = createRegisterCaptureWebSocket();
+    globalThis.WebSocket = RegisterCaptureWebSocket;
+
+    try {
+      const runtime = new BridgeRuntime({
+        workspacePath: workspace,
+        client: createRuntimeClient({
+          app: {
+            log: async (options) => {
+              appLogs.push(options.body);
+              return true;
+            },
+          },
+          global: undefined,
+        }),
+      });
+
+      await expect(runtime.start()).rejects.toEqual({
+        code: 'GLOBAL_HEALTH_UNAVAILABLE',
+        message: 'OpenCode client.global.health is not available',
+        details: {
+          missingCapability: 'global.health',
+        },
+      });
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(RegisterCaptureWebSocket.instances).toHaveLength(0);
+      const failureLog = appLogs.find((entry) => entry.message === 'runtime.start.failed_health');
+      expect(failureLog.extra.errorCode).toBe('GLOBAL_HEALTH_UNAVAILABLE');
+      expect(failureLog.extra.errorMessage).toBe('OpenCode client.global.health is not available');
+      expect(failureLog.extra.missingCapability).toBe('global.health');
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      globalThis.WebSocket = originalWebSocket;
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('runtime.start fails when global.health returns without version before connect', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-runtime-start-no-version-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    const originalHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+    await writeEnabledConfig(workspace);
+
+    const appLogs = [];
+    const originalWebSocket = globalThis.WebSocket;
+    const RegisterCaptureWebSocket = createRegisterCaptureWebSocket();
+    globalThis.WebSocket = RegisterCaptureWebSocket;
+
+    try {
+      const runtime = new BridgeRuntime({
+        workspacePath: workspace,
+        client: createRuntimeClient({
+          app: {
+            log: async (options) => {
+              appLogs.push(options.body);
+              return true;
+            },
+          },
+          global: {
+            health: async () => ({ healthy: true }),
+          },
+        }),
+      });
+
+      await expect(runtime.start()).rejects.toEqual({
+        code: 'GLOBAL_HEALTH_VERSION_MISSING',
+        message: 'OpenCode global.health returned without version',
+        details: {
+          responseShape: 'object:healthy',
+        },
+      });
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(RegisterCaptureWebSocket.instances).toHaveLength(0);
+      const failureLog = appLogs.find((entry) => entry.message === 'runtime.start.failed_health_version');
+      expect(failureLog.extra.errorCode).toBe('GLOBAL_HEALTH_VERSION_MISSING');
+      expect(failureLog.extra.errorMessage).toBe('OpenCode global.health returned without version');
+      expect(failureLog.extra.responseShape).toBe('object:healthy');
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      globalThis.WebSocket = originalWebSocket;
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('runtime.start fails when global.health throws before register', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-runtime-register-empty-version-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    const originalHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+
+    await writeEnabledConfig(workspace);
+
+    const appLogs = [];
+    const originalWebSocket = globalThis.WebSocket;
+    const RegisterCaptureWebSocket = createRegisterCaptureWebSocket();
+
+    globalThis.WebSocket = RegisterCaptureWebSocket;
+    const originalNetworkInterfaces = os.networkInterfaces;
+    os.networkInterfaces = () => ({
+      en0: [
+        {
+          address: '127.0.0.1',
+          netmask: '255.0.0.0',
+          family: 'IPv4',
+          mac: '11:22:33:44:55:66',
+          internal: false,
+          cidr: null,
+        },
+      ],
+    });
+    try {
+      const runtime = new BridgeRuntime({
+        workspacePath: workspace,
+        client: createRuntimeClient({
+          app: {
+            log: async (options) => {
+              appLogs.push(options.body);
+              return true;
+            },
+          },
+          global: {
+            health: async () => {
+              throw new Error('global unavailable');
+            },
+          },
+        }),
+      });
+
+      await expect(runtime.start()).rejects.toEqual({
+        code: 'GLOBAL_HEALTH_FAILED',
+        message: 'OpenCode global.health check failed during startup',
+        details: { cause: 'global unavailable' },
+      });
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(RegisterCaptureWebSocket.instances).toHaveLength(0);
+      const failureLog = appLogs.find((entry) => entry.message === 'runtime.start.failed_health');
+      expect(failureLog.extra.errorCode).toBe('GLOBAL_HEALTH_FAILED');
+      expect(failureLog.extra.errorMessage).toBe('OpenCode global.health check failed during startup');
+      expect(failureLog.extra.cause).toBe('global unavailable');
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      os.networkInterfaces = originalNetworkInterfaces;
       globalThis.WebSocket = originalWebSocket;
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
@@ -809,7 +1153,7 @@ describe('runtime protocol strictness', () => {
   test('uses gatewayMessageId as traceId across downstream invoke handling', async () => {
     const appLogs = [];
     const runtime = new BridgeRuntime({
-      client: {
+      client: createRuntimeClient({
         app: {
           log: async (options) => {
             appLogs.push(options.body);
@@ -817,12 +1161,9 @@ describe('runtime protocol strictness', () => {
           },
         },
         session: {
-          create: async () => ({}),
-          abort: async () => ({}),
           prompt: async () => ({ data: { ok: true } }),
         },
-        postSessionIdPermissionsPermissionId: async () => ({}),
-      },
+      }),
     });
 
     runtime.gatewayConnection = { send: () => {} };

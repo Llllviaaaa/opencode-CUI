@@ -525,12 +525,16 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
     }
   });
 
-  test('supports overriding gateway.macAddress from environment', async () => {
+  test('ignores removed gateway metadata environment overrides', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'mb-json-mac-env-'));
     const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    const originalDeviceName = process.env.BRIDGE_GATEWAY_DEVICE_NAME;
     const originalMacAddress = process.env.BRIDGE_GATEWAY_MAC_ADDRESS;
+    const originalToolVersion = process.env.BRIDGE_GATEWAY_TOOL_VERSION;
     process.env.HOME = fakeHome;
+    process.env.BRIDGE_GATEWAY_DEVICE_NAME = 'env-device';
     process.env.BRIDGE_GATEWAY_MAC_ADDRESS = '11:22:33:44:55:66';
+    process.env.BRIDGE_GATEWAY_TOOL_VERSION = '9.9.9';
 
     await mkdir(join(workspace, '.opencode'), { recursive: true });
     await writeFile(
@@ -541,12 +545,24 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
 
     try {
       const config = await loadConfig(workspace);
-      expect(config.gateway.macAddress).toBe('11:22:33:44:55:66');
+      expect('deviceName' in config.gateway).toBe(false);
+      expect('macAddress' in config.gateway).toBe(false);
+      expect('toolVersion' in config.gateway).toBe(false);
     } finally {
+      if (originalDeviceName === undefined) {
+        delete process.env.BRIDGE_GATEWAY_DEVICE_NAME;
+      } else {
+        process.env.BRIDGE_GATEWAY_DEVICE_NAME = originalDeviceName;
+      }
       if (originalMacAddress === undefined) {
         delete process.env.BRIDGE_GATEWAY_MAC_ADDRESS;
       } else {
         process.env.BRIDGE_GATEWAY_MAC_ADDRESS = originalMacAddress;
+      }
+      if (originalToolVersion === undefined) {
+        delete process.env.BRIDGE_GATEWAY_TOOL_VERSION;
+      } else {
+        process.env.BRIDGE_GATEWAY_TOOL_VERSION = originalToolVersion;
       }
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });

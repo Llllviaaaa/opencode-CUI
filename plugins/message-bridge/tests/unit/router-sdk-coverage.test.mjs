@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test';
 
 import { DefaultActionRouter } from '../../src/action/ActionRouter.ts';
 import { DefaultActionRegistry } from '../../src/action/ActionRegistry.ts';
-import { createSdkAdapter } from '../../src/runtime/SdkAdapter.ts';
+import { createSdkAdapter, getMissingSdkCapabilities } from '../../src/runtime/SdkAdapter.ts';
 
 describe('DefaultActionRouter coverage', () => {
   const context = {
@@ -43,14 +43,28 @@ describe('DefaultActionRouter coverage', () => {
 });
 
 describe('createSdkAdapter coverage', () => {
-  test('returns passthrough for invalid clients', () => {
+  test('reports missing capabilities in fixed order', () => {
+    expect(getMissingSdkCapabilities({
+      session: {
+        create: async () => ({}),
+      },
+    })).toEqual([
+      'session.prompt',
+      'session.abort',
+      'session.delete',
+      'postSessionIdPermissionsPermissionId',
+      '_client.get',
+      '_client.post',
+    ]);
+  });
+
+  test('returns null for invalid or incomplete clients', () => {
     expect(createSdkAdapter(null)).toBeNull();
-    const input = { session: {} };
-    expect(createSdkAdapter(input)).toBe(input);
+    expect(createSdkAdapter({ session: {} })).toBeNull();
   });
 
   test('creates adapted sdk methods and forwards calls', async () => {
-    const calls = { create: 0, abort: 0, prompt: 0, permission: 0 };
+    const calls = { create: 0, abort: 0, delete: 0, prompt: 0, permission: 0, get: 0, post: 0 };
     const raw = {
       session: {
         create: async (options) => {
@@ -59,6 +73,10 @@ describe('createSdkAdapter coverage', () => {
         },
         abort: async (options) => {
           calls.abort += 1;
+          return { data: options };
+        },
+        delete: async (options) => {
+          calls.delete += 1;
           return { data: options };
         },
         prompt: async (options) => {
@@ -70,24 +88,40 @@ describe('createSdkAdapter coverage', () => {
         calls.permission += 1;
         return { data: options };
       },
+      _client: {
+        get: async (options) => {
+          calls.get += 1;
+          return { data: options };
+        },
+        post: async (options) => {
+          calls.post += 1;
+          return { data: options };
+        },
+      },
     };
 
     const adapted = createSdkAdapter(raw);
     const r1 = await adapted.session.create({ body: { metadata: { a: 1 } } });
     const r2 = await adapted.session.abort({ path: { id: 's1' } });
-    const r3 = await adapted.session.prompt({
+    const r3 = await adapted.session.delete({ path: { id: 's1' } });
+    const r4 = await adapted.session.prompt({
       path: { id: 's1' },
       body: { parts: [{ type: 'text', text: 'hi' }] },
     });
-    const r4 = await adapted.postSessionIdPermissionsPermissionId({
+    const r5 = await adapted.postSessionIdPermissionsPermissionId({
       path: { id: 's1', permissionID: 'p1' },
       body: { response: 'once' },
     });
+    const r6 = await adapted._client.get({ url: '/question' });
+    const r7 = await adapted._client.post({ url: '/question/reply' });
 
-    expect(calls).toEqual({ create: 1, abort: 1, prompt: 1, permission: 1 });
+    expect(calls).toEqual({ create: 1, abort: 1, delete: 1, prompt: 1, permission: 1, get: 1, post: 1 });
     expect(r1.data.body.metadata.a).toBe(1);
     expect(r2.data.path.id).toBe('s1');
-    expect(r3.data.body.parts[0].text).toBe('hi');
-    expect(r4.data.path.permissionID).toBe('p1');
+    expect(r3.data.path.id).toBe('s1');
+    expect(r4.data.body.parts[0].text).toBe('hi');
+    expect(r5.data.path.permissionID).toBe('p1');
+    expect(r6.data.url).toBe('/question');
+    expect(r7.data.url).toBe('/question/reply');
   });
 });

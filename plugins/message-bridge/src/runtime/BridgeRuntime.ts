@@ -30,9 +30,12 @@ import {
   normalizeDownstreamMessage,
 } from '../protocol/downstream';
 import { BridgeEvent } from './types';
-import { createSdkAdapter } from './SdkAdapter';
+import { createSdkAdapter, getMissingSdkCapabilities, toHostClientLike } from './SdkAdapter';
 import { AppLogger, type BridgeLogger } from './AppLogger';
 import { ToolDoneCompat, type ToolDoneSource } from './compat/ToolDoneCompat';
+import { resolveRegisterMetadata } from './RegisterMetadata';
+import { isBridgeStartupError, type BridgeStartupError, validateBridgeStartup } from './Startup';
+import type { HostClientLike, OpencodeClient } from '../types';
 
 export interface BridgeRuntimeOptions {
   workspacePath?: string;
@@ -64,46 +67,6 @@ interface DownstreamLogFields {
   toolSessionId?: string;
 }
 
-const UNKNOWN_MAC_ADDRESS = 'unknown';
-
-function isUsableMacAddress(macAddress: string | undefined): macAddress is string {
-  if (!macAddress) {
-    return false;
-  }
-
-  const normalized = macAddress.trim().toLowerCase();
-  return normalized.length > 0 && normalized !== '00:00:00:00:00:00' && normalized !== '00-00-00-00-00-00';
-}
-
-function resolveMacAddress(configuredMacAddress: string | undefined, logger: BridgeLogger): string {
-  if (isUsableMacAddress(configuredMacAddress)) {
-    return configuredMacAddress;
-  }
-
-  const interfaces = os.networkInterfaces();
-  let interfaceCount = 0;
-
-  for (const entries of Object.values(interfaces)) {
-    if (!entries) {
-      continue;
-    }
-
-    interfaceCount += entries.length;
-    for (const entry of entries) {
-      if (entry.internal || !isUsableMacAddress(entry.mac)) {
-        continue;
-      }
-      return entry.mac.trim().toLowerCase();
-    }
-  }
-
-  logger.warn('runtime.mac_address.fallback_unknown', {
-    platform: os.platform(),
-    interfaceCount,
-  });
-  return UNKNOWN_MAC_ADDRESS;
-}
-
 export class BridgeRuntime {
   private readonly actionRouter = new DefaultActionRouter();
   private readonly stateManager = new DefaultStateManager();
@@ -112,19 +75,27 @@ export class BridgeRuntime {
   private gatewayConnection: GatewayConnection | null = null;
   private eventFilter: EventFilter | null = null;
   private started = false;
-  private readonly sdkClient: unknown;
+  private readonly rawClient: HostClientLike;
+  private sdkClient: OpencodeClient | null;
+  private readonly missingSdkCapabilities: ReturnType<typeof getMissingSdkCapabilities>;
+  private readonly workspacePath?: string;
+  private readonly debug?: boolean;
   private logger: BridgeLogger;
   private readonly toolDoneCompat = new ToolDoneCompat();
 
-  constructor(private readonly options: BridgeRuntimeOptions) {
-    this.logger = new AppLogger(options.client, { component: 'runtime' }, undefined, undefined, options.debug);
+  constructor(options: BridgeRuntimeOptions) {
+    this.workspacePath = options.workspacePath;
+    this.debug = options.debug;
+    this.rawClient = toHostClientLike(options.client);
+    this.missingSdkCapabilities = getMissingSdkCapabilities(options.client);
+    this.logger = new AppLogger(this.rawClient, { component: 'runtime' }, undefined, undefined, options.debug);
     this.sdkClient = createSdkAdapter(options.client);
     this.registerActions();
     this.actionRouter.setRegistry(this.registry);
   }
 
   async start(options: BridgeRuntimeStartOptions = {}): Promise<void> {
-    this.logger.info('runtime.start.requested', { workspacePath: this.options.workspacePath });
+    this.logger.info('runtime.start.requested', { workspacePath: this.workspacePath });
     if (this.started) {
       this.logger.debug('runtime.start.skipped_already_started');
       return;
@@ -137,11 +108,11 @@ export class BridgeRuntime {
 
     let config;
     try {
-      this.logger.info('runtime.config.loading', { workspacePath: this.options.workspacePath });
-      config = await loadConfig(this.options.workspacePath, this.logger);
-      if (this.options.debug === undefined && typeof config.debug === 'boolean') {
+      this.logger.info('runtime.config.loading', { workspacePath: this.workspacePath });
+      config = await loadConfig(this.workspacePath, this.logger);
+      if (this.debug === undefined && typeof config.debug === 'boolean') {
         this.logger = new AppLogger(
-          this.options.client,
+          this.rawClient,
           { component: 'runtime' },
           this.logger.getTraceId(),
           undefined,
@@ -157,7 +128,7 @@ export class BridgeRuntime {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error('runtime.config.loading_failed', {
         error: errorMessage,
-        workspacePath: this.options.workspacePath,
+        workspacePath: this.workspacePath,
       });
       throw error;
     }
@@ -167,8 +138,11 @@ export class BridgeRuntime {
       return;
     }
 
+    const startupValidation = await this.validateStartupPrerequisites();
+    this.sdkClient = startupValidation.sdkClient;
     const agentId = this.stateManager.generateAndBindAgentId();
     this.eventFilter = new EventFilter(config.events.allowlist);
+    const registerMetadata = resolveRegisterMetadata(startupValidation.health.version, this.logger);
 
     const auth = new DefaultAkSkAuth(config.auth.ak, config.auth.sk);
     const authPayloadProvider = () => auth.generateAuthPayload();
@@ -183,11 +157,11 @@ export class BridgeRuntime {
       authPayloadProvider,
       registerMessage: {
         type: 'register',
-        deviceName: config.gateway.deviceName,
-        macAddress: resolveMacAddress(config.gateway.macAddress, this.logger),
+        deviceName: registerMetadata.deviceName,
+        macAddress: registerMetadata.macAddress,
         os: os.platform(),
         toolType: config.gateway.toolType,
-        toolVersion: config.gateway.toolVersion,
+        toolVersion: registerMetadata.toolVersion,
       },
       logger: this.logger.child({ component: 'gateway' }),
     });
@@ -533,8 +507,13 @@ export class BridgeRuntime {
   }
 
   private buildActionContext(welinkSessionId?: string, logger: BridgeLogger = this.logger) {
+    if (!this.sdkClient) {
+      throw new Error('runtime.sdk_client_unavailable');
+    }
+
     return {
       client: this.sdkClient,
+      hostClient: this.rawClient,
       connectionState: this.stateManager.getState(),
       agentId: this.stateManager.getAgentId() ?? 'unknown-agent',
       welinkSessionId,
@@ -544,6 +523,37 @@ export class BridgeRuntime {
         welinkSessionId,
       }),
     };
+  }
+
+  private async validateStartupPrerequisites() {
+    try {
+      return await validateBridgeStartup(this.rawClient, this.sdkClient, this.missingSdkCapabilities);
+    } catch (error) {
+      if (isBridgeStartupError(error)) {
+        this.logStartupFailure(error);
+      }
+      throw error;
+    }
+  }
+
+  private logStartupFailure(error: BridgeStartupError): void {
+    const payload = {
+      errorCode: error.code,
+      errorMessage: error.message,
+      ...error.details,
+    };
+
+    if (error.code === 'SDK_CLIENT_CAPABILITIES_MISSING') {
+      this.logger.error('runtime.start.failed_capabilities', payload);
+      return;
+    }
+
+    if (error.code === 'GLOBAL_HEALTH_VERSION_MISSING') {
+      this.logger.error('runtime.start.failed_health_version', payload);
+      return;
+    }
+
+    this.logger.error('runtime.start.failed_health', payload);
   }
 
   private logEventForwardingDetail(normalized: NormalizedUpstreamEvent, logger: BridgeLogger = this.logger): void {

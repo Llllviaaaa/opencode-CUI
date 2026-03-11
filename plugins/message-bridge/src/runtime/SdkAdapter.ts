@@ -1,53 +1,101 @@
-import type { OpencodeClient } from '../types';
+import type { HostClientLike, OpencodeClient } from '../types';
 
-export function createSdkAdapter(client: unknown): unknown {
-  // Keep action execution on the minimal session/permission surface.
-  // Logging uses the original input client (client.app.log) and does not go through this adapter.
-  if (!client || typeof client !== 'object') {
-    return client;
+export const REQUIRED_SDK_CAPABILITIES = [
+  'session.create',
+  'session.prompt',
+  'session.abort',
+  'session.delete',
+  'postSessionIdPermissionsPermissionId',
+  '_client.get',
+  '_client.post',
+] as const;
+
+export type SdkClientCapability = typeof REQUIRED_SDK_CAPABILITIES[number];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}
+
+function asFunction<T extends (...args: never[]) => unknown>(value: unknown, bindTarget?: unknown): T | undefined {
+  if (typeof value !== 'function') {
+    return undefined;
   }
 
-  const c = client as Partial<OpencodeClient>;
-  if (!c.session || !c.postSessionIdPermissionsPermissionId) {
-    return client;
+  return (bindTarget ? value.bind(bindTarget) : value) as T;
+}
+
+export function getMissingSdkCapabilities(client: unknown): SdkClientCapability[] {
+  const root = isRecord(client) ? client : undefined;
+  const session = isRecord(root?.session) ? root.session : undefined;
+  const rawClient = isRecord(root?._client) ? root._client : undefined;
+
+  return REQUIRED_SDK_CAPABILITIES.filter((capability) => {
+    switch (capability) {
+      case 'session.create':
+        return typeof session?.create !== 'function';
+      case 'session.prompt':
+        return typeof session?.prompt !== 'function';
+      case 'session.abort':
+        return typeof session?.abort !== 'function';
+      case 'session.delete':
+        return typeof session?.delete !== 'function';
+      case 'postSessionIdPermissionsPermissionId':
+        return typeof root?.postSessionIdPermissionsPermissionId !== 'function';
+      case '_client.get':
+        return typeof rawClient?.get !== 'function';
+      case '_client.post':
+        return typeof rawClient?.post !== 'function';
+      default:
+        return true;
+    }
+  });
+}
+
+export function toHostClientLike(client: unknown): HostClientLike {
+  const root = isRecord(client) ? client : undefined;
+  const global = isRecord(root?.global) ? root.global : undefined;
+  const app = isRecord(root?.app) ? root.app : undefined;
+
+  return {
+    global: {
+      health: asFunction(global?.health, global),
+    },
+    app: {
+      log: asFunction(app?.log, app),
+    },
+  };
+}
+
+export function createSdkAdapter(client: unknown): OpencodeClient | null {
+  if (getMissingSdkCapabilities(client).length > 0) {
+    return null;
   }
 
-  const rawClient =
-    c._client && typeof c._client === 'object'
-      ? {
-          get: typeof c._client.get === 'function' ? c._client.get.bind(c._client) : undefined,
-          post: typeof c._client.post === 'function' ? c._client.post.bind(c._client) : undefined,
-        }
-      : undefined;
+  const root = client as {
+    session: {
+      create: OpencodeClient['session']['create'];
+      prompt: OpencodeClient['session']['prompt'];
+      abort: OpencodeClient['session']['abort'];
+      delete: OpencodeClient['session']['delete'];
+    };
+    postSessionIdPermissionsPermissionId: OpencodeClient['postSessionIdPermissionsPermissionId'];
+    _client: {
+      get: OpencodeClient['_client']['get'];
+      post: OpencodeClient['_client']['post'];
+    };
+  };
 
   return {
     session: {
-      create: async (options: { body?: Record<string, unknown> }) => {
-        return c.session!.create(options);
-      },
-      abort: async (options: { path: { id: string } }) => {
-        return c.session!.abort(options);
-      },
-      delete: async (options: { path: { id: string } }) => {
-        if (!c.session!.delete) {
-          throw new Error('SDK session.delete is not available');
-        }
-        return c.session!.delete(options);
-      },
-      prompt: async (options: {
-        path: { id: string };
-        body: { parts: Array<{ type: 'text'; text: string }> };
-      }) => {
-        return c.session!.prompt(options);
-      },
+      create: root.session.create.bind(root.session),
+      prompt: root.session.prompt.bind(root.session),
+      abort: root.session.abort.bind(root.session),
+      delete: root.session.delete.bind(root.session),
     },
-    postSessionIdPermissionsPermissionId: async (options: {
-      path: { id: string; permissionID: string };
-      body: { response: 'once' | 'always' | 'reject' };
-      }) => {
-      return c.postSessionIdPermissionsPermissionId!(options);
+    postSessionIdPermissionsPermissionId: root.postSessionIdPermissionsPermissionId.bind(root),
+    _client: {
+      get: root._client.get.bind(root._client),
+      post: root._client.post.bind(root._client),
     },
-    _client: rawClient,
-    app: c.app,
-  } as OpencodeClient;
+  };
 }

@@ -2,8 +2,27 @@ import { describe, test, expect } from 'bun:test';
 
 import { BridgeRuntime } from '../../src/runtime/BridgeRuntime.ts';
 
+function createRuntimeClient() {
+  return {
+    global: {
+      health: async () => ({ healthy: true, version: '9.9.9' }),
+    },
+    session: {
+      create: async () => ({}),
+      abort: async () => ({}),
+      delete: async () => ({}),
+      prompt: async () => ({}),
+    },
+    postSessionIdPermissionsPermissionId: async () => ({}),
+    _client: {
+      get: async () => ({ data: [] }),
+      post: async () => ({ data: undefined }),
+    },
+  };
+}
+
 function createRuntimeHarness({ state = 'READY', routeResult } = {}) {
-  const runtime = new BridgeRuntime({ client: {} });
+  const runtime = new BridgeRuntime({ client: createRuntimeClient() });
   const sent = [];
 
   runtime.gatewayConnection = {
@@ -32,6 +51,7 @@ describe('downlink -> uplink protocol', () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0].type).toBe('tool_done');
+    expect(sent[0].toolSessionId).toBe('tool-1');
     expect(sent[0].welinkSessionId).toBe('s-1');
   });
 
