@@ -642,7 +642,16 @@ class StatusQueryAction {
           await global.health();
           opencodeOnline = true;
         } catch {
-          opencodeOnline = false;
+          if (app?.health) {
+            try {
+              await app.health();
+              opencodeOnline = true;
+            } catch {
+              opencodeOnline = false;
+            }
+          } else {
+            opencodeOnline = false;
+          }
         }
       } else if (app?.health) {
         try {
@@ -3420,17 +3429,30 @@ function isUsableMacAddress(macAddress) {
   const normalized = normalizeMacAddress(macAddress);
   return MAC_ADDRESS_PATTERN.test(normalized) && normalized !== ZERO_MAC_ADDRESS;
 }
-async function resolveToolVersion(client) {
+async function resolveToolVersion(client, logger) {
   const globalHealth = client?.global?.health;
   if (!globalHealth) {
-    throw new Error("opencode_global_health_unavailable");
+    logger.warn("runtime.tool_version.unavailable", {
+      reason: "opencode_global_health_unavailable"
+    });
+    return "";
   }
-  const health = await globalHealth();
-  const version = health && typeof health === "object" && typeof health.version === "string" ? health.version.trim() : "";
-  if (!version) {
-    throw new Error("opencode_version_unavailable");
+  try {
+    const health = await globalHealth();
+    const version = health && typeof health === "object" && typeof health.version === "string" ? health.version.trim() : "";
+    if (!version) {
+      logger.warn("runtime.tool_version.unavailable", {
+        reason: "opencode_version_unavailable"
+      });
+      return "";
+    }
+    return version;
+  } catch (error) {
+    logger.warn("runtime.tool_version.unavailable", {
+      reason: error instanceof Error ? error.message : String(error)
+    });
+    return "";
   }
-  return version;
 }
 function resolveMacAddress(logger) {
   const interfaces = os.networkInterfaces();
@@ -3456,7 +3478,7 @@ function resolveMacAddress(logger) {
 async function resolveRegisterMetadata(client, logger) {
   return {
     deviceName: os.hostname(),
-    toolVersion: await resolveToolVersion(client),
+    toolVersion: await resolveToolVersion(client, logger),
     macAddress: resolveMacAddress(logger)
   };
 }
@@ -3998,5 +4020,5 @@ export {
   MessageBridgePlugin
 };
 
-//# debugId=FE92CA1585B804BE64756E2164756E21
+//# debugId=DEBED9A51BD28BA464756E2164756E21
 //# sourceMappingURL=message-bridge.plugin.js.map

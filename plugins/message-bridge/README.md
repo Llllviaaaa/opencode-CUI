@@ -192,7 +192,7 @@ The bridge emits structured logs through `client.app.log()` when available.
 Register metadata is auto-collected at runtime:
 
 - `deviceName` comes from `os.hostname()`
-- `toolVersion` comes from `client.global.health().version`
+- `toolVersion` comes from `client.global.health().version`, or `""` when unavailable
 - `macAddress` comes from the first usable local network interface, or `""` when unavailable
 - `macAddress` is currently a pre-provisioned field for Gateway compatibility; the server must treat `""` as missing
 

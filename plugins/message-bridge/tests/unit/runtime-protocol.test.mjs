@@ -924,6 +924,108 @@ describe('runtime protocol strictness', () => {
     }
   });
 
+  test('runtime.start keeps register flow when host toolVersion is unavailable', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-runtime-register-empty-version-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    process.env.HOME = fakeHome;
+
+    await mkdir(join(workspace, '.opencode'), { recursive: true });
+    await writeFile(
+      join(workspace, '.opencode', 'message-bridge.json'),
+      JSON.stringify({
+        config_version: 1,
+        enabled: true,
+        gateway: {
+          url: 'ws://localhost:8081/ws/agent',
+          toolType: 'opencode',
+          heartbeatIntervalMs: 30000,
+          reconnect: {
+            baseMs: 1000,
+            maxMs: 30000,
+            exponential: true,
+          },
+        },
+        sdk: {
+          timeoutMs: 10000,
+        },
+        auth: {
+          ak: 'test-ak-001',
+          sk: 'test-sk-secret-001',
+        },
+        events: {
+          allowlist: ['message.updated'],
+        },
+      }),
+      'utf8',
+    );
+
+    const originalWebSocket = globalThis.WebSocket;
+    class RegisterCaptureWebSocket {
+      static OPEN = 1;
+      static instances = [];
+
+      constructor() {
+        this.readyState = 0;
+        this.sent = [];
+        RegisterCaptureWebSocket.instances.push(this);
+        setTimeout(() => {
+          this.readyState = RegisterCaptureWebSocket.OPEN;
+          this.onopen?.();
+          this.onmessage?.({ data: JSON.stringify({ type: 'register_ok' }) });
+        }, 0);
+      }
+
+      send(data) {
+        this.sent.push(JSON.parse(data));
+      }
+
+      close() {
+        this.readyState = 3;
+        this.onclose?.();
+      }
+    }
+
+    globalThis.WebSocket = RegisterCaptureWebSocket;
+    const originalNetworkInterfaces = os.networkInterfaces;
+    os.networkInterfaces = () => ({
+      en0: [
+        {
+          address: '127.0.0.1',
+          netmask: '255.0.0.0',
+          family: 'IPv4',
+          mac: '11:22:33:44:55:66',
+          internal: false,
+          cidr: null,
+        },
+      ],
+    });
+    try {
+      const runtime = new BridgeRuntime({
+        workspacePath: workspace,
+        client: {
+          global: {
+            health: async () => {
+              throw new Error('global unavailable');
+            },
+          },
+        },
+      });
+
+      await runtime.start();
+      await new Promise((r) => setTimeout(r, 10));
+
+      const ws = RegisterCaptureWebSocket.instances[0];
+      expect(ws.sent[0].toolVersion).toBe('');
+
+      runtime.stop();
+    } finally {
+      os.networkInterfaces = originalNetworkInterfaces;
+      globalThis.WebSocket = originalWebSocket;
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
   test('uses gatewayMessageId as traceId across downstream invoke handling', async () => {
     const appLogs = [];
     const runtime = new BridgeRuntime({
