@@ -5,7 +5,6 @@ import {
   ActionResult,
   ActionContext,
   ErrorCode,
-  isOpencodeClient,
   hasError,
   safeExecute,
   stateToErrorCode
@@ -36,15 +35,6 @@ export class PermissionReplyAction implements Action<'permission_reply', Permiss
           success: false,
           errorCode: stateToErrorCode(context.connectionState),
           errorMessage: `Agent not ready. Current state: ${context.connectionState}`
-        };
-      }
-
-      if (!isOpencodeClient(context.client)) {
-        context.logger?.error('action.permission_reply.invalid_client');
-        return {
-          success: false,
-          errorCode: 'SDK_UNREACHABLE',
-          errorMessage: 'Valid OpenCode client not available in context'
         };
       }
 

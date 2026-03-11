@@ -2,8 +2,27 @@ import { describe, test, expect } from 'bun:test';
 
 import { BridgeRuntime } from '../../dist/runtime/BridgeRuntime.js';
 
+function createRuntimeClient() {
+  return {
+    global: {
+      health: async () => ({ healthy: true, version: '9.9.9' }),
+    },
+    session: {
+      create: async () => ({}),
+      abort: async () => ({}),
+      delete: async () => ({}),
+      prompt: async () => ({}),
+    },
+    postSessionIdPermissionsPermissionId: async () => ({}),
+    _client: {
+      get: async () => ({ data: [] }),
+      post: async () => ({ data: undefined }),
+    },
+  };
+}
+
 function createRuntimeHarness({ state = 'READY', routeResult } = {}) {
-  const runtime = new BridgeRuntime({ client: {} });
+  const runtime = new BridgeRuntime({ client: createRuntimeClient() });
   const sent = [];
 
   runtime.gatewayConnection = {

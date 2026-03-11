@@ -5,7 +5,6 @@ import {
   ActionResult,
   ActionContext,
   ErrorCode,
-  isOpencodeClient,
   hasError,
   safeExecute,
   stateToErrorCode
@@ -89,14 +88,6 @@ export class ChatAction implements Action<'chat', ChatPayload, void> {
       };
     }
 
-    if (!isOpencodeClient(context.client)) {
-      context.logger?.error('action.chat.invalid_client');
-      return {
-        success: false,
-        errorCode: 'SDK_UNREACHABLE',
-        errorMessage: 'OpenCode client not available or invalid in context'
-      };
-    }
     const client = context.client;
 
     try {

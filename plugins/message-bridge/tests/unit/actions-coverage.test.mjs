@@ -11,6 +11,7 @@ import { QuestionReplyAction } from '../../dist/action/QuestionReplyAction.js';
 function readyContext(client, overrides = {}) {
   return {
     client,
+    hostClient: overrides.hostClient ?? client,
     connectionState: 'READY',
     agentId: 'agent-1',
     sessionId: 'ctx-session',
@@ -187,39 +188,25 @@ describe('PermissionReplyAction coverage', () => {
 });
 
 describe('StatusQueryAction coverage', () => {
-  test('execute prefers global.health and falls back to app.health', async () => {
+  test('execute only uses global.health', async () => {
     const action = new StatusQueryAction();
     const ready = await action.execute({}, readyContext({
       global: {
         health: async () => ({ healthy: true, version: '9.9.9' }),
       },
-      app: {
-        health: async () => ({ ok: true }),
-      },
     }));
     expect(ready.success).toBe(true);
     expect(ready.data.opencodeOnline).toBe(true);
 
-    const fallback = await action.execute({}, readyContext({
-      app: {
-        health: async () => ({ ok: true }),
-      },
-    }));
-    expect(fallback.success).toBe(true);
-    expect(fallback.data.opencodeOnline).toBe(true);
-
-    const fallbackAfterGlobalFailure = await action.execute({}, readyContext({
+    const downAfterGlobalFailure = await action.execute({}, readyContext({
       global: {
         health: async () => {
           throw new Error('global unavailable');
         },
       },
-      app: {
-        health: async () => ({ ok: true }),
-      },
     }));
-    expect(fallbackAfterGlobalFailure.success).toBe(true);
-    expect(fallbackAfterGlobalFailure.data.opencodeOnline).toBe(true);
+    expect(downAfterGlobalFailure.success).toBe(true);
+    expect(downAfterGlobalFailure.data.opencodeOnline).toBe(false);
 
     const down = await action.execute(
       {},

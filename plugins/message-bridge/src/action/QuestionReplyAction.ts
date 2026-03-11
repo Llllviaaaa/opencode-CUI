@@ -5,7 +5,6 @@ import {
   ActionResult,
   ActionContext,
   ErrorCode,
-  isOpencodeClient,
   stateToErrorCode,
 } from '../types';
 import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
@@ -39,13 +38,7 @@ export class QuestionReplyAction implements Action<'question_reply', QuestionRep
     toolSessionId: string,
     toolCallId?: string,
   ): Promise<string | undefined> {
-    const rawClient = this.readRecord((context.client as { _client?: unknown } | undefined)?._client);
-    const getFn = rawClient?.get as ((options: Record<string, unknown>) => Promise<unknown>) | undefined;
-    if (!getFn) {
-      throw new Error('raw client GET unavailable on client');
-    }
-
-    const listResult = await getFn({ url: '/question' });
+    const listResult = await context.client._client.get({ url: '/question' });
     const pendingQuestions = this.extractResultData<unknown>(listResult);
     const requests = Array.isArray(pendingQuestions)
       ? pendingQuestions.filter((item): item is Record<string, unknown> => item !== null && typeof item === 'object')
@@ -96,15 +89,6 @@ export class QuestionReplyAction implements Action<'question_reply', QuestionRep
       };
     }
 
-    if (!isOpencodeClient(context.client)) {
-      context.logger?.error('action.question_reply.invalid_client');
-      return {
-        success: false,
-        errorCode: 'SDK_UNREACHABLE',
-        errorMessage: 'OpenCode client not available or invalid in context',
-      };
-    }
-
     const client = context.client;
 
     try {
@@ -123,17 +107,7 @@ export class QuestionReplyAction implements Action<'question_reply', QuestionRep
         };
       }
 
-      const rawClient = this.readRecord((client as { _client?: unknown })._client);
-      const postFn = rawClient?.post as ((options: Record<string, unknown>) => Promise<unknown>) | undefined;
-      if (!postFn) {
-        return {
-          success: false,
-          errorCode: 'SDK_UNREACHABLE',
-          errorMessage: 'raw client POST unavailable on client',
-        };
-      }
-
-      await postFn({
+      await client._client.post({
         url: '/question/{requestID}/reply',
         path: { requestID: requestId },
         body: { answers: [[payload.answer]] },

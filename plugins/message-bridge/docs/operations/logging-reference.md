@@ -159,6 +159,9 @@ sequenceDiagram
 | `runtime.start.skipped_already_started` | debug | 重复 start 被跳过 | - | `src/runtime/BridgeRuntime.ts:56` |
 | `runtime.start.aborted_precheck` | warn | start 前检测到 abort | - | `src/runtime/BridgeRuntime.ts:61` |
 | `runtime.start.disabled_by_config` | info | `config.enabled=false` | - | `src/runtime/BridgeRuntime.ts:67` |
+| `runtime.start.failed_capabilities` | error | 启动前发现 SDK action 能力不完整 | `errorCode`,`errorMessage`,`missingCapabilities` | `src/runtime/BridgeRuntime.ts` |
+| `runtime.start.failed_health` | error | 启动前 `global.health()` 缺失或调用失败 | `errorCode`,`errorMessage`,`missingCapability?`,`cause?` | `src/runtime/BridgeRuntime.ts` |
+| `runtime.start.failed_health_version` | error | 启动前 `global.health()` 未返回可用 version | `errorCode`,`errorMessage`,`responseShape?` | `src/runtime/BridgeRuntime.ts` |
 | `runtime.agent.rebound` | info | 连接状态转 `CONNECTING` 后重置 agentId | `agentId` | `src/runtime/BridgeRuntime.ts:103` |
 | `runtime.downstream_message_error` | error | 下行消息处理抛错 | `error`,`errorDetail`,`errorName`,`sourceErrorCode?` | `src/runtime/BridgeRuntime.ts:114` |
 | `runtime.start.aborted_before_connect` | warn | connect 前中止 | - | `src/runtime/BridgeRuntime.ts:124` |
@@ -237,28 +240,24 @@ sequenceDiagram
 |---|---|---|---|---|
 | `action.chat.started` | info | chat action 开始 | `sessionId`,`messageLength` | `src/action/ChatAction.ts:57` |
 | `action.chat.rejected_state` | warn | 连接态不允许执行 chat | `state` | `src/action/ChatAction.ts:62` |
-| `action.chat.invalid_client` | error | SDK client 结构无效 | - | `src/action/ChatAction.ts:71` |
 | `action.chat.sdk_error_payload` | error | SDK 返回 error payload | `error` | `src/action/ChatAction.ts:110` |
 | `action.chat.failed` | error | chat 失败（可映射 code） | `error`,`errorCode?` | `src/action/ChatAction.ts:126` |
 | `action.chat.exception` | error | chat 执行抛异常 | `error`,`errorCode?` | `src/action/ChatAction.ts:139` |
 | `action.chat.finished` | debug | chat 结束（finally） | `latencyMs` | `src/action/ChatAction.ts:151` |
 | `action.create_session.started` | info | create_session 开始 | `requestedSessionId`,`hasMetadata` | `src/action/CreateSessionAction.ts:58` |
 | `action.create_session.rejected_state` | warn | 连接态不允许创建会话 | `state` | `src/action/CreateSessionAction.ts:65` |
-| `action.create_session.invalid_client` | error | SDK client 结构无效 | - | `src/action/CreateSessionAction.ts:74` |
 | `action.create_session.sdk_error_payload` | error | SDK 返回 error payload | `error` | `src/action/CreateSessionAction.ts:132` |
 | `action.create_session.failed` | error | create_session 失败 | `error`,`errorCode?` | `src/action/CreateSessionAction.ts:143` |
 | `action.create_session.exception` | error | create_session 抛异常 | `error`,`errorCode?` | `src/action/CreateSessionAction.ts:156` |
 | `action.create_session.finished` | debug | create_session 结束（finally） | `latencyMs` | `src/action/CreateSessionAction.ts:168` |
 | `action.close_session.started` | info | close_session 开始 | `sessionId` | `src/action/CloseSessionAction.ts:50` |
 | `action.close_session.rejected_state` | warn | 连接态不允许关闭会话 | `state` | `src/action/CloseSessionAction.ts:56` |
-| `action.close_session.invalid_client` | error | SDK client 结构无效 | - | `src/action/CloseSessionAction.ts:65` |
 | `action.close_session.sdk_error_payload` | error | SDK 返回 error payload | `error` | `src/action/CloseSessionAction.ts:108` |
 | `action.close_session.failed` | error | close_session 失败 | `error`,`errorCode?` | `src/action/CloseSessionAction.ts:119` |
 | `action.close_session.exception` | error | close_session 抛异常 | `error`,`errorCode?` | `src/action/CloseSessionAction.ts:132` |
 | `action.close_session.finished` | debug | close_session 结束（finally） | `latencyMs` | `src/action/CloseSessionAction.ts:144` |
 | `action.permission_reply.started` | info | permission_reply 开始 | `permissionId`,`hasToolSessionId`,`payloadFormat` | `src/action/PermissionReplyAction.ts:99` |
 | `action.permission_reply.rejected_state` | warn | 连接态不允许权限回复 | `state` | `src/action/PermissionReplyAction.ts:107` |
-| `action.permission_reply.invalid_client` | error | SDK client 结构无效 | - | `src/action/PermissionReplyAction.ts:116` |
 | `action.permission_reply.sdk_error_payload` | error | SDK 返回 error payload | `error` | `src/action/PermissionReplyAction.ts:180` |
 | `action.permission_reply.failed` | error | permission_reply 失败 | `error`,`errorCode?` | `src/action/PermissionReplyAction.ts:191` |
 | `action.permission_reply.exception` | error | permission_reply 抛异常 | `error`,`errorCode?` | `src/action/PermissionReplyAction.ts:204` |

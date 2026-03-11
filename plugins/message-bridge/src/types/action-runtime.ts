@@ -4,9 +4,11 @@ import type {
   ActionPayloadByName,
   ActionResultDataByName,
 } from '../contracts/downstream-messages';
+import type { HostClientLike, OpencodeClient } from './sdk';
 
 export interface ActionContext {
-  client: unknown;
+  client: OpencodeClient;
+  hostClient: HostClientLike;
   connectionState: ConnectionState;
   agentId: string;
   welinkSessionId?: string;
