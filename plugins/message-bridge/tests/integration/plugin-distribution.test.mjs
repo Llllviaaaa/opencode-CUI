@@ -1,9 +1,12 @@
 import { describe, test, expect } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { access } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+
+const PACKAGE_NAME = '@opencode-cui/message-bridge';
 
 describe('plugin distribution artifact', () => {
   test('builds single-file artifact with default and named exports', async () => {
@@ -30,11 +33,28 @@ describe('plugin distribution artifact', () => {
       env: process.env,
     });
 
-    const packageEntrypoint = resolve('dist/index.js');
-    await access(packageEntrypoint, constants.R_OK);
+    const tempDir = await mkdtemp(join(tmpdir(), 'message-bridge-package-'));
+    try {
+      const packageScopeDir = join(tempDir, 'node_modules', '@opencode-cui');
+      await mkdir(packageScopeDir, { recursive: true });
+      await symlink(process.cwd(), join(packageScopeDir, 'message-bridge'), process.platform === 'win32' ? 'junction' : 'dir');
 
-    const mod = await import(pathToFileURL(packageEntrypoint).href);
-    expect(typeof mod.default).toBe('function');
-    expect(typeof mod.MessageBridgePlugin).toBe('function');
+      const stdout = execFileSync(
+        'bun',
+        [
+          '-e',
+          `const mod = await import(${JSON.stringify(PACKAGE_NAME)}); console.log(typeof mod.default, typeof mod.MessageBridgePlugin, mod.default === mod.MessageBridgePlugin);`,
+        ],
+        {
+          cwd: tempDir,
+          stdio: 'pipe',
+          env: process.env,
+        },
+      ).toString().trim();
+
+      expect(stdout).toBe('function function true');
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
