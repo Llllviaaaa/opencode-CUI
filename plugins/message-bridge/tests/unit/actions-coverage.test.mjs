@@ -208,6 +208,19 @@ describe('StatusQueryAction coverage', () => {
     expect(fallback.success).toBe(true);
     expect(fallback.data.opencodeOnline).toBe(true);
 
+    const fallbackAfterGlobalFailure = await action.execute({}, readyContext({
+      global: {
+        health: async () => {
+          throw new Error('global unavailable');
+        },
+      },
+      app: {
+        health: async () => ({ ok: true }),
+      },
+    }));
+    expect(fallbackAfterGlobalFailure.success).toBe(true);
+    expect(fallbackAfterGlobalFailure.data.opencodeOnline).toBe(true);
+
     const down = await action.execute(
       {},
       readyContext({}, { connectionState: 'READY' }),

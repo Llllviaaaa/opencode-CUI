@@ -25,22 +25,35 @@ function isUsableMacAddress(macAddress: string | undefined): macAddress is strin
   return MAC_ADDRESS_PATTERN.test(normalized) && normalized !== ZERO_MAC_ADDRESS;
 }
 
-async function resolveToolVersion(client: unknown): Promise<string> {
+async function resolveToolVersion(client: unknown, logger: BridgeLogger): Promise<string> {
   const globalHealth = (client as Partial<OpencodeClient> | null | undefined)?.global?.health;
   if (!globalHealth) {
-    throw new Error('opencode_global_health_unavailable');
+    logger.warn('runtime.tool_version.unavailable', {
+      reason: 'opencode_global_health_unavailable',
+    });
+    return '';
   }
 
-  const health = await globalHealth();
-  const version =
-    health && typeof health === 'object' && typeof (health as { version?: unknown }).version === 'string'
-      ? (health as { version: string }).version.trim()
-      : '';
-  if (!version) {
-    throw new Error('opencode_version_unavailable');
-  }
+  try {
+    const health = await globalHealth();
+    const version =
+      health && typeof health === 'object' && typeof (health as { version?: unknown }).version === 'string'
+        ? (health as { version: string }).version.trim()
+        : '';
+    if (!version) {
+      logger.warn('runtime.tool_version.unavailable', {
+        reason: 'opencode_version_unavailable',
+      });
+      return '';
+    }
 
-  return version;
+    return version;
+  } catch (error) {
+    logger.warn('runtime.tool_version.unavailable', {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    return '';
+  }
 }
 
 function resolveMacAddress(logger: BridgeLogger): string {
@@ -71,7 +84,7 @@ function resolveMacAddress(logger: BridgeLogger): string {
 export async function resolveRegisterMetadata(client: unknown, logger: BridgeLogger): Promise<RegisterMetadata> {
   return {
     deviceName: os.hostname(),
-    toolVersion: await resolveToolVersion(client),
+    toolVersion: await resolveToolVersion(client, logger),
     macAddress: resolveMacAddress(logger),
   };
 }

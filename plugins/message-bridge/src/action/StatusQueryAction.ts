@@ -33,7 +33,16 @@ export class StatusQueryAction implements Action<'status_query', StatusQueryPayl
           await global.health();
           opencodeOnline = true;
         } catch {
-          opencodeOnline = false;
+          if (app?.health) {
+            try {
+              await app.health();
+              opencodeOnline = true;
+            } catch {
+              opencodeOnline = false;
+            }
+          } else {
+            opencodeOnline = false;
+          }
         }
       } else if (app?.health) {
         try {
