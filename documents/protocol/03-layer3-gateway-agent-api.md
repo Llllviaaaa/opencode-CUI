@@ -1,7 +1,7 @@
 # 层③ 接口协议：AI-Gateway ↔ PC Agent
 
 > 版本：1.2  
-> 日期：2026-03-09  
+> 日期：2026-03-11  
 > 状态：待实现
 
 ---
@@ -45,11 +45,12 @@ Base64URL 编码的 JSON 结构：
 Gateway 在 `beforeHandshake()` 中：
 1. 从 `Sec-WebSocket-Protocol` 头提取 `auth.` 前缀的子协议
 2. Base64URL 解码 → JSON 解析 → 提取 ak/ts/nonce/sign
-3. 调用 `AkSkAuthService.verify(ak, ts, nonce, sign)` 校验签名，返回 `userId`
+3. 调用 `AkSkAuthService.verify(ak, ts, nonce, sign)` 校验签名，返回 `String` 类型的 `userId`
 4. 校验通过 → 响应回显完整子协议值；校验失败 → 拒绝握手
 
 > **注意**：必须使用 Base64URL 编码（RFC 4648 §5），不能用标准 Base64。
 > 服务端必须回显客户端发送的完整子协议值（RFC 6455 精确匹配要求）。
+> Gateway 内部以字符串形式处理 `userId`，并持久化到 `agent_connection.user_id`、`ak_sk_credential.user_id`（`VARCHAR(128)`）。
 
 ### ID 命名规范
 

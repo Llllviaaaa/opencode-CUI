@@ -142,7 +142,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
         }
 
         // Verify AK/SK signature
-        Long userId = akSkAuthService.verify(ak, ts, nonce, sign);
+        String userId = akSkAuthService.verify(ak, ts, nonce, sign);
         if (userId == null) {
             log.warn("WebSocket handshake rejected: auth failed. ak={}", ak);
             return false;
@@ -173,7 +173,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
-        Long userId = (Long) session.getAttributes().get(ATTR_USER_ID);
+        String userId = (String) session.getAttributes().get(ATTR_USER_ID);
         String akId = (String) session.getAttributes().get(ATTR_AK_ID);
         log.info("PCAgent WebSocket connected: sessionId={}, userId={}, ak={}",
                 session.getId(), userId, akId);
@@ -210,7 +210,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
             return;
         }
 
-        Long userId = (Long) session.getAttributes().get(ATTR_USER_ID);
+        String userId = (String) session.getAttributes().get(ATTR_USER_ID);
         String akId = (String) session.getAttributes().get(ATTR_AK_ID);
 
         switch (type) {
@@ -261,7 +261,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
     // ==================== Message Handlers ====================
 
     private void handleRegister(WebSocketSession session, GatewayMessage message,
-            Long userId, String akId) {
+            String userId, String akId) {
         String deviceName = message.getDeviceName();
         String macAddress = message.getMacAddress();
         String os = message.getOs();

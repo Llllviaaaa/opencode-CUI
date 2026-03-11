@@ -1,7 +1,7 @@
 # 层① 接口协议：Miniapp ↔ Skill Server
 
 > 版本：1.1  
-> 日期：2026-03-08  
+> 日期：2026-03-11  
 > 状态：待实现
 
 ---
@@ -498,11 +498,12 @@
 
 **GET** `/api/skill/agents`
 
-查询当前用户名下在线的 Agent 列表（代理到 Gateway 的 `/api/gateway/agents`）。
+查询当前用户名下在线的 Agent 列表。
+Skill Server 会从 Cookie 解析 `String` 类型的 `userId`，并代理到 Gateway 的 `/api/gateway/agents?userId=<string>`。
 
 #### 请求
 
-无请求体。从 Cookie 解析 `userId`。
+无请求体。从 Cookie 解析 `userId`（`String`），并透传为 Gateway 的 `userId` 查询参数。
 
 #### 响应
 

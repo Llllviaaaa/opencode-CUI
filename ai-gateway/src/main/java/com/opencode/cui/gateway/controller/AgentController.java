@@ -55,7 +55,7 @@ public class AgentController {
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> listOnlineAgents(
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestParam(required = false) String ak,
-            @RequestParam(required = false) Long userId) {
+            @RequestParam(required = false) String userId) {
         if (!isAuthorized(authorization)) {
             return ResponseEntity.status(401)
                     .body(ApiResponse.error(401, "Invalid or missing internal token"));
@@ -67,7 +67,7 @@ public class AgentController {
             agents = latest != null && latest.getStatus() == AgentConnection.AgentStatus.ONLINE
                     ? List.of(latest)
                     : List.of();
-        } else if (userId != null) {
+        } else if (userId != null && !userId.isBlank()) {
             agents = agentRegistryService.findOnlineByUserId(userId);
         } else {
             agents = agentRegistryService.findOnlineAgents();

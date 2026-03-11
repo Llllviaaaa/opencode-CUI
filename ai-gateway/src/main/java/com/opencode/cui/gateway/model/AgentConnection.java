@@ -15,7 +15,7 @@ public class AgentConnection {
 
     private Long id;
 
-    private Long userId;
+    private String userId;
 
     private String akId;
 

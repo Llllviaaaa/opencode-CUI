@@ -47,7 +47,7 @@ public class AgentRegistryService {
      * @return the AgentConnection (reused or newly created)
      */
     @Transactional
-    public AgentConnection register(Long userId, String akId, String deviceName,
+    public AgentConnection register(String userId, String akId, String deviceName,
             String macAddress, String os, String toolType, String toolVersion) {
         String effectiveToolType = toolType != null ? toolType : "channel";
 
@@ -117,7 +117,7 @@ public class AgentRegistryService {
     /**
      * Find all online agents for a specific user.
      */
-    public List<AgentConnection> findOnlineByUserId(Long userId) {
+    public List<AgentConnection> findOnlineByUserId(String userId) {
         return repository.findByUserIdAndStatus(userId, AgentStatus.ONLINE);
     }
 

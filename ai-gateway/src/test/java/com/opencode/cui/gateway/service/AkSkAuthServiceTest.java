@@ -33,7 +33,7 @@ class AkSkAuthServiceTest {
 
     private static final String TEST_AK = "test-ak-001";
     private static final String TEST_SK = "test-sk-secret-001";
-    private static final Long TEST_USER_ID = 1L;
+    private static final String TEST_USER_ID = "user-1";
 
     @Mock
     private StringRedisTemplate redisTemplate;
@@ -101,7 +101,7 @@ class AkSkAuthServiceTest {
         String nonce = UUID.randomUUID().toString();
         String sign = computeSignature(TEST_AK, TEST_SK, ts, nonce);
 
-        Long userId = authService.verify(TEST_AK, ts, nonce, sign);
+        String userId = authService.verify(TEST_AK, ts, nonce, sign);
 
         assertNotNull(userId);
         assertEquals(TEST_USER_ID, userId);

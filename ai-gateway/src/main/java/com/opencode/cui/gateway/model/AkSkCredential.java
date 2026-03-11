@@ -27,7 +27,7 @@ public class AkSkCredential {
     private String sk;
 
     /** Associated user ID */
-    private Long userId;
+    private String userId;
 
     /** Human-readable description */
     private String description;

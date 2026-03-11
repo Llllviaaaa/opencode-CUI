@@ -1,7 +1,7 @@
 # 层② 接口协议：Skill Server ↔ AI-Gateway
 
 > 版本：1.2  
-> 日期：2026-03-08  
+> 日期：2026-03-11  
 > 状态：待实现
 
 ---
@@ -378,6 +378,9 @@ Gateway 自身生成。
 | 参数 | 类型   | 必填  | 说明               |
 | ---- | ------ | :---: | ------------------ |
 | `ak` | String |   ❌   | 按 Access Key 过滤 |
+| `userId` | String |   ❌   | 按用户 ID 过滤；由 Skill Server 透传当前用户的 `userId` |
+
+> 说明：当 Skill Server 查询“当前用户在线 Agent 列表”时，应传递 `String` 类型的 `userId`；`ak` 与 `userId` 都不传时，Gateway 返回所有在线 Agent。
 
 #### 响应
 
