@@ -155,7 +155,7 @@
 `<workspace>` 定义：
 1. 优先 `ctx.projectRoot`
 2. 若无则 `process.cwd()`
-3. 不向上递归搜索 git root
+3. 从该目录开始向父目录递归查找 `.opencode/message-bridge.jsonc|json`，直到文件系统根目录
 
 配置治理要求：
 - 支持 JSONC（注释、尾逗号）
@@ -163,6 +163,28 @@
 - 结构化错误：`path/code/message`
 - 敏感字段脱敏
 - `enabled=false` 时安全禁用
+- 文档需明确配置项全集、环境变量映射、兼容别名与已移除变量
+
+当前对外配置面至少包括：
+
+- `enabled`
+- `debug`
+- `config_version`
+- `gateway.url`
+- `gateway.channel`
+- `gateway.heartbeatIntervalMs`
+- `gateway.reconnect.baseMs`
+- `gateway.reconnect.maxMs`
+- `gateway.reconnect.exponential`
+- `sdk.timeoutMs`
+- `auth.ak`
+- `auth.sk`
+- `events.allowlist`
+
+说明：
+
+- `gateway.ping.intervalMs` 当前存在于配置解析层，但未见运行时消费；若保留在文档中，必须标记为保留字段
+- `deviceName`、`macAddress`、`toolVersion` 由运行时自动采集，不属于用户配置项
 
 ### FR-MB-10（P1）SDK 对齐映射表治理
 文档维护 `GatewayAction/Event <-> SDK 方法/事件` 对照表，状态：
