@@ -310,7 +310,7 @@ describe('EventRelay downstream invoke fallback', () => {
     const relay = new EventRelay(gateway as any, client as any);
     await (relay as any).handleDownstreamMessage({
       type: 'invoke',
-      welinkSessionId: '24',
+      welinkSessionId: 24,
       action: 'question_reply',
       payload: {
         toolSessionId: 'ses_question_123',

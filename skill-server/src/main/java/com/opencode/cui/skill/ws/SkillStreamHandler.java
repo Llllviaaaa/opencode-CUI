@@ -479,7 +479,8 @@ public class SkillStreamHandler extends TextWebSocketHandler {
         try {
             node.put("welinkSessionId", Long.parseLong(sessionId));
         } catch (NumberFormatException e) {
-            node.put("welinkSessionId", sessionId);
+            log.warn("Skipping non-numeric welinkSessionId in stream payload: sessionId={}", sessionId);
+            node.putNull("welinkSessionId");
         }
     }
 

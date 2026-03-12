@@ -1,30 +1,30 @@
-# 层③ 接口协议：AI-Gateway ↔ PC Agent
+﻿# 灞傗憿 鎺ュ彛鍗忚锛欰I-Gateway 鈫?PC Agent
 
-> 版本：1.2  
-> 日期：2026-03-11  
-> 状态：待实现
+> 鐗堟湰锛?.2  
+> 鏃ユ湡锛?026-03-11  
+> 鐘舵€侊細寰呭疄鐜?
 
 ---
 
-## 全局约定
+## 鍏ㄥ眬绾﹀畾
 
-### 通信方式
+### 閫氫俊鏂瑰紡
 
-| 项目         | 说明                         |
+| 椤圭洰         | 璇存槑                         |
 | ------------ | ---------------------------- |
-| **协议**     | WebSocket（JSON）            |
-| **连接方向** | PC Agent 主动建联到 Gateway  |
-| **端点**     | `ws://gateway-host/ws/agent` |
+| **鍗忚**     | WebSocket锛圝SON锛?           |
+| **杩炴帴鏂瑰悜** | PC Agent 涓诲姩寤鸿仈鍒?Gateway  |
+| **绔偣**     | `ws://gateway-host/ws/agent` |
 
-### 认证方式
+### 璁よ瘉鏂瑰紡
 
-AK/SK 签名握手，通过 **WebSocket 子协议** `Sec-WebSocket-Protocol` 头传递认证信息（不暴露在 URL 中）：
+AK/SK 绛惧悕鎻℃墜锛岄€氳繃 **WebSocket 瀛愬崗璁?* `Sec-WebSocket-Protocol` 澶翠紶閫掕璇佷俊鎭紙涓嶆毚闇插湪 URL 涓級锛?
 
 ```
 Sec-WebSocket-Protocol: auth.{base64url(JSON)}
 ```
 
-Base64URL 编码的 JSON 结构：
+Base64URL 缂栫爜鐨?JSON 缁撴瀯锛?
 
 ```json
 {
@@ -35,65 +35,62 @@ Base64URL 编码的 JSON 结构：
 }
 ```
 
-| 参数    | 类型   | 必填  | 说明                                          |
+| 鍙傛暟    | 绫诲瀷   | 蹇呭～  | 璇存槑                                          |
 | ------- | ------ | :---: | --------------------------------------------- |
-| `ak`    | String |   ✅   | Agent 的 Access Key                           |
-| `ts`    | String |   ✅   | 当前时间戳                                    |
-| `nonce` | String |   ✅   | 随机数，防重放                                |
-| `sign`  | String |   ✅   | HMAC 签名：`HMAC-SHA256(sk, ak + ts + nonce)` |
+| `ak`    | String |   鉁?  | Agent 鐨?Access Key                           |
+| `ts`    | String |   鉁?  | 褰撳墠鏃堕棿鎴?                                   |
+| `nonce` | String |   鉁?  | 闅忔満鏁帮紝闃查噸鏀?                               |
+| `sign`  | String |   鉁?  | HMAC 绛惧悕锛歚HMAC-SHA256(sk, ak + ts + nonce)` |
 
-Gateway 在 `beforeHandshake()` 中：
-1. 从 `Sec-WebSocket-Protocol` 头提取 `auth.` 前缀的子协议
-2. Base64URL 解码 → JSON 解析 → 提取 ak/ts/nonce/sign
-3. 调用 `AkSkAuthService.verify(ak, ts, nonce, sign)` 校验签名，返回 `String` 类型的 `userId`
-4. 校验通过 → 响应回显完整子协议值；校验失败 → 拒绝握手
+Gateway 鍦?`beforeHandshake()` 涓細
+1. 浠?`Sec-WebSocket-Protocol` 澶存彁鍙?`auth.` 鍓嶇紑鐨勫瓙鍗忚
+2. Base64URL 瑙ｇ爜 鈫?JSON 瑙ｆ瀽 鈫?鎻愬彇 ak/ts/nonce/sign
+3. 璋冪敤 `AkSkAuthService.verify(ak, ts, nonce, sign)` 鏍￠獙绛惧悕锛岃繑鍥?`String` 绫诲瀷鐨?`userId`
+4. 鏍￠獙閫氳繃 鈫?鍝嶅簲鍥炴樉瀹屾暣瀛愬崗璁€硷紱鏍￠獙澶辫触 鈫?鎷掔粷鎻℃墜
 
-> **注意**：必须使用 Base64URL 编码（RFC 4648 §5），不能用标准 Base64。
-> 服务端必须回显客户端发送的完整子协议值（RFC 6455 精确匹配要求）。
-> Gateway 内部以字符串形式处理 `userId`，并持久化到 `agent_connection.user_id`、`ak_sk_credential.user_id`（`VARCHAR(128)`）。
+> **娉ㄦ剰**锛氬繀椤讳娇鐢?Base64URL 缂栫爜锛圧FC 4648 搂5锛夛紝涓嶈兘鐢ㄦ爣鍑?Base64銆?> 鏈嶅姟绔繀椤诲洖鏄惧鎴风鍙戦€佺殑瀹屾暣瀛愬崗璁€硷紙RFC 6455 绮剧‘鍖归厤瑕佹眰锛夈€?> Gateway 鍐呴儴浠ュ瓧绗︿覆褰㈠紡澶勭悊 `userId`锛屽苟鎸佷箙鍖栧埌 `agent_connection.user_id`銆乣ak_sk_credential.user_id`锛坄VARCHAR(128)`锛夈€?
+### ID 鍛藉悕瑙勮寖
 
-### ID 命名规范
-
-| 名称              | 说明                                                                       |
+| 鍚嶇О              | 璇存槑                                                                       |
 | ----------------- | -------------------------------------------------------------------------- |
-| `welinkSessionId` | Skill 会话 ID。PC Agent 不识别语义，来自 invoke.create_session，需原样回传 |
-| `toolSessionId`   | OpenCode SDK 分配的会话 ID。PC Agent 和 OpenCode 均使用此 ID               |
+| `welinkSessionId` | Skill 浼氳瘽 ID銆侾C Agent 涓嶈瘑鍒涔夛紝鏉ヨ嚜 invoke.create_session锛岄渶鍘熸牱鍥炰紶 |
+| `toolSessionId`   | OpenCode SDK 鍒嗛厤鐨勪細璇?ID銆侾C Agent 鍜?OpenCode 鍧囦娇鐢ㄦ ID               |
 
 ---
 
-## 一、下行消息（Gateway → PC Agent）
+## 涓€銆佷笅琛屾秷鎭紙Gateway 鈫?PC Agent锛?
 
 ---
 
-### 1. invoke.create_session — 创建 OpenCode 会话
+### 1. invoke.create_session 鈥?鍒涘缓 OpenCode 浼氳瘽
 
 ```json
 {
   "type": "invoke",
-  "welinkSessionId": "42",
+  "welinkSessionId": 42,
   "action": "create_session",
   "payload": {
-    "title": "帮我创建一个React项目"
+    "title": "甯垜鍒涘缓涓€涓猂eact椤圭洰"
   }
 }
 ```
 
-| 字段              | 类型   | 必填  | 说明                                                   |
+| 瀛楁              | 绫诲瀷   | 蹇呭～  | 璇存槑                                                   |
 | ----------------- | ------ | :---: | ------------------------------------------------------ |
-| `type`            | String |   ✅   | 固定 `"invoke"`                                        |
-| `welinkSessionId` | String |   ✅   | Skill 会话 ID，PC Agent 需原样回传到 `session_created` |
-| `action`          | String |   ✅   | 固定 `"create_session"`                                |
-| `payload`         | Object |   ✅   | 创建参数                                               |
+| `type`            | String |   鉁?  | 鍥哄畾 `"invoke"`                                        |
+| `welinkSessionId` | Long |   鉁?  | Skill 浼氳瘽 ID锛孭C Agent 闇€鍘熸牱鍥炰紶鍒?`session_created` |
+| `action`          | String |   鉁?  | 鍥哄畾 `"create_session"`                                |
+| `payload`         | Object |   鉁?  | 鍒涘缓鍙傛暟                                               |
 
-| payload 字段 | 类型   | 必填  | 说明     |
+| payload 瀛楁 | 绫诲瀷   | 蹇呭～  | 璇存槑     |
 | ------------ | ------ | :---: | -------- |
-| `title`      | String |   ❌   | 会话标题 |
+| `title`      | String |   鉂?  | 浼氳瘽鏍囬 |
 
-**PC Agent 收到后**: 调用 `client.session.create()` 创建 OpenCode 会话，成功后发送 `session_created` 回传 `toolSessionId`。
+**PC Agent 鏀跺埌鍚?*: 璋冪敤 `client.session.create()` 鍒涘缓 OpenCode 浼氳瘽锛屾垚鍔熷悗鍙戦€?`session_created` 鍥炰紶 `toolSessionId`銆?
 
 ---
 
-### 2. invoke.chat — 发送用户消息
+### 2. invoke.chat 鈥?鍙戦€佺敤鎴锋秷鎭?
 
 ```json
 {
@@ -101,27 +98,27 @@ Gateway 在 `beforeHandshake()` 中：
   "action": "chat",
   "payload": {
     "toolSessionId": "ses_abc",
-    "text": "帮我创建一个React项目"
+    "text": "甯垜鍒涘缓涓€涓猂eact椤圭洰"
   }
 }
 ```
 
-| 字段      | 类型   | 必填  | 说明            |
+| 瀛楁      | 绫诲瀷   | 蹇呭～  | 璇存槑            |
 | --------- | ------ | :---: | --------------- |
-| `type`    | String |   ✅   | 固定 `"invoke"` |
-| `action`  | String |   ✅   | 固定 `"chat"`   |
-| `payload` | Object |   ✅   | 消息参数        |
+| `type`    | String |   鉁?  | 鍥哄畾 `"invoke"` |
+| `action`  | String |   鉁?  | 鍥哄畾 `"chat"`   |
+| `payload` | Object |   鉁?  | 娑堟伅鍙傛暟        |
 
-| payload 字段    | 类型   | 必填  | 说明             |
+| payload 瀛楁    | 绫诲瀷   | 蹇呭～  | 璇存槑             |
 | --------------- | ------ | :---: | ---------------- |
-| `toolSessionId` | String |   ✅   | OpenCode 会话 ID |
-| `text`          | String |   ✅   | 用户消息内容     |
+| `toolSessionId` | String |   鉁?  | OpenCode 浼氳瘽 ID |
+| `text`          | String |   鉁?  | 鐢ㄦ埛娑堟伅鍐呭     |
 
-**PC Agent 收到后**: 调用 `client.session.prompt({ path: { id: toolSessionId }, body: { parts: [{ type: 'text', text }] } })`。
+**PC Agent 鏀跺埌鍚?*: 璋冪敤 `client.session.prompt({ path: { id: toolSessionId }, body: { parts: [{ type: 'text', text }] } })`銆?
 
 ---
 
-### 3. invoke.abort_session — 中止当前执行
+### 3. invoke.abort_session 鈥?涓褰撳墠鎵ц
 
 ```json
 {
@@ -133,15 +130,15 @@ Gateway 在 `beforeHandshake()` 中：
 }
 ```
 
-| payload 字段    | 类型   | 必填  | 说明             |
+| payload 瀛楁    | 绫诲瀷   | 蹇呭～  | 璇存槑             |
 | --------------- | ------ | :---: | ---------------- |
-| `toolSessionId` | String |   ✅   | OpenCode 会话 ID |
+| `toolSessionId` | String |   鉁?  | OpenCode 浼氳瘽 ID |
 
-**PC Agent 收到后**: 调用 `client.session.abort({ path: { id: toolSessionId } })`。
+**PC Agent 鏀跺埌鍚?*: 璋冪敤 `client.session.abort({ path: { id: toolSessionId } })`銆?
 
 ---
 
-### 4. invoke.close_session — 关闭并删除会话
+### 4. invoke.close_session 鈥?鍏抽棴骞跺垹闄や細璇?
 
 ```json
 {
@@ -153,15 +150,15 @@ Gateway 在 `beforeHandshake()` 中：
 }
 ```
 
-| payload 字段    | 类型   | 必填  | 说明             |
+| payload 瀛楁    | 绫诲瀷   | 蹇呭～  | 璇存槑             |
 | --------------- | ------ | :---: | ---------------- |
-| `toolSessionId` | String |   ✅   | OpenCode 会话 ID |
+| `toolSessionId` | String |   鉁?  | OpenCode 浼氳瘽 ID |
 
-**PC Agent 收到后**: 调用 `client.session.delete({ path: { id: toolSessionId } })`。
+**PC Agent 鏀跺埌鍚?*: 璋冪敤 `client.session.delete({ path: { id: toolSessionId } })`銆?
 
 ---
 
-### 5. invoke.permission_reply — 回复权限请求
+### 5. invoke.permission_reply 鈥?鍥炲鏉冮檺璇锋眰
 
 ```json
 {
@@ -175,17 +172,17 @@ Gateway 在 `beforeHandshake()` 中：
 }
 ```
 
-| payload 字段    | 类型   | 必填  | 说明                         |
+| payload 瀛楁    | 绫诲瀷   | 蹇呭～  | 璇存槑                         |
 | --------------- | ------ | :---: | ---------------------------- |
-| `toolSessionId` | String |   ✅   | OpenCode 会话 ID             |
-| `permissionId`  | String |   ✅   | 权限请求 ID                  |
-| `response`      | String |   ✅   | `once` / `always` / `reject` |
+| `toolSessionId` | String |   鉁?  | OpenCode 浼氳瘽 ID             |
+| `permissionId`  | String |   鉁?  | 鏉冮檺璇锋眰 ID                  |
+| `response`      | String |   鉁?  | `once` / `always` / `reject` |
 
-**PC Agent 收到后**: 调用 `client.postSessionIdPermissionsPermissionId({ body: { response }, path: { id: toolSessionId, permissionID: permissionId } })`。
+**PC Agent 鏀跺埌鍚?*: 璋冪敤 `client.postSessionIdPermissionsPermissionId({ body: { response }, path: { id: toolSessionId, permissionID: permissionId } })`銆?
 
 ---
 
-### 6. invoke.question_reply — 回答 AI 提问
+### 6. invoke.question_reply 鈥?鍥炵瓟 AI 鎻愰棶
 
 ```json
 {
@@ -199,17 +196,17 @@ Gateway 在 `beforeHandshake()` 中：
 }
 ```
 
-| payload 字段    | 类型   | 必填  | 说明                        |
+| payload 瀛楁    | 绫诲瀷   | 蹇呭～  | 璇存槑                        |
 | --------------- | ------ | :---: | --------------------------- |
-| `toolSessionId` | String |   ✅   | OpenCode 会话 ID            |
-| `toolCallId`    | String |   ✅   | 对应 question 的工具调用 ID |
-| `answer`        | String |   ✅   | 用户的回答内容              |
+| `toolSessionId` | String |   鉁?  | OpenCode 浼氳瘽 ID            |
+| `toolCallId`    | String |   鉁?  | 瀵瑰簲 question 鐨勫伐鍏疯皟鐢?ID |
+| `answer`        | String |   鉁?  | 鐢ㄦ埛鐨勫洖绛斿唴瀹?             |
 
-**PC Agent 收到后**: 调用 `client.session.prompt()` 将答案作为消息发送。
+**PC Agent 鏀跺埌鍚?*: 璋冪敤 `client.session.prompt()` 灏嗙瓟妗堜綔涓烘秷鎭彂閫併€?
 
 ---
 
-### 7. status_query — 状态查询
+### 7. status_query 鈥?鐘舵€佹煡璇?
 
 ```json
 {
@@ -217,21 +214,21 @@ Gateway 在 `beforeHandshake()` 中：
 }
 ```
 
-| 字段   | 类型   | 必填  | 说明                  |
+| 瀛楁   | 绫诲瀷   | 蹇呭～  | 璇存槑                  |
 | ------ | ------ | :---: | --------------------- |
-| `type` | String |   ✅   | 固定 `"status_query"` |
+| `type` | String |   鉁?  | 鍥哄畾 `"status_query"` |
 
-**PC Agent 收到后**: 调用 `client.app.health()` 检测 OpenCode 运行时，返回 `status_response`。
-
----
-
-## 二、上行消息（PC Agent → Gateway）
+**PC Agent 鏀跺埌鍚?*: 璋冪敤 `client.app.health()` 妫€娴?OpenCode 杩愯鏃讹紝杩斿洖 `status_response`銆?
 
 ---
 
-### 1. register — Agent 注册
+## 浜屻€佷笂琛屾秷鎭紙PC Agent 鈫?Gateway锛?
 
-建联成功后 PC Agent 发送的**第一条消息**，包含设备和工具信息。**必须在 10 秒内发送**，否则连接将被关闭（close code 4408）。
+---
+
+### 1. register 鈥?Agent 娉ㄥ唽
+
+寤鸿仈鎴愬姛鍚?PC Agent 鍙戦€佺殑**绗竴鏉℃秷鎭?*锛屽寘鍚澶囧拰宸ュ叿淇℃伅銆?*蹇呴』鍦?10 绉掑唴鍙戦€?*锛屽惁鍒欒繛鎺ュ皢琚叧闂紙close code 4408锛夈€?
 
 ```json
 {
@@ -244,25 +241,25 @@ Gateway 在 `beforeHandshake()` 中：
 }
 ```
 
-| 字段          | 类型   | 必填  | 说明                        |
+| 瀛楁          | 绫诲瀷   | 蹇呭～  | 璇存槑                        |
 | ------------- | ------ | :---: | --------------------------- |
-| `type`        | String |   ✅   | 固定 `"register"`           |
-| `deviceName`  | String |   ❎   | 设备名称                    |
-| `os`          | String |   ❎   | 操作系统                    |
-| `toolType`    | String |   ❎   | 工具类型，默认 `"opencode"` |
-| `toolVersion` | String |   ❎   | 工具版本                    |
-| `macAddress`  | String |   ❎   | 设备 MAC 地址               |
+| `type`        | String |   鉁?  | 鍥哄畾 `"register"`           |
+| `deviceName`  | String |   鉂?  | 璁惧鍚嶇О                    |
+| `os`          | String |   鉂?  | 鎿嶄綔绯荤粺                    |
+| `toolType`    | String |   鉂?  | 宸ュ叿绫诲瀷锛岄粯璁?`"opencode"` |
+| `toolVersion` | String |   鉂?  | 宸ュ叿鐗堟湰                    |
+| `macAddress`  | String |   鉂?  | 璁惧 MAC 鍦板潃               |
 
-**Gateway 收到后**:
+**Gateway 鏀跺埌鍚?*:
 
-1. 设备绑定校验（如已启用）：与第三方服务核验 AK + MAC + toolType
-2. 重复连接检测：同 AK 已有活跃 session → 拒绝新连接（close code 4409）
-3. 身份持久化：同 AK + toolType 复用已有记录（UPDATE），首次则 INSERT
-4. 注册 WebSocket session 到 `EventRelayService`
-5. 通知 Skill Server `agent_online`
-6. 回复 `register_ok` 或 `register_rejected`
+1. 璁惧缁戝畾鏍￠獙锛堝宸插惎鐢級锛氫笌绗笁鏂规湇鍔℃牳楠?AK + MAC + toolType
+2. 閲嶅杩炴帴妫€娴嬶細鍚?AK 宸叉湁娲昏穬 session 鈫?鎷掔粷鏂拌繛鎺ワ紙close code 4409锛?
+3. 韬唤鎸佷箙鍖栵細鍚?AK + toolType 澶嶇敤宸叉湁璁板綍锛圲PDATE锛夛紝棣栨鍒?INSERT
+4. 娉ㄥ唽 WebSocket session 鍒?`EventRelayService`
+5. 閫氱煡 Skill Server `agent_online`
+6. 鍥炲 `register_ok` 鎴?`register_rejected`
 
-#### register_ok — 注册成功响应
+#### register_ok 鈥?娉ㄥ唽鎴愬姛鍝嶅簲
 
 ```json
 {
@@ -270,7 +267,7 @@ Gateway 在 `beforeHandshake()` 中：
 }
 ```
 
-#### register_rejected — 注册拒绝响应
+#### register_rejected 鈥?娉ㄥ唽鎷掔粷鍝嶅簲
 
 ```json
 {
@@ -279,15 +276,15 @@ Gateway 在 `beforeHandshake()` 中：
 }
 ```
 
-| reason 值               | 含义               | 关闭码 |
+| reason 鍊?              | 鍚箟               | 鍏抽棴鐮?|
 | ----------------------- | ------------------ | ------ |
-| `duplicate_connection`  | 同 AK 已有活跃连接 | 4409   |
-| `device_binding_failed` | 设备绑定校验失败   | 4403   |
-| `registration_timeout`  | 注册超时           | 4408   |
+| `duplicate_connection`  | 鍚?AK 宸叉湁娲昏穬杩炴帴 | 4409   |
+| `device_binding_failed` | 璁惧缁戝畾鏍￠獙澶辫触   | 4403   |
+| `registration_timeout`  | 娉ㄥ唽瓒呮椂           | 4408   |
 
 ---
 
-### 2. heartbeat — 心跳
+### 2. heartbeat 鈥?蹇冭烦
 
 ```json
 {
@@ -295,35 +292,35 @@ Gateway 在 `beforeHandshake()` 中：
 }
 ```
 
-| 字段   | 类型   | 必填  | 说明               |
+| 瀛楁   | 绫诲瀷   | 蹇呭～  | 璇存槑               |
 | ------ | ------ | :---: | ------------------ |
-| `type` | String |   ✅   | 固定 `"heartbeat"` |
+| `type` | String |   鉁?  | 鍥哄畾 `"heartbeat"` |
 
-**Gateway 收到后**: 调用 `AgentRegistryService.heartbeat()` 更新 `last_seen_at`。
+**Gateway 鏀跺埌鍚?*: 璋冪敤 `AgentRegistryService.heartbeat()` 鏇存柊 `last_seen_at`銆?
 
 ---
 
-### 3. session_created — 会话创建成功
+### 3. session_created 鈥?浼氳瘽鍒涘缓鎴愬姛
 
 ```json
 {
   "type": "session_created",
-  "welinkSessionId": "42",
+  "welinkSessionId": 42,
   "toolSessionId": "ses_abc"
 }
 ```
 
-| 字段              | 类型   | 必填  | 说明                                   |
+| 瀛楁              | 绫诲瀷   | 蹇呭～  | 璇存槑                                   |
 | ----------------- | ------ | :---: | -------------------------------------- |
-| `type`            | String |   ✅   | 固定 `"session_created"`               |
-| `welinkSessionId` | String |   ✅   | 原样回传（来自 invoke.create_session） |
-| `toolSessionId`   | String |   ✅   | OpenCode 分配的会话 ID                 |
+| `type`            | String |   鉁?  | 鍥哄畾 `"session_created"`               |
+| `welinkSessionId` | Long |   鉁?  | 鍘熸牱鍥炰紶锛堟潵鑷?invoke.create_session锛?|
+| `toolSessionId`   | String |   鉁?  | OpenCode 鍒嗛厤鐨勪細璇?ID                 |
 
-**Gateway 收到后**: 透传给 Skill Server（层②上行）。
+**Gateway 鏀跺埌鍚?*: 閫忎紶缁?Skill Server锛堝眰鈶′笂琛岋級銆?
 
 ---
 
-### 4. tool_event — OpenCode 事件透传
+### 4. tool_event 鈥?OpenCode 浜嬩欢閫忎紶
 
 ```json
 {
@@ -333,23 +330,23 @@ Gateway 在 `beforeHandshake()` 中：
     "type": "message.part.updated",
     "properties": {
       "sessionId": "ses_abc",
-      "part": { "type": "text", "text": "好的，" }
+      "part": { "type": "text", "text": "濂界殑锛? }
     }
   }
 }
 ```
 
-| 字段            | 类型   | 必填  | 说明                   |
+| 瀛楁            | 绫诲瀷   | 蹇呭～  | 璇存槑                   |
 | --------------- | ------ | :---: | ---------------------- |
-| `type`          | String |   ✅   | 固定 `"tool_event"`    |
-| `toolSessionId` | String |   ✅   | OpenCode 会话 ID       |
-| `event`         | Object |   ✅   | 原始 OpenCode 事件对象 |
+| `type`          | String |   鉁?  | 鍥哄畾 `"tool_event"`    |
+| `toolSessionId` | String |   鉁?  | OpenCode 浼氳瘽 ID       |
+| `event`         | Object |   鉁?  | 鍘熷 OpenCode 浜嬩欢瀵硅薄 |
 
-**Gateway 收到后**: 根据 `toolSessionId` 路由，透传给对应 Skill Server。
+**Gateway 鏀跺埌鍚?*: 鏍规嵁 `toolSessionId` 璺敱锛岄€忎紶缁欏搴?Skill Server銆?
 
 ---
 
-### 5. tool_done — 执行完成
+### 5. tool_done 鈥?鎵ц瀹屾垚
 
 ```json
 {
@@ -364,15 +361,15 @@ Gateway 在 `beforeHandshake()` 中：
 }
 ```
 
-| 字段            | 类型   | 必填  | 说明               |
+| 瀛楁            | 绫诲瀷   | 蹇呭～  | 璇存槑               |
 | --------------- | ------ | :---: | ------------------ |
-| `type`          | String |   ✅   | 固定 `"tool_done"` |
-| `toolSessionId` | String |   ✅   | OpenCode 会话 ID   |
-| `usage`         | Object |   ❌   | Token 使用统计     |
+| `type`          | String |   鉁?  | 鍥哄畾 `"tool_done"` |
+| `toolSessionId` | String |   鉁?  | OpenCode 浼氳瘽 ID   |
+| `usage`         | Object |   鉂?  | Token 浣跨敤缁熻     |
 
 ---
 
-### 6. tool_error — 执行错误
+### 6. tool_error 鈥?鎵ц閿欒
 
 ```json
 {
@@ -382,15 +379,15 @@ Gateway 在 `beforeHandshake()` 中：
 }
 ```
 
-| 字段            | 类型   | 必填  | 说明                |
+| 瀛楁            | 绫诲瀷   | 蹇呭～  | 璇存槑                |
 | --------------- | ------ | :---: | ------------------- |
-| `type`          | String |   ✅   | 固定 `"tool_error"` |
-| `toolSessionId` | String |   ✅   | OpenCode 会话 ID    |
-| `error`         | String |   ✅   | 错误描述            |
+| `type`          | String |   鉁?  | 鍥哄畾 `"tool_error"` |
+| `toolSessionId` | String |   鉁?  | OpenCode 浼氳瘽 ID    |
+| `error`         | String |   鉁?  | 閿欒鎻忚堪            |
 
 ---
 
-### 7. status_response — 状态响应
+### 7. status_response 鈥?鐘舵€佸搷搴?
 
 ```json
 {
@@ -399,7 +396,8 @@ Gateway 在 `beforeHandshake()` 中：
 }
 ```
 
-| 字段             | 类型    | 必填  | 说明                     |
+| 瀛楁             | 绫诲瀷    | 蹇呭～  | 璇存槑                     |
 | ---------------- | ------- | :---: | ------------------------ |
-| `type`           | String  |   ✅   | 固定 `"status_response"` |
-| `opencodeOnline` | Boolean |   ✅   | OpenCode 运行时是否在线  |
+| `type`           | String  |   鉁?  | 鍥哄畾 `"status_response"` |
+| `opencodeOnline` | Boolean |   鉁?  | OpenCode 杩愯鏃舵槸鍚﹀湪绾? |
+

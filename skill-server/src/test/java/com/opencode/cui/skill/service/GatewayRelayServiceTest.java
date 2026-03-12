@@ -67,7 +67,7 @@ class GatewayRelayServiceTest {
     @Test
     @DisplayName("tool_event persists and broadcasts to Skill Redis")
     void toolEventPersistsAndBroadcasts() {
-        String msg = "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":\"123\",\"event\":{\"data\":\"hello\"}}";
+        String msg = "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":123,\"event\":{\"data\":\"hello\"}}";
         when(translator.translate(any())).thenReturn(StreamMessage.builder()
                 .type(StreamMessage.Types.TEXT_DELTA)
                 .sessionId("ses_internal_1")
@@ -88,7 +88,7 @@ class GatewayRelayServiceTest {
     @Test
     @DisplayName("tool_done broadcasts via Skill Redis")
     void toolDoneBroadcasts() {
-        String msg = "{\"type\":\"tool_done\",\"userId\":\"user-1\",\"welinkSessionId\":\"42\",\"usage\":{\"tokens\":100}}";
+        String msg = "{\"type\":\"tool_done\",\"userId\":\"user-1\",\"welinkSessionId\":42,\"usage\":{\"tokens\":100}}";
 
         service.handleGatewayMessage(msg);
 
@@ -108,7 +108,7 @@ class GatewayRelayServiceTest {
                 .build());
         when(sessionService.activateSession(123L)).thenReturn(true);
 
-        service.handleGatewayMessage("{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":\"123\",\"event\":{\"data\":\"hello\"}}");
+        service.handleGatewayMessage("{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":123,\"event\":{\"data\":\"hello\"}}");
 
         ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
         verify(redisMessageBroker, org.mockito.Mockito.atLeast(2)).publishToUser(eq("user-1"), payloadCaptor.capture());
@@ -128,7 +128,7 @@ class GatewayRelayServiceTest {
         when(gatewayRelayTarget.hasActiveConnection()).thenReturn(true);
         when(gatewayRelayTarget.sendToGateway(any())).thenReturn(true);
 
-        service.handleGatewayMessage("{\"type\":\"tool_error\",\"welinkSessionId\":\"42\",\"error\":\"session_not_found\"}");
+        service.handleGatewayMessage("{\"type\":\"tool_error\",\"welinkSessionId\":42,\"error\":\"session_not_found\"}");
 
         ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
         verify(redisMessageBroker).publishToUser(eq("user-42"), payloadCaptor.capture());
@@ -138,7 +138,7 @@ class GatewayRelayServiceTest {
     @Test
     @DisplayName("tool_error persists and broadcasts via Skill Redis")
     void toolErrorPersistsAndBroadcasts() {
-        String msg = "{\"type\":\"tool_error\",\"userId\":\"user-42\",\"welinkSessionId\":\"42\",\"error\":\"timeout\"}";
+        String msg = "{\"type\":\"tool_error\",\"userId\":\"user-42\",\"welinkSessionId\":42,\"error\":\"timeout\"}";
 
         service.handleGatewayMessage(msg);
 
@@ -178,7 +178,7 @@ class GatewayRelayServiceTest {
     @Test
     @DisplayName("session_created updates toolSessionId")
     void sessionCreatedUpdatesToolSessionId() {
-        String msg = "{\"type\":\"session_created\",\"ak\":\"1\",\"welinkSessionId\":\"42\",\"toolSessionId\":\"ts-abc\"}";
+        String msg = "{\"type\":\"session_created\",\"ak\":\"1\",\"welinkSessionId\":42,\"toolSessionId\":\"ts-abc\"}";
 
         service.handleGatewayMessage(msg);
 
@@ -193,7 +193,7 @@ class GatewayRelayServiceTest {
                 .permissionId("p-1")
                 .build());
 
-        String msg = "{\"type\":\"permission_request\",\"userId\":\"user-42\",\"welinkSessionId\":\"42\",\"permissionId\":\"p-1\",\"command\":\"rm -rf /\",\"workingDirectory\":\"/tmp\"}";
+        String msg = "{\"type\":\"permission_request\",\"userId\":\"user-42\",\"welinkSessionId\":42,\"permissionId\":\"p-1\",\"command\":\"rm -rf /\",\"workingDirectory\":\"/tmp\"}";
         service.handleGatewayMessage(msg);
 
         verify(redisMessageBroker).publishToUser(eq("user-42"), contains("permission.ask"));
@@ -224,7 +224,7 @@ class GatewayRelayServiceTest {
     @Test
     @DisplayName("unknown type logs warning without errors")
     void unknownTypeLogsWarning() {
-        String msg = "{\"type\":\"unknown_type\",\"welinkSessionId\":\"42\"}";
+        String msg = "{\"type\":\"unknown_type\",\"welinkSessionId\":42}";
 
         service.handleGatewayMessage(msg);
 
@@ -309,7 +309,7 @@ class GatewayRelayServiceTest {
                 .content("hello")
                 .build());
 
-        service.handleGatewayMessage("{\"type\":\"tool_event\",\"welinkSessionId\":\"123\",\"event\":{\"data\":\"hello\"}}");
+        service.handleGatewayMessage("{\"type\":\"tool_event\",\"welinkSessionId\":123,\"event\":{\"data\":\"hello\"}}");
 
         verify(redisMessageBroker).publishToUser(eq("user-123"), contains("text.delta"));
     }

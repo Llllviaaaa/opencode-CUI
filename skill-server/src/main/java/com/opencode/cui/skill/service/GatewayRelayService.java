@@ -119,7 +119,8 @@ public class GatewayRelayService {
             try {
                 message.put("welinkSessionId", Long.parseLong(sessionId));
             } catch (NumberFormatException e) {
-                message.put("welinkSessionId", sessionId);
+                log.warn("Skipping non-numeric welinkSessionId in invoke payload: action={}, sessionId={}",
+                        action, sessionId);
             }
         }
         message.put("action", action);

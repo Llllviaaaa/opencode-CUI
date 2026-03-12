@@ -103,7 +103,7 @@ class SkillWebSocketHandlerTest {
     @DisplayName("invoke message delegates to skill relay service")
     void invokeDelegatesToSkillRelayService() throws Exception {
         handler.handle(session,
-                "{\"type\":\"invoke\",\"source\":\"skill-server\",\"ak\":\"ak_test_001\",\"welinkSessionId\":\"42\",\"action\":\"chat\",\"userId\":\"user-1\"}");
+                "{\"type\":\"invoke\",\"source\":\"skill-server\",\"ak\":\"ak_test_001\",\"welinkSessionId\":42,\"action\":\"chat\",\"userId\":\"user-1\"}");
 
         verify(skillRelayService).handleInvokeFromSkill(eq(session),
                 argThat(message -> "invoke".equals(message.getType())
@@ -115,7 +115,7 @@ class SkillWebSocketHandlerTest {
     @Test
     @DisplayName("non invoke message is ignored")
     void nonInvokeMessageIsIgnored() throws Exception {
-        handler.handle(session, "{\"type\":\"tool_event\",\"welinkSessionId\":\"42\"}");
+        handler.handle(session, "{\"type\":\"tool_event\",\"welinkSessionId\":42}");
 
         verifyNoInteractions(skillRelayService);
     }
