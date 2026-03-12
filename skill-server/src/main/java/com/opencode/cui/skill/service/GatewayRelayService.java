@@ -4,18 +4,12 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
-import com.opencode.cui.skill.model.SkillMessage;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
-import com.opencode.cui.skill.repository.SkillMessageRepository;
 import com.opencode.cui.skill.ws.SkillStreamHandler;
-import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Iterator;
 
@@ -47,55 +41,35 @@ public class GatewayRelayService {
     private final SkillStreamHandler skillStreamHandler;
     private final SkillMessageService messageService;
     private final SkillSessionService sessionService;
-    private final SkillMessageRepository messageRepository;
     private final RedisMessageBroker redisMessageBroker;
     private final OpenCodeEventTranslator translator;
     private final MessagePersistenceService persistenceService;
     private final StreamBufferService bufferService;
+    private final SessionRebuildService rebuildService;
     private volatile GatewayRelayTarget gatewayRelayTarget;
-
-    /**
-     * Stores pending message text to retry after toolSession rebuild.
-     * 使用 Caffeine Cache，5 分钟过期防止 rebuild 失败导致内存泄漏。
-     */
-    private final Cache<String, String> pendingRebuildMessages = Caffeine.newBuilder()
-            .expireAfterWrite(Duration.ofMinutes(5))
-            .maximumSize(1_000)
-            .build();
 
     public GatewayRelayService(ObjectMapper objectMapper,
             SkillStreamHandler skillStreamHandler,
             SkillMessageService messageService,
             SkillSessionService sessionService,
-            SkillMessageRepository messageRepository,
             RedisMessageBroker redisMessageBroker,
             OpenCodeEventTranslator translator,
             MessagePersistenceService persistenceService,
-            StreamBufferService bufferService) {
+            StreamBufferService bufferService,
+            SessionRebuildService rebuildService) {
         this.objectMapper = objectMapper;
         this.skillStreamHandler = skillStreamHandler;
         this.messageService = messageService;
         this.sessionService = sessionService;
-        this.messageRepository = messageRepository;
         this.redisMessageBroker = redisMessageBroker;
         this.translator = translator;
         this.persistenceService = persistenceService;
         this.bufferService = bufferService;
+        this.rebuildService = rebuildService;
     }
 
     public void setGatewayRelayTarget(GatewayRelayTarget gatewayRelayTarget) {
         this.gatewayRelayTarget = gatewayRelayTarget;
-    }
-
-    // ==================== Initialization ====================
-
-    /**
-     * On startup, wire circular dependency with SkillSessionService.
-     */
-    @PostConstruct
-    public void init() {
-        // 循环依赖已消除，不再需要 setter 注入
-        log.info("GatewayRelayService initialized");
     }
 
     // ==================== Downstream: Skill -> Gateway ====================
@@ -371,27 +345,7 @@ public class GatewayRelayService {
      * create_session to Gateway.
      */
     private void handleSessionNotFound(String sessionId, String userId) {
-        log.warn("Tool session not found for welinkSession={}, initiating rebuild", sessionId);
-
-        try {
-            Long sessionIdLong = Long.valueOf(sessionId);
-            SkillSession session = sessionService.getSession(sessionIdLong);
-
-            // Clear invalid toolSessionId
-            sessionService.clearToolSessionId(sessionIdLong);
-
-            // Use the last user message text as the pending retry payload
-            String pendingMessage = null;
-            SkillMessage lastUserMsg = messageRepository.findLastUserMessage(sessionIdLong);
-            if (lastUserMsg != null && lastUserMsg.getContent() != null) {
-                pendingMessage = lastUserMsg.getContent();
-            }
-
-            rebuildToolSession(sessionId, session, pendingMessage);
-        } catch (Exception e) {
-            log.error("Failed to rebuild session {}: {}", sessionId, e.getMessage(), e);
-            pendingRebuildMessages.invalidate(sessionId);
-        }
+        rebuildService.handleSessionNotFound(sessionId, userId, rebuildCallback());
     }
 
     /**
@@ -404,37 +358,7 @@ public class GatewayRelayService {
      * @param pendingMessage user message to auto-retry after rebuild (nullable)
      */
     public void rebuildToolSession(String sessionId, SkillSession session, String pendingMessage) {
-        log.info("Rebuilding toolSession for welinkSession={}", sessionId);
-        // 存储待重发消息
-        if (pendingMessage != null && !pendingMessage.isBlank()) {
-            pendingRebuildMessages.put(sessionId, pendingMessage);
-            log.info("Stored pending retry message for session {}: '{}'",
-                    sessionId,
-                    pendingMessage.substring(0, Math.min(50, pendingMessage.length())));
-        }
-
-        // 通知前端 retry 状态
-        StreamMessage reconnecting = StreamMessage.sessionStatus("retry");
-        broadcastStreamMessage(sessionId, session.getUserId(), reconnecting);
-
-        // 发送 create_session 到 Gateway 重建 toolSession
-        if (session.getAk() != null) {
-            ObjectNode payload = objectMapper.createObjectNode();
-            payload.put("title", session.getTitle() != null ? session.getTitle() : "");
-            String payloadStr;
-            try {
-                payloadStr = objectMapper.writeValueAsString(payload);
-            } catch (JsonProcessingException e) {
-                payloadStr = "{}";
-            }
-            sendInvokeToGateway(session.getAk(), session.getUserId(), sessionId, "create_session", payloadStr);
-            log.info("Rebuild create_session sent for welinkSession={}, ak={}", sessionId, session.getAk());
-        } else {
-            log.error("Cannot rebuild session {}: no ak associated", sessionId);
-            pendingRebuildMessages.invalidate(sessionId);
-            StreamMessage errorMsg = StreamMessage.error("AI session expired and cannot be rebuilt");
-            broadcastStreamMessage(sessionId, session.getUserId(), errorMsg);
-        }
+        rebuildService.rebuildToolSession(sessionId, session, pendingMessage, rebuildCallback());
     }
 
 
@@ -478,14 +402,12 @@ public class GatewayRelayService {
             sessionService.updateToolSessionId(Long.valueOf(sessionId), toolSessionId);
             log.info("Tool session created: sessionId={}, toolSessionId={}", sessionId, toolSessionId);
 
-            // Check for pending message retry after rebuild
-            String pendingText = pendingRebuildMessages.getIfPresent(sessionId);
-            pendingRebuildMessages.invalidate(sessionId);
+            // 检查是否有 rebuild 期间的待重发消息
+            String pendingText = rebuildService.consumePendingMessage(sessionId);
             if (pendingText != null) {
                 log.info("Retrying pending message after rebuild: sessionId={}, text='{}'",
                         sessionId, pendingText.substring(0, Math.min(50, pendingText.length())));
 
-                // Build chat payload with new toolSessionId and re-send
                 ObjectNode chatPayload = objectMapper.createObjectNode();
                 chatPayload.put("text", pendingText);
                 chatPayload.put("toolSessionId", toolSessionId);
@@ -498,13 +420,12 @@ public class GatewayRelayService {
                 sendInvokeToGateway(ak, userId, sessionId, "chat", payloadStr);
                 log.info("Pending message re-sent after rebuild: sessionId={}", sessionId);
 
-                // Notify frontend that session is active again
                 StreamMessage activeMsg = StreamMessage.sessionStatus("busy");
                 broadcastStreamMessage(sessionId, userId, activeMsg);
             }
         } catch (Exception e) {
             log.error("Failed to update tool session ID: sessionId={}, error={}", sessionId, e.getMessage());
-            pendingRebuildMessages.invalidate(sessionId);
+            rebuildService.clearPendingMessage(sessionId);
         }
     }
 
@@ -528,6 +449,23 @@ public class GatewayRelayService {
     public void publishProtocolMessage(String sessionId, StreamMessage msg) {
         broadcastStreamMessage(sessionId, null, msg);
         bufferService.accumulate(sessionId, msg);
+    }
+
+    /**
+     * 创建回调实例，将广播和发送 invoke 委托回本服务。
+     */
+    private SessionRebuildService.RebuildCallback rebuildCallback() {
+        return new SessionRebuildService.RebuildCallback() {
+            @Override
+            public void broadcast(String sessionId, String userId, StreamMessage msg) {
+                broadcastStreamMessage(sessionId, userId, msg);
+            }
+
+            @Override
+            public void sendInvoke(String ak, String userId, String sessionId, String action, String payload) {
+                sendInvokeToGateway(ak, userId, sessionId, action, payload);
+            }
+        };
     }
 
     // ==================== Internal Helpers ====================

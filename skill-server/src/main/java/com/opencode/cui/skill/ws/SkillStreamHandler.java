@@ -5,15 +5,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.skill.model.SkillSession;
-import com.opencode.cui.skill.model.SkillMessage;
-import com.opencode.cui.skill.model.ProtocolMessageView;
 import com.opencode.cui.skill.model.StreamMessage;
-import com.opencode.cui.skill.repository.SkillMessagePartRepository;
-import com.opencode.cui.skill.service.ProtocolMessageMapper;
 import com.opencode.cui.skill.service.RedisMessageBroker;
-import com.opencode.cui.skill.service.SkillMessageService;
 import com.opencode.cui.skill.service.SkillSessionService;
-import com.opencode.cui.skill.service.StreamBufferService;
+import com.opencode.cui.skill.service.SnapshotService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
@@ -23,8 +18,6 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
 import java.time.Duration;
-import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -50,10 +43,8 @@ public class SkillStreamHandler extends TextWebSocketHandler {
     private static final String ATTR_USER_ID = "userId";
 
     private final ObjectMapper objectMapper;
-    private final StreamBufferService bufferService;
     private final SkillSessionService sessionService;
-    private final SkillMessageService messageService;
-    private final SkillMessagePartRepository partRepository;
+    private final SnapshotService snapshotService;
     private final RedisMessageBroker redisMessageBroker;
 
     /**
@@ -78,16 +69,12 @@ public class SkillStreamHandler extends TextWebSocketHandler {
     private final ConcurrentHashMap<String, AtomicInteger> activeConnectionCounts = new ConcurrentHashMap<>();
 
     public SkillStreamHandler(ObjectMapper objectMapper,
-            StreamBufferService bufferService,
             SkillSessionService sessionService,
-            SkillMessageService messageService,
-            SkillMessagePartRepository partRepository,
+            SnapshotService snapshotService,
             RedisMessageBroker redisMessageBroker) {
         this.objectMapper = objectMapper;
-        this.bufferService = bufferService;
         this.sessionService = sessionService;
-        this.messageService = messageService;
-        this.partRepository = partRepository;
+        this.snapshotService = snapshotService;
         this.redisMessageBroker = redisMessageBroker;
     }
 
@@ -336,7 +323,7 @@ public class SkillStreamHandler extends TextWebSocketHandler {
     }
 
     private void sendInitialStreamingState(WebSocketSession session, String userId) {
-        List<SkillSession> activeSessions = sessionService.findActiveByUserId(userId);
+        List<SkillSession> activeSessions = snapshotService.getActiveSessionsForUser(userId);
         for (SkillSession skillSession : activeSessions) {
             String sessionId = String.valueOf(skillSession.getId());
             sessionOwners.put(sessionId, skillSession.getUserId());
@@ -350,17 +337,10 @@ public class SkillStreamHandler extends TextWebSocketHandler {
             return;
         }
         try {
-            List<Object> messages = buildSnapshotMessages(sessionId);
-            StreamMessage snapshotMsg = StreamMessage.builder()
-                    .type(StreamMessage.Types.SNAPSHOT)
-                    .seq(nextTransportSeq(sessionId))
-                    .sessionId(sessionId)
-                    .emittedAt(Instant.now().toString())
-                    .messages(messages)
-                    .build();
-
+            StreamMessage snapshotMsg = snapshotService.buildSnapshot(sessionId, nextTransportSeq(sessionId));
             session.sendMessage(new TextMessage(objectMapper.writeValueAsString(snapshotMsg)));
-            log.info("Snapshot sent: sessionId={}, messages={}", sessionId, messages.size());
+            log.info("Snapshot sent: sessionId={}, messages={}",
+                    sessionId, snapshotMsg.getMessages() != null ? snapshotMsg.getMessages().size() : 0);
         } catch (Exception e) {
             log.error("Failed to send snapshot for session {}: {}", sessionId, e.getMessage(), e);
         }
@@ -371,72 +351,26 @@ public class SkillStreamHandler extends TextWebSocketHandler {
             return;
         }
         try {
-            boolean isStreaming = bufferService.isSessionStreaming(sessionId);
-            List<StreamMessage> parts = bufferService.getStreamingParts(sessionId);
-            List<Object> aggregatedParts = parts.stream()
-                    .map(part -> ProtocolMessageMapper.toProtocolStreamingPart(part, objectMapper))
-                    .filter(Objects::nonNull)
-                    .map(part -> (Object) part)
-                    .toList();
-
-            StreamMessage streamingMsg = StreamMessage.builder()
-                    .type(StreamMessage.Types.STREAMING)
-                    .seq(nextTransportSeq(sessionId))
-                    .sessionId(sessionId)
-                    .emittedAt(Instant.now().toString())
-                    .sessionStatus(isStreaming ? "busy" : "idle")
-                    .parts(aggregatedParts)
-                    .build();
-            if (!parts.isEmpty()) {
-                StreamMessage firstPart = parts.get(0);
-                streamingMsg.setMessageId(firstPart.getMessageId());
-                streamingMsg.setMessageSeq(firstPart.getMessageSeq());
-                streamingMsg.setRole(firstPart.getRole());
-            }
-
+            StreamMessage streamingMsg = snapshotService.buildStreamingState(sessionId, nextTransportSeq(sessionId));
             session.sendMessage(new TextMessage(objectMapper.writeValueAsString(streamingMsg)));
-            log.info("Streaming state sent: sessionId={}, streaming={}, parts={}",
-                    sessionId, isStreaming, parts.size());
+            log.info("Streaming state sent: sessionId={}, status={}",
+                    sessionId, streamingMsg.getSessionStatus());
         } catch (Exception e) {
             log.error("Failed to send streaming state for session {}: {}", sessionId, e.getMessage(), e);
         }
     }
 
-    private List<Object> buildSnapshotMessages(String sessionId) {
-        Long numericSessionId;
-        try {
-            numericSessionId = Long.valueOf(sessionId);
-        } catch (NumberFormatException e) {
-            log.warn("Cannot build snapshot: invalid sessionId={}", sessionId);
-            return List.of();
-        }
 
-        return messageService.getAllMessages(numericSessionId).stream()
-                .map(this::toSnapshotMessage)
-                .map(node -> (Object) node)
-                .toList();
-    }
-
-    private ObjectNode toSnapshotMessage(SkillMessage message) {
-        ProtocolMessageView messageView = ProtocolMessageMapper.toProtocolMessage(
-                message,
-                partRepository.findByMessageId(message.getId()),
-                objectMapper);
-        return objectMapper.valueToTree(messageView);
-    }
 
     private Set<WebSocketSession> resolveRecipients(String sessionId) {
-        Set<WebSocketSession> recipients = new CopyOnWriteArraySet<>();
-
         String ownerUserId = sessionOwners.get(sessionId, this::resolveOwnerUserId);
         if (ownerUserId != null) {
             Set<WebSocketSession> userLevel = userSubscribers.get(ownerUserId);
             if (userLevel != null) {
-                recipients.addAll(userLevel);
+                return userLevel;
             }
         }
-
-        return recipients;
+        return Set.of();
     }
 
     private String resolveOwnerUserId(String sessionId) {
