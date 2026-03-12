@@ -98,6 +98,46 @@ public class StreamMessage {
         }
     }
 
+    // ==================== 静态工厂方法 ====================
+
+    /**
+     * 创建 session.status 消息。
+     */
+    public static StreamMessage sessionStatus(String status) {
+        return StreamMessage.builder()
+                .type(Types.SESSION_STATUS)
+                .sessionStatus(status)
+                .build();
+    }
+
+    /**
+     * 创建 error 消息。
+     */
+    public static StreamMessage error(String errorMessage) {
+        return StreamMessage.builder()
+                .type(Types.ERROR)
+                .error(errorMessage)
+                .build();
+    }
+
+    /**
+     * 创建 agent.online 消息。
+     */
+    public static StreamMessage agentOnline() {
+        return StreamMessage.builder()
+                .type(Types.AGENT_ONLINE)
+                .build();
+    }
+
+    /**
+     * 创建 agent.offline 消息。
+     */
+    public static StreamMessage agentOffline() {
+        return StreamMessage.builder()
+                .type(Types.AGENT_OFFLINE)
+                .build();
+    }
+
     @JsonProperty("welinkSessionId")
     public String getWelinkSessionId() {
         if (welinkSessionId != null) {

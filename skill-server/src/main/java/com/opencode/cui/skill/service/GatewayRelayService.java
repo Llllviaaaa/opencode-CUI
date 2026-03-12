@@ -49,7 +49,6 @@ public class GatewayRelayService {
     private final SkillSessionService sessionService;
     private final SkillMessageRepository messageRepository;
     private final RedisMessageBroker redisMessageBroker;
-    private final SequenceTracker sequenceTracker;
     private final OpenCodeEventTranslator translator;
     private final MessagePersistenceService persistenceService;
     private final StreamBufferService bufferService;
@@ -70,7 +69,6 @@ public class GatewayRelayService {
             SkillSessionService sessionService,
             SkillMessageRepository messageRepository,
             RedisMessageBroker redisMessageBroker,
-            SequenceTracker sequenceTracker,
             OpenCodeEventTranslator translator,
             MessagePersistenceService persistenceService,
             StreamBufferService bufferService) {
@@ -80,7 +78,6 @@ public class GatewayRelayService {
         this.sessionService = sessionService;
         this.messageRepository = messageRepository;
         this.redisMessageBroker = redisMessageBroker;
-        this.sequenceTracker = sequenceTracker;
         this.translator = translator;
         this.persistenceService = persistenceService;
         this.bufferService = bufferService;
@@ -261,10 +258,7 @@ public class GatewayRelayService {
             boolean activated = sessionService.activateSession(Long.parseLong(sessionId));
             if (activated) {
                 // Notify frontend that session is now active
-                StreamMessage activeMsg = StreamMessage.builder()
-                        .type(StreamMessage.Types.SESSION_STATUS)
-                        .sessionStatus("busy")
-                        .build();
+                StreamMessage activeMsg = StreamMessage.sessionStatus("busy");
                 broadcastStreamMessage(sessionId, userId, activeMsg);
             }
         } catch (NumberFormatException e) {
@@ -305,10 +299,7 @@ public class GatewayRelayService {
             return;
         }
 
-        StreamMessage msg = StreamMessage.builder()
-                .type(StreamMessage.Types.SESSION_STATUS)
-                .sessionStatus("idle")
-                .build();
+        StreamMessage msg = StreamMessage.sessionStatus("idle");
         broadcastStreamMessage(sessionId, userId, msg);
 
         // Accumulate to Redis buffer (clears session on idle)
@@ -423,10 +414,7 @@ public class GatewayRelayService {
         }
 
         // 通知前端 retry 状态
-        StreamMessage reconnecting = StreamMessage.builder()
-                .type(StreamMessage.Types.SESSION_STATUS)
-                .sessionStatus("retry")
-                .build();
+        StreamMessage reconnecting = StreamMessage.sessionStatus("retry");
         broadcastStreamMessage(sessionId, session.getUserId(), reconnecting);
 
         // 发送 create_session 到 Gateway 重建 toolSession
@@ -444,10 +432,7 @@ public class GatewayRelayService {
         } else {
             log.error("Cannot rebuild session {}: no ak associated", sessionId);
             pendingRebuildMessages.invalidate(sessionId);
-            StreamMessage errorMsg = StreamMessage.builder()
-                    .type(StreamMessage.Types.ERROR)
-                    .error("AI session expired and cannot be rebuilt")
-                    .build();
+            StreamMessage errorMsg = StreamMessage.error("AI session expired and cannot be rebuilt");
             broadcastStreamMessage(sessionId, session.getUserId(), errorMsg);
         }
     }
@@ -459,9 +444,7 @@ public class GatewayRelayService {
         log.info("Agent online: ak={}, toolType={}, toolVersion={}", ak, toolType, toolVersion);
 
         if (ak != null) {
-            StreamMessage msg = StreamMessage.builder()
-                    .type(StreamMessage.Types.AGENT_ONLINE)
-                    .build();
+            StreamMessage msg = StreamMessage.agentOnline();
             sessionService.findByAk(ak).forEach(
                     session -> broadcastStreamMessage(session.getId().toString(),
                             userId != null && !userId.isBlank() ? userId : session.getUserId(),
@@ -473,9 +456,7 @@ public class GatewayRelayService {
         log.warn("Agent offline: ak={}", ak);
 
         if (ak != null) {
-            StreamMessage msg = StreamMessage.builder()
-                    .type(StreamMessage.Types.AGENT_OFFLINE)
-                    .build();
+            StreamMessage msg = StreamMessage.agentOffline();
             sessionService.findByAk(ak).forEach(
                     session -> broadcastStreamMessage(session.getId().toString(),
                             userId != null && !userId.isBlank() ? userId : session.getUserId(),
@@ -518,10 +499,7 @@ public class GatewayRelayService {
                 log.info("Pending message re-sent after rebuild: sessionId={}", sessionId);
 
                 // Notify frontend that session is active again
-                StreamMessage activeMsg = StreamMessage.builder()
-                        .type(StreamMessage.Types.SESSION_STATUS)
-                        .sessionStatus("busy")
-                        .build();
+                StreamMessage activeMsg = StreamMessage.sessionStatus("busy");
                 broadcastStreamMessage(sessionId, userId, activeMsg);
             }
         } catch (Exception e) {

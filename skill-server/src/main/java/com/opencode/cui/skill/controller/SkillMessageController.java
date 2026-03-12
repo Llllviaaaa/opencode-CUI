@@ -12,7 +12,7 @@ import com.opencode.cui.skill.repository.SkillMessagePartRepository;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.ImMessageService;
 import com.opencode.cui.skill.service.MessagePersistenceService;
-import com.opencode.cui.skill.service.ProtocolException;
+
 import com.opencode.cui.skill.service.ProtocolMessageMapper;
 import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillMessageService;
@@ -90,13 +90,7 @@ public class SkillMessageController {
         }
 
         SkillSession session;
-        try {
-            session = accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
-        } catch (ProtocolException e) {
-            return ResponseEntity.ok(ApiResponse.error(e.getCode(), e.getMessage()));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.ok(ApiResponse.error(404, "Session not found"));
-        }
+        session = accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
 
         if (session.getStatus() == SkillSession.Status.CLOSED) {
             return ResponseEntity.ok(ApiResponse.error(409, "Session is closed"));
@@ -162,13 +156,7 @@ public class SkillMessageController {
             return ResponseEntity.ok(ApiResponse.error(400, "Invalid session ID"));
         }
 
-        try {
-            accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
-        } catch (ProtocolException e) {
-            return ResponseEntity.ok(ApiResponse.error(e.getCode(), e.getMessage()));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.ok(ApiResponse.error(404, "Session not found"));
-        }
+        accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
 
         PageResult<SkillMessage> messages = messageService.getMessageHistory(numericSessionId, page, size);
         var content = messages.getContent().stream()
@@ -205,13 +193,7 @@ public class SkillMessageController {
         }
 
         SkillSession session;
-        try {
-            session = accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
-        } catch (ProtocolException e) {
-            return ResponseEntity.ok(ApiResponse.error(e.getCode(), e.getMessage()));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.ok(ApiResponse.error(404, "Session not found"));
-        }
+        session = accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
 
         String chatId = request.getChatId();
         if (chatId == null || chatId.isBlank()) {
@@ -263,13 +245,7 @@ public class SkillMessageController {
         }
 
         SkillSession session;
-        try {
-            session = accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
-        } catch (ProtocolException e) {
-            return ResponseEntity.ok(ApiResponse.error(e.getCode(), e.getMessage()));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.ok(ApiResponse.error(404, "Session not found"));
-        }
+        session = accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
 
         if (session.getStatus() == SkillSession.Status.CLOSED) {
             return ResponseEntity.ok(ApiResponse.error(409, "Session is closed"));

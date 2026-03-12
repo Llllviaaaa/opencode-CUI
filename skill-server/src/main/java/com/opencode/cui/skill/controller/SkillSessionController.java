@@ -6,7 +6,7 @@ import com.opencode.cui.skill.model.ApiResponse;
 import com.opencode.cui.skill.model.PageResult;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.service.GatewayRelayService;
-import com.opencode.cui.skill.service.ProtocolException;
+
 import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillSessionService;
 import lombok.Data;
@@ -22,7 +22,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
+
 import java.util.Map;
 
 @Slf4j
@@ -54,28 +54,24 @@ public class SkillSessionController {
     public ResponseEntity<ApiResponse<SkillSession>> createSession(
             @CookieValue(value = "userId", required = false) String userIdCookie,
             @RequestBody CreateSessionRequest request) {
-        try {
-            String resolvedUserId = accessControlService.requireUserId(userIdCookie);
+        String resolvedUserId = accessControlService.requireUserId(userIdCookie);
 
-            SkillSession session = sessionService.createSession(
-                    resolvedUserId,
+        SkillSession session = sessionService.createSession(
+                resolvedUserId,
+                request.getAk(),
+                request.getTitle(),
+                request.getImGroupId());
+
+        if (request.getAk() != null) {
+            gatewayRelayService.sendInvokeToGateway(
                     request.getAk(),
-                    request.getTitle(),
-                    request.getImGroupId());
-
-            if (request.getAk() != null) {
-                gatewayRelayService.sendInvokeToGateway(
-                        request.getAk(),
-                        resolvedUserId,
-                        session.getId().toString(),
-                        "create_session",
-                        buildCreateSessionPayload(request.getTitle()));
-            }
-
-            return ResponseEntity.ok(ApiResponse.ok(session));
-        } catch (ProtocolException e) {
-            return ResponseEntity.ok(ApiResponse.error(e.getCode(), e.getMessage()));
+                    resolvedUserId,
+                    session.getId().toString(),
+                    "create_session",
+                    buildCreateSessionPayload(request.getTitle()));
         }
+
+        return ResponseEntity.ok(ApiResponse.ok(session));
     }
 
     /**
@@ -91,14 +87,10 @@ public class SkillSessionController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
 
-        try {
-            String resolvedUserId = accessControlService.requireUserId(userIdCookie);
-            PageResult<SkillSession> sessions = sessionService.listSessions(
-                    resolvedUserId, ak, imGroupId, status, page, size);
-            return ResponseEntity.ok(ApiResponse.ok(sessions));
-        } catch (ProtocolException e) {
-            return ResponseEntity.ok(ApiResponse.error(e.getCode(), e.getMessage()));
-        }
+        String resolvedUserId = accessControlService.requireUserId(userIdCookie);
+        PageResult<SkillSession> sessions = sessionService.listSessions(
+                resolvedUserId, ak, imGroupId, status, page, size);
+        return ResponseEntity.ok(ApiResponse.ok(sessions));
     }
 
     /**
@@ -113,12 +105,8 @@ public class SkillSessionController {
             Long sessionId = Long.parseLong(id);
             SkillSession session = accessControlService.requireSessionAccess(sessionId, userIdCookie);
             return ResponseEntity.ok(ApiResponse.ok(session));
-        } catch (ProtocolException e) {
-            return ResponseEntity.ok(ApiResponse.error(e.getCode(), e.getMessage()));
         } catch (NumberFormatException e) {
             return ResponseEntity.ok(ApiResponse.error(400, "Invalid session ID"));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.ok(ApiResponse.error(404, "Session not found"));
         }
     }
 
@@ -153,12 +141,8 @@ public class SkillSessionController {
             }
             sessionService.closeSession(sessionId);
             return ResponseEntity.ok(ApiResponse.ok(Map.of("status", "closed", "welinkSessionId", id)));
-        } catch (ProtocolException e) {
-            return ResponseEntity.ok(ApiResponse.error(e.getCode(), e.getMessage()));
         } catch (NumberFormatException e) {
             return ResponseEntity.ok(ApiResponse.error(400, "Invalid session ID"));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.ok(ApiResponse.error(404, "Session not found"));
         }
     }
 
@@ -198,12 +182,8 @@ public class SkillSessionController {
             }
 
             return ResponseEntity.ok(ApiResponse.ok(Map.of("status", "aborted", "welinkSessionId", id)));
-        } catch (ProtocolException e) {
-            return ResponseEntity.ok(ApiResponse.error(e.getCode(), e.getMessage()));
         } catch (NumberFormatException e) {
             return ResponseEntity.ok(ApiResponse.error(400, "Invalid session ID"));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.ok(ApiResponse.error(404, "Session not found"));
         }
     }
 

@@ -3,7 +3,7 @@ package com.opencode.cui.skill.config;
 import com.opencode.cui.skill.model.ApiResponse;
 import com.opencode.cui.skill.service.ProtocolException;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
+
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -18,13 +18,12 @@ public class GlobalExceptionHandler {
 
     /**
      * 处理协议层自定义异常。
+     * 保持 HTTP 200 + body error 的约定（前端使用 ApiResponse.code 判断成功/失败）。
      */
     @ExceptionHandler(ProtocolException.class)
     public ResponseEntity<ApiResponse<?>> handleProtocolException(ProtocolException e) {
         log.warn("Protocol exception: code={}, message={}", e.getCode(), e.getMessage());
-        int httpStatus = mapProtocolCodeToHttpStatus(e.getCode());
-        return ResponseEntity.status(httpStatus)
-                .body(ApiResponse.error(e.getCode(), e.getMessage()));
+        return ResponseEntity.ok(ApiResponse.error(e.getCode(), e.getMessage()));
     }
 
     /**
@@ -33,8 +32,16 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ApiResponse<?>> handleIllegalArgument(IllegalArgumentException e) {
         log.warn("Illegal argument: {}", e.getMessage());
-        return ResponseEntity.badRequest()
-                .body(ApiResponse.error(400, e.getMessage()));
+        return ResponseEntity.ok(ApiResponse.error(400, e.getMessage()));
+    }
+
+    /**
+     * 处理 NumberFormatException（如非法 session ID）。
+     */
+    @ExceptionHandler(NumberFormatException.class)
+    public ResponseEntity<ApiResponse<?>> handleNumberFormat(NumberFormatException e) {
+        log.warn("Invalid number format: {}", e.getMessage());
+        return ResponseEntity.ok(ApiResponse.error(400, "Invalid ID format"));
     }
 
     /**
@@ -43,18 +50,6 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<?>> handleGenericException(Exception e) {
         log.error("Unhandled exception", e);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiResponse.error(500, "Internal server error"));
-    }
-
-    /**
-     * 将 ProtocolException 的 code 映射为 HTTP 状态码。
-     */
-    private int mapProtocolCodeToHttpStatus(int code) {
-        if (code >= 400 && code < 600) {
-            return code;
-        }
-        // 非标准 code 默认返回 400
-        return 400;
+        return ResponseEntity.ok(ApiResponse.error(500, "Internal server error"));
     }
 }

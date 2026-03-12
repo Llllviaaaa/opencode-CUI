@@ -10,7 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Map;
+
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -95,8 +95,8 @@ public class MessagePersistenceService {
     }
 
     private ActiveMessageRef resolveActiveMessage(Long sessionId, StreamMessage msg) {
-        String requestedMessageId = firstNonBlank(msg.getMessageId(), msg.getSourceMessageId());
-        String role = normalizeRole(msg.getRole());
+        String requestedMessageId = ProtocolUtils.firstNonBlank(msg.getMessageId(), msg.getSourceMessageId());
+        String role = ProtocolUtils.normalizeRole(msg.getRole());
 
         ActiveMessageRef active = activeMessages.get(sessionId);
         if (active != null) {
@@ -333,12 +333,8 @@ public class MessagePersistenceService {
         };
     }
 
-    private String normalizeRole(String role) {
-        if (role == null || role.isBlank()) {
-            return "assistant";
-        }
-        return role.toLowerCase();
-    }
+
+
 
     private SkillMessage.Role toRoleEnum(String role) {
         return switch (role) {
@@ -355,16 +351,6 @@ public class MessagePersistenceService {
             case "tool" -> SkillMessage.ContentType.CODE;
             default -> SkillMessage.ContentType.MARKDOWN;
         };
-    }
-
-    private String firstNonBlank(String first, String second) {
-        if (first != null && !first.isBlank()) {
-            return first;
-        }
-        if (second != null && !second.isBlank()) {
-            return second;
-        }
-        return null;
     }
 
     private record ActiveMessageRef(Long dbId, String protocolMessageId, Integer messageSeq) {

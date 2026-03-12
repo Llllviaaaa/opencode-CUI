@@ -95,8 +95,8 @@ public class OpenCodeEventTranslator {
             return null;
         }
 
-        String sessionId = firstNonBlank(part.path("sessionID").asText(null), props.path("sessionID").asText(null));
-        String messageId = firstNonBlank(part.path("messageID").asText(null), props.path("messageID").asText(null));
+        String sessionId = ProtocolUtils.firstNonBlank(part.path("sessionID").asText(null), props.path("sessionID").asText(null));
+        String messageId = ProtocolUtils.firstNonBlank(part.path("messageID").asText(null), props.path("messageID").asText(null));
         String partId = part.path("id").asText(null);
         String partType = part.path("type").asText("");
         String delta = props.has("delta") && !props.get("delta").isNull()
@@ -332,9 +332,9 @@ public class OpenCodeEventTranslator {
             return null;
         }
 
-        String sessionId = firstNonBlank(props.path("sessionID").asText(null), info.path("sessionID").asText(null));
-        String messageId = firstNonBlank(props.path("messageID").asText(null), info.path("id").asText(null));
-        String role = normalizeRole(info.path("role").asText(null));
+        String sessionId = ProtocolUtils.firstNonBlank(props.path("sessionID").asText(null), info.path("sessionID").asText(null));
+        String messageId = ProtocolUtils.firstNonBlank(props.path("messageID").asText(null), info.path("id").asText(null));
+        String role = ProtocolUtils.normalizeRole(info.path("role").asText(null));
         rememberMessageRole(sessionId, messageId, role);
 
         if (!info.has("finish") || shouldIgnoreMessage(role)) {
@@ -442,7 +442,7 @@ public class OpenCodeEventTranslator {
             String sourceMessageId,
             String role) {
         StreamMessage.StreamMessageBuilder builder = baseBuilder(type, sessionId)
-                .role(normalizeRole(role));
+                .role(ProtocolUtils.normalizeRole(role));
         if (sourceMessageId != null && !sourceMessageId.isBlank()) {
             builder.messageId(sourceMessageId);
             builder.sourceMessageId(sourceMessageId);
@@ -546,29 +546,14 @@ public class OpenCodeEventTranslator {
         if (sessionId == null || sessionId.isBlank() || messageId == null || messageId.isBlank()) {
             return "assistant";
         }
-        return normalizeRole(messageRoles.getIfPresent(messageCacheKey(sessionId, messageId)));
+        return ProtocolUtils.normalizeRole(messageRoles.getIfPresent(messageCacheKey(sessionId, messageId)));
     }
 
     private boolean shouldIgnoreMessage(String role) {
-        return "user".equals(normalizeRole(role));
+        return "user".equals(ProtocolUtils.normalizeRole(role));
     }
 
-    private String normalizeRole(String role) {
-        if (role == null || role.isBlank()) {
-            return "assistant";
-        }
-        return role.toLowerCase();
-    }
 
-    private String firstNonBlank(String first, String second) {
-        if (first != null && !first.isBlank()) {
-            return first;
-        }
-        if (second != null && !second.isBlank()) {
-            return second;
-        }
-        return null;
-    }
 
     private String normalizeSessionStatus(String rawStatus) {
         if (rawStatus == null || rawStatus.isBlank()) {
