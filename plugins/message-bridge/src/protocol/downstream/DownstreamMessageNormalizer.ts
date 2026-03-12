@@ -345,10 +345,8 @@ export function normalizeDownstreamMessage(
     return fail(error);
   }
 
-  const welinkSessionId =
-    typeof raw.welinkSessionId === 'string' && raw.welinkSessionId.trim()
-      ? raw.welinkSessionId
-      : undefined;
+  // fix: 兼容逻辑
+  const welinkSessionId = raw.welinkSessionId as string;
 
   if (messageTypeValue === 'status_query') {
     return ok({
