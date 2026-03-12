@@ -189,7 +189,7 @@ class SkillMessageControllerTest {
         when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
 
         var request = new SkillMessageController.PermissionReplyRequest();
-        request.setApproved(true);
+        request.setResponse("once");
 
         var response = controller.replyPermission("1", "1", "p-abc", request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
@@ -201,10 +201,10 @@ class SkillMessageControllerTest {
     }
 
     @Test
-    @DisplayName("replyPermission returns 400 when approved is null")
-    void permissionReplyMissingApproved400() {
+    @DisplayName("replyPermission returns 400 when response is null")
+    void permissionReplyMissingResponse400() {
         var request = new SkillMessageController.PermissionReplyRequest();
-        // approved is null
+        // response is null
 
         var response = controller.replyPermission("1", "1", "p-abc", request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
