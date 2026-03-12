@@ -32,8 +32,8 @@ public class DeviceBindingService {
 
     private final RestTemplate restTemplate;
 
-    public DeviceBindingService() {
-        this.restTemplate = new RestTemplate();
+    public DeviceBindingService(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
     }
 
     /**

@@ -2,16 +2,17 @@ package com.opencode.cui.skill.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.opencode.cui.skill.model.StreamMessage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
 /**
  * Translates raw OpenCode events into frontend-facing StreamMessage DTOs.
@@ -21,10 +22,16 @@ import java.util.concurrent.ConcurrentMap;
 public class OpenCodeEventTranslator {
 
     private final ObjectMapper objectMapper;
-    private final ConcurrentMap<String, String> partTypes = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, Integer> partSequences = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, Integer> nextPartSequences = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, String> messageRoles = new ConcurrentHashMap<>();
+
+    // 使用 Caffeine Cache 替换 ConcurrentHashMap，防止内存泄漏
+    private final Cache<String, String> partTypes = Caffeine.newBuilder()
+            .expireAfterAccess(Duration.ofHours(2)).maximumSize(50_000).build();
+    private final Cache<String, Integer> partSequences = Caffeine.newBuilder()
+            .expireAfterAccess(Duration.ofHours(2)).maximumSize(50_000).build();
+    private final Cache<String, Integer> nextPartSequences = Caffeine.newBuilder()
+            .expireAfterAccess(Duration.ofHours(2)).maximumSize(10_000).build();
+    private final Cache<String, String> messageRoles = Caffeine.newBuilder()
+            .expireAfterAccess(Duration.ofHours(2)).maximumSize(10_000).build();
 
     public OpenCodeEventTranslator(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
@@ -466,11 +473,12 @@ public class OpenCodeEventTranslator {
         partTypes.put(partCacheKey(sessionId, partId), partType);
     }
 
+
     private String getPartType(String sessionId, String partId) {
         if (sessionId == null || sessionId.isBlank() || partId == null || partId.isBlank()) {
             return null;
         }
-        return partTypes.get(partCacheKey(sessionId, partId));
+        return partTypes.getIfPresent(partCacheKey(sessionId, partId));
     }
 
     private Integer rememberPartSeq(String sessionId, String messageId, String partId) {
@@ -480,14 +488,14 @@ public class OpenCodeEventTranslator {
         }
 
         String partKey = partCacheKey(sessionId, partId);
-        Integer existing = partSequences.get(partKey);
+        Integer existing = partSequences.getIfPresent(partKey);
         if (existing != null) {
             return existing;
         }
 
         String messageKey = messageCacheKey(sessionId, messageId);
-        Integer nextSeq = nextPartSequences.compute(messageKey, (key, value) -> value == null ? 1 : value + 1);
-        Integer prior = partSequences.putIfAbsent(partKey, nextSeq);
+        Integer nextSeq = nextPartSequences.asMap().compute(messageKey, (key, value) -> value == null ? 1 : value + 1);
+        Integer prior = partSequences.asMap().putIfAbsent(partKey, nextSeq);
         return prior != null ? prior : nextSeq;
     }
 
@@ -495,12 +503,12 @@ public class OpenCodeEventTranslator {
         if (sessionId == null || sessionId.isBlank() || partId == null || partId.isBlank()) {
             return;
         }
-        partTypes.remove(partCacheKey(sessionId, partId));
-        partSequences.remove(partCacheKey(sessionId, partId));
+        partTypes.invalidate(partCacheKey(sessionId, partId));
+        partSequences.invalidate(partCacheKey(sessionId, partId));
         if (messageId != null && !messageId.isBlank()) {
             String messageKey = messageCacheKey(sessionId, messageId);
-            if (partSequences.keySet().stream().noneMatch(key -> key.startsWith(sessionId + ":"))) {
-                nextPartSequences.remove(messageKey);
+            if (partSequences.asMap().keySet().stream().noneMatch(key -> key.startsWith(sessionId + ":"))) {
+                nextPartSequences.invalidate(messageKey);
             }
         }
     }
@@ -511,10 +519,10 @@ public class OpenCodeEventTranslator {
         }
 
         String prefix = sessionId + ":";
-        partTypes.keySet().removeIf(key -> key.startsWith(prefix));
-        partSequences.keySet().removeIf(key -> key.startsWith(prefix));
-        nextPartSequences.keySet().removeIf(key -> key.startsWith(prefix));
-        messageRoles.keySet().removeIf(key -> key.startsWith(prefix));
+        partTypes.asMap().keySet().removeIf(key -> key.startsWith(prefix));
+        partSequences.asMap().keySet().removeIf(key -> key.startsWith(prefix));
+        nextPartSequences.asMap().keySet().removeIf(key -> key.startsWith(prefix));
+        messageRoles.asMap().keySet().removeIf(key -> key.startsWith(prefix));
     }
 
     private String partCacheKey(String sessionId, String partId) {
@@ -533,11 +541,12 @@ public class OpenCodeEventTranslator {
         messageRoles.put(messageCacheKey(sessionId, messageId), role);
     }
 
+
     private String resolveMessageRole(String sessionId, String messageId) {
         if (sessionId == null || sessionId.isBlank() || messageId == null || messageId.isBlank()) {
             return "assistant";
         }
-        return normalizeRole(messageRoles.get(messageCacheKey(sessionId, messageId)));
+        return normalizeRole(messageRoles.getIfPresent(messageCacheKey(sessionId, messageId)));
     }
 
     private boolean shouldIgnoreMessage(String role) {

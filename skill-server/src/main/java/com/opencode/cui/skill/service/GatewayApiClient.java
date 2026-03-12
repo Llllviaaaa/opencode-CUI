@@ -28,10 +28,11 @@ public class GatewayApiClient {
     private final String internalToken;
 
     public GatewayApiClient(
+            RestTemplate restTemplate,
             ObjectMapper objectMapper,
             @Value("${skill.gateway.api-base-url:http://localhost:8081}") String gatewayBaseUrl,
             @Value("${skill.gateway.internal-token:changeme}") String internalToken) {
-        this.restTemplate = new RestTemplate();
+        this.restTemplate = restTemplate;
         this.objectMapper = objectMapper;
         this.gatewayBaseUrl = gatewayBaseUrl;
         this.internalToken = internalToken;

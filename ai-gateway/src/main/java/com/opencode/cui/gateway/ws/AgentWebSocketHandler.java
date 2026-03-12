@@ -19,6 +19,8 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 import org.springframework.web.socket.server.HandshakeInterceptor;
 
+import jakarta.annotation.PreDestroy;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -88,6 +90,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
         this.deviceBindingService = deviceBindingService;
         this.eventRelayService = eventRelayService;
         this.objectMapper = objectMapper;
+    }
+
+    @PreDestroy
+    public void destroy() {
+        scheduler.shutdownNow();
+        log.info("AgentWebSocketHandler scheduler shut down");
     }
 
     // ==================== Handshake Interceptor ====================

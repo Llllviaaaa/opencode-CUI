@@ -20,7 +20,6 @@ public class SkillSessionService {
 
     private final SkillSessionRepository sessionRepository;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
-    private volatile GatewayRelayService gatewayRelayService;
 
     @Value("${skill.session.idle-timeout-minutes:30}")
     private int idleTimeoutMinutes;
@@ -31,12 +30,6 @@ public class SkillSessionService {
         this.snowflakeIdGenerator = snowflakeIdGenerator;
     }
 
-    /**
-     * Set GatewayRelayService lazily to avoid circular dependency.
-     */
-    public void setGatewayRelayService(GatewayRelayService gatewayRelayService) {
-        this.gatewayRelayService = gatewayRelayService;
-    }
 
     /**
      * Create a new skill session.

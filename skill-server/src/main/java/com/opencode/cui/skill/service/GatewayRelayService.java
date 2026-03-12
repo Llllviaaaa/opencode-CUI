@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.opencode.cui.skill.model.SkillMessage;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
@@ -13,9 +15,9 @@ import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Iterator;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Manages communication with AI-Gateway.
@@ -54,10 +56,13 @@ public class GatewayRelayService {
     private volatile GatewayRelayTarget gatewayRelayTarget;
 
     /**
-     * Stores pending message text to retry after toolSession rebuild. sessionId →
-     * text
+     * Stores pending message text to retry after toolSession rebuild.
+     * 使用 Caffeine Cache，5 分钟过期防止 rebuild 失败导致内存泄漏。
      */
-    private final ConcurrentHashMap<String, String> pendingRebuildMessages = new ConcurrentHashMap<>();
+    private final Cache<String, String> pendingRebuildMessages = Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofMinutes(5))
+            .maximumSize(1_000)
+            .build();
 
     public GatewayRelayService(ObjectMapper objectMapper,
             SkillStreamHandler skillStreamHandler,
@@ -92,9 +97,7 @@ public class GatewayRelayService {
      */
     @PostConstruct
     public void init() {
-        // Wire circular dependency: SkillSessionService needs GatewayRelayService
-        // for Redis unsubscribe during IDLE cleanup
-        sessionService.setGatewayRelayService(this);
+        // 循环依赖已消除，不再需要 setter 注入
         log.info("GatewayRelayService initialized");
     }
 
@@ -396,7 +399,7 @@ public class GatewayRelayService {
             rebuildToolSession(sessionId, session, pendingMessage);
         } catch (Exception e) {
             log.error("Failed to rebuild session {}: {}", sessionId, e.getMessage(), e);
-            pendingRebuildMessages.remove(sessionId);
+            pendingRebuildMessages.invalidate(sessionId);
         }
     }
 
@@ -440,7 +443,7 @@ public class GatewayRelayService {
             log.info("Rebuild create_session sent for welinkSession={}, ak={}", sessionId, session.getAk());
         } else {
             log.error("Cannot rebuild session {}: no ak associated", sessionId);
-            pendingRebuildMessages.remove(sessionId);
+            pendingRebuildMessages.invalidate(sessionId);
             StreamMessage errorMsg = StreamMessage.builder()
                     .type(StreamMessage.Types.ERROR)
                     .error("AI session expired and cannot be rebuilt")
@@ -495,7 +498,8 @@ public class GatewayRelayService {
             log.info("Tool session created: sessionId={}, toolSessionId={}", sessionId, toolSessionId);
 
             // Check for pending message retry after rebuild
-            String pendingText = pendingRebuildMessages.remove(sessionId);
+            String pendingText = pendingRebuildMessages.getIfPresent(sessionId);
+            pendingRebuildMessages.invalidate(sessionId);
             if (pendingText != null) {
                 log.info("Retrying pending message after rebuild: sessionId={}, text='{}'",
                         sessionId, pendingText.substring(0, Math.min(50, pendingText.length())));
@@ -522,7 +526,7 @@ public class GatewayRelayService {
             }
         } catch (Exception e) {
             log.error("Failed to update tool session ID: sessionId={}, error={}", sessionId, e.getMessage());
-            pendingRebuildMessages.remove(sessionId);
+            pendingRebuildMessages.invalidate(sessionId);
         }
     }
 

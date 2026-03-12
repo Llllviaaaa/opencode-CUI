@@ -74,6 +74,12 @@
             <version>1.5.6</version>
         </dependency>
 
+        <!-- Caffeine Cache (替换无界 ConcurrentHashMap，防止内存泄漏) -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

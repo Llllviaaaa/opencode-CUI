@@ -22,6 +22,7 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,6 +32,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 /**
  * WebSocket handler for Skill miniapp streaming.
@@ -60,13 +64,17 @@ public class SkillStreamHandler extends TextWebSocketHandler {
 
     /**
      * Cache for resolving welinkSessionId -> userId.
+     * 使用 Caffeine 防止无限增长，1 小时无访问自动过期。
      */
-    private final ConcurrentHashMap<String, String> sessionOwners = new ConcurrentHashMap<>();
+    private final Cache<String, String> sessionOwners = Caffeine.newBuilder()
+            .expireAfterAccess(Duration.ofHours(1)).maximumSize(10_000).build();
 
     /**
      * Per-session transport sequence counter.
+     * 使用 Caffeine 防止已关闭 session 的计数器永久驻留。
      */
-    private final ConcurrentHashMap<String, AtomicLong> seqCounters = new ConcurrentHashMap<>();
+    private final Cache<String, AtomicLong> seqCounters = Caffeine.newBuilder()
+            .expireAfterAccess(Duration.ofHours(1)).maximumSize(10_000).build();
     private final ConcurrentHashMap<String, AtomicInteger> activeConnectionCounts = new ConcurrentHashMap<>();
 
     public SkillStreamHandler(ObjectMapper objectMapper,
@@ -420,7 +428,7 @@ public class SkillStreamHandler extends TextWebSocketHandler {
     private Set<WebSocketSession> resolveRecipients(String sessionId) {
         Set<WebSocketSession> recipients = new CopyOnWriteArraySet<>();
 
-        String ownerUserId = sessionOwners.computeIfAbsent(sessionId, this::resolveOwnerUserId);
+        String ownerUserId = sessionOwners.get(sessionId, this::resolveOwnerUserId);
         if (ownerUserId != null) {
             Set<WebSocketSession> userLevel = userSubscribers.get(ownerUserId);
             if (userLevel != null) {
@@ -441,12 +449,6 @@ public class SkillStreamHandler extends TextWebSocketHandler {
         }
     }
 
-    private void cacheSessionOwner(String sessionId) {
-        String userId = resolveOwnerUserId(sessionId);
-        if (userId != null) {
-            sessionOwners.put(sessionId, userId);
-        }
-    }
 
     private void preloadActiveSessionOwners(String userId) {
         for (SkillSession session : sessionService.findActiveByUserId(userId)) {
@@ -488,7 +490,7 @@ public class SkillStreamHandler extends TextWebSocketHandler {
     }
 
     private long nextTransportSeq(String sessionId) {
-        return seqCounters.computeIfAbsent(sessionId, key -> new AtomicLong(0)).incrementAndGet();
+        return seqCounters.get(sessionId, key -> new AtomicLong(0)).incrementAndGet();
     }
 
     private String extractUserIdFromCookie(WebSocketSession session) {

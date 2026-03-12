@@ -20,8 +20,9 @@ public class ImMessageService {
     private final RestTemplate restTemplate;
     private final String imApiUrl;
 
-    public ImMessageService(@Value("${skill.im.api-url}") String imApiUrl) {
-        this.restTemplate = new RestTemplate();
+    public ImMessageService(RestTemplate restTemplate,
+                           @Value("${skill.im.api-url}") String imApiUrl) {
+        this.restTemplate = restTemplate;
         this.imApiUrl = imApiUrl;
     }
 
