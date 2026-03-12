@@ -3192,7 +3192,7 @@ function normalizeDownstreamMessage(raw, logger) {
     logDownstreamNormalizationFailure(logger, raw, error);
     return fail2(error);
   }
-  const welinkSessionId = typeof raw.welinkSessionId === "string" && raw.welinkSessionId.trim() ? raw.welinkSessionId : undefined;
+  const welinkSessionId = raw.welinkSessionId;
   if (messageTypeValue === "status_query") {
     return ok2({
       type: "status_query"
@@ -4112,5 +4112,5 @@ export {
   MessageBridgePlugin
 };
 
-//# debugId=8A6D365EA49BD09464756E2164756E21
+//# debugId=7936B4D3076F0FC064756E2164756E21
 //# sourceMappingURL=message-bridge.plugin.js.map
