@@ -1766,7 +1766,7 @@ var DEFAULT_BRIDGE_CONFIG = {
   config_version: 1,
   gateway: {
     url: "ws://localhost:8081/ws/agent",
-    toolType: "channel",
+    channel: "opencode",
     heartbeatIntervalMs: 30000,
     reconnect: {
       baseMs: 1000,
@@ -1906,8 +1906,8 @@ class ConfigResolver {
     if (process.env.BRIDGE_GATEWAY_URL) {
       gateway.url = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_URL);
     }
-    if (process.env.BRIDGE_GATEWAY_TOOL_TYPE) {
-      gateway.toolType = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_TOOL_TYPE);
+    if (process.env.BRIDGE_GATEWAY_CHANNEL) {
+      gateway.channel = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_CHANNEL);
     }
     const reconnect = {};
     if (process.env.BRIDGE_GATEWAY_RECONNECT_BASE_MS)
@@ -1965,10 +1965,10 @@ class ConfigResolver {
     if (!normalized.gateway.url) {
       normalized.gateway.url = "ws://localhost:8081/ws/agent";
     }
-    if (!normalized.gateway.toolType) {
-      normalized.gateway.toolType = "channel";
+    if (!normalized.gateway.channel) {
+      normalized.gateway.channel = "opencode";
     } else {
-      normalized.gateway.toolType = normalized.gateway.toolType.trim();
+      normalized.gateway.channel = normalized.gateway.channel.trim();
     }
     if (!normalized.gateway.heartbeatIntervalMs) {
       normalized.gateway.heartbeatIntervalMs = 30000;
@@ -2078,9 +2078,6 @@ class ConfigValidator {
     }
     if (c.sdk?.timeoutMs !== undefined) {
       this.validatePositiveInt(c.sdk.timeoutMs, "sdk.timeoutMs", errors);
-    }
-    if (c.sdk && "baseUrl" in c.sdk) {
-      errors.push({ path: "sdk.baseUrl", code: "DEPRECATED_FIELD", message: "sdk.baseUrl is deprecated and should not be used" });
     }
     if (c.events?.allowlist !== undefined) {
       if (!Array.isArray(c.events.allowlist)) {
@@ -3616,7 +3613,7 @@ class BridgeRuntime {
         deviceName: registerMetadata.deviceName,
         macAddress: registerMetadata.macAddress,
         os: os2.platform(),
-        toolType: config.gateway.toolType,
+        toolType: config.gateway.channel,
         toolVersion: registerMetadata.toolVersion
       },
       logger: this.logger.child({ component: "gateway" })
@@ -4148,5 +4145,5 @@ export {
   MessageBridgePlugin
 };
 
-//# debugId=710F8BB07C565B2464756E2164756E21
+//# debugId=640A2EBBA2D6755B64756E2164756E21
 //# sourceMappingURL=message-bridge.plugin.js.map

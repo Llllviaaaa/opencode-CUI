@@ -177,7 +177,7 @@ Defaults are defined in:
 | `enabled` | `true` |
 | `config_version` | `1` |
 | `gateway.url` | `ws://localhost:8081/ws/agent` |
-| `gateway.toolType` | `channel` |
+| `gateway.channel` | `opencode` |
 | `gateway.heartbeatIntervalMs` | `30000` |
 | `gateway.reconnect.baseMs` | `1000` |
 | `gateway.reconnect.maxMs` | `30000` |
@@ -186,6 +186,8 @@ Defaults are defined in:
 | `gateway.ping.pongTimeoutMs` | `10000` |
 | `sdk.timeoutMs` | `10000` |
 | `events.allowlist` | `DEFAULT_EVENT_ALLOWLIST` |
+
+`gateway.channel` is mapped to register payload field `toolType` when the bridge connects to ai-gateway.
 
 ## Logging
 

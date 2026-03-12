@@ -28,7 +28,7 @@ Key defaults:
 | `enabled` | `true` |
 | `config_version` | `1` |
 | `gateway.url` | `ws://localhost:8081/ws/agent` |
-| `gateway.toolType` | `channel` |
+| `gateway.channel` | `opencode` |
 | `sdk.timeoutMs` | `10000` |
 | `events.allowlist` | `DEFAULT_EVENT_ALLOWLIST` |
 
@@ -53,7 +53,6 @@ Current validation rules include:
 - timing fields must be positive integers
 - `auth.ak` and `auth.sk` are required when `enabled !== false`
 - `events.allowlist` must be an exact supported event list
-- `sdk.baseUrl` is deprecated and rejected
 
 ## 5. Event Allowlist Contract
 
@@ -81,10 +80,13 @@ Examples:
 BRIDGE_AUTH_AK=your-access-key
 BRIDGE_AUTH_SK=your-secret-key
 BRIDGE_GATEWAY_URL=ws://gateway.example.com/ws/agent
+BRIDGE_GATEWAY_CHANNEL=opencode
 BRIDGE_DEBUG=true
 BRIDGE_ENABLED=true
 BRIDGE_EVENTS_ALLOWLIST=message.updated,session.status
 ```
+
+`gateway.channel` is a config-facing field name. The outbound register payload still uses protocol field `toolType`.
 
 ## 7. Logging
 

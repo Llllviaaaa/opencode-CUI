@@ -907,7 +907,7 @@ describe('INT-CONN-001', () => {
       type: 'register',
       deviceName: expect.any(String),
       os: expect.any(String),
-      toolType: 'channel',
+      toolType: 'opencode',
       toolVersion: expect.any(String)
     });
     

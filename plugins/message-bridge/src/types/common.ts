@@ -18,7 +18,7 @@ export interface ConfigValidationError {
 
 export interface GatewayConfig {
   url: string;
-  toolType: string;
+  channel: string;
   heartbeatIntervalMs: number;
   reconnect: ReconnectConfig;
   ping?: PingConfig;

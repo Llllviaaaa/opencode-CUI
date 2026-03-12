@@ -55,7 +55,7 @@ async function writeEnabledConfig(workspace) {
       enabled: true,
       gateway: {
         url: 'ws://localhost:8081/ws/agent',
-        toolType: 'channel',
+        channel: 'opencode',
         heartbeatIntervalMs: 30000,
         reconnect: {
           baseMs: 1000,
@@ -837,7 +837,7 @@ describe('runtime protocol strictness', () => {
           url: 'ws://localhost:8081/ws/agent',
           deviceName: 'dev',
           macAddress: '11:22:33:44:55:66',
-          toolType: 'channel',
+          channel: 'opencode',
           toolVersion: '1.2.3',
           heartbeatIntervalMs: 30000,
           reconnect: {
@@ -915,7 +915,7 @@ describe('runtime protocol strictness', () => {
         deviceName: hostname(),
         macAddress: '11:22:33:44:55:66',
         os: expect.any(String),
-        toolType: 'channel',
+        toolType: 'opencode',
         toolVersion: '9.9.9',
       });
 
@@ -941,7 +941,7 @@ describe('runtime protocol strictness', () => {
         enabled: true,
         gateway: {
           url: 'ws://localhost:8081/ws/agent',
-          toolType: 'channel',
+          channel: 'opencode',
           heartbeatIntervalMs: 30000,
           reconnect: {
             baseMs: 1000,

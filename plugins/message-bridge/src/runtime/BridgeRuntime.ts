@@ -162,7 +162,7 @@ export class BridgeRuntime {
         deviceName: registerMetadata.deviceName,
         macAddress: registerMetadata.macAddress,
         os: os.platform(),
-        toolType: config.gateway.toolType,
+        toolType: config.gateway.channel,
         toolVersion: registerMetadata.toolVersion,
       },
       logger: this.logger.child({ component: 'gateway' }),
