@@ -221,6 +221,21 @@ bun run test:e2e
 bun run test:coverage
 ```
 
+协议回归推荐入口：
+
+```bash
+bun run verify:protocol-smoke
+```
+
+该命令会顺序执行：
+
+- `tests/integration`
+- `tests/e2e/connect-register.test.mjs`
+- `tests/e2e/chat-stream.test.mjs`
+- `tests/e2e/permission-roundtrip.test.mjs`
+
+适合作为修改需求代码后的主回归入口，用于验证 `message-bridge` 与 `ai-gateway` 的协议主链路仍然正确。
+
 Distribution and load verification:
 
 ```bash

@@ -45,7 +45,8 @@
 
 1. [测试策略](./quality/test-strategy.md)
 2. [需求追踪矩阵](./quality/traceability-matrix.md)
-3. [验证报告](./quality/validation-report.md)
+3. [协议驱动测试任务清单](./quality/protocol-test-plan.md)
+4. [验证报告](./quality/validation-report.md)
 
 ## 治理与变更
 
