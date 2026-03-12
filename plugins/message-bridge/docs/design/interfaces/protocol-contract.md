@@ -30,6 +30,11 @@ Shape:
 }
 ```
 
+Action-specific constraint:
+
+- `create_session` requires a non-empty top-level `welinkSessionId`
+- other `invoke` actions may omit `welinkSessionId`
+
 Supported `action` values:
 
 - `chat`
@@ -145,7 +150,7 @@ type ToolErrorMessage = {
 
 type SessionCreatedMessage = {
   type: 'session_created';
-  welinkSessionId?: string;
+  welinkSessionId: string;
   toolSessionId?: string;
   session?: CreateSessionResultData;
 };

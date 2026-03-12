@@ -294,9 +294,18 @@ function normalizeInvokePayload(
       return ok({ type: 'invoke', action, payload: normalized.value, welinkSessionId });
     }
     case 'create_session': {
+      const requiredWelinkSessionId = requireNonEmptyString(
+        welinkSessionId,
+        'payload',
+        'welinkSessionId',
+        'invoke',
+        'create_session',
+        welinkSessionId,
+      );
+      if (!requiredWelinkSessionId.ok) return requiredWelinkSessionId;
       const normalized = normalizeCreateSessionPayload(payload, welinkSessionId);
       if (!normalized.ok) return normalized;
-      return ok({ type: 'invoke', action, payload: normalized.value, welinkSessionId });
+      return ok({ type: 'invoke', action, payload: normalized.value, welinkSessionId: requiredWelinkSessionId.value });
     }
     case 'close_session': {
       const normalized = normalizeCloseSessionPayload(payload, welinkSessionId);

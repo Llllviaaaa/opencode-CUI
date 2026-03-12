@@ -3144,10 +3144,13 @@ function normalizeInvokePayload(action, payload, welinkSessionId) {
       return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId });
     }
     case "create_session": {
+      const requiredWelinkSessionId = requireNonEmptyString2(welinkSessionId, "payload", "welinkSessionId", "invoke", "create_session", welinkSessionId);
+      if (!requiredWelinkSessionId.ok)
+        return requiredWelinkSessionId;
       const normalized = normalizeCreateSessionPayload(payload, welinkSessionId);
       if (!normalized.ok)
         return normalized;
-      return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId });
+      return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId: requiredWelinkSessionId.value });
     }
     case "close_session": {
       const normalized = normalizeCloseSessionPayload(payload, welinkSessionId);
@@ -4112,5 +4115,5 @@ export {
   MessageBridgePlugin
 };
 
-//# debugId=7936B4D3076F0FC064756E2164756E21
+//# debugId=D3FE263F0BC8CACE64756E2164756E21
 //# sourceMappingURL=message-bridge.plugin.js.map

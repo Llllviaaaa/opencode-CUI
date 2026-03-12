@@ -345,7 +345,7 @@ WebSocket。
 
 | 报文类型 | 必填字段 | 可选字段 | 说明 |
 |---|---|---|---|
-| `invoke` | `type`、`action`、`payload` | `welinkSessionId`、`messageId` | 业务动作入口 |
+| `invoke` | `type`、`action`、`payload` | `welinkSessionId`、`messageId` | 业务动作入口；其中 `create_session` 的 `welinkSessionId` 额外为必填 |
 | `status_query` | `type` | `messageId` | 状态查询 |
 
 下行源报文样例：`chat`
@@ -404,6 +404,11 @@ type NormalizedDownstreamMessage =
       payload: Record<string, unknown>;
     };
 ```
+
+补充约束：
+
+- `create_session` 归一化后必须携带非空 `welinkSessionId`
+- 其他 `invoke` action 仍允许缺省 `welinkSessionId`
 
 按 action 进一步收敛后，关键内部数据如下：
 
