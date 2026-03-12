@@ -1,0 +1,12 @@
+{
+  "id": "message-bridge",
+  "name": "Message Bridge",
+  "description": "OpenClaw channel plugin for bridging ai-gateway to OpenClaw",
+  "version": "0.1.0",
+  "channels": ["message-bridge"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

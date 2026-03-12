@@ -1,0 +1,46 @@
+{
+  "name": "message-bridge",
+  "version": "0.1.0",
+  "description": "OpenClaw channel plugin for bridging ai-gateway to OpenClaw",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "bundle",
+    "README.md",
+    "docs",
+    "openclaw.plugin.json"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:bundle": "esbuild src/index.ts --bundle --platform=node --format=esm --target=es2022 --outfile=bundle/index.js --external:openclaw --external:openclaw/*",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test tests/**/*.test.mjs"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1",
+    "openclaw": "2026.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "esbuild": "^0.27.4",
+    "typescript": "^5.7.2"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "channel": {
+      "id": "message-bridge",
+      "label": "Message Bridge",
+      "selectionLabel": "Message Bridge",
+      "docsPath": "/channels/message-bridge",
+      "blurb": "Bridge ai-gateway sessions into OpenClaw."
+    },
+    "install": {
+      "localPath": "extensions/message-bridge",
+      "defaultChoice": "local"
+    }
+  }
+}
