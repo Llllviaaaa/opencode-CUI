@@ -3028,39 +3028,6 @@ function requireNonEmptyString2(value, stage, field, messageType, action, welink
   }
   return ok2(value);
 }
-function requireCreateSessionWelinkSessionId(value) {
-  if (value === undefined) {
-    return fail2({
-      stage: "message",
-      code: "missing_required_field",
-      field: "welinkSessionId",
-      message: "create_session missing welinkSessionId",
-      messageType: "invoke",
-      action: "create_session"
-    });
-  }
-  if (typeof value !== "string") {
-    return fail2({
-      stage: "message",
-      code: "invalid_field_type",
-      field: "welinkSessionId",
-      message: "create_session missing welinkSessionId",
-      messageType: "invoke",
-      action: "create_session"
-    });
-  }
-  if (!value.trim()) {
-    return fail2({
-      stage: "message",
-      code: "missing_required_field",
-      field: "welinkSessionId",
-      message: "create_session missing welinkSessionId",
-      messageType: "invoke",
-      action: "create_session"
-    });
-  }
-  return ok2(value);
-}
 function buildEventPreview2(raw) {
   if (!isRecord4(raw)) {
     return { kind: typeof raw };
@@ -3177,13 +3144,10 @@ function normalizeInvokePayload(action, payload, welinkSessionId) {
       return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId });
     }
     case "create_session": {
-      const requiredWelinkSessionId = requireCreateSessionWelinkSessionId(welinkSessionId);
-      if (!requiredWelinkSessionId.ok)
-        return requiredWelinkSessionId;
       const normalized = normalizeCreateSessionPayload(payload, welinkSessionId);
       if (!normalized.ok)
         return normalized;
-      return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId: requiredWelinkSessionId.value });
+      return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId });
     }
     case "close_session": {
       const normalized = normalizeCloseSessionPayload(payload, welinkSessionId);
@@ -3797,6 +3761,9 @@ class BridgeRuntime {
     }, traceId);
     invokeLogger.info("runtime.invoke.received");
     if (message.action === "create_session") {
+      if (!welinkSessionId) {
+        invokeLogger.warn("runtime.create_session.missing_welink_session_id");
+      }
       const result2 = await this.actionRouter.route(message.action, message.payload, this.buildActionContext(welinkSessionId, invokeLogger));
       if (!result2.success) {
         this.sendToolError(result2, welinkSessionId, {
@@ -4145,5 +4112,5 @@ export {
   MessageBridgePlugin
 };
 
-//# debugId=640A2EBBA2D6755B64756E2164756E21
+//# debugId=8A6D365EA49BD09464756E2164756E21
 //# sourceMappingURL=message-bridge.plugin.js.map
