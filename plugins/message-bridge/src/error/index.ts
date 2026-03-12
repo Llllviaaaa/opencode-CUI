@@ -1,4 +1,4 @@
-import { ToolErrorMessage } from '../types';
+import type { ToolErrorMessage, ToolErrorReason } from '../types';
 import { FastFailDetector } from './FastFailDetector';
 import { ErrorMapper } from './ErrorMapper';
 
@@ -14,13 +14,15 @@ export function buildToolError(
   _agentId: string,
   welinkSessionId?: string,
   toolSessionId?: string,
-  _sequenceNumber?: number
+  _sequenceNumber?: number,
+  reason?: ToolErrorReason,
 ): ToolErrorMessage {
   return {
     type: 'tool_error',
     welinkSessionId,
     toolSessionId,
     error,
+    reason,
   };
 }
 

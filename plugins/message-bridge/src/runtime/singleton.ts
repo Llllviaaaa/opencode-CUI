@@ -1,6 +1,7 @@
 import { BridgeRuntime } from './BridgeRuntime';
 import type { PluginInput } from './types';
 import { AppLogger } from './AppLogger';
+import { buildClientShapeSummary } from './clientShapeSummary';
 import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
 
 let runtime: BridgeRuntime | null = null;
@@ -19,6 +20,8 @@ export async function getOrCreateRuntime(input: PluginInput): Promise<BridgeRunt
     logger.debug('runtime.singleton.await_initializing');
     return initializing;
   }
+
+  logger.info('runtime.singleton.client_shape', buildClientShapeSummary(input.client));
 
   const candidate = new BridgeRuntime({
     workspacePath: input.worktree || input.directory,

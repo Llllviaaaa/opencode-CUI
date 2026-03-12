@@ -1,4 +1,4 @@
-import type { HostClientLike, OpencodeClient } from '../types';
+import type { HostClientLike, OpencodeClient, OpencodeHealthResult } from '../types';
 
 export const REQUIRED_SDK_CAPABILITIES = [
   'session.create',
@@ -22,6 +22,52 @@ function asFunction<T extends (...args: never[]) => unknown>(value: unknown, bin
   }
 
   return (bindTarget ? value.bind(bindTarget) : value) as T;
+}
+
+function normalizeHealthResponse(response: unknown): OpencodeHealthResult {
+  if (isRecord(response) && 'error' in response && response.error !== undefined) {
+    const error = response.error;
+    const message =
+      isRecord(error) && typeof error.message === 'string'
+        ? error.message
+        : typeof error === 'string'
+          ? error
+          : 'OpenCode health request failed';
+    throw new Error(message);
+  }
+
+  const payload =
+    isRecord(response) && 'data' in response
+      ? response.data
+      : response;
+
+  if (!isRecord(payload) || typeof payload.healthy !== 'boolean') {
+    throw new Error('Invalid global health response');
+  }
+
+  return payload as unknown as OpencodeHealthResult;
+}
+
+type AdaptedGlobalHealth = NonNullable<HostClientLike['global']>['health'];
+
+function adaptGlobalHealth(root: Record<string, unknown> | undefined): AdaptedGlobalHealth {
+  const global = isRecord(root?.global) ? root.global : undefined;
+  const rawClient = isRecord(root?._client) ? root._client : undefined;
+  const globalHealth = asFunction<(options?: Record<string, unknown>) => Promise<OpencodeHealthResult> | OpencodeHealthResult>(
+    global?.health,
+    global,
+  );
+
+  if (globalHealth) {
+    return globalHealth;
+  }
+
+  const rawGet = asFunction<(options: Record<string, unknown>) => Promise<unknown>>(rawClient?.get, rawClient);
+  if (!rawGet) {
+    return undefined;
+  }
+
+  return async () => normalizeHealthResponse(await rawGet({ url: '/global/health' }));
 }
 
 export function getMissingSdkCapabilities(client: unknown): SdkClientCapability[] {
@@ -53,12 +99,11 @@ export function getMissingSdkCapabilities(client: unknown): SdkClientCapability[
 
 export function toHostClientLike(client: unknown): HostClientLike {
   const root = isRecord(client) ? client : undefined;
-  const global = isRecord(root?.global) ? root.global : undefined;
   const app = isRecord(root?.app) ? root.app : undefined;
 
   return {
     global: {
-      health: asFunction(global?.health, global),
+      health: adaptGlobalHealth(root),
     },
     app: {
       log: asFunction(app?.log, app),

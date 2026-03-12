@@ -28,7 +28,7 @@ Key defaults:
 | `enabled` | `true` |
 | `config_version` | `1` |
 | `gateway.url` | `ws://localhost:8081/ws/agent` |
-| `gateway.toolType` | `OPENCODE` |
+| `gateway.toolType` | `channel` |
 | `sdk.timeoutMs` | `10000` |
 | `events.allowlist` | `DEFAULT_EVENT_ALLOWLIST` |
 

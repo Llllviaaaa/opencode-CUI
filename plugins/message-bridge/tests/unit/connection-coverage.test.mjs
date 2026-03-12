@@ -74,7 +74,7 @@ function registerMessage() {
     deviceName: 'dev',
     macAddress: 'aa:bb:cc:dd:ee:ff',
     os: 'darwin',
-    toolType: 'OPENCODE',
+    toolType: 'channel',
     toolVersion: '1.0.0',
   };
 }

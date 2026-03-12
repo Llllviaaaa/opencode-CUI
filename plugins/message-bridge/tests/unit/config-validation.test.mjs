@@ -493,7 +493,7 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
     }
   });
 
-  test('normalizes default toolType to OPENCODE', async () => {
+  test('normalizes default toolType to channel', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'mb-json-defaults-'));
     const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
     process.env.HOME = fakeHome;
@@ -510,7 +510,7 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
             maxMs: 30000,
             exponential: true,
           },
-          toolType: 'opencode',
+          toolType: 'channel',
         },
       })),
       'utf8',
@@ -518,7 +518,7 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
 
     try {
       const config = await loadConfig(workspace);
-      expect(config.gateway.toolType).toBe('OPENCODE');
+      expect(config.gateway.toolType).toBe('channel');
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });

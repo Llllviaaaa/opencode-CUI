@@ -8,9 +8,7 @@ import { EventFilter } from '../../src/event/EventFilter.ts';
 
 function createRuntimeClient(overrides = {}) {
   const base = {
-    global: {
-      health: async () => ({ healthy: true, version: '9.9.9' }),
-    },
+    global: {},
     session: {
       create: async () => ({}),
       abort: async () => ({}),
@@ -19,7 +17,12 @@ function createRuntimeClient(overrides = {}) {
     },
     postSessionIdPermissionsPermissionId: async () => ({}),
     _client: {
-      get: async () => ({ data: [] }),
+      get: async (options) => {
+        if (options?.url === '/global/health') {
+          return { data: { healthy: true, version: '9.9.9' } };
+        }
+        return { data: [] };
+      },
       post: async () => ({ data: undefined }),
     },
   };
@@ -29,9 +32,7 @@ function createRuntimeClient(overrides = {}) {
   return {
     ...base,
     ...overrides,
-    global: hasOwn('global')
-      ? (overrides.global ? { ...base.global, ...overrides.global } : overrides.global)
-      : base.global,
+    app: hasOwn('app') ? (overrides.app ? { ...overrides.app } : overrides.app) : undefined,
     session: {
       ...base.session,
       ...(overrides.session ?? {}),
@@ -39,7 +40,9 @@ function createRuntimeClient(overrides = {}) {
     _client: hasOwn('_client')
       ? (overrides._client ? { ...base._client, ...overrides._client } : overrides._client)
       : base._client,
-    app: hasOwn('app') ? (overrides.app ? { ...overrides.app } : overrides.app) : undefined,
+    global: hasOwn('global')
+      ? (overrides.global ? { ...base.global, ...overrides.global } : overrides.global)
+      : base.global,
   };
 }
 
@@ -52,7 +55,7 @@ async function writeEnabledConfig(workspace) {
       enabled: true,
       gateway: {
         url: 'ws://localhost:8081/ws/agent',
-        toolType: 'opencode',
+        toolType: 'channel',
         heartbeatIntervalMs: 30000,
         reconnect: {
           baseMs: 1000,
@@ -125,6 +128,39 @@ describe('runtime protocol strictness', () => {
     expect(sent[0].type).toBe('tool_error');
     expect(sent[0].welinkSessionId).toBe('42');
     expect('code' in sent[0]).toBe(false);
+  });
+
+  test('chat session-not-found failure adds tool_error reason for auto-rebuild', async () => {
+    const runtime = new BridgeRuntime({
+      client: createRuntimeClient(),
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.stateManager.setState('READY');
+    runtime.actionRouter = {
+      route: async () => ({
+        success: false,
+        errorCode: 'INVALID_PAYLOAD',
+        errorMessage: 'Failed to send message: session not found',
+      }),
+    };
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      welinkSessionId: 's-rebuild',
+      action: 'chat',
+      payload: { toolSessionId: 'tool-rebuild', text: 'hello' },
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toEqual({
+      type: 'tool_error',
+      welinkSessionId: 's-rebuild',
+      toolSessionId: 'tool-rebuild',
+      error: 'Failed to send message: session not found',
+      reason: 'session_not_found',
+    });
   });
 
   test('accepts baseline invoke shape and emits tool_done on chat success', async () => {
@@ -801,7 +837,7 @@ describe('runtime protocol strictness', () => {
           url: 'ws://localhost:8081/ws/agent',
           deviceName: 'dev',
           macAddress: '11:22:33:44:55:66',
-          toolType: 'opencode',
+          toolType: 'channel',
           toolVersion: '1.2.3',
           heartbeatIntervalMs: 30000,
           reconnect: {
@@ -879,7 +915,7 @@ describe('runtime protocol strictness', () => {
         deviceName: hostname(),
         macAddress: '11:22:33:44:55:66',
         os: expect.any(String),
-        toolType: 'OPENCODE',
+        toolType: 'channel',
         toolVersion: '9.9.9',
       });
 
@@ -905,7 +941,7 @@ describe('runtime protocol strictness', () => {
         enabled: true,
         gateway: {
           url: 'ws://localhost:8081/ws/agent',
-          toolType: 'opencode',
+          toolType: 'channel',
           heartbeatIntervalMs: 30000,
           reconnect: {
             baseMs: 1000,
@@ -1042,7 +1078,7 @@ describe('runtime protocol strictness', () => {
     }
   });
 
-  test('runtime.start fails when global.health is unavailable before connect', async () => {
+  test('runtime.start falls back to raw /global/health when global.health is unavailable', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'mb-runtime-start-no-health-'));
     const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
     const originalHome = process.env.HOME;
@@ -1068,20 +1104,13 @@ describe('runtime protocol strictness', () => {
         }),
       });
 
-      await expect(runtime.start()).rejects.toEqual({
-        code: 'GLOBAL_HEALTH_UNAVAILABLE',
-        message: 'OpenCode client.global.health is not available',
-        details: {
-          missingCapability: 'global.health',
-        },
-      });
+      await runtime.start();
       await new Promise((r) => setTimeout(r, 10));
 
-      expect(RegisterCaptureWebSocket.instances).toHaveLength(0);
-      const failureLog = appLogs.find((entry) => entry.message === 'runtime.start.failed_health');
-      expect(failureLog.extra.errorCode).toBe('GLOBAL_HEALTH_UNAVAILABLE');
-      expect(failureLog.extra.errorMessage).toBe('OpenCode client.global.health is not available');
-      expect(failureLog.extra.missingCapability).toBe('global.health');
+      expect(RegisterCaptureWebSocket.instances).toHaveLength(1);
+      const ws = RegisterCaptureWebSocket.instances[0];
+      expect(ws.sent[0].toolVersion).toBe('9.9.9');
+      expect(appLogs.find((entry) => entry.message === 'runtime.start.failed_health')).toBeUndefined();
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;
@@ -1094,7 +1123,7 @@ describe('runtime protocol strictness', () => {
     }
   });
 
-  test('runtime.start fails when global.health returns without version before connect', async () => {
+  test('runtime.start fails when raw /global/health returns without version before connect', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'mb-runtime-start-no-version-'));
     const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
     const originalHome = process.env.HOME;
@@ -1116,8 +1145,14 @@ describe('runtime protocol strictness', () => {
               return true;
             },
           },
-          global: {
-            health: async () => ({ healthy: true }),
+          global: undefined,
+          _client: {
+            get: async (options) => {
+              if (options?.url === '/global/health') {
+                return { data: { healthy: true } };
+              }
+              return { data: [] };
+            },
           },
         }),
       });
@@ -1148,7 +1183,7 @@ describe('runtime protocol strictness', () => {
     }
   });
 
-  test('runtime.start fails when global.health throws before register', async () => {
+  test('runtime.start fails when raw /global/health throws before register', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'mb-runtime-register-empty-version-'));
     const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
     const originalHome = process.env.HOME;
@@ -1184,8 +1219,9 @@ describe('runtime protocol strictness', () => {
               return true;
             },
           },
-          global: {
-            health: async () => {
+          global: undefined,
+          _client: {
+            get: async () => {
               throw new Error('global unavailable');
             },
           },

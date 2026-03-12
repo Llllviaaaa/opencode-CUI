@@ -184,6 +184,13 @@ var INVOKE_ACTIONS = [
   "question_reply"
 ];
 var ACTION_NAMES = [...INVOKE_ACTIONS, "status_query"];
+// src/contracts/transport-messages.ts
+var TOOL_ERROR_REASON = {
+  SESSION_NOT_FOUND: "session_not_found"
+};
+var TOOL_ERROR_REASONS = [
+  TOOL_ERROR_REASON.SESSION_NOT_FOUND
+];
 // src/action/ChatAction.ts
 class ChatAction {
   name = "chat";
@@ -590,10 +597,13 @@ class StatusQueryAction {
       let opencodeOnline = false;
       if (context.hostClient.global?.health) {
         try {
-          await context.hostClient.global.health();
-          opencodeOnline = true;
-        } catch {
+          const health = await context.hostClient.global.health();
+          opencodeOnline = health.healthy === true;
+        } catch (error) {
           opencodeOnline = false;
+          context.logger?.debug("action.status_query.health_failed", {
+            error: error instanceof Error ? error.message : String(error)
+          });
         }
       }
       return {
@@ -1756,7 +1766,7 @@ var DEFAULT_BRIDGE_CONFIG = {
   config_version: 1,
   gateway: {
     url: "ws://localhost:8081/ws/agent",
-    toolType: "OPENCODE",
+    toolType: "channel",
     heartbeatIntervalMs: 30000,
     reconnect: {
       baseMs: 1000,
@@ -1956,9 +1966,9 @@ class ConfigResolver {
       normalized.gateway.url = "ws://localhost:8081/ws/agent";
     }
     if (!normalized.gateway.toolType) {
-      normalized.gateway.toolType = "OPENCODE";
+      normalized.gateway.toolType = "channel";
     } else {
-      normalized.gateway.toolType = normalized.gateway.toolType.trim().toUpperCase();
+      normalized.gateway.toolType = normalized.gateway.toolType.trim();
     }
     if (!normalized.gateway.heartbeatIntervalMs) {
       normalized.gateway.heartbeatIntervalMs = 30000;
@@ -3021,6 +3031,39 @@ function requireNonEmptyString2(value, stage, field, messageType, action, welink
   }
   return ok2(value);
 }
+function requireCreateSessionWelinkSessionId(value) {
+  if (value === undefined) {
+    return fail2({
+      stage: "message",
+      code: "missing_required_field",
+      field: "welinkSessionId",
+      message: "create_session missing welinkSessionId",
+      messageType: "invoke",
+      action: "create_session"
+    });
+  }
+  if (typeof value !== "string") {
+    return fail2({
+      stage: "message",
+      code: "invalid_field_type",
+      field: "welinkSessionId",
+      message: "create_session missing welinkSessionId",
+      messageType: "invoke",
+      action: "create_session"
+    });
+  }
+  if (!value.trim()) {
+    return fail2({
+      stage: "message",
+      code: "missing_required_field",
+      field: "welinkSessionId",
+      message: "create_session missing welinkSessionId",
+      messageType: "invoke",
+      action: "create_session"
+    });
+  }
+  return ok2(value);
+}
 function buildEventPreview2(raw) {
   if (!isRecord4(raw)) {
     return { kind: typeof raw };
@@ -3137,10 +3180,13 @@ function normalizeInvokePayload(action, payload, welinkSessionId) {
       return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId });
     }
     case "create_session": {
+      const requiredWelinkSessionId = requireCreateSessionWelinkSessionId(welinkSessionId);
+      if (!requiredWelinkSessionId.ok)
+        return requiredWelinkSessionId;
       const normalized = normalizeCreateSessionPayload(payload, welinkSessionId);
       if (!normalized.ok)
         return normalized;
-      return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId });
+      return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId: requiredWelinkSessionId.value });
     }
     case "close_session": {
       const normalized = normalizeCloseSessionPayload(payload, welinkSessionId);
@@ -3185,7 +3231,7 @@ function normalizeDownstreamMessage(raw, logger) {
     logDownstreamNormalizationFailure(logger, raw, error);
     return fail2(error);
   }
-  const welinkSessionId = typeof raw.welinkSessionId === "string" ? raw.welinkSessionId : undefined;
+  const welinkSessionId = typeof raw.welinkSessionId === "string" && raw.welinkSessionId.trim() ? raw.welinkSessionId : undefined;
   if (messageTypeValue === "status_query") {
     return ok2({
       type: "status_query"
@@ -3228,6 +3274,31 @@ function asFunction(value, bindTarget) {
   }
   return bindTarget ? value.bind(bindTarget) : value;
 }
+function normalizeHealthResponse(response) {
+  if (isRecord5(response) && "error" in response && response.error !== undefined) {
+    const error = response.error;
+    const message = isRecord5(error) && typeof error.message === "string" ? error.message : typeof error === "string" ? error : "OpenCode health request failed";
+    throw new Error(message);
+  }
+  const payload = isRecord5(response) && "data" in response ? response.data : response;
+  if (!isRecord5(payload) || typeof payload.healthy !== "boolean") {
+    throw new Error("Invalid global health response");
+  }
+  return payload;
+}
+function adaptGlobalHealth(root) {
+  const global = isRecord5(root?.global) ? root.global : undefined;
+  const rawClient = isRecord5(root?._client) ? root._client : undefined;
+  const globalHealth = asFunction(global?.health, global);
+  if (globalHealth) {
+    return globalHealth;
+  }
+  const rawGet = asFunction(rawClient?.get, rawClient);
+  if (!rawGet) {
+    return;
+  }
+  return async () => normalizeHealthResponse(await rawGet({ url: "/global/health" }));
+}
 function getMissingSdkCapabilities(client) {
   const root = isRecord5(client) ? client : undefined;
   const session = isRecord5(root?.session) ? root.session : undefined;
@@ -3255,11 +3326,10 @@ function getMissingSdkCapabilities(client) {
 }
 function toHostClientLike(client) {
   const root = isRecord5(client) ? client : undefined;
-  const global = isRecord5(root?.global) ? root.global : undefined;
   const app = isRecord5(root?.app) ? root.app : undefined;
   return {
     global: {
-      health: asFunction(global?.health, global)
+      health: adaptGlobalHealth(root)
     },
     app: {
       log: asFunction(app?.log, app)
@@ -3680,7 +3750,8 @@ class BridgeRuntime {
         hasWelinkSessionId: !!normalized.error.welinkSessionId
       });
       if (normalized.error.messageType === "invoke") {
-        this.sendToolError({ success: false, errorCode: "INVALID_PAYLOAD", errorMessage: "Invalid invoke payload shape" }, normalized.error.welinkSessionId, {
+        const errorMessage = normalized.error.action === "create_session" && normalized.error.field === "welinkSessionId" ? normalized.error.message : "Invalid invoke payload shape";
+        this.sendToolError({ success: false, errorCode: "INVALID_PAYLOAD", errorMessage }, normalized.error.welinkSessionId, {
           logger: messageLogger,
           traceId,
           gatewayMessageId: downstreamFields.gatewayMessageId,
@@ -3742,15 +3813,6 @@ class BridgeRuntime {
       const toolSessionId2 = result2.data.sessionId;
       if (!toolSessionId2) {
         this.sendToolError({ success: false, errorCode: "SDK_UNREACHABLE", errorMessage: "create_session returned without sessionId" }, welinkSessionId, {
-          logger: invokeLogger,
-          traceId,
-          gatewayMessageId: downstreamFields.gatewayMessageId,
-          action: message.action
-        });
-        return;
-      }
-      if (!welinkSessionId) {
-        this.sendToolError({ success: false, errorCode: "INVALID_PAYLOAD", errorMessage: "create_session missing welinkSessionId" }, undefined, {
           logger: invokeLogger,
           traceId,
           gatewayMessageId: downstreamFields.gatewayMessageId,
@@ -3939,13 +4001,15 @@ class BridgeRuntime {
       return;
     }
     const error = result.success ? "Unknown error" : result.errorMessage ?? "Unknown error";
+    const reason = this.getToolErrorReason(result);
     const logger = logOptions?.logger ?? this.logger;
-    logger.error("runtime.tool_error.sending", { welinkSessionId, error });
+    logger.error("runtime.tool_error.sending", { welinkSessionId, error, reason });
     this.gatewayConnection.send({
       type: "tool_error",
       welinkSessionId,
       toolSessionId: logOptions?.toolSessionId,
-      error
+      error,
+      reason
     }, {
       traceId: logOptions?.traceId,
       runtimeTraceId: this.logger.getTraceId(),
@@ -3954,6 +4018,16 @@ class BridgeRuntime {
       action: logOptions?.action,
       toolSessionId: logOptions?.toolSessionId
     });
+  }
+  getToolErrorReason(result) {
+    if (result.success) {
+      return;
+    }
+    const message = (result.errorMessage ?? "").toLowerCase();
+    if (message.includes("not found") || message.includes("404") || message.includes(TOOL_ERROR_REASON.SESSION_NOT_FOUND) || message.includes("unexpected eof") || message.includes("json parse error")) {
+      return TOOL_ERROR_REASON.SESSION_NOT_FOUND;
+    }
+    return;
   }
   sendToolDone(toolSessionId, welinkSessionId, source, logOptions) {
     if (!this.gatewayConnection) {
@@ -3983,6 +4057,38 @@ class BridgeRuntime {
   }
 }
 
+// src/runtime/clientShapeSummary.ts
+function isRecord6(value) {
+  return value !== null && typeof value === "object";
+}
+function listKeys(value) {
+  return isRecord6(value) ? Object.keys(value).sort() : [];
+}
+function buildClientShapeSummary(client) {
+  const root = isRecord6(client) ? client : undefined;
+  const global = isRecord6(root?.global) ? root.global : undefined;
+  const app = isRecord6(root?.app) ? root.app : undefined;
+  const session = isRecord6(root?.session) ? root.session : undefined;
+  const rawClient = isRecord6(root?._client) ? root._client : undefined;
+  return {
+    clientTopLevelKeys: listKeys(root),
+    globalKeys: listKeys(global),
+    appKeys: listKeys(app),
+    sessionKeys: listKeys(session),
+    rawClientKeys: listKeys(rawClient),
+    hasGlobalHealth: typeof global?.health === "function",
+    hasAppHealth: typeof app?.health === "function",
+    hasAppLog: typeof app?.log === "function",
+    hasSessionCreate: typeof session?.create === "function",
+    hasSessionPrompt: typeof session?.prompt === "function",
+    hasSessionAbort: typeof session?.abort === "function",
+    hasSessionDelete: typeof session?.delete === "function",
+    hasPermissionReply: typeof root?.postSessionIdPermissionsPermissionId === "function",
+    hasRawClientGet: typeof rawClient?.get === "function",
+    hasRawClientPost: typeof rawClient?.post === "function"
+  };
+}
+
 // src/runtime/singleton.ts
 var runtime = null;
 var initializing = null;
@@ -3998,6 +4104,7 @@ async function getOrCreateRuntime(input) {
     logger.debug("runtime.singleton.await_initializing");
     return initializing;
   }
+  logger.info("runtime.singleton.client_shape", buildClientShapeSummary(input.client));
   const candidate = new BridgeRuntime({
     workspacePath: input.worktree || input.directory,
     client: input.client
@@ -4041,5 +4148,5 @@ export {
   MessageBridgePlugin
 };
 
-//# debugId=55D89FEB602BE52564756E2164756E21
+//# debugId=710F8BB07C565B2464756E2164756E21
 //# sourceMappingURL=message-bridge.plugin.js.map

@@ -56,7 +56,7 @@ describe('gateway connection bun-only contract', () => {
         deviceName: 'dev',
         macAddress: 'aa:bb:cc:dd:ee:ff',
         os: 'darwin',
-        toolType: 'OPENCODE',
+        toolType: 'channel',
         toolVersion: '1.0.0',
       },
     });
@@ -69,7 +69,7 @@ describe('gateway connection bun-only contract', () => {
       deviceName: 'dev',
       macAddress: 'aa:bb:cc:dd:ee:ff',
       os: 'darwin',
-      toolType: 'OPENCODE',
+      toolType: 'channel',
       toolVersion: '1.0.0',
     });
 
@@ -85,7 +85,7 @@ describe('gateway connection bun-only contract', () => {
         deviceName: 'dev',
         macAddress: 'aa:bb:cc:dd:ee:ff',
         os: 'darwin',
-        toolType: 'OPENCODE',
+        toolType: 'channel',
         toolVersion: '1.0.0',
       },
     });
@@ -114,7 +114,7 @@ describe('gateway connection bun-only contract', () => {
         deviceName: 'dev',
         macAddress: 'aa:bb:cc:dd:ee:ff',
         os: 'darwin',
-        toolType: 'OPENCODE',
+        toolType: 'channel',
         toolVersion: '1.0.0',
       },
     });

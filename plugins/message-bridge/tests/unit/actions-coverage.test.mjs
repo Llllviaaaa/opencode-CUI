@@ -7,6 +7,7 @@ import { PermissionReplyAction } from '../../src/action/PermissionReplyAction.ts
 import { StatusQueryAction } from '../../src/action/StatusQueryAction.ts';
 import { AbortSessionAction } from '../../src/action/AbortSessionAction.ts';
 import { QuestionReplyAction } from '../../src/action/QuestionReplyAction.ts';
+import { toHostClientLike } from '../../src/runtime/SdkAdapter.ts';
 
 function readyContext(client, overrides = {}) {
   return {
@@ -188,29 +189,81 @@ describe('PermissionReplyAction coverage', () => {
 });
 
 describe('StatusQueryAction coverage', () => {
-  test('execute only uses global.health', async () => {
+  test('execute uses global.health when available and raw health fallback otherwise', async () => {
     const action = new StatusQueryAction();
     const ready = await action.execute({}, readyContext({
       global: {
         health: async () => ({ healthy: true, version: '9.9.9' }),
       },
+      _client: {
+        get: async () => {
+          throw new Error('raw fallback should not be called');
+        },
+      },
     }));
     expect(ready.success).toBe(true);
     expect(ready.data.opencodeOnline).toBe(true);
 
-    const downAfterGlobalFailure = await action.execute({}, readyContext({
-      global: {
-        health: async () => {
-          throw new Error('global unavailable');
+    const readyViaRawFallback = await action.execute({}, readyContext({
+      _client: {
+        get: async (options) => {
+          expect(options).toEqual({ url: '/global/health' });
+          return { data: { healthy: true, version: '9.9.9' } };
         },
       },
+    }, {
+      hostClient: toHostClientLike({
+        _client: {
+          get: async (options) => {
+            expect(options).toEqual({ url: '/global/health' });
+            return { data: { healthy: true, version: '9.9.9' } };
+          },
+        },
+      }),
     }));
-    expect(downAfterGlobalFailure.success).toBe(true);
-    expect(downAfterGlobalFailure.data.opencodeOnline).toBe(false);
+    expect(readyViaRawFallback.success).toBe(true);
+    expect(readyViaRawFallback.data.opencodeOnline).toBe(true);
+
+    const downViaHealthFalse = await action.execute({}, readyContext({
+      global: {
+        health: async () => ({ healthy: false, version: '9.9.9' }),
+      },
+    }));
+    expect(downViaHealthFalse.success).toBe(true);
+    expect(downViaHealthFalse.data.opencodeOnline).toBe(false);
+
+    const downViaRawError = await action.execute({}, readyContext({
+      _client: {
+        get: async () => ({ error: { message: 'bad gateway' } }),
+      },
+    }, {
+      hostClient: toHostClientLike({
+        _client: {
+          get: async () => ({ error: { message: 'bad gateway' } }),
+        },
+      }),
+    }));
+    expect(downViaRawError.success).toBe(true);
+    expect(downViaRawError.data.opencodeOnline).toBe(false);
 
     const down = await action.execute(
       {},
-      readyContext({}, { connectionState: 'READY' }),
+      readyContext({
+        _client: {
+          get: async () => {
+            throw new Error('global unavailable');
+          },
+        },
+      }, {
+        connectionState: 'READY',
+        hostClient: toHostClientLike({
+          _client: {
+            get: async () => {
+              throw new Error('global unavailable');
+            },
+          },
+        }),
+      }),
     );
     expect(down.success).toBe(true);
     expect(down.data.opencodeOnline).toBe(false);
