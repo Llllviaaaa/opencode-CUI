@@ -26,6 +26,7 @@ const App: React.FC = () => {
     error: sessionError,
     createSession,
     switchSession,
+    updateSessionStatus,
   } = useSkillSession();
 
   const activeSessionId = currentSession?.id ?? null;
@@ -39,6 +40,13 @@ const App: React.FC = () => {
     replyPermission,
     error: streamError,
   } = useSkillStream(activeSessionId);
+
+  // When streaming starts, update session status to 'active' in sidebar
+  useEffect(() => {
+    if (isStreaming && activeSessionId) {
+      updateSessionStatus(activeSessionId, 'active');
+    }
+  }, [isStreaming, activeSessionId, updateSessionStatus]);
 
   const {
     agents,
