@@ -51,7 +51,7 @@ payload: {
 }
 ```
 
-`create_session` also requires a non-empty top-level `welinkSessionId`; the runtime fails fast with `tool_error` before calling the SDK when it is missing.
+`welinkSessionId` remains optional for `create_session`; when present it is passed through to `session_created` / `tool_error`.
 
 ### `close_session`
 

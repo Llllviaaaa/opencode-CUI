@@ -399,6 +399,10 @@ export class BridgeRuntime {
     invokeLogger.info('runtime.invoke.received');
 
     if (message.action === 'create_session') {
+      if (!welinkSessionId) {
+        invokeLogger.warn('runtime.create_session.missing_welink_session_id');
+      }
+
       const result = await this.actionRouter.route(
         message.action,
         message.payload,

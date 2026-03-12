@@ -486,7 +486,7 @@ describe('runtime protocol strictness', () => {
     });
   });
 
-  test('rejects create_session without welinkSessionId before calling SDK', async () => {
+  test('allows create_session without welinkSessionId and calls SDK', async () => {
     const createCalls = [];
     const runtime = new BridgeRuntime({
       client: createRuntimeClient({
@@ -509,17 +509,17 @@ describe('runtime protocol strictness', () => {
       payload: {},
     });
 
-    expect(createCalls).toHaveLength(0);
+    expect(createCalls).toHaveLength(1);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toEqual({
-      type: 'tool_error',
+    expect(sent[0]).toMatchObject({
+      type: 'session_created',
       welinkSessionId: undefined,
-      toolSessionId: undefined,
-      error: 'create_session missing welinkSessionId',
+      toolSessionId: 'created-1',
+      session: { sessionId: 'created-1' },
     });
   });
 
-  test('rejects create_session with blank welinkSessionId before calling SDK', async () => {
+  test('treats blank create_session welinkSessionId as undefined and calls SDK', async () => {
     const createCalls = [];
     const runtime = new BridgeRuntime({
       client: createRuntimeClient({
@@ -543,13 +543,52 @@ describe('runtime protocol strictness', () => {
       payload: {},
     });
 
-    expect(createCalls).toHaveLength(0);
+    expect(createCalls).toHaveLength(1);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toEqual({
-      type: 'tool_error',
+    expect(sent[0]).toMatchObject({
+      type: 'session_created',
       welinkSessionId: undefined,
-      toolSessionId: undefined,
-      error: 'create_session missing welinkSessionId',
+      toolSessionId: 'created-1',
+      session: { sessionId: 'created-1' },
+    });
+  });
+
+  test('warns when create_session proceeds without welinkSessionId', async () => {
+    const appLogs = [];
+    const runtime = new BridgeRuntime({
+      client: createRuntimeClient({
+        app: {
+          log: async (options) => {
+            appLogs.push(options.body);
+            return true;
+          },
+        },
+        session: {
+          create: async () => ({ data: { id: 'created-1' } }),
+        },
+      }),
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      messageId: 'gw-create-1',
+      action: 'create_session',
+      payload: {},
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    const warningLog = appLogs.find((entry) => entry.message === 'runtime.create_session.missing_welink_session_id');
+    expect(warningLog).toBeDefined();
+    expect(warningLog.level).toBe('warn');
+    expect(warningLog.extra.traceId).toBe('gw-create-1');
+    expect(sent[0]).toMatchObject({
+      type: 'session_created',
+      welinkSessionId: undefined,
+      toolSessionId: 'created-1',
     });
   });
 
