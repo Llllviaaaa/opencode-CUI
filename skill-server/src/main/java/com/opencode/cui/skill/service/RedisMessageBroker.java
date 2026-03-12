@@ -1,7 +1,5 @@
 package com.opencode.cui.skill.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.Message;
@@ -14,7 +12,6 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
@@ -22,11 +19,7 @@ import java.util.function.Consumer;
  *
  * Channel patterns:
  * - agent:{agentId} - messages to specific agent
- * - session:{sessionId} - messages to specific session
- *
- * Sequence tracking:
- * - Each session maintains a sequence number for message ordering
- * - Sequence numbers are included in published messages
+ * - user-stream:{userId} - realtime messages to all instances holding the user's stream link
  */
 @Slf4j
 @Service
@@ -35,9 +28,6 @@ public class RedisMessageBroker {
     private final StringRedisTemplate redisTemplate;
     private final RedisMessageListenerContainer listenerContainer;
     private final ObjectMapper objectMapper;
-
-    /** Track sequence numbers per session */
-    private final Map<String, AtomicLong> sessionSequences = new ConcurrentHashMap<>();
 
     /** Track active subscriptions for cleanup */
     private final Map<String, MessageListener> activeListeners = new ConcurrentHashMap<>();
@@ -58,24 +48,12 @@ public class RedisMessageBroker {
      */
     public void publishToAgent(String agentId, String message) {
         String channel = "agent:" + agentId;
-        publishMessage(channel, message, null);
+        publishMessage(channel, message);
     }
 
-    /**
-     * Publish a message to a session channel with sequence number.
-     *
-     * @param sessionId the target session ID
-     * @param message   the message to publish (as JSON string)
-     */
-    public void publishToSession(String sessionId, String message) {
-        String channel = "session:" + sessionId;
-
-        // Get and increment sequence number for this session
-        AtomicLong sequence = sessionSequences.computeIfAbsent(
-                sessionId, k -> new AtomicLong(0));
-        long seqNum = sequence.incrementAndGet();
-
-        publishMessage(channel, message, seqNum);
+    public void publishToUser(String userId, String message) {
+        String channel = "user-stream:" + userId;
+        publishMessage(channel, message);
     }
 
     /**
@@ -89,14 +67,8 @@ public class RedisMessageBroker {
         subscribe(channel, handler);
     }
 
-    /**
-     * Subscribe to a session channel.
-     *
-     * @param sessionId the session ID to subscribe to
-     * @param handler   callback to handle received messages (JSON string)
-     */
-    public void subscribeToSession(String sessionId, Consumer<String> handler) {
-        String channel = "session:" + sessionId;
+    public void subscribeToUser(String userId, Consumer<String> handler) {
+        String channel = "user-stream:" + userId;
         subscribe(channel, handler);
     }
 
@@ -110,39 +82,17 @@ public class RedisMessageBroker {
         unsubscribe(channel);
     }
 
-    /**
-     * Unsubscribe from a session channel.
-     *
-     * @param sessionId the session ID to unsubscribe from
-     */
-    public void unsubscribeFromSession(String sessionId) {
-        String channel = "session:" + sessionId;
+    public void unsubscribeFromUser(String userId) {
+        String channel = "user-stream:" + userId;
         unsubscribe(channel);
-
-        // Clean up sequence tracker
-        sessionSequences.remove(sessionId);
     }
 
     // ========== Internal methods ==========
 
-    private void publishMessage(String channel, String message, Long sequenceNumber) {
+    private void publishMessage(String channel, String message) {
         try {
-            // Add sequence number if provided
-            String enriched = message;
-            if (sequenceNumber != null) {
-                JsonNode node = objectMapper.readTree(message);
-                if (node.isObject()) {
-                    ((com.fasterxml.jackson.databind.node.ObjectNode) node)
-                            .put("sequenceNumber", sequenceNumber);
-                    enriched = objectMapper.writeValueAsString(node);
-                }
-            }
-
-            redisTemplate.convertAndSend(channel, enriched);
-
-            log.debug("Published to Redis channel {}: seq={}", channel, sequenceNumber);
-        } catch (JsonProcessingException e) {
-            log.error("Failed to process message for channel {}: {}", channel, e.getMessage(), e);
+            redisTemplate.convertAndSend(channel, message);
+            log.debug("Published to Redis channel {}", channel);
         } catch (Exception e) {
             log.error("Failed to publish to Redis channel {}: {}", channel, e.getMessage(), e);
         }
@@ -177,22 +127,8 @@ public class RedisMessageBroker {
         }
     }
 
-    /**
-     * Check if a session channel has an active subscription.
-     *
-     * @param sessionId the session ID to check
-     * @return true if the session channel is currently subscribed
-     */
-    public boolean isSessionSubscribed(String sessionId) {
-        String channel = "session:" + sessionId;
+    public boolean isUserSubscribed(String userId) {
+        String channel = "user-stream:" + userId;
         return activeListeners.containsKey(channel);
-    }
-
-    /**
-     * Get the current sequence number for a session (for testing/monitoring).
-     */
-    public long getSessionSequence(String sessionId) {
-        AtomicLong sequence = sessionSequences.get(sessionId);
-        return sequence != null ? sequence.get() : 0;
     }
 }

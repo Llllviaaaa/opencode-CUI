@@ -83,7 +83,7 @@ class GatewayMessageTest {
     @Test
     void testInvokeSerialization() throws Exception {
         JsonNode payload = objectMapper.readTree("{\"toolSessionId\":\"sess_abc\",\"text\":\"hello\"}");
-        GatewayMessage msg = GatewayMessage.invoke("ak_test_001", 42L, "chat", payload);
+        GatewayMessage msg = GatewayMessage.invoke("ak_test_001", 42L, "chat", payload).withUserId("user-1");
 
         String json = objectMapper.writeValueAsString(msg);
         GatewayMessage deserialized = objectMapper.readValue(json, GatewayMessage.class);
@@ -91,6 +91,7 @@ class GatewayMessageTest {
         assertEquals("invoke", deserialized.getType());
         assertEquals("ak_test_001", deserialized.getAk());
         assertEquals(42L, deserialized.getWelinkSessionId());
+        assertEquals("user-1", deserialized.getUserId());
         assertEquals("chat", deserialized.getAction());
         assertEquals("hello", deserialized.getPayload().get("text").asText());
     }
@@ -124,6 +125,15 @@ class GatewayMessageTest {
 
         assertNull(original.getSequenceNumber());
         assertEquals(5L, withSeq.getSequenceNumber());
+    }
+
+    @Test
+    void testWithoutUserIdCreatesNewInstance() {
+        GatewayMessage original = GatewayMessage.toolEvent("sess-42", null).withUserId("user-1");
+        GatewayMessage stripped = original.withoutUserId();
+
+        assertEquals("user-1", original.getUserId());
+        assertNull(stripped.getUserId());
     }
 
     @Test

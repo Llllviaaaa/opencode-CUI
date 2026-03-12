@@ -7,6 +7,7 @@ import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.repository.SkillMessagePartRepository;
 import com.opencode.cui.skill.service.SkillMessageService;
 import com.opencode.cui.skill.model.SkillSession;
+import com.opencode.cui.skill.service.RedisMessageBroker;
 import com.opencode.cui.skill.service.SkillSessionService;
 import com.opencode.cui.skill.service.StreamBufferService;
 import org.junit.jupiter.api.Assertions;
@@ -24,6 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -39,6 +41,7 @@ class SkillStreamHandlerTest {
     private SkillSessionService sessionService;
     private SkillMessageService messageService;
     private SkillMessagePartRepository partRepository;
+    private RedisMessageBroker redisMessageBroker;
 
     @BeforeEach
     void setUp() {
@@ -46,12 +49,14 @@ class SkillStreamHandlerTest {
         sessionService = mock(SkillSessionService.class);
         messageService = mock(SkillMessageService.class);
         partRepository = mock(SkillMessagePartRepository.class);
+        redisMessageBroker = mock(RedisMessageBroker.class);
         handler = new SkillStreamHandler(
                 new ObjectMapper(),
                 bufferService,
                 sessionService,
                 messageService,
-                partRepository);
+                partRepository,
+                redisMessageBroker);
     }
 
     @Test
@@ -70,6 +75,7 @@ class SkillStreamHandlerTest {
         handler.pushToSession("42", "delta", "hello");
 
         verify(session, times(3)).sendMessage(any(TextMessage.class));
+        verify(redisMessageBroker).subscribeToUser(eq("10001"), any());
     }
 
     @Test
@@ -313,6 +319,37 @@ class SkillStreamHandlerTest {
         handler.pushToSession("42", "delta", "content");
 
         verify(session, never()).sendMessage(any(TextMessage.class));
+    }
+
+    @Test
+    @DisplayName("transport error followed by close does not unsubscribe remaining user stream connection")
+    void duplicateCleanupDoesNotDropActiveUserSubscription() throws Exception {
+        WebSocketSession first = mockSession("/ws/skill/stream", "userId=10001");
+        WebSocketSession second = mockSession("/ws/skill/stream", "userId=10001");
+        SkillSession activeSession = new SkillSession();
+        activeSession.setId(42L);
+        activeSession.setUserId("10001");
+        when(sessionService.findActiveByUserId("10001")).thenReturn(List.of(activeSession));
+        when(messageService.getAllMessages(42L)).thenReturn(List.of());
+        when(bufferService.isSessionStreaming("42")).thenReturn(false);
+        when(bufferService.getStreamingParts("42")).thenReturn(List.of());
+
+        handler.afterConnectionEstablished(first);
+        handler.afterConnectionEstablished(second);
+
+        handler.handleTransportError(first, new RuntimeException("boom"));
+        handler.afterConnectionClosed(first, org.springframework.web.socket.CloseStatus.SERVER_ERROR);
+
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA)
+                .sessionId("42")
+                .content("hello")
+                .build();
+        handler.pushStreamMessageToUser("10001", msg);
+
+        verify(redisMessageBroker, times(1)).subscribeToUser(eq("10001"), any());
+        verify(redisMessageBroker, never()).unsubscribeFromUser("10001");
+        verify(second, atLeastOnce()).sendMessage(any(TextMessage.class));
     }
 
     private WebSocketSession mockSession(String uri, String cookieHeader) throws Exception {

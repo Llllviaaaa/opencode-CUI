@@ -298,7 +298,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
         sessionAkMap.put(session.getId(), akId);
 
         // Register WebSocket session in relay service (keyed by ak)
-        eventRelayService.registerAgentSession(akId, session);
+        eventRelayService.registerAgentSession(akId, userId, session);
 
         // Send register_ok to client
         try {

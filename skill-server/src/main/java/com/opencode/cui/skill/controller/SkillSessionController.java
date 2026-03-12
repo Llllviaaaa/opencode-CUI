@@ -63,11 +63,10 @@ public class SkillSessionController {
                     request.getTitle(),
                     request.getImGroupId());
 
-            gatewayRelayService.subscribeToSessionBroadcast(session.getId().toString());
-
             if (request.getAk() != null) {
                 gatewayRelayService.sendInvokeToGateway(
                         request.getAk(),
+                        resolvedUserId,
                         session.getId().toString(),
                         "create_session",
                         buildCreateSessionPayload(request.getTitle()));
@@ -143,12 +142,12 @@ public class SkillSessionController {
                 }
                 gatewayRelayService.sendInvokeToGateway(
                         session.getAk(),
+                        session.getUserId(),
                         session.getId().toString(),
                         "close_session",
                         payload);
             }
             sessionService.closeSession(id);
-            gatewayRelayService.unsubscribeFromSession(id.toString());
             return ResponseEntity.ok(ApiResponse.ok(Map.of("status", "closed", "welinkSessionId", id)));
         } catch (ProtocolException e) {
             return ResponseEntity.ok(ApiResponse.error(e.getCode(), e.getMessage()));
@@ -185,6 +184,7 @@ public class SkillSessionController {
                 }
                 gatewayRelayService.sendInvokeToGateway(
                         session.getAk(),
+                        session.getUserId(),
                         session.getId().toString(),
                         "abort_session",
                         payload);

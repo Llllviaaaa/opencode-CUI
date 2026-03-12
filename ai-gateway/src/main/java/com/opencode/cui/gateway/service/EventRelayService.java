@@ -39,7 +39,7 @@ public class EventRelayService {
         this.skillRelayService = skillRelayService;
     }
 
-    public void registerAgentSession(String ak, WebSocketSession session) {
+    public void registerAgentSession(String ak, String userId, WebSocketSession session) {
         WebSocketSession old = agentSessions.put(ak, session);
         if (old != null && old.isOpen()) {
             try {
@@ -50,6 +50,7 @@ public class EventRelayService {
             }
         }
 
+        redisMessageBroker.bindAgentUser(ak, userId);
         redisMessageBroker.subscribeToAgent(ak, message -> sendToLocalAgent(ak, message));
         log.info("Registered agent session: ak={}, wsSessionId={}", ak, session.getId());
     }
@@ -69,6 +70,7 @@ public class EventRelayService {
         if (pending != null) {
             pending.complete(false);
         }
+        redisMessageBroker.removeAgentUser(ak);
         redisMessageBroker.unsubscribeFromAgent(ak);
         log.debug("Removed agent session: ak={}", ak);
     }
@@ -79,10 +81,11 @@ public class EventRelayService {
     }
 
     public void relayToSkillServer(String ak, GatewayMessage message) {
-        GatewayMessage forwarded = message.withAk(ak);
+        String userId = redisMessageBroker.getAgentUser(ak);
+        GatewayMessage forwarded = message.withAk(ak).withUserId(userId);
 
-        log.debug("Relaying to skill: ak={}, type={}, welinkSessionId={}, toolSessionId={}",
-                ak, message.getType(), forwarded.getWelinkSessionId(), forwarded.getToolSessionId());
+        log.debug("Relaying to skill: ak={}, userId={}, type={}, welinkSessionId={}, toolSessionId={}",
+                ak, userId, message.getType(), forwarded.getWelinkSessionId(), forwarded.getToolSessionId());
 
         try {
             boolean routed = skillRelayService.relayToSkill(forwarded);
@@ -97,7 +100,7 @@ public class EventRelayService {
     }
 
     public void relayToAgent(String ak, GatewayMessage message) {
-        redisMessageBroker.publishToAgent(ak, message);
+        redisMessageBroker.publishToAgent(ak, message.withoutUserId());
         log.debug("Published to agent channel: ak={}, type={}", ak, message.getType());
     }
 
@@ -110,7 +113,7 @@ public class EventRelayService {
         }
 
         try {
-            String json = objectMapper.writeValueAsString(message);
+            String json = objectMapper.writeValueAsString(message.withoutUserId());
             synchronized (session) {
                 session.sendMessage(new TextMessage(json));
             }

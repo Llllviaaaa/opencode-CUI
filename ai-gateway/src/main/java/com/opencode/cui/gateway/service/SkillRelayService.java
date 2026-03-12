@@ -91,9 +91,21 @@ public class SkillRelayService {
             return;
         }
 
-        redisMessageBroker.publishToAgent(message.getAk(), message);
-        log.debug("Forwarded invoke from skill to agent: linkId={}, ak={}, action={}",
-                session.getId(), message.getAk(), message.getAction());
+        String expectedUserId = redisMessageBroker.getAgentUser(message.getAk());
+        if (message.getUserId() == null || message.getUserId().isBlank()) {
+            log.warn("Invoke from skill missing userId: linkId={}, ak={}, action={}",
+                    session.getId(), message.getAk(), message.getAction());
+            return;
+        }
+        if (expectedUserId == null || !message.getUserId().equals(expectedUserId)) {
+            log.warn("Invoke from skill rejected by user validation: linkId={}, ak={}, userId={}, expectedUserId={}, action={}",
+                    session.getId(), message.getAk(), message.getUserId(), expectedUserId, message.getAction());
+            return;
+        }
+
+        redisMessageBroker.publishToAgent(message.getAk(), message.withoutUserId());
+        log.debug("Forwarded invoke from skill to agent: linkId={}, ak={}, userId={}, action={}",
+                session.getId(), message.getAk(), message.getUserId(), message.getAction());
     }
 
     /**

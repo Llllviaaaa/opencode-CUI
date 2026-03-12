@@ -181,7 +181,7 @@ public class SkillSessionService {
 
     /**
      * Scheduled cleanup: mark ACTIVE sessions as IDLE if they have been inactive
-     * beyond the configured idle timeout. Also unsubscribes Redis channels.
+     * beyond the configured idle timeout.
      */
     @Scheduled(fixedDelayString = "${skill.session.cleanup-interval-minutes:10}", timeUnit = TimeUnit.MINUTES)
     @Transactional
@@ -199,16 +199,5 @@ public class SkillSessionService {
         int count = sessionRepository.markIdleSessions(SkillSession.Status.IDLE.name(), cutoff);
         log.info("Marked {} sessions as IDLE (inactive since before {})", count, cutoff);
 
-        // Unsubscribe Redis channels for idle sessions
-        if (gatewayRelayService != null) {
-            for (Long sessionId : idleSessionIds) {
-                try {
-                    gatewayRelayService.unsubscribeFromSession(sessionId.toString());
-                } catch (Exception e) {
-                    log.warn("Failed to unsubscribe Redis for idle session {}: {}",
-                            sessionId, e.getMessage());
-                }
-            }
-        }
     }
 }

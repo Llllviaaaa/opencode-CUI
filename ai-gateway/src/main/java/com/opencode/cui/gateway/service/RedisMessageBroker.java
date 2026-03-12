@@ -41,6 +41,7 @@ public class RedisMessageBroker {
     private static final String RELAY_CHANNEL_PREFIX = "gw:relay:";
     private static final String SKILL_OWNER_KEY_PREFIX = "gw:skill:owner:";
     private static final String SKILL_OWNERS_SET_KEY = "gw:skill:owners";
+    private static final String AGENT_USER_KEY_PREFIX = "gw:agent:user:";
 
     private final StringRedisTemplate redisTemplate;
     private final RedisMessageListenerContainer listenerContainer;
@@ -135,6 +136,27 @@ public class RedisMessageBroker {
         return activeOwners;
     }
 
+    public void bindAgentUser(String ak, String userId) {
+        if (ak == null || ak.isBlank() || userId == null || userId.isBlank()) {
+            return;
+        }
+        redisTemplate.opsForValue().set(agentUserKey(ak), userId);
+    }
+
+    public String getAgentUser(String ak) {
+        if (ak == null || ak.isBlank()) {
+            return null;
+        }
+        return redisTemplate.opsForValue().get(agentUserKey(ak));
+    }
+
+    public void removeAgentUser(String ak) {
+        if (ak == null || ak.isBlank()) {
+            return;
+        }
+        redisTemplate.delete(agentUserKey(ak));
+    }
+
     // ========== Internal methods ==========
 
     private void publishMessage(String channel, GatewayMessage message) {
@@ -187,6 +209,10 @@ public class RedisMessageBroker {
 
     private String skillOwnerKey(String instanceId) {
         return SKILL_OWNER_KEY_PREFIX + instanceId;
+    }
+
+    private String agentUserKey(String ak) {
+        return AGENT_USER_KEY_PREFIX + ak;
     }
 
 }

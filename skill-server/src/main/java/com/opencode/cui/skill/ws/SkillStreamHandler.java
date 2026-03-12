@@ -10,6 +10,7 @@ import com.opencode.cui.skill.model.ProtocolMessageView;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.repository.SkillMessagePartRepository;
 import com.opencode.cui.skill.service.ProtocolMessageMapper;
+import com.opencode.cui.skill.service.RedisMessageBroker;
 import com.opencode.cui.skill.service.SkillMessageService;
 import com.opencode.cui.skill.service.SkillSessionService;
 import com.opencode.cui.skill.service.StreamBufferService;
@@ -29,6 +30,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * WebSocket handler for Skill miniapp streaming.
@@ -48,6 +50,7 @@ public class SkillStreamHandler extends TextWebSocketHandler {
     private final SkillSessionService sessionService;
     private final SkillMessageService messageService;
     private final SkillMessagePartRepository partRepository;
+    private final RedisMessageBroker redisMessageBroker;
 
     /**
      * Protocol subscriptions keyed by userId. Each socket receives events for all
@@ -64,17 +67,20 @@ public class SkillStreamHandler extends TextWebSocketHandler {
      * Per-session transport sequence counter.
      */
     private final ConcurrentHashMap<String, AtomicLong> seqCounters = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AtomicInteger> activeConnectionCounts = new ConcurrentHashMap<>();
 
     public SkillStreamHandler(ObjectMapper objectMapper,
             StreamBufferService bufferService,
             SkillSessionService sessionService,
             SkillMessageService messageService,
-            SkillMessagePartRepository partRepository) {
+            SkillMessagePartRepository partRepository,
+            RedisMessageBroker redisMessageBroker) {
         this.objectMapper = objectMapper;
         this.bufferService = bufferService;
         this.sessionService = sessionService;
         this.messageService = messageService;
         this.partRepository = partRepository;
+        this.redisMessageBroker = redisMessageBroker;
     }
 
     @Override
@@ -205,20 +211,111 @@ public class SkillStreamHandler extends TextWebSocketHandler {
     private void registerUserSubscriber(WebSocketSession session, String userId) {
         session.getAttributes().put(ATTR_USER_ID, userId);
         userSubscribers.computeIfAbsent(userId, key -> new CopyOnWriteArraySet<>()).add(session);
+        int connections = activeConnectionCounts
+                .computeIfAbsent(userId, key -> new AtomicInteger(0))
+                .incrementAndGet();
+        if (connections == 1) {
+            subscribeToUserStream(userId);
+        }
         preloadActiveSessionOwners(userId);
         log.info("Skill protocol stream subscriber connected: userId={}, wsId={}, remoteAddr={}",
                 userId, session.getId(), session.getRemoteAddress());
     }
 
     private void unregisterSubscriber(WebSocketSession session) {
-        String userId = (String) session.getAttributes().get(ATTR_USER_ID);
+        // Both transport error and close callbacks may fire for the same socket.
+        // Remove the marker eagerly so cleanup stays idempotent.
+        String userId = (String) session.getAttributes().remove(ATTR_USER_ID);
         if (userId != null) {
             Set<WebSocketSession> sessions = userSubscribers.get(userId);
+            boolean removed = false;
             if (sessions != null) {
-                sessions.remove(session);
+                removed = sessions.remove(session);
                 if (sessions.isEmpty()) {
                     userSubscribers.remove(userId);
                 }
+            }
+
+            if (!removed) {
+                return;
+            }
+
+            AtomicInteger counter = activeConnectionCounts.get(userId);
+            if (counter != null) {
+                int remaining = counter.decrementAndGet();
+                if (remaining <= 0) {
+                    activeConnectionCounts.remove(userId);
+                    unsubscribeFromUserStream(userId);
+                }
+            }
+        }
+    }
+
+    private void subscribeToUserStream(String userId) {
+        if (redisMessageBroker.isUserSubscribed(userId)) {
+            return;
+        }
+        redisMessageBroker.subscribeToUser(userId, message -> handleUserBroadcast(userId, message));
+        log.info("Subscribed to user stream: userId={}", userId);
+    }
+
+    private void unsubscribeFromUserStream(String userId) {
+        redisMessageBroker.unsubscribeFromUser(userId);
+        log.info("Unsubscribed from user stream: userId={}", userId);
+    }
+
+    private void handleUserBroadcast(String userId, String rawMessage) {
+        try {
+            JsonNode node = objectMapper.readTree(rawMessage);
+            if (node.has("message")) {
+                StreamMessage msg = objectMapper.treeToValue(node.get("message"), StreamMessage.class);
+                pushStreamMessageToUser(userId, msg);
+                return;
+            }
+
+            String sessionId = node.path("sessionId").asText(null);
+            String type = node.path("type").asText("delta");
+            String content = node.has("content") ? node.get("content").toString() : null;
+            if (sessionId != null) {
+                pushToSession(sessionId, type, content);
+            }
+        } catch (JsonProcessingException e) {
+            log.error("Failed to parse user broadcast for user {}: {}", userId, e.getMessage());
+        }
+    }
+
+    public void pushStreamMessageToUser(String userId, StreamMessage msg) {
+        Set<WebSocketSession> recipients = new CopyOnWriteArraySet<>(userSubscribers.getOrDefault(userId, Set.of()));
+        if (recipients.isEmpty()) {
+            log.debug("No subscribers for user {}, message type={} dropped", userId, msg.getType());
+            return;
+        }
+
+        String sessionId = msg.getSessionId();
+        if (sessionId != null && !sessionId.isBlank()) {
+            msg.setSeq(nextTransportSeq(sessionId));
+        }
+
+        String messageText;
+        try {
+            messageText = objectMapper.writeValueAsString(msg);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to serialize user stream message: userId={}, type={}", userId, msg.getType(), e);
+            return;
+        }
+
+        TextMessage textMessage = new TextMessage(messageText);
+        for (WebSocketSession ws : recipients) {
+            if (ws.isOpen()) {
+                try {
+                    ws.sendMessage(textMessage);
+                } catch (IOException e) {
+                    log.error("Failed to push user stream message: userId={}, wsId={}, error={}",
+                            userId, ws.getId(), e.getMessage());
+                    unregisterSubscriber(ws);
+                }
+            } else {
+                unregisterSubscriber(ws);
             }
         }
     }

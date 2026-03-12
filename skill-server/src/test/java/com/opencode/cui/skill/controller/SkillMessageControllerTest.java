@@ -66,6 +66,7 @@ class SkillMessageControllerTest {
         SkillSession session = new SkillSession();
         session.setId(1L);
         session.setAk("99");
+        session.setUserId("1");
         session.setToolSessionId("tool-session-1");
         session.setStatus(SkillSession.Status.ACTIVE);
         when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
@@ -84,7 +85,7 @@ class SkillMessageControllerTest {
         assertEquals(1L, body.getData().getWelinkSessionId());
         assertEquals("user", body.getData().getRole());
         verify(messagePersistenceService).finalizeActiveAssistantTurn(1L);
-        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("chat"), any());
+        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("1"), eq("chat"), any());
     }
 
     @Test
@@ -93,6 +94,7 @@ class SkillMessageControllerTest {
         SkillSession session = new SkillSession();
         session.setId(1L);
         session.setAk("99");
+        session.setUserId("1");
         session.setToolSessionId("tool-session-1");
         session.setStatus(SkillSession.Status.ACTIVE);
         when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
@@ -107,7 +109,7 @@ class SkillMessageControllerTest {
 
         ResponseEntity<?> response = controller.sendMessage("1", 1L, request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
-        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("question_reply"), any());
+        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("1"), eq("question_reply"), any());
     }
 
     @Test
@@ -181,6 +183,7 @@ class SkillMessageControllerTest {
         SkillSession session = new SkillSession();
         session.setId(1L);
         session.setAk("99");
+        session.setUserId("1");
         session.setToolSessionId("tool-session-1");
         session.setStatus(SkillSession.Status.ACTIVE);
         when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
@@ -193,7 +196,7 @@ class SkillMessageControllerTest {
         assertEquals(1L, response.getBody().getData().get("welinkSessionId"));
         assertEquals("p-abc", response.getBody().getData().get("permissionId"));
         assertEquals("once", response.getBody().getData().get("response"));
-        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("permission_reply"), any());
+        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("1"), eq("permission_reply"), any());
         verify(gatewayRelayService).publishProtocolMessage(eq("1"), any());
     }
 

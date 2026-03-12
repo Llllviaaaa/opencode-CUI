@@ -120,6 +120,7 @@ public class SkillMessageController {
 
             gatewayRelayService.sendInvokeToGateway(
                     session.getAk(),
+                    session.getUserId(),
                     sessionId.toString(),
                     action,
                     payload);
@@ -257,6 +258,7 @@ public class SkillMessageController {
         // Send permission_reply invoke to AI-Gateway
         gatewayRelayService.sendInvokeToGateway(
                 session.getAk(),
+                session.getUserId(),
                 sessionId.toString(),
                 "permission_reply",
                 payload);

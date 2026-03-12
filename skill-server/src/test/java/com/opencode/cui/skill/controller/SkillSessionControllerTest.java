@@ -57,8 +57,7 @@ class SkillSessionControllerTest {
         assertNotNull(response.getBody());
         assertEquals(0, response.getBody().getCode());
         assertNotNull(response.getBody().getData());
-        verify(gatewayRelayService).subscribeToSessionBroadcast("1");
-        verify(gatewayRelayService).sendInvokeToGateway(eq("3"), eq("1"), eq("create_session"), contains("Test"));
+        verify(gatewayRelayService).sendInvokeToGateway(eq("3"), eq("1"), eq("1"), eq("create_session"), contains("Test"));
     }
 
     @Test
@@ -106,7 +105,7 @@ class SkillSessionControllerTest {
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(42L, response.getBody().getData().get("welinkSessionId"));
         verify(sessionService).closeSession(42L);
-        verify(gatewayRelayService).unsubscribeFromSession("42");
+        verify(gatewayRelayService, never()).publishProtocolMessage(anyString(), any());
     }
 
     @Test
@@ -115,11 +114,12 @@ class SkillSessionControllerTest {
         SkillSession session = new SkillSession();
         session.setId(42L);
         session.setAk("99");
+        session.setUserId("1");
         session.setToolSessionId("ts-abc");
         when(accessControlService.requireSessionAccess(42L, "1")).thenReturn(session);
 
         controller.closeSession("1", 42L);
-        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("42"), eq("close_session"), any());
+        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("42"), eq("close_session"), any());
     }
 
     @Test
@@ -128,6 +128,7 @@ class SkillSessionControllerTest {
         SkillSession session = new SkillSession();
         session.setId(42L);
         session.setAk("99");
+        session.setUserId("1");
         session.setToolSessionId("ts-abc");
         session.setStatus(SkillSession.Status.ACTIVE);
         when(accessControlService.requireSessionAccess(42L, "1")).thenReturn(session);
@@ -136,9 +137,9 @@ class SkillSessionControllerTest {
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals("aborted", response.getBody().getData().get("status"));
         assertEquals(42L, response.getBody().getData().get("welinkSessionId"));
-        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("42"), eq("abort_session"), any());
+        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("42"), eq("abort_session"), any());
         verify(sessionService, never()).closeSession(anyLong());
-        verify(gatewayRelayService, never()).unsubscribeFromSession(anyString());
+        verify(gatewayRelayService, never()).publishProtocolMessage(anyString(), any());
     }
 
     @Test

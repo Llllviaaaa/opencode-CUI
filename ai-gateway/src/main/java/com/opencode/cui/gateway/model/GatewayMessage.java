@@ -19,7 +19,7 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
+@Builder(toBuilder = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class GatewayMessage {
 
@@ -34,6 +34,9 @@ public class GatewayMessage {
 
     /** Skill session identifier from Layer2/3 protocol */
     private Long welinkSessionId;
+
+    /** User identifier trusted by server-side routing */
+    private String userId;
 
     /** Action for invoke messages: chat, create_session, close_session, ... */
     private String action;
@@ -167,74 +170,32 @@ public class GatewayMessage {
     }
 
     public GatewayMessage withAgentId(String agentId) {
-        return GatewayMessage.builder()
-                .type(this.type)
+        return this.toBuilder()
                 .agentId(agentId)
-                .ak(this.ak)
-                .welinkSessionId(this.welinkSessionId)
-                .action(this.action)
-                .payload(this.payload)
-                .event(this.event)
-                .error(this.error)
-                .usage(this.usage)
-                .sequenceNumber(this.sequenceNumber)
-                .deviceName(this.deviceName)
-                .macAddress(this.macAddress)
-                .os(this.os)
-                .toolType(this.toolType)
-                .toolVersion(this.toolVersion)
-                .toolSessionId(this.toolSessionId)
-                .session(this.session)
-                .opencodeOnline(this.opencodeOnline)
-                .reason(this.reason)
                 .build();
     }
 
     public GatewayMessage withAk(String ak) {
-        return GatewayMessage.builder()
-                .type(this.type)
-                .agentId(this.agentId)
+        return this.toBuilder()
                 .ak(ak)
-                .welinkSessionId(this.welinkSessionId)
-                .action(this.action)
-                .payload(this.payload)
-                .event(this.event)
-                .error(this.error)
-                .usage(this.usage)
-                .sequenceNumber(this.sequenceNumber)
-                .deviceName(this.deviceName)
-                .macAddress(this.macAddress)
-                .os(this.os)
-                .toolType(this.toolType)
-                .toolVersion(this.toolVersion)
-                .toolSessionId(this.toolSessionId)
-                .session(this.session)
-                .opencodeOnline(this.opencodeOnline)
-                .reason(this.reason)
                 .build();
     }
 
     public GatewayMessage withSequenceNumber(Long sequenceNumber) {
-        return GatewayMessage.builder()
-                .type(this.type)
-                .agentId(this.agentId)
-                .ak(this.ak)
-                .welinkSessionId(this.welinkSessionId)
-                .action(this.action)
-                .payload(this.payload)
-                .event(this.event)
-                .error(this.error)
-                .usage(this.usage)
+        return this.toBuilder()
                 .sequenceNumber(sequenceNumber)
-                .deviceName(this.deviceName)
-                .macAddress(this.macAddress)
-                .os(this.os)
-                .toolType(this.toolType)
-                .toolVersion(this.toolVersion)
-                .toolSessionId(this.toolSessionId)
-                .session(this.session)
-                .opencodeOnline(this.opencodeOnline)
-                .reason(this.reason)
+                .build();
+    }
+
+    public GatewayMessage withUserId(String userId) {
+        return this.toBuilder()
+                .userId(userId)
+                .build();
+    }
+
+    public GatewayMessage withoutUserId() {
+        return this.toBuilder()
+                .userId(null)
                 .build();
     }
 }
