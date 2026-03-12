@@ -172,7 +172,7 @@ describe('downstream message normalizer', () => {
     expect(result.error.action).toBe('status_query');
   });
 
-  test('allows create_session without welinkSessionId', () => {
+  test('rejects create_session without welinkSessionId', () => {
     const { logger } = createLogger();
     const result = normalizeDownstreamMessage(
       {
@@ -183,16 +183,13 @@ describe('downstream message normalizer', () => {
       logger,
     );
 
-    expect(result.ok).toBe(true);
-    expect(result.value).toEqual({
-      type: 'invoke',
-      action: 'create_session',
-      payload: {},
-      welinkSessionId: undefined,
-    });
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('missing_required_field');
+    expect(result.error.action).toBe('create_session');
+    expect(result.error.field).toBe('welinkSessionId');
   });
 
-  test('treats blank create_session welinkSessionId as undefined', () => {
+  test('rejects blank create_session welinkSessionId', () => {
     const { logger } = createLogger();
     const result = normalizeDownstreamMessage(
       {
@@ -204,13 +201,11 @@ describe('downstream message normalizer', () => {
       logger,
     );
 
-    expect(result.ok).toBe(true);
-    expect(result.value).toEqual({
-      type: 'invoke',
-      action: 'create_session',
-      payload: {},
-      welinkSessionId: undefined,
-    });
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('missing_required_field');
+    expect(result.error.action).toBe('create_session');
+    expect(result.error.field).toBe('welinkSessionId');
+    expect(result.error.welinkSessionId).toBe('   ');
   });
 
   test('normalizes invoke/abort_session payload', () => {

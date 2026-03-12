@@ -486,7 +486,7 @@ describe('runtime protocol strictness', () => {
     });
   });
 
-  test('allows create_session without welinkSessionId and calls SDK', async () => {
+  test('rejects create_session without welinkSessionId', async () => {
     const createCalls = [];
     const runtime = new BridgeRuntime({
       client: createRuntimeClient({
@@ -509,17 +509,16 @@ describe('runtime protocol strictness', () => {
       payload: {},
     });
 
-    expect(createCalls).toHaveLength(1);
+    expect(createCalls).toHaveLength(0);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({
-      type: 'session_created',
+    expect(sent[0]).toEqual({
+      type: 'tool_error',
       welinkSessionId: undefined,
-      toolSessionId: 'created-1',
-      session: { sessionId: 'created-1' },
+      error: 'welinkSessionId is required',
     });
   });
 
-  test('treats blank create_session welinkSessionId as undefined and calls SDK', async () => {
+  test('rejects blank create_session welinkSessionId', async () => {
     const createCalls = [];
     const runtime = new BridgeRuntime({
       client: createRuntimeClient({
@@ -543,17 +542,16 @@ describe('runtime protocol strictness', () => {
       payload: {},
     });
 
-    expect(createCalls).toHaveLength(1);
+    expect(createCalls).toHaveLength(0);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({
-      type: 'session_created',
-      welinkSessionId: undefined,
-      toolSessionId: 'created-1',
-      session: { sessionId: 'created-1' },
+    expect(sent[0]).toEqual({
+      type: 'tool_error',
+      welinkSessionId: '   ',
+      error: 'welinkSessionId is required',
     });
   });
 
-  test('warns when create_session proceeds without welinkSessionId', async () => {
+  test('create_session missing welinkSessionId does not call SDK and does not emit warning-only success', async () => {
     const appLogs = [];
     const runtime = new BridgeRuntime({
       client: createRuntimeClient({
@@ -582,13 +580,11 @@ describe('runtime protocol strictness', () => {
     await new Promise((r) => setTimeout(r, 10));
 
     const warningLog = appLogs.find((entry) => entry.message === 'runtime.create_session.missing_welink_session_id');
-    expect(warningLog).toBeDefined();
-    expect(warningLog.level).toBe('warn');
-    expect(warningLog.extra.traceId).toBe('gw-create-1');
-    expect(sent[0]).toMatchObject({
-      type: 'session_created',
+    expect(warningLog).toBeUndefined();
+    expect(sent[0]).toEqual({
+      type: 'tool_error',
       welinkSessionId: undefined,
-      toolSessionId: 'created-1',
+      error: 'welinkSessionId is required',
     });
   });
 
