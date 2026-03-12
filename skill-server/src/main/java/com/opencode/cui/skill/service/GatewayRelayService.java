@@ -386,48 +386,69 @@ public class GatewayRelayService {
             // Clear invalid toolSessionId
             sessionService.clearToolSessionId(sessionIdLong);
 
-            // Store the last user message text for retry after rebuild
+            // Use the last user message text as the pending retry payload
+            String pendingMessage = null;
             SkillMessage lastUserMsg = messageRepository.findLastUserMessage(sessionIdLong);
             if (lastUserMsg != null && lastUserMsg.getContent() != null) {
-                pendingRebuildMessages.put(sessionId, lastUserMsg.getContent());
-                log.info("Stored pending retry message for session {}: '{}'",
-                        sessionId,
-                        lastUserMsg.getContent().substring(0, Math.min(50, lastUserMsg.getContent().length())));
+                pendingMessage = lastUserMsg.getContent();
             }
 
-            // Notify frontend that session is reconnecting
-            StreamMessage reconnecting = StreamMessage.builder()
-                    .type(StreamMessage.Types.SESSION_STATUS)
-                    .sessionStatus("retry")
-                    .build();
-            broadcastStreamMessage(sessionId, userId, reconnecting);
-
-            // Send create_session to Gateway to rebuild toolSession
-            if (session.getAk() != null) {
-                ObjectNode payload = objectMapper.createObjectNode();
-                payload.put("title", session.getTitle() != null ? session.getTitle() : "");
-                String payloadStr;
-                try {
-                    payloadStr = objectMapper.writeValueAsString(payload);
-                } catch (JsonProcessingException e) {
-                    payloadStr = "{}";
-                }
-                sendInvokeToGateway(session.getAk(), session.getUserId(), sessionId, "create_session", payloadStr);
-                log.info("Rebuild create_session sent for welinkSession={}, ak={}", sessionId, session.getAk());
-            } else {
-                log.error("Cannot rebuild session {}: no ak associated", sessionId);
-                pendingRebuildMessages.remove(sessionId);
-                StreamMessage errorMsg = StreamMessage.builder()
-                        .type(StreamMessage.Types.ERROR)
-                        .error("AI session expired and cannot be rebuilt")
-                        .build();
-                broadcastStreamMessage(sessionId, userId, errorMsg);
-            }
+            rebuildToolSession(sessionId, session, pendingMessage);
         } catch (Exception e) {
             log.error("Failed to rebuild session {}: {}", sessionId, e.getMessage(), e);
             pendingRebuildMessages.remove(sessionId);
         }
     }
+
+    /**
+     * Trigger toolSession rebuild: store pending message, notify frontend retry,
+     * send create_session to Gateway.
+     * Can be called by Controller when toolSessionId is null.
+     *
+     * @param sessionId      welinkSessionId (string)
+     * @param session        the SkillSession entity
+     * @param pendingMessage user message to auto-retry after rebuild (nullable)
+     */
+    public void rebuildToolSession(String sessionId, SkillSession session, String pendingMessage) {
+        log.info("Rebuilding toolSession for welinkSession={}", sessionId);
+        // 存储待重发消息
+        if (pendingMessage != null && !pendingMessage.isBlank()) {
+            pendingRebuildMessages.put(sessionId, pendingMessage);
+            log.info("Stored pending retry message for session {}: '{}'",
+                    sessionId,
+                    pendingMessage.substring(0, Math.min(50, pendingMessage.length())));
+        }
+
+        // 通知前端 retry 状态
+        StreamMessage reconnecting = StreamMessage.builder()
+                .type(StreamMessage.Types.SESSION_STATUS)
+                .sessionStatus("retry")
+                .build();
+        broadcastStreamMessage(sessionId, session.getUserId(), reconnecting);
+
+        // 发送 create_session 到 Gateway 重建 toolSession
+        if (session.getAk() != null) {
+            ObjectNode payload = objectMapper.createObjectNode();
+            payload.put("title", session.getTitle() != null ? session.getTitle() : "");
+            String payloadStr;
+            try {
+                payloadStr = objectMapper.writeValueAsString(payload);
+            } catch (JsonProcessingException e) {
+                payloadStr = "{}";
+            }
+            sendInvokeToGateway(session.getAk(), session.getUserId(), sessionId, "create_session", payloadStr);
+            log.info("Rebuild create_session sent for welinkSession={}, ak={}", sessionId, session.getAk());
+        } else {
+            log.error("Cannot rebuild session {}: no ak associated", sessionId);
+            pendingRebuildMessages.remove(sessionId);
+            StreamMessage errorMsg = StreamMessage.builder()
+                    .type(StreamMessage.Types.ERROR)
+                    .error("AI session expired and cannot be rebuilt")
+                    .build();
+            broadcastStreamMessage(sessionId, session.getUserId(), errorMsg);
+        }
+    }
+
 
     private void handleAgentOnline(String ak, String userId, JsonNode node) {
         String toolType = node.path("toolType").asText("UNKNOWN");

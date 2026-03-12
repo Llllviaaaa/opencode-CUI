@@ -102,8 +102,11 @@ public class SkillMessageController {
         // Send invoke to AI-Gateway to trigger OpenCode processing
         if (session.getAk() != null) {
             if (session.getToolSessionId() == null) {
-                log.warn("Session {} has no toolSessionId, cannot invoke AI", sessionId);
-                return ResponseEntity.ok(ApiResponse.error(500, "No toolSessionId available"));
+                log.info("Session {} has no toolSessionId, triggering create_session rebuild", sessionId);
+                gatewayRelayService.rebuildToolSession(
+                        sessionId.toString(), session, request.getContent());
+                return ResponseEntity.ok(ApiResponse.ok(ProtocolMessageMapper.toProtocolMessage(
+                        message, List.of(), objectMapper)));
             }
 
             // Route: toolCallId present → question_reply, otherwise → chat
