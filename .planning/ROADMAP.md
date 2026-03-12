@@ -13,12 +13,12 @@
 
 ## Proposed Roadmap
 
-**2 phases** | **6 requirements mapped** | All covered
+**2 phases** | **7 requirements mapped** | All covered
 
 | # | Phase | Goal | Requirements | Success Criteria |
 |---|-------|------|--------------|------------------|
 | 10 | Stream Event Affinity | 在 `skill-server` 广播前补齐并校验流式事件的会话归属 | `STREAM-01`, `STREAM-02`, `STREAM-03` | 4 |
-| 11 | Frontend Consistency Regression | 统一 miniapp 分流行为并补齐回归验证 | `CONSIST-01`, `CONSIST-02`, `SAFE-03` | 4 |
+| 11 | Frontend Consistency Regression | 统一 miniapp 分流与恢复行为并补齐回归验证 | `CONSIST-01`, `CONSIST-02`, `CONSIST-03`, `SAFE-03` | 5 |
 
 ## Phase Details
 
@@ -43,22 +43,23 @@ Success criteria:
 
 ### Phase 11: Frontend Consistency Regression
 
-**Goal**: 让 miniapp 对 snapshot、恢复态和实时事件使用一致的会话分流规则，并用回归测试锁定 A/B session 隔离。
+**Goal**: 让 miniapp 对 snapshot、恢复态和实时事件使用一致的会话分流与续接规则，并用回归测试锁定 A/B session 隔离以及切会话/重连后的进行中回复恢复。
 **Depends on**: Phase 10  
 **Plans**: 3 plans
 
 Plans:
 
-- [ ] 11-01: 校准 `useSkillStream` 对不同流式事件类型的会话过滤与恢复策略
-- [ ] 11-02: 补齐 miniapp 侧测试或联动测试，覆盖 A/B session 并发显示隔离
+- [ ] 11-01: 校准 `useSkillStream` 对不同流式事件类型的会话过滤、恢复与进行中消息合并策略
+- [ ] 11-02: 补齐 miniapp 侧测试或联动测试，覆盖 A/B session 并发显示隔离以及切会话/重连后的回复续接
 - [ ] 11-03: 形成 phase verification / summary，固化 v1.3 的串流隔离证据链
 
 Success criteria:
 
 1. `snapshot`、`streaming`、实时增量事件都按同一 `welinkSessionId` 规则分流
 2. A session 产生的回复不会出现在 B session 视图中，反之亦然
-3. 前端对缺少会话标识的异常事件表现为忽略或报错，不会错误渲染
-4. 回归工件能直接支撑后续 milestone audit
+3. 用户切换会话或重连后，正在生成中的回复会先恢复已生成内容，再继续追加后续内容，而不是只看到新片段
+4. 前端对缺少会话标识的异常事件表现为忽略或报错，不会错误渲染
+5. 回归工件能直接支撑后续 milestone audit
 
 ## Next Step
 
