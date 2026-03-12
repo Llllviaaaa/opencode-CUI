@@ -27,10 +27,13 @@ export class StatusQueryAction implements Action<'status_query', StatusQueryPayl
       let opencodeOnline = false;
       if (context.hostClient.global?.health) {
         try {
-          await context.hostClient.global.health();
-          opencodeOnline = true;
-        } catch {
+          const health = await context.hostClient.global.health();
+          opencodeOnline = health.healthy === true;
+        } catch (error) {
           opencodeOnline = false;
+          context.logger?.debug('action.status_query.health_failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
 
@@ -38,7 +41,7 @@ export class StatusQueryAction implements Action<'status_query', StatusQueryPayl
         success: true,
         data: {
           opencodeOnline,
-        }
+        },
       };
     } catch (error) {
       const errorCode = this.errorMapper(error);

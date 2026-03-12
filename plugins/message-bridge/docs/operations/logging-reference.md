@@ -160,8 +160,8 @@ sequenceDiagram
 | `runtime.start.aborted_precheck` | warn | start 前检测到 abort | - | `src/runtime/BridgeRuntime.ts:61` |
 | `runtime.start.disabled_by_config` | info | `config.enabled=false` | - | `src/runtime/BridgeRuntime.ts:67` |
 | `runtime.start.failed_capabilities` | error | 启动前发现 SDK action 能力不完整 | `errorCode`,`errorMessage`,`missingCapabilities` | `src/runtime/BridgeRuntime.ts` |
-| `runtime.start.failed_health` | error | 启动前 `global.health()` 缺失或调用失败 | `errorCode`,`errorMessage`,`missingCapability?`,`cause?` | `src/runtime/BridgeRuntime.ts` |
-| `runtime.start.failed_health_version` | error | 启动前 `global.health()` 未返回可用 version | `errorCode`,`errorMessage`,`responseShape?` | `src/runtime/BridgeRuntime.ts` |
+| `runtime.start.failed_health` | error | 启动前 `global.health()` 或 raw `/global/health` 探活失败 | `errorCode`,`errorMessage`,`missingCapability?`,`cause?` | `src/runtime/BridgeRuntime.ts` |
+| `runtime.start.failed_health_version` | error | 启动前 `global.health()` 或 raw `/global/health` 未返回可用 version | `errorCode`,`errorMessage`,`responseShape?` | `src/runtime/BridgeRuntime.ts` |
 | `runtime.agent.rebound` | info | 连接状态转 `CONNECTING` 后重置 agentId | `agentId` | `src/runtime/BridgeRuntime.ts:103` |
 | `runtime.downstream_message_error` | error | 下行消息处理抛错 | `error`,`errorDetail`,`errorName`,`sourceErrorCode?` | `src/runtime/BridgeRuntime.ts:114` |
 | `runtime.start.aborted_before_connect` | warn | connect 前中止 | - | `src/runtime/BridgeRuntime.ts:124` |

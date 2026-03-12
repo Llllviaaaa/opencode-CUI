@@ -35,7 +35,7 @@ export function createRegisterMessage(overrides = {}) {
     deviceName: overrides.deviceName || 'test-device',
     macAddress: overrides.macAddress || 'aa:bb:cc:dd:ee:ff',
     os: overrides.os || 'darwin',
-    toolType: 'OPENCODE',
+    toolType: 'channel',
     toolVersion: overrides.toolVersion || '1.0.0',
     timestamp: Date.now(),
     ...overrides

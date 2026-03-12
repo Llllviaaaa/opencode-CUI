@@ -4,6 +4,8 @@ import {
   ActionResult,
   StatusQueryPayload,
   StatusQueryResultData,
+  TOOL_ERROR_REASON,
+  type ToolErrorReason,
 } from '../types';
 import { ChatAction } from '../action/ChatAction';
 import { CreateSessionAction } from '../action/CreateSessionAction';
@@ -656,14 +658,16 @@ export class BridgeRuntime {
     }
 
     const error = result.success ? 'Unknown error' : result.errorMessage ?? 'Unknown error';
+    const reason = this.getToolErrorReason(result);
     const logger = logOptions?.logger ?? this.logger;
-    logger.error('runtime.tool_error.sending', { welinkSessionId, error });
+    logger.error('runtime.tool_error.sending', { welinkSessionId, error, reason });
 
     this.gatewayConnection.send({
       type: 'tool_error',
       welinkSessionId,
       toolSessionId: logOptions?.toolSessionId,
       error,
+      reason,
     }, {
       traceId: logOptions?.traceId,
       runtimeTraceId: this.logger.getTraceId(),
@@ -672,6 +676,25 @@ export class BridgeRuntime {
       action: logOptions?.action,
       toolSessionId: logOptions?.toolSessionId,
     });
+  }
+
+  private getToolErrorReason(result: ActionResult): ToolErrorReason | undefined {
+    if (result.success) {
+      return undefined;
+    }
+
+    const message = (result.errorMessage ?? '').toLowerCase();
+    if (
+      message.includes('not found') ||
+      message.includes('404') ||
+      message.includes(TOOL_ERROR_REASON.SESSION_NOT_FOUND) ||
+      message.includes('unexpected eof') ||
+      message.includes('json parse error')
+    ) {
+      return TOOL_ERROR_REASON.SESSION_NOT_FOUND;
+    }
+
+    return undefined;
   }
 
   private sendToolDone(

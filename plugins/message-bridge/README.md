@@ -177,7 +177,7 @@ Defaults are defined in:
 | `enabled` | `true` |
 | `config_version` | `1` |
 | `gateway.url` | `ws://localhost:8081/ws/agent` |
-| `gateway.toolType` | `OPENCODE` |
+| `gateway.toolType` | `channel` |
 | `gateway.heartbeatIntervalMs` | `30000` |
 | `gateway.reconnect.baseMs` | `1000` |
 | `gateway.reconnect.maxMs` | `30000` |
@@ -194,8 +194,8 @@ The bridge emits structured logs through `client.app.log()` when available.
 Register metadata is auto-collected at runtime:
 
 - `deviceName` comes from `os.hostname()`
-- `toolVersion` comes only from `client.global.health().version`
-- `runtime.start()` fails before connect/register when `global.health()` is unavailable, throws, or returns without a non-empty `version`
+- `toolVersion` comes from `client.global.health().version`, or from a raw `GET /global/health` fallback when the injected SDK surface does not expose `global.health()`
+- `runtime.start()` fails before connect/register when the `global.health` probe fails or returns without a non-empty `version`
 - `macAddress` comes from the first usable local network interface, or `""` when unavailable
 - `macAddress` is currently a pre-provisioned field for Gateway compatibility; the server must treat `""` as missing
 

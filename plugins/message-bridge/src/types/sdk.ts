@@ -1,7 +1,7 @@
 import { getErrorMessage } from '../utils/error';
 
 export interface OpencodeHealthResult {
-  healthy: true;
+  healthy: boolean;
   version?: string;
 }
 

@@ -6,6 +6,16 @@
 **Owner:** message-bridge maintainers  
 **Related:** `../migration/path-mapping.md`, `../README.md`
 
+## 2026-03-11
+
+### Added
+
+- `design/interfaces/end-to-end-message-flow.md`：新增四方链路联调文档，覆盖 `OpenCode SDK / message-bridge / ai-gateway / skill-server` 的上下行报文、接口入口、字段映射与联调核对清单。
+
+### Changed
+
+- `docs/README.md`：在“开发”入口中加入端到端消息链路说明。
+
 ## 2026-03-09
 
 ### Changed

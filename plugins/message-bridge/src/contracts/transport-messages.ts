@@ -15,6 +15,16 @@ export const TRANSPORT_UPSTREAM_MESSAGE_TYPES = [
 
 export type UpstreamMessageType = typeof TRANSPORT_UPSTREAM_MESSAGE_TYPES[number];
 
+export const TOOL_ERROR_REASON = {
+  SESSION_NOT_FOUND: 'session_not_found',
+} as const;
+
+export const TOOL_ERROR_REASONS = [
+  TOOL_ERROR_REASON.SESSION_NOT_FOUND,
+] as const;
+
+export type ToolErrorReason = typeof TOOL_ERROR_REASONS[number];
+
 export interface RegisterMessage {
   type: 'register';
   deviceName: string;
@@ -47,6 +57,7 @@ export interface ToolErrorMessage {
   welinkSessionId?: string;
   toolSessionId?: string;
   error: string;
+  reason?: ToolErrorReason;
 }
 
 export interface SessionCreatedMessage {

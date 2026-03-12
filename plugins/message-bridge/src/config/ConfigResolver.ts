@@ -214,9 +214,9 @@ export class ConfigResolver {
     }
 
     if (!normalized.gateway.toolType) {
-      normalized.gateway.toolType = 'OPENCODE';
+      normalized.gateway.toolType = 'channel';
     } else {
-      normalized.gateway.toolType = normalized.gateway.toolType.trim().toUpperCase();
+      normalized.gateway.toolType = normalized.gateway.toolType.trim();
     }
 
     if (!normalized.gateway.heartbeatIntervalMs) {

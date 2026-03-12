@@ -8,9 +8,8 @@ import { __resetRuntimeForTests, getOrCreateRuntime, getRuntime, stopRuntime } f
 
 function createPluginClient(overrides = {}) {
   const base = {
-    global: {
-      health: async () => ({ healthy: true, version: '9.9.9' }),
-    },
+    global: {},
+    app: {},
     session: {
       create: async () => ({}),
       abort: async () => ({}),
@@ -19,7 +18,12 @@ function createPluginClient(overrides = {}) {
     },
     postSessionIdPermissionsPermissionId: async () => ({}),
     _client: {
-      get: async () => ({ data: [] }),
+      get: async (options) => {
+        if (options?.url === '/global/health') {
+          return { data: { healthy: true, version: '9.9.9' } };
+        }
+        return { data: [] };
+      },
       post: async () => ({ data: undefined }),
     },
   };
@@ -28,6 +32,7 @@ function createPluginClient(overrides = {}) {
     ...base,
     ...overrides,
     global: { ...base.global, ...(overrides.global ?? {}) },
+    app: { ...base.app, ...(overrides.app ?? {}) },
     session: { ...base.session, ...(overrides.session ?? {}) },
     _client: { ...base._client, ...(overrides._client ?? {}) },
   };
@@ -72,6 +77,34 @@ describe('plugin contract', () => {
     expect(runtime2).toBe(runtime1);
     expect(typeof hooks1.event).toBe('function');
     expect(typeof hooks2.event).toBe('function');
+  });
+
+  test('logs injected client shape only once during first singleton init', async () => {
+    const logs = [];
+    const client = createPluginClient({
+      app: {
+        log: async (options) => {
+          logs.push(options?.body);
+          return true;
+        },
+      },
+    });
+
+    await MessageBridgePlugin(mockInput({ client }));
+    await MessageBridgePlugin(mockInput({ client }));
+    await new Promise((r) => setTimeout(r, 10));
+
+    const shapeLogs = logs.filter((entry) => entry?.message === 'runtime.singleton.client_shape');
+    expect(shapeLogs).toHaveLength(1);
+    expect(shapeLogs[0].extra.clientTopLevelKeys).toContain('app');
+    expect(shapeLogs[0].extra.clientTopLevelKeys).toContain('global');
+    expect(shapeLogs[0].extra.clientTopLevelKeys).toContain('session');
+    expect(shapeLogs[0].extra.hasGlobalHealth).toBe(false);
+    expect(shapeLogs[0].extra.hasAppHealth).toBe(false);
+    expect(shapeLogs[0].extra.hasAppLog).toBe(true);
+    expect(shapeLogs[0].extra.hasSessionCreate).toBe(true);
+    expect(shapeLogs[0].extra.hasRawClientGet).toBe(true);
+    expect(shapeLogs[0].extra.hasRawClientPost).toBe(true);
   });
 
   test('loader semantics: Object.entries + duplicate function references only init once', async () => {

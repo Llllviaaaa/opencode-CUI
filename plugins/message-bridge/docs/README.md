@@ -37,8 +37,9 @@
 1. [方案设计](./design/solution-design.md)
 2. [实施计划](./design/implementation-plan.md)
 3. [协议契约](./design/interfaces/protocol-contract.md)
-4. [配置契约](./design/interfaces/config-contract.md)
-5. [源码目录说明](./architecture/source-layout.md)
+4. [端到端消息链路说明](./design/interfaces/end-to-end-message-flow.md)
+5. [配置契约](./design/interfaces/config-contract.md)
+6. [源码目录说明](./architecture/source-layout.md)
 
 ### 测试
 

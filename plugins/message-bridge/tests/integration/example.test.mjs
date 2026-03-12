@@ -4,9 +4,7 @@ import { BridgeRuntime } from '../../src/runtime/BridgeRuntime.ts';
 
 function createRuntimeClient() {
   return {
-    global: {
-      health: async () => ({ healthy: true, version: '9.9.9' }),
-    },
+    global: {},
     session: {
       create: async () => ({}),
       abort: async () => ({}),
@@ -15,7 +13,12 @@ function createRuntimeClient() {
     },
     postSessionIdPermissionsPermissionId: async () => ({}),
     _client: {
-      get: async () => ({ data: [] }),
+      get: async (options) => {
+        if (options?.url === '/global/health') {
+          return { data: { healthy: true, version: '9.9.9' } };
+        }
+        return { data: [] };
+      },
       post: async () => ({ data: undefined }),
     },
   };
