@@ -39,9 +39,10 @@ public class RedisMessageBroker {
 
     private static final String AGENT_CHANNEL_PREFIX = "agent:";
     private static final String RELAY_CHANNEL_PREFIX = "gw:relay:";
-    private static final String SKILL_OWNER_KEY_PREFIX = "gw:skill:owner:";
-    private static final String SKILL_OWNERS_SET_KEY = "gw:skill:owners";
+    private static final String SOURCE_OWNER_KEY_PREFIX = "gw:source:owner:";
+    private static final String SOURCE_OWNERS_SET_PREFIX = "gw:source:owners:";
     private static final String AGENT_USER_KEY_PREFIX = "gw:agent:user:";
+    private static final String AGENT_SOURCE_KEY_PREFIX = "gw:agent:source:";
 
     private final StringRedisTemplate redisTemplate;
     private final RedisMessageListenerContainer listenerContainer;
@@ -102,22 +103,36 @@ public class RedisMessageBroker {
         unsubscribe(relayChannel(instanceId));
     }
 
-    public void refreshSkillOwner(String instanceId, Duration ttl) {
-        redisTemplate.opsForValue().set(skillOwnerKey(instanceId), "alive", ttl);
-        redisTemplate.opsForSet().add(SKILL_OWNERS_SET_KEY, instanceId);
+    public void refreshSourceOwner(String source, String instanceId, Duration ttl) {
+        if (source == null || source.isBlank() || instanceId == null || instanceId.isBlank()) {
+            return;
+        }
+        String ownerKey = sourceOwnerMember(source, instanceId);
+        redisTemplate.opsForValue().set(sourceOwnerKey(ownerKey), "alive", ttl);
+        redisTemplate.opsForSet().add(sourceOwnersSetKey(source), ownerKey);
     }
 
-    public void removeSkillOwner(String instanceId) {
-        redisTemplate.delete(skillOwnerKey(instanceId));
-        redisTemplate.opsForSet().remove(SKILL_OWNERS_SET_KEY, instanceId);
+    public void removeSourceOwner(String source, String instanceId) {
+        if (source == null || source.isBlank() || instanceId == null || instanceId.isBlank()) {
+            return;
+        }
+        String ownerKey = sourceOwnerMember(source, instanceId);
+        redisTemplate.delete(sourceOwnerKey(ownerKey));
+        redisTemplate.opsForSet().remove(sourceOwnersSetKey(source), ownerKey);
     }
 
-    public boolean hasActiveSkillOwner(String instanceId) {
-        return Boolean.TRUE.equals(redisTemplate.hasKey(skillOwnerKey(instanceId)));
+    public boolean hasActiveSourceOwner(String source, String instanceId) {
+        if (source == null || source.isBlank() || instanceId == null || instanceId.isBlank()) {
+            return false;
+        }
+        return Boolean.TRUE.equals(redisTemplate.hasKey(sourceOwnerKey(sourceOwnerMember(source, instanceId))));
     }
 
-    public Set<String> getActiveSkillOwners() {
-        Set<String> owners = redisTemplate.opsForSet().members(SKILL_OWNERS_SET_KEY);
+    public Set<String> getActiveSourceOwners(String source) {
+        if (source == null || source.isBlank()) {
+            return Set.of();
+        }
+        Set<String> owners = redisTemplate.opsForSet().members(sourceOwnersSetKey(source));
         if (owners == null || owners.isEmpty()) {
             return Set.of();
         }
@@ -127,13 +142,39 @@ public class RedisMessageBroker {
             if (owner == null || owner.isBlank()) {
                 continue;
             }
-            if (hasActiveSkillOwner(owner)) {
+            String ownerSource = sourceFromOwnerKey(owner);
+            String ownerInstanceId = instanceIdFromOwnerKey(owner);
+            if (!source.equals(ownerSource) || ownerInstanceId == null) {
+                redisTemplate.opsForSet().remove(sourceOwnersSetKey(source), owner);
+                continue;
+            }
+            if (hasActiveSourceOwner(ownerSource, ownerInstanceId)) {
                 activeOwners.add(owner);
             } else {
-                redisTemplate.opsForSet().remove(SKILL_OWNERS_SET_KEY, owner);
+                redisTemplate.opsForSet().remove(sourceOwnersSetKey(source), owner);
             }
         }
         return activeOwners;
+    }
+
+    public static String sourceOwnerMember(String source, String instanceId) {
+        return source + ":" + instanceId;
+    }
+
+    public static String sourceFromOwnerKey(String ownerKey) {
+        int separatorIndex = ownerKey != null ? ownerKey.indexOf(':') : -1;
+        if (separatorIndex <= 0) {
+            return null;
+        }
+        return ownerKey.substring(0, separatorIndex);
+    }
+
+    public static String instanceIdFromOwnerKey(String ownerKey) {
+        int separatorIndex = ownerKey != null ? ownerKey.indexOf(':') : -1;
+        if (separatorIndex <= 0 || separatorIndex == ownerKey.length() - 1) {
+            return null;
+        }
+        return ownerKey.substring(separatorIndex + 1);
     }
 
     public void bindAgentUser(String ak, String userId) {
@@ -155,6 +196,27 @@ public class RedisMessageBroker {
             return;
         }
         redisTemplate.delete(agentUserKey(ak));
+    }
+
+    public void bindAgentSource(String ak, String source) {
+        if (ak == null || ak.isBlank() || source == null || source.isBlank()) {
+            return;
+        }
+        redisTemplate.opsForValue().set(agentSourceKey(ak), source);
+    }
+
+    public String getAgentSource(String ak) {
+        if (ak == null || ak.isBlank()) {
+            return null;
+        }
+        return redisTemplate.opsForValue().get(agentSourceKey(ak));
+    }
+
+    public void removeAgentSource(String ak) {
+        if (ak == null || ak.isBlank()) {
+            return;
+        }
+        redisTemplate.delete(agentSourceKey(ak));
     }
 
     // ========== Internal methods ==========
@@ -207,12 +269,20 @@ public class RedisMessageBroker {
         return RELAY_CHANNEL_PREFIX + instanceId;
     }
 
-    private String skillOwnerKey(String instanceId) {
-        return SKILL_OWNER_KEY_PREFIX + instanceId;
+    private String sourceOwnerKey(String ownerKey) {
+        return SOURCE_OWNER_KEY_PREFIX + ownerKey;
+    }
+
+    private String sourceOwnersSetKey(String source) {
+        return SOURCE_OWNERS_SET_PREFIX + source;
     }
 
     private String agentUserKey(String ak) {
         return AGENT_USER_KEY_PREFIX + ak;
+    }
+
+    private String agentSourceKey(String ak) {
+        return AGENT_SOURCE_KEY_PREFIX + ak;
     }
 
 }

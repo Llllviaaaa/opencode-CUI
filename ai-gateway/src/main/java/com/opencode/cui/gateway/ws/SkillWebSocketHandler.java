@@ -41,13 +41,14 @@ public class SkillWebSocketHandler extends TextWebSocketHandler implements Hands
     @Override
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
             WebSocketHandler wsHandler, Map<String, Object> attributes) {
-        String selectedProtocol = extractAcceptedProtocol(request);
-        if (selectedProtocol == null) {
+        HandshakeAuth handshakeAuth = extractAcceptedProtocol(request);
+        if (handshakeAuth == null) {
             log.warn("Rejected skill handshake: invalid auth subprotocol");
             return false;
         }
 
-        response.getHeaders().set("Sec-WebSocket-Protocol", selectedProtocol);
+        attributes.put(SkillRelayService.SOURCE_ATTR, handshakeAuth.source());
+        response.getHeaders().set("Sec-WebSocket-Protocol", handshakeAuth.protocol());
         return true;
     }
 
@@ -98,7 +99,7 @@ public class SkillWebSocketHandler extends TextWebSocketHandler implements Hands
                 session.getId(), exception.getMessage(), exception);
     }
 
-    private String extractAcceptedProtocol(ServerHttpRequest request) {
+    private HandshakeAuth extractAcceptedProtocol(ServerHttpRequest request) {
         List<String> protocols = request.getHeaders().get("Sec-WebSocket-Protocol");
         if (protocols == null || protocols.isEmpty()) {
             return null;
@@ -110,24 +111,33 @@ public class SkillWebSocketHandler extends TextWebSocketHandler implements Hands
                 if (!protocol.startsWith(AUTH_PROTOCOL_PREFIX)) {
                     continue;
                 }
-                if (verifyProtocolToken(protocol)) {
-                    return protocol;
+                HandshakeAuth handshakeAuth = verifyProtocolToken(protocol);
+                if (handshakeAuth != null) {
+                    return handshakeAuth;
                 }
             }
         }
         return null;
     }
 
-    private boolean verifyProtocolToken(String protocol) {
+    private HandshakeAuth verifyProtocolToken(String protocol) {
         String encodedPayload = protocol.substring(AUTH_PROTOCOL_PREFIX.length());
         try {
             byte[] decoded = Base64.getUrlDecoder().decode(encodedPayload);
             String json = new String(decoded, StandardCharsets.UTF_8);
-            String token = objectMapper.readTree(json).path("token").asText(null);
-            return internalToken.equals(token);
+            var authNode = objectMapper.readTree(json);
+            String token = authNode.path("token").asText(null);
+            String source = authNode.path("source").asText(null);
+            if (!internalToken.equals(token) || source == null || source.isBlank()) {
+                return null;
+            }
+            return new HandshakeAuth(protocol, source);
         } catch (Exception e) {
             log.warn("Failed to decode skill auth subprotocol: {}", e.getMessage());
-            return false;
+            return null;
         }
+    }
+
+    private record HandshakeAuth(String protocol, String source) {
     }
 }

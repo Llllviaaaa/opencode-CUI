@@ -18,6 +18,7 @@ import org.springframework.web.socket.WebSocketSession;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Base64;
+import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -52,23 +53,25 @@ class SkillWebSocketHandlerTest {
     @DisplayName("valid auth subprotocol passes handshake and echoes selected protocol")
     void validAuthSubprotocolPassesHandshake() {
         HttpHeaders headers = new HttpHeaders();
-        String protocol = authProtocol("secret-token");
+        String protocol = authProtocol("secret-token", "skill-server");
         headers.set("Sec-WebSocket-Protocol", protocol);
         when(request.getHeaders()).thenReturn(headers);
         when(response.getHeaders()).thenReturn(new HttpHeaders());
+        Map<String, Object> attributes = new HashMap<>();
 
-        boolean accepted = handler.beforeHandshake(request, response, wsHandler, new HashMap<>());
+        boolean accepted = handler.beforeHandshake(request, response, wsHandler, attributes);
 
         org.junit.jupiter.api.Assertions.assertTrue(accepted);
         org.junit.jupiter.api.Assertions.assertEquals(protocol,
                 response.getHeaders().getFirst("Sec-WebSocket-Protocol"));
+        org.junit.jupiter.api.Assertions.assertEquals("skill-server", attributes.get(SkillRelayService.SOURCE_ATTR));
     }
 
     @Test
     @DisplayName("invalid auth subprotocol rejects handshake")
     void invalidAuthSubprotocolRejectsHandshake() {
         HttpHeaders headers = new HttpHeaders();
-        headers.set("Sec-WebSocket-Protocol", authProtocol("wrong-token"));
+        headers.set("Sec-WebSocket-Protocol", authProtocol("wrong-token", "skill-server"));
         when(request.getHeaders()).thenReturn(headers);
 
         boolean accepted = handler.beforeHandshake(request, response, wsHandler, new HashMap<>());
@@ -100,10 +103,11 @@ class SkillWebSocketHandlerTest {
     @DisplayName("invoke message delegates to skill relay service")
     void invokeDelegatesToSkillRelayService() throws Exception {
         handler.handle(session,
-                "{\"type\":\"invoke\",\"ak\":\"ak_test_001\",\"welinkSessionId\":\"42\",\"action\":\"chat\"}");
+                "{\"type\":\"invoke\",\"source\":\"skill-server\",\"ak\":\"ak_test_001\",\"welinkSessionId\":\"42\",\"action\":\"chat\",\"userId\":\"user-1\"}");
 
         verify(skillRelayService).handleInvokeFromSkill(eq(session),
                 argThat(message -> "invoke".equals(message.getType())
+                        && "skill-server".equals(message.getSource())
                         && "ak_test_001".equals(message.getAk())
                         && Long.valueOf(42L).equals(message.getWelinkSessionId())));
     }
@@ -141,8 +145,8 @@ class SkillWebSocketHandlerTest {
         }
     }
 
-    private static String authProtocol(String token) {
-        String json = "{\"token\":\"" + token + "\"}";
+    private static String authProtocol(String token, String source) {
+        String json = "{\"token\":\"" + token + "\",\"source\":\"" + source + "\"}";
         return "auth." + Base64.getUrlEncoder().withoutPadding()
                 .encodeToString(json.getBytes(StandardCharsets.UTF_8));
     }

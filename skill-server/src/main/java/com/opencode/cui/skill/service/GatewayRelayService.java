@@ -32,6 +32,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class GatewayRelayService {
 
+    public static final String SOURCE = "skill-server";
+
     public interface GatewayRelayTarget {
         boolean sendToGateway(String message);
 
@@ -109,6 +111,7 @@ public class GatewayRelayService {
         ObjectNode message = objectMapper.createObjectNode();
         message.put("type", "invoke");
         message.put("ak", ak);
+        message.put("source", SOURCE);
         if (userId != null && !userId.isBlank()) {
             message.put("userId", userId);
         }

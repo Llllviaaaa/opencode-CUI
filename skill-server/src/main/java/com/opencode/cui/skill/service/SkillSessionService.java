@@ -19,13 +19,16 @@ import java.util.stream.Collectors;
 public class SkillSessionService {
 
     private final SkillSessionRepository sessionRepository;
+    private final SnowflakeIdGenerator snowflakeIdGenerator;
     private volatile GatewayRelayService gatewayRelayService;
 
     @Value("${skill.session.idle-timeout-minutes:30}")
     private int idleTimeoutMinutes;
 
-    public SkillSessionService(SkillSessionRepository sessionRepository) {
+    public SkillSessionService(SkillSessionRepository sessionRepository,
+            SnowflakeIdGenerator snowflakeIdGenerator) {
         this.sessionRepository = sessionRepository;
+        this.snowflakeIdGenerator = snowflakeIdGenerator;
     }
 
     /**
@@ -42,6 +45,7 @@ public class SkillSessionService {
     public SkillSession createSession(String userId, String ak,
             String title, String imGroupId) {
         SkillSession session = SkillSession.builder()
+                .id(snowflakeIdGenerator.nextId())
                 .userId(userId)
                 .ak(ak)
                 .title(title)

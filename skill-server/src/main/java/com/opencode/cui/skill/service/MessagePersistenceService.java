@@ -23,15 +23,18 @@ public class MessagePersistenceService {
     private final SkillMessageService messageService;
     private final SkillMessagePartRepository partRepository;
     private final ObjectMapper objectMapper;
+    private final SnowflakeIdGenerator snowflakeIdGenerator;
 
     private final ConcurrentHashMap<Long, ActiveMessageRef> activeMessages = new ConcurrentHashMap<>();
 
     public MessagePersistenceService(SkillMessageService messageService,
             SkillMessagePartRepository partRepository,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            SnowflakeIdGenerator snowflakeIdGenerator) {
         this.messageService = messageService;
         this.partRepository = partRepository;
         this.objectMapper = objectMapper;
+        this.snowflakeIdGenerator = snowflakeIdGenerator;
     }
 
     @Transactional
@@ -148,6 +151,7 @@ public class MessagePersistenceService {
         }
 
         SkillMessagePart part = SkillMessagePart.builder()
+                .id(snowflakeIdGenerator.nextId())
                 .messageId(active.dbId())
                 .sessionId(sessionId)
                 .partId(msg.getPartId() != null ? msg.getPartId() : partType + "-" + active.messageSeq())
@@ -187,6 +191,7 @@ public class MessagePersistenceService {
         }
 
         SkillMessagePart part = SkillMessagePart.builder()
+                .id(snowflakeIdGenerator.nextId())
                 .messageId(active.dbId())
                 .sessionId(sessionId)
                 .partId(msg.getPartId() != null ? msg.getPartId() : "tool-" + active.messageSeq())
@@ -212,6 +217,7 @@ public class MessagePersistenceService {
         }
 
         SkillMessagePart part = SkillMessagePart.builder()
+                .id(snowflakeIdGenerator.nextId())
                 .messageId(active.dbId())
                 .sessionId(sessionId)
                 .partId(msg.getPartId() != null ? msg.getPartId() : "file-" + active.messageSeq())
@@ -247,6 +253,7 @@ public class MessagePersistenceService {
 
         int partSeq = resolvePartSeq(sessionId, active.dbId(), msg);
         SkillMessagePart part = SkillMessagePart.builder()
+                .id(snowflakeIdGenerator.nextId())
                 .messageId(active.dbId())
                 .sessionId(sessionId)
                 .partId(msg.getPartId() != null ? msg.getPartId() : "step-done-" + partSeq)

@@ -38,6 +38,12 @@ public class GatewayMessage {
     /** User identifier trusted by server-side routing */
     private String userId;
 
+    /** Upstream source service identifier */
+    private String source;
+
+    /** Trace identifier for cross-service routing observability */
+    private String traceId;
+
     /** Action for invoke messages: chat, create_session, close_session, ... */
     private String action;
 
@@ -193,9 +199,34 @@ public class GatewayMessage {
                 .build();
     }
 
+    public GatewayMessage withSource(String source) {
+        return this.toBuilder()
+                .source(source)
+                .build();
+    }
+
+    public GatewayMessage withTraceId(String traceId) {
+        return this.toBuilder()
+                .traceId(traceId)
+                .build();
+    }
+
     public GatewayMessage withoutUserId() {
         return this.toBuilder()
                 .userId(null)
+                .build();
+    }
+
+    public GatewayMessage withoutSource() {
+        return this.toBuilder()
+                .source(null)
+                .build();
+    }
+
+    public GatewayMessage withoutRoutingContext() {
+        return this.toBuilder()
+                .userId(null)
+                .source(null)
                 .build();
     }
 }

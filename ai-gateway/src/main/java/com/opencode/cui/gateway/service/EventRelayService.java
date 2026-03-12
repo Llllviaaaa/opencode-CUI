@@ -8,6 +8,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.io.IOException;
+import java.util.UUID;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -71,6 +72,7 @@ public class EventRelayService {
             pending.complete(false);
         }
         redisMessageBroker.removeAgentUser(ak);
+        redisMessageBroker.removeAgentSource(ak);
         redisMessageBroker.unsubscribeFromAgent(ak);
         log.debug("Removed agent session: ak={}", ak);
     }
@@ -81,11 +83,19 @@ public class EventRelayService {
     }
 
     public void relayToSkillServer(String ak, GatewayMessage message) {
+        GatewayMessage tracedMessage = ensureTraceId(message);
         String userId = redisMessageBroker.getAgentUser(ak);
-        GatewayMessage forwarded = message.withAk(ak).withUserId(userId);
+        String source = tracedMessage.getSource();
+        if (source == null || source.isBlank()) {
+            source = redisMessageBroker.getAgentSource(ak);
+        }
+        GatewayMessage forwarded = tracedMessage.withAk(ak)
+                .withUserId(userId)
+                .withSource(source);
 
-        log.debug("Relaying to skill: ak={}, userId={}, type={}, welinkSessionId={}, toolSessionId={}",
-                ak, userId, message.getType(), forwarded.getWelinkSessionId(), forwarded.getToolSessionId());
+        log.debug("Routing upstream message: traceId={}, source={}, ak={}, userId={}, type={}, routeDecision=to_upstream, fallbackUsed=false, welinkSessionId={}, toolSessionId={}",
+                forwarded.getTraceId(), source, ak, userId, tracedMessage.getType(),
+                forwarded.getWelinkSessionId(), forwarded.getToolSessionId());
 
         try {
             boolean routed = skillRelayService.relayToSkill(forwarded);
@@ -99,8 +109,15 @@ public class EventRelayService {
         }
     }
 
+    private GatewayMessage ensureTraceId(GatewayMessage message) {
+        if (message.getTraceId() != null && !message.getTraceId().isBlank()) {
+            return message;
+        }
+        return message.withTraceId(UUID.randomUUID().toString());
+    }
+
     public void relayToAgent(String ak, GatewayMessage message) {
-        redisMessageBroker.publishToAgent(ak, message.withoutUserId());
+        redisMessageBroker.publishToAgent(ak, message.withoutRoutingContext());
         log.debug("Published to agent channel: ak={}, type={}", ak, message.getType());
     }
 
@@ -113,7 +130,7 @@ public class EventRelayService {
         }
 
         try {
-            String json = objectMapper.writeValueAsString(message.withoutUserId());
+            String json = objectMapper.writeValueAsString(message.withoutRoutingContext());
             synchronized (session) {
                 session.sendMessage(new TextMessage(json));
             }

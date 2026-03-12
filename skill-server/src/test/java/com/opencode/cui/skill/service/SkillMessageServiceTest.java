@@ -23,12 +23,15 @@ class SkillMessageServiceTest {
     private SkillMessageRepository messageRepository;
     @Mock
     private SkillSessionService sessionService;
+    @Mock
+    private SnowflakeIdGenerator snowflakeIdGenerator;
 
     private SkillMessageService service;
 
     @BeforeEach
     void setUp() {
-        service = new SkillMessageService(messageRepository, sessionService);
+        lenient().when(snowflakeIdGenerator.nextId()).thenReturn(100L, 101L, 102L, 103L, 104L, 105L);
+        service = new SkillMessageService(messageRepository, sessionService, snowflakeIdGenerator);
     }
 
     @Test
@@ -38,6 +41,7 @@ class SkillMessageServiceTest {
 
         SkillMessage msg = service.saveUserMessage(1L, "Hello");
         assertNotNull(msg);
+        assertEquals(100L, msg.getId());
         assertEquals(SkillMessage.Role.USER, msg.getRole());
         assertEquals("Hello", msg.getContent());
         assertEquals(1, msg.getSeq());
@@ -52,6 +56,7 @@ class SkillMessageServiceTest {
 
         SkillMessage msg = service.saveAssistantMessage(1L, "Response", "{\"tokens\":10}");
         assertNotNull(msg);
+        assertEquals(100L, msg.getId());
         assertEquals(SkillMessage.Role.ASSISTANT, msg.getRole());
         assertEquals(2, msg.getSeq());
         verify(messageRepository).insert(any(SkillMessage.class));
@@ -64,6 +69,7 @@ class SkillMessageServiceTest {
 
         SkillMessage msg = service.saveSystemMessage(1L, "System info");
         assertNotNull(msg);
+        assertEquals(100L, msg.getId());
         assertEquals(SkillMessage.Role.SYSTEM, msg.getRole());
         assertEquals(3, msg.getSeq());
         verify(messageRepository).insert(any(SkillMessage.class));
@@ -76,6 +82,7 @@ class SkillMessageServiceTest {
 
         SkillMessage msg = service.saveToolMessage(1L, "tool output", null);
         assertNotNull(msg);
+        assertEquals(100L, msg.getId());
         assertEquals(SkillMessage.Role.TOOL, msg.getRole());
         assertEquals(4, msg.getSeq());
         verify(messageRepository).insert(any(SkillMessage.class));

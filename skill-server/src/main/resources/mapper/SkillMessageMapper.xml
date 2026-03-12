@@ -59,11 +59,11 @@
         SELECT COALESCE(MAX(seq), 0) FROM skill_message WHERE session_id = #{sessionId}
     </select>
 
-    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+    <insert id="insert">
         INSERT INTO skill_message
-            (message_id, session_id, seq, role, content, content_type, created_at, meta)
+            (id, message_id, session_id, seq, role, content, content_type, created_at, meta)
         VALUES
-            (#{messageId}, #{sessionId}, #{seq}, #{role}, #{content}, #{contentType}, NOW(), #{meta})
+            (#{id}, #{messageId}, #{sessionId}, #{seq}, #{role}, #{content}, #{contentType}, NOW(), #{meta})
     </insert>
 
     <select id="findLastUserMessage" resultMap="SkillMessageResultMap">

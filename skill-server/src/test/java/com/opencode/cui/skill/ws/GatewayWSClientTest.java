@@ -26,6 +26,6 @@ class GatewayWSClientTest {
         assertTrue(protocol.startsWith("auth."));
         String encoded = protocol.substring("auth.".length());
         byte[] decoded = Base64.getUrlDecoder().decode(encoded);
-        assertEquals("{\"token\":\"secret-token\"}", new String(decoded, StandardCharsets.UTF_8));
+        assertEquals("{\"source\":\"skill-server\",\"token\":\"secret-token\"}", new String(decoded, StandardCharsets.UTF_8));
     }
 }

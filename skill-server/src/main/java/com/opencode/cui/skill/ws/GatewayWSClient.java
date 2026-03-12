@@ -142,7 +142,9 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget {
 
     String buildAuthProtocol() {
         try {
-            String json = objectMapper.writeValueAsString(java.util.Map.of("token", internalToken));
+            String json = objectMapper.writeValueAsString(java.util.Map.of(
+                    "token", internalToken,
+                    "source", GatewayRelayService.SOURCE));
             String encoded = Base64.getUrlEncoder().withoutPadding()
                     .encodeToString(json.getBytes(StandardCharsets.UTF_8));
             return AUTH_PROTOCOL_PREFIX + encoded;

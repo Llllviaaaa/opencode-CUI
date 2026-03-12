@@ -38,6 +38,15 @@ mybatis:
 
 # WebSocket configuration
 skill:
+  snowflake:
+    epoch-ms: ${SKILL_SNOWFLAKE_EPOCH_MS:1735689600000}
+    service-code: ${SKILL_SNOWFLAKE_SERVICE_CODE:1}
+    worker-id: ${SKILL_SNOWFLAKE_WORKER_ID:1}
+    service-bits: ${SKILL_SNOWFLAKE_SERVICE_BITS:4}
+    worker-bits: ${SKILL_SNOWFLAKE_WORKER_BITS:10}
+    sequence-bits: ${SKILL_SNOWFLAKE_SEQUENCE_BITS:12}
+    clock-backwards-strategy: ${SKILL_SNOWFLAKE_CLOCK_BACKWARDS_STRATEGY:WAIT}
+    max-backward-ms: ${SKILL_SNOWFLAKE_MAX_BACKWARD_MS:5}
   websocket:
     # Allowed origins for Skill miniapp WebSocket connections
     allowed-origins: ${CORS_ORIGINS:*}
