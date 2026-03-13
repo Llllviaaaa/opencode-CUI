@@ -55,7 +55,7 @@ async function writeEnabledConfig(workspace) {
       enabled: true,
       gateway: {
         url: 'ws://localhost:8081/ws/agent',
-        toolType: 'channel',
+        channel: 'opencode',
         heartbeatIntervalMs: 30000,
         reconnect: {
           baseMs: 1000,
@@ -486,7 +486,7 @@ describe('runtime protocol strictness', () => {
     });
   });
 
-  test('rejects create_session without welinkSessionId before calling SDK', async () => {
+  test('rejects create_session without welinkSessionId', async () => {
     const createCalls = [];
     const runtime = new BridgeRuntime({
       client: createRuntimeClient({
@@ -514,12 +514,11 @@ describe('runtime protocol strictness', () => {
     expect(sent[0]).toEqual({
       type: 'tool_error',
       welinkSessionId: undefined,
-      toolSessionId: undefined,
-      error: 'create_session missing welinkSessionId',
+      error: 'welinkSessionId is required',
     });
   });
 
-  test('rejects create_session with blank welinkSessionId before calling SDK', async () => {
+  test('rejects blank create_session welinkSessionId', async () => {
     const createCalls = [];
     const runtime = new BridgeRuntime({
       client: createRuntimeClient({
@@ -547,9 +546,45 @@ describe('runtime protocol strictness', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]).toEqual({
       type: 'tool_error',
+      welinkSessionId: '   ',
+      error: 'welinkSessionId is required',
+    });
+  });
+
+  test('create_session missing welinkSessionId does not call SDK and does not emit warning-only success', async () => {
+    const appLogs = [];
+    const runtime = new BridgeRuntime({
+      client: createRuntimeClient({
+        app: {
+          log: async (options) => {
+            appLogs.push(options.body);
+            return true;
+          },
+        },
+        session: {
+          create: async () => ({ data: { id: 'created-1' } }),
+        },
+      }),
+    });
+
+    const sent = [];
+    runtime.gatewayConnection = { send: (msg) => sent.push(msg) };
+    runtime.stateManager.setState('READY');
+
+    await runtime.handleDownstreamMessage({
+      type: 'invoke',
+      messageId: 'gw-create-1',
+      action: 'create_session',
+      payload: {},
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    const warningLog = appLogs.find((entry) => entry.message === 'runtime.create_session.missing_welink_session_id');
+    expect(warningLog).toBeUndefined();
+    expect(sent[0]).toEqual({
+      type: 'tool_error',
       welinkSessionId: undefined,
-      toolSessionId: undefined,
-      error: 'create_session missing welinkSessionId',
+      error: 'welinkSessionId is required',
     });
   });
 
@@ -837,7 +872,7 @@ describe('runtime protocol strictness', () => {
           url: 'ws://localhost:8081/ws/agent',
           deviceName: 'dev',
           macAddress: '11:22:33:44:55:66',
-          toolType: 'channel',
+          channel: 'opencode',
           toolVersion: '1.2.3',
           heartbeatIntervalMs: 30000,
           reconnect: {
@@ -915,7 +950,7 @@ describe('runtime protocol strictness', () => {
         deviceName: hostname(),
         macAddress: '11:22:33:44:55:66',
         os: expect.any(String),
-        toolType: 'channel',
+        toolType: 'opencode',
         toolVersion: '9.9.9',
       });
 
@@ -941,7 +976,7 @@ describe('runtime protocol strictness', () => {
         enabled: true,
         gateway: {
           url: 'ws://localhost:8081/ws/agent',
-          toolType: 'channel',
+          channel: 'opencode',
           heartbeatIntervalMs: 30000,
           reconnect: {
             baseMs: 1000,

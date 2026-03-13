@@ -54,7 +54,7 @@ public class AkSkAuthService {
      * @param signature Base64-encoded HMAC-SHA256 signature
      * @return userId associated with the AK, or null if verification fails
      */
-    public Long verify(String ak, String timestamp, String nonce, String signature) {
+    public String verify(String ak, String timestamp, String nonce, String signature) {
         if (ak == null || timestamp == null || nonce == null || signature == null) {
             log.warn("Auth failed: missing parameters. ak={}, ts={}, nonce={}, sign={}",
                     ak, timestamp, nonce, signature != null ? "[present]" : "null");
@@ -164,6 +164,6 @@ public class AkSkAuthService {
     /**
      * Internal record holding AK lookup result.
      */
-    private record AkSkRecord(String sk, Long userId) {
+    private record AkSkRecord(String sk, String userId) {
     }
 }

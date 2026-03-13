@@ -14,6 +14,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -25,12 +26,15 @@ class MessagePersistenceServiceTest {
     private SkillMessageService messageService;
     @Mock
     private SkillMessagePartRepository partRepository;
+    @Mock
+    private SnowflakeIdGenerator snowflakeIdGenerator;
 
     private MessagePersistenceService service;
 
     @BeforeEach
     void setUp() {
-        service = new MessagePersistenceService(messageService, partRepository, new ObjectMapper());
+        lenient().when(snowflakeIdGenerator.nextId()).thenReturn(501L, 502L, 503L, 504L);
+        service = new MessagePersistenceService(messageService, partRepository, new ObjectMapper(), snowflakeIdGenerator);
     }
 
     @Test

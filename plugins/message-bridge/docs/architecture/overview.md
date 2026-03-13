@@ -141,18 +141,25 @@ Protocol notes:
 - `tool_done` is restored as a compat-layer completion projection for UI consumers
 - no wildcard upstream allowlist defaults
 
-## 6. Config and Logging
+## 6. 配置与日志
 
-Config sources, high to low:
+配置解析以当前实现为准，完整配置项、环境变量映射、兼容别名与校验规则统一维护在 `design/interfaces/config-contract.md`。
 
-1. env: `BRIDGE_*`
-2. project: `.opencode/message-bridge.jsonc` / `.json`
-3. user: `~/.config/opencode/message-bridge.jsonc` / `.json`
-4. built-in defaults
+配置来源从高到低：
 
-Defaults live in `src/config/default-config.ts`.
+1. 环境变量：`BRIDGE_*`
+2. 项目级配置：`.opencode/message-bridge.jsonc` / `.json`
+3. 用户级配置：`~/.config/opencode/message-bridge.jsonc` / `.json`
+4. 内建默认值
 
-Structured logging is emitted through `client.app.log()` when available. Key protocol failure events:
+补充说明：
+
+- 同目录下优先读取 `.jsonc`
+- 项目级配置会从工作目录开始向父目录递归查找，直到文件系统根目录
+- `gateway.channel` 是配置侧字段名，注册报文中仍映射到协议字段 `toolType`
+- `deviceName`、`macAddress`、`toolVersion` 由运行时自动采集，不属于可配置项
+
+结构化日志在 `client.app.log()` 可用时上报。关键协议失败事件：
 
 - `event.extraction_failed`
 - `downstream.normalization_failed`

@@ -40,7 +40,7 @@ function createRuntimeHarness({ state = 'READY', routeResult } = {}) {
 }
 
 describe('downlink -> uplink protocol', () => {
-  test('invoke/chat success -> emits compatibility tool_done uplink', async () => {
+  test('invoke/chat success -> emits tool_done compat message', async () => {
     const { runtime, sent } = createRuntimeHarness({
       routeResult: { success: true, data: { text: 'ok' } },
     });

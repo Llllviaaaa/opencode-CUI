@@ -12,24 +12,27 @@ import org.springframework.web.socket.WebSocketSession;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Manages Skill Server WebSocket connections and routes upstream messages
- * to any available Skill link.
- *
- * Gateway does NOT perform session-level routing. All upstream messages are
- * sent to any available Skill Server instance. Skill Server resolves
- * toolSessionId → welinkSessionId via its own DB.
+ * Manages upstream service WebSocket connections and routes messages within the
+ * correct source domain.
  */
 @Slf4j
 @Service
 public class SkillRelayService {
+
+    public static final String SOURCE_ATTR = "source";
+    public static final String SKILL_SOURCE = "skill-server";
+    public static final String ERROR_SOURCE_NOT_ALLOWED = "source_not_allowed";
+    public static final String ERROR_SOURCE_MISMATCH = "source_mismatch";
 
     private final RedisMessageBroker redisMessageBroker;
     private final ObjectMapper objectMapper;
@@ -37,8 +40,8 @@ public class SkillRelayService {
     private final String instanceId;
     private final Duration ownerTtl;
 
-    private final Map<String, WebSocketSession> skillSessions = new ConcurrentHashMap<>();
-    private final AtomicReference<String> defaultLinkId = new AtomicReference<>();
+    private final Map<String, Map<String, WebSocketSession>> sourceSessions = new ConcurrentHashMap<>();
+    private final Map<String, AtomicReference<String>> defaultLinkIds = new ConcurrentHashMap<>();
     private final AtomicBoolean relaySubscribed = new AtomicBoolean(false);
 
     public SkillRelayService(RedisMessageBroker redisMessageBroker,
@@ -52,75 +55,147 @@ public class SkillRelayService {
     }
 
     public void registerSkillSession(WebSocketSession session) {
-        String linkId = session.getId();
-        skillSessions.put(linkId, session);
-        defaultLinkId.compareAndSet(null, linkId);
-
-        ensureRelaySubscription();
-        refreshOwnerState();
-
-        log.info("Registered skill link: instanceId={}, linkId={}, activeLinks={}",
-                instanceId, linkId, getActiveSkillConnectionCount());
-    }
-
-    public void removeSkillSession(WebSocketSession session) {
-        String linkId = session.getId();
-        skillSessions.remove(linkId);
-
-        if (linkId.equals(defaultLinkId.get())) {
-            defaultLinkId.set(selectAnyOpenLinkId());
-        }
-
-        if (skillSessions.isEmpty()) {
-            clearOwnerState();
-        } else {
-            refreshOwnerState();
-        }
-
-        log.info("Removed skill link: instanceId={}, linkId={}, activeLinks={}",
-                instanceId, linkId, getActiveSkillConnectionCount());
-    }
-
-    /**
-     * Handle invoke messages FROM Skill Server → route to target agent via Redis.
-     */
-    public void handleInvokeFromSkill(WebSocketSession session, GatewayMessage message) {
-        if (message.getAk() == null || message.getAk().isBlank()) {
-            log.warn("Invoke from skill missing ak: linkId={}, action={}",
-                    session.getId(), message.getAction());
+        String source = resolveBoundSource(session);
+        if (source == null || source.isBlank()) {
+            log.warn("Skipping upstream session registration without bound source: instanceId={}, linkId={}",
+                    instanceId, session.getId());
             return;
         }
 
-        redisMessageBroker.publishToAgent(message.getAk(), message);
-        log.debug("Forwarded invoke from skill to agent: linkId={}, ak={}, action={}",
-                session.getId(), message.getAk(), message.getAction());
+        String linkId = session.getId();
+        sourceSessions.computeIfAbsent(source, ignored -> new ConcurrentHashMap<>()).put(linkId, session);
+        defaultLinkRef(source).compareAndSet(null, linkId);
+
+        ensureRelaySubscription();
+        refreshOwnerState(source);
+
+        log.info("Registered upstream link: source={}, instanceId={}, linkId={}, activeLinks={}",
+                source, instanceId, linkId, getActiveConnectionCount(source));
+    }
+
+    public void removeSkillSession(WebSocketSession session) {
+        String source = resolveBoundSource(session);
+        if (source == null || source.isBlank()) {
+            return;
+        }
+
+        Map<String, WebSocketSession> sessionsBySource = sourceSessions.get(source);
+        if (sessionsBySource == null) {
+            return;
+        }
+
+        String linkId = session.getId();
+        sessionsBySource.remove(linkId);
+
+        AtomicReference<String> defaultLinkRef = defaultLinkRef(source);
+        if (linkId.equals(defaultLinkRef.get())) {
+            defaultLinkRef.set(selectAnyOpenLinkId(source));
+        }
+
+        if (sessionsBySource.isEmpty()) {
+            sourceSessions.remove(source, sessionsBySource);
+            defaultLinkIds.remove(source);
+            clearOwnerState(source);
+        } else {
+            refreshOwnerState(source);
+        }
+
+        unsubscribeRelayIfIdle();
+
+        log.info("Removed upstream link: source={}, instanceId={}, linkId={}, activeLinks={}",
+                source, instanceId, linkId, getActiveConnectionCount(source));
     }
 
     /**
-     * Route an upstream message (from PC Agent) to any available Skill link.
-     * No session-level routing — just pick any open link on this instance,
-     * or relay to another Gateway instance that has a Skill connection.
+     * Handle invoke messages from an upstream service and route them to the
+     * target agent.
+     */
+    public void handleInvokeFromSkill(WebSocketSession session, GatewayMessage message) {
+        GatewayMessage tracedMessage = ensureTraceId(message);
+        String boundSource = resolveBoundSource(session);
+        String messageSource = tracedMessage.getSource();
+        if (messageSource == null || messageSource.isBlank()) {
+            log.warn("Rejected upstream invoke: traceId={}, linkId={}, boundSource={}, messageSource={}, routeDecision=rejected, fallbackUsed=false, errorCode={}, ak={}, action={}",
+                    tracedMessage.getTraceId(), session.getId(), boundSource, messageSource,
+                    ERROR_SOURCE_NOT_ALLOWED, tracedMessage.getAk(), tracedMessage.getAction());
+            sendProtocolError(session, ERROR_SOURCE_NOT_ALLOWED);
+            return;
+        }
+        if (boundSource == null || !boundSource.equals(messageSource)) {
+            log.warn("Rejected upstream invoke: traceId={}, linkId={}, boundSource={}, messageSource={}, routeDecision=rejected, fallbackUsed=false, errorCode={}, ak={}, action={}",
+                    tracedMessage.getTraceId(), session.getId(), boundSource, messageSource,
+                    ERROR_SOURCE_MISMATCH, tracedMessage.getAk(), tracedMessage.getAction());
+            sendProtocolError(session, ERROR_SOURCE_MISMATCH);
+            return;
+        }
+        if (tracedMessage.getAk() == null || tracedMessage.getAk().isBlank()) {
+            log.warn("Invoke from upstream missing ak: linkId={}, action={}",
+                    session.getId(), tracedMessage.getAction());
+            return;
+        }
+
+        String expectedUserId = redisMessageBroker.getAgentUser(tracedMessage.getAk());
+        if (tracedMessage.getUserId() == null || tracedMessage.getUserId().isBlank()) {
+            log.warn("Invoke from upstream missing userId: linkId={}, ak={}, action={}",
+                    session.getId(), tracedMessage.getAk(), tracedMessage.getAction());
+            return;
+        }
+        if (expectedUserId == null || !tracedMessage.getUserId().equals(expectedUserId)) {
+            log.warn("Invoke from upstream rejected by user validation: linkId={}, ak={}, userId={}, expectedUserId={}, action={}",
+                    session.getId(), tracedMessage.getAk(), tracedMessage.getUserId(), expectedUserId, tracedMessage.getAction());
+            return;
+        }
+
+        redisMessageBroker.bindAgentSource(tracedMessage.getAk(), messageSource);
+        redisMessageBroker.publishToAgent(tracedMessage.getAk(), tracedMessage.withoutRoutingContext());
+        log.debug("Forwarded invoke to agent: traceId={}, source={}, instanceId={}, ownerKey={}, messageType={}, routeDecision=to_agent, fallbackUsed=false, errorCode=none, linkId={}, ak={}, userId={}, action={}",
+                tracedMessage.getTraceId(), messageSource, instanceId,
+                RedisMessageBroker.sourceOwnerMember(messageSource, instanceId), tracedMessage.getType(),
+                session.getId(), tracedMessage.getAk(), tracedMessage.getUserId(), tracedMessage.getAction());
+    }
+
+    /**
+     * Route a message from PC Agent to the correct upstream source domain.
      */
     public boolean relayToSkill(GatewayMessage message) {
-        // Try local: send via any available skill link on this instance
-        if (sendViaDefaultLink(message)) {
+        GatewayMessage tracedMessage = ensureTraceId(message);
+        String source = resolveMessageSource(tracedMessage);
+        if (source == null) {
+            log.warn("Rejected upstream relay: traceId={}, source={}, instanceId={}, ownerKey={}, messageType={}, routeDecision=rejected, fallbackUsed=false, errorCode=source_not_allowed, ak={}, toolSessionId={}, welinkSessionId={}",
+                    tracedMessage.getTraceId(), null, instanceId, null, tracedMessage.getType(),
+                    tracedMessage.getAk(), tracedMessage.getToolSessionId(), tracedMessage.getWelinkSessionId());
+            return false;
+        }
+
+        GatewayMessage routedMessage = tracedMessage.withSource(source);
+        if (sendViaDefaultLink(source, routedMessage)) {
+            log.debug("Routed upstream message locally: traceId={}, source={}, instanceId={}, ownerKey={}, messageType={}, routeDecision=local_link, fallbackUsed=false, errorCode=none, ak={}",
+                    routedMessage.getTraceId(), source, instanceId,
+                    RedisMessageBroker.sourceOwnerMember(source, instanceId), routedMessage.getType(), routedMessage.getAk());
             return true;
         }
 
-        // Local failed — relay to another Gateway instance with a Skill connection
-        String ownerId = selectOwner(message.getType());
+        String ownerId = selectOwner(source, tracedMessage.getType());
         if (ownerId == null) {
-            log.warn("No active skill owner available: type={}, agentId={}",
-                    message.getType(), message.getAgentId());
+            log.warn("Upstream routing failed: traceId={}, source={}, instanceId={}, ownerKey={}, messageType={}, routeDecision=no_owner, fallbackUsed=true, errorCode=owner_unavailable, agentId={}, ak={}",
+                    routedMessage.getTraceId(), source, instanceId, null, routedMessage.getType(),
+                    tracedMessage.getAgentId(), tracedMessage.getAk());
             return false;
         }
 
         if (instanceId.equals(ownerId)) {
-            // We are the selected owner but local send failed — no skill link available
-            return sendViaDefaultLink(message);
+            boolean routed = sendViaDefaultLink(source, routedMessage);
+            log.debug("Retried upstream message on local owner: traceId={}, source={}, instanceId={}, ownerKey={}, messageType={}, routeDecision=local_fallback, fallbackUsed=true, errorCode={}, ak={}",
+                    routedMessage.getTraceId(), source, instanceId,
+                    RedisMessageBroker.sourceOwnerMember(source, instanceId), routedMessage.getType(),
+                    routed ? "none" : "owner_unavailable", routedMessage.getAk());
+            return routed;
         }
 
-        redisMessageBroker.publishToRelay(ownerId, message);
+        redisMessageBroker.publishToRelay(ownerId, routedMessage);
+        log.debug("Relayed upstream message to remote owner: traceId={}, source={}, instanceId={}, ownerKey={}, messageType={}, routeDecision=remote_owner, fallbackUsed=true, errorCode=none, ak={}",
+                routedMessage.getTraceId(), source, instanceId,
+                RedisMessageBroker.sourceOwnerMember(source, ownerId), routedMessage.getType(), routedMessage.getAk());
         return true;
     }
 
@@ -128,34 +203,44 @@ public class SkillRelayService {
      * Handle a message relayed from another Gateway instance.
      */
     public void handleRelayedMessage(GatewayMessage message) {
-        if (!sendViaDefaultLink(message)) {
-            log.warn("Relay target gateway has no active skill link: instanceId={}, type={}",
-                    instanceId, message.getType());
+        GatewayMessage tracedMessage = ensureTraceId(message);
+        String source = resolveMessageSource(tracedMessage);
+        if (source == null) {
+            log.warn("Rejected relayed upstream message: traceId={}, source={}, instanceId={}, ownerKey={}, messageType={}, routeDecision=rejected, fallbackUsed=false, errorCode=source_not_allowed",
+                    tracedMessage.getTraceId(), null, instanceId, null, tracedMessage.getType());
+            return;
+        }
+
+        if (!sendViaDefaultLink(source, tracedMessage.withSource(source))) {
+            log.warn("Relay target gateway has no active upstream link: traceId={}, source={}, instanceId={}, ownerKey={}, messageType={}, routeDecision=relay_delivery_failed, fallbackUsed=true, errorCode=owner_unavailable",
+                    tracedMessage.getTraceId(), source, instanceId,
+                    RedisMessageBroker.sourceOwnerMember(source, instanceId), tracedMessage.getType());
         }
     }
 
     public int getActiveSkillConnectionCount() {
-        return (int) skillSessions.values().stream()
+        return (int) sourceSessions.values().stream()
+                .map(Map::values)
+                .flatMap(Collection::stream)
                 .filter(WebSocketSession::isOpen)
                 .count();
     }
 
     @Scheduled(fixedDelayString = "#{T(java.time.Duration).ofSeconds(${gateway.skill-relay.owner-heartbeat-interval-seconds:10}).toMillis()}")
     public void refreshOwnerHeartbeat() {
-        if (!skillSessions.isEmpty()) {
-            refreshOwnerState();
-        }
+        sourceSessions.keySet().forEach(this::refreshOwnerState);
     }
 
     @PreDestroy
     public void destroy() {
-        clearOwnerState();
+        sourceSessions.keySet().forEach(this::clearOwnerState);
+        if (relaySubscribed.compareAndSet(true, false)) {
+            redisMessageBroker.unsubscribeFromRelay(instanceId);
+        }
     }
 
-    // ========== Internal methods ==========
-
-    private boolean sendViaDefaultLink(GatewayMessage message) {
-        WebSocketSession session = resolveDefaultSession();
+    private boolean sendViaDefaultLink(String source, GatewayMessage message) {
+        WebSocketSession session = resolveDefaultSession(source);
         if (session == null) {
             return false;
         }
@@ -168,49 +253,52 @@ public class SkillRelayService {
             synchronized (session) {
                 session.sendMessage(new TextMessage(json));
             }
-            log.debug("Sent to skill link: instanceId={}, linkId={}, type={}, welinkSessionId={}, toolSessionId={}",
-                    instanceId, session.getId(), message.getType(),
+            log.debug("Sent to upstream link: source={}, instanceId={}, linkId={}, type={}, welinkSessionId={}, toolSessionId={}",
+                    resolveBoundSource(session), instanceId, session.getId(), message.getType(),
                     message.getWelinkSessionId(), message.getToolSessionId());
             return true;
         } catch (IOException e) {
-            log.error("Failed to send to skill link: instanceId={}, linkId={}, type={}",
-                    instanceId, session.getId(), message.getType(), e);
+            log.error("Failed to send to upstream link: source={}, instanceId={}, linkId={}, type={}",
+                    resolveBoundSource(session), instanceId, session.getId(), message.getType(), e);
             return false;
         }
     }
 
-    private String selectOwner(String key) {
-        Set<String> owners = redisMessageBroker.getActiveSkillOwners();
+    private String selectOwner(String source, String key) {
+        Set<String> owners = redisMessageBroker.getActiveSourceOwners(source);
         if (owners.isEmpty()) {
             return null;
         }
 
         return owners.stream()
-                .max(Comparator.comparingLong(ownerId -> rendezvousScore(key, ownerId)))
+                .max(Comparator.comparingLong(ownerKey -> rendezvousScore(key, ownerKey)))
+                .map(RedisMessageBroker::instanceIdFromOwnerKey)
                 .orElse(null);
     }
 
-    private long rendezvousScore(String key, String ownerId) {
+    private long rendezvousScore(String key, String ownerKey) {
         String stableKey = key != null && !key.isBlank() ? key : "default";
-        return Integer.toUnsignedLong((stableKey + "|" + ownerId).hashCode());
+        return Integer.toUnsignedLong((stableKey + "|" + ownerKey).hashCode());
     }
 
-    private WebSocketSession resolveDefaultSession() {
-        String preferredLinkId = defaultLinkId.get();
+    private WebSocketSession resolveDefaultSession(String source) {
+        AtomicReference<String> preferredLinkRef = defaultLinkIds.get(source);
+        String preferredLinkId = preferredLinkRef != null ? preferredLinkRef.get() : null;
+        Map<String, WebSocketSession> sessionsBySource = sessionMap(source);
         if (preferredLinkId != null) {
-            WebSocketSession preferredSession = skillSessions.get(preferredLinkId);
+            WebSocketSession preferredSession = sessionsBySource.get(preferredLinkId);
             if (preferredSession != null && preferredSession.isOpen()) {
                 return preferredSession;
             }
         }
 
-        String replacement = selectAnyOpenLinkId();
-        defaultLinkId.set(replacement);
-        return replacement != null ? skillSessions.get(replacement) : null;
+        String replacement = selectAnyOpenLinkId(source);
+        defaultLinkRef(source).set(replacement);
+        return replacement != null ? sessionsBySource.get(replacement) : null;
     }
 
-    private String selectAnyOpenLinkId() {
-        return skillSessions.entrySet().stream()
+    private String selectAnyOpenLinkId(String source) {
+        return sessionMap(source).entrySet().stream()
                 .filter(entry -> entry.getValue() != null && entry.getValue().isOpen())
                 .map(Map.Entry::getKey)
                 .findFirst()
@@ -223,14 +311,84 @@ public class SkillRelayService {
         }
     }
 
-    private void refreshOwnerState() {
-        redisMessageBroker.refreshSkillOwner(instanceId, ownerTtl);
+    private void refreshOwnerState(String source) {
+        if (source == null || source.isBlank()) {
+            return;
+        }
+        if (!hasOpenSession(source)) {
+            clearOwnerState(source);
+            return;
+        }
+        redisMessageBroker.refreshSourceOwner(source, instanceId, ownerTtl);
     }
 
-    private void clearOwnerState() {
-        redisMessageBroker.removeSkillOwner(instanceId);
-        if (relaySubscribed.compareAndSet(true, false)) {
+    private void clearOwnerState(String source) {
+        if (source == null || source.isBlank()) {
+            return;
+        }
+        redisMessageBroker.removeSourceOwner(source, instanceId);
+    }
+
+    private void unsubscribeRelayIfIdle() {
+        if (!hasAnyOpenSession() && relaySubscribed.compareAndSet(true, false)) {
             redisMessageBroker.unsubscribeFromRelay(instanceId);
+        }
+    }
+
+    private boolean hasAnyOpenSession() {
+        return sourceSessions.keySet().stream().anyMatch(this::hasOpenSession);
+    }
+
+    private boolean hasOpenSession(String source) {
+        return sessionMap(source).values().stream().anyMatch(WebSocketSession::isOpen);
+    }
+
+    private int getActiveConnectionCount(String source) {
+        return (int) sessionMap(source).values().stream()
+                .filter(WebSocketSession::isOpen)
+                .count();
+    }
+
+    private Map<String, WebSocketSession> sessionMap(String source) {
+        return sourceSessions.getOrDefault(source, Map.of());
+    }
+
+    private AtomicReference<String> defaultLinkRef(String source) {
+        return defaultLinkIds.computeIfAbsent(source, ignored -> new AtomicReference<>());
+    }
+
+    private String resolveMessageSource(GatewayMessage message) {
+        String source = message.getSource();
+        if (source != null && !source.isBlank()) {
+            return source;
+        }
+        if (message.getAk() == null || message.getAk().isBlank()) {
+            return null;
+        }
+        return redisMessageBroker.getAgentSource(message.getAk());
+    }
+
+    private GatewayMessage ensureTraceId(GatewayMessage message) {
+        if (message.getTraceId() != null && !message.getTraceId().isBlank()) {
+            return message;
+        }
+        return message.withTraceId(UUID.randomUUID().toString());
+    }
+
+    private String resolveBoundSource(WebSocketSession session) {
+        Object source = session.getAttributes().get(SOURCE_ATTR);
+        return source instanceof String ? (String) source : null;
+    }
+
+    private void sendProtocolError(WebSocketSession session, String reason) {
+        try {
+            String json = objectMapper.writeValueAsString(GatewayMessage.registerRejected(reason));
+            synchronized (session) {
+                session.sendMessage(new TextMessage(json));
+            }
+        } catch (IOException e) {
+            log.error("Failed to send protocol error to upstream link: linkId={}, reason={}",
+                    session.getId(), reason, e);
         }
     }
 }

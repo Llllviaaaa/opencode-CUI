@@ -6,9 +6,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.SkillMessage;
-import com.opencode.cui.skill.model.SkillMessagePart;
+import com.opencode.cui.skill.model.ProtocolMessageView;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.repository.SkillMessagePartRepository;
+import com.opencode.cui.skill.service.ProtocolMessageMapper;
+import com.opencode.cui.skill.service.RedisMessageBroker;
 import com.opencode.cui.skill.service.SkillMessageService;
 import com.opencode.cui.skill.service.SkillSessionService;
 import com.opencode.cui.skill.service.StreamBufferService;
@@ -28,6 +30,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * WebSocket handler for Skill miniapp streaming.
@@ -47,6 +50,7 @@ public class SkillStreamHandler extends TextWebSocketHandler {
     private final SkillSessionService sessionService;
     private final SkillMessageService messageService;
     private final SkillMessagePartRepository partRepository;
+    private final RedisMessageBroker redisMessageBroker;
 
     /**
      * Protocol subscriptions keyed by userId. Each socket receives events for all
@@ -63,17 +67,20 @@ public class SkillStreamHandler extends TextWebSocketHandler {
      * Per-session transport sequence counter.
      */
     private final ConcurrentHashMap<String, AtomicLong> seqCounters = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AtomicInteger> activeConnectionCounts = new ConcurrentHashMap<>();
 
     public SkillStreamHandler(ObjectMapper objectMapper,
             StreamBufferService bufferService,
             SkillSessionService sessionService,
             SkillMessageService messageService,
-            SkillMessagePartRepository partRepository) {
+            SkillMessagePartRepository partRepository,
+            RedisMessageBroker redisMessageBroker) {
         this.objectMapper = objectMapper;
         this.bufferService = bufferService;
         this.sessionService = sessionService;
         this.messageService = messageService;
         this.partRepository = partRepository;
+        this.redisMessageBroker = redisMessageBroker;
     }
 
     @Override
@@ -204,20 +211,118 @@ public class SkillStreamHandler extends TextWebSocketHandler {
     private void registerUserSubscriber(WebSocketSession session, String userId) {
         session.getAttributes().put(ATTR_USER_ID, userId);
         userSubscribers.computeIfAbsent(userId, key -> new CopyOnWriteArraySet<>()).add(session);
+        int connections = activeConnectionCounts
+                .computeIfAbsent(userId, key -> new AtomicInteger(0))
+                .incrementAndGet();
+        if (connections == 1) {
+            subscribeToUserStream(userId);
+        }
         preloadActiveSessionOwners(userId);
         log.info("Skill protocol stream subscriber connected: userId={}, wsId={}, remoteAddr={}",
                 userId, session.getId(), session.getRemoteAddress());
     }
 
     private void unregisterSubscriber(WebSocketSession session) {
-        String userId = (String) session.getAttributes().get(ATTR_USER_ID);
+        // Both transport error and close callbacks may fire for the same socket.
+        // Remove the marker eagerly so cleanup stays idempotent.
+        String userId = (String) session.getAttributes().remove(ATTR_USER_ID);
         if (userId != null) {
             Set<WebSocketSession> sessions = userSubscribers.get(userId);
+            boolean removed = false;
             if (sessions != null) {
-                sessions.remove(session);
+                removed = sessions.remove(session);
                 if (sessions.isEmpty()) {
                     userSubscribers.remove(userId);
                 }
+            }
+
+            if (!removed) {
+                return;
+            }
+
+            AtomicInteger counter = activeConnectionCounts.get(userId);
+            if (counter != null) {
+                int remaining = counter.decrementAndGet();
+                if (remaining <= 0) {
+                    activeConnectionCounts.remove(userId);
+                    unsubscribeFromUserStream(userId);
+                }
+            }
+        }
+    }
+
+    private void subscribeToUserStream(String userId) {
+        if (redisMessageBroker.isUserSubscribed(userId)) {
+            return;
+        }
+        redisMessageBroker.subscribeToUser(userId, message -> handleUserBroadcast(userId, message));
+        log.info("Subscribed to user stream: userId={}", userId);
+    }
+
+    private void unsubscribeFromUserStream(String userId) {
+        redisMessageBroker.unsubscribeFromUser(userId);
+        log.info("Unsubscribed from user stream: userId={}", userId);
+    }
+
+    private void handleUserBroadcast(String userId, String rawMessage) {
+        try {
+            JsonNode node = objectMapper.readTree(rawMessage);
+            if (node.has("message")) {
+                StreamMessage msg = objectMapper.treeToValue(node.get("message"), StreamMessage.class);
+                String sessionId = node.path("sessionId").asText(null);
+                if (sessionId != null && !sessionId.isBlank()) {
+                    msg.setSessionId(sessionId);
+                    if (msg.getWelinkSessionId() == null) {
+                        msg.setWelinkSessionId(sessionId);
+                    }
+                }
+                pushStreamMessageToUser(userId, msg);
+                return;
+            }
+
+            String sessionId = node.path("sessionId").asText(null);
+            String type = node.path("type").asText("delta");
+            String content = node.has("content") ? node.get("content").toString() : null;
+            if (sessionId != null) {
+                pushToSession(sessionId, type, content);
+            }
+        } catch (JsonProcessingException e) {
+            log.error("Failed to parse user broadcast for user {}: {}", userId, e.getMessage());
+        }
+    }
+
+    public void pushStreamMessageToUser(String userId, StreamMessage msg) {
+        Set<WebSocketSession> recipients = new CopyOnWriteArraySet<>(userSubscribers.getOrDefault(userId, Set.of()));
+        if (recipients.isEmpty()) {
+            log.debug("No subscribers for user {}, message type={} dropped", userId, msg.getType());
+            return;
+        }
+
+        String sessionId = msg.getSessionId();
+        if (sessionId != null && !sessionId.isBlank()) {
+            msg.setSeq(nextTransportSeq(sessionId));
+        }
+
+        String messageText;
+        try {
+            messageText = objectMapper.writeValueAsString(msg);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to serialize user stream message: userId={}, type={}", userId, msg.getType(), e);
+            return;
+        }
+
+        TextMessage textMessage = new TextMessage(messageText);
+        for (WebSocketSession ws : recipients) {
+            if (ws.isOpen()) {
+                try {
+                    ws.sendMessage(textMessage);
+                } catch (IOException e) {
+                    log.error("Failed to push user stream message: userId={}, wsId={}, error={}",
+                            userId, ws.getId(), e.getMessage());
+                    unregisterSubscriber(ws);
+                }
+            } else {
+                unregisterSubscriber(ws);
             }
         }
     }
@@ -240,6 +345,7 @@ public class SkillStreamHandler extends TextWebSocketHandler {
             List<Object> messages = buildSnapshotMessages(sessionId);
             StreamMessage snapshotMsg = StreamMessage.builder()
                     .type(StreamMessage.Types.SNAPSHOT)
+                    .seq(nextTransportSeq(sessionId))
                     .sessionId(sessionId)
                     .emittedAt(Instant.now().toString())
                     .messages(messages)
@@ -259,6 +365,11 @@ public class SkillStreamHandler extends TextWebSocketHandler {
         try {
             boolean isStreaming = bufferService.isSessionStreaming(sessionId);
             List<StreamMessage> parts = bufferService.getStreamingParts(sessionId);
+            List<Object> aggregatedParts = parts.stream()
+                    .map(part -> ProtocolMessageMapper.toProtocolStreamingPart(part, objectMapper))
+                    .filter(Objects::nonNull)
+                    .map(part -> (Object) part)
+                    .toList();
 
             StreamMessage streamingMsg = StreamMessage.builder()
                     .type(StreamMessage.Types.STREAMING)
@@ -266,7 +377,7 @@ public class SkillStreamHandler extends TextWebSocketHandler {
                     .sessionId(sessionId)
                     .emittedAt(Instant.now().toString())
                     .sessionStatus(isStreaming ? "busy" : "idle")
-                    .parts(new ArrayList<>(parts))
+                    .parts(aggregatedParts)
                     .build();
             if (!parts.isEmpty()) {
                 StreamMessage firstPart = parts.get(0);
@@ -299,174 +410,11 @@ public class SkillStreamHandler extends TextWebSocketHandler {
     }
 
     private ObjectNode toSnapshotMessage(SkillMessage message) {
-        ObjectNode node = objectMapper.createObjectNode();
-        node.put("id", message.getMessageId() != null ? message.getMessageId() : String.valueOf(message.getId()));
-        node.put("seq", message.getMessageSeq() != null ? message.getMessageSeq() : message.getSeq());
-        node.put("role", message.getRole() != null ? message.getRole().name().toLowerCase() : "assistant");
-        node.put("content", message.getContent() != null ? message.getContent() : "");
-        node.put("contentType",
-                message.getContentType() != null ? message.getContentType().name().toLowerCase() : "plain");
-        if (message.getCreatedAt() != null) {
-            node.put("createdAt", message.getCreatedAt().toString());
-        }
-        if (message.getMeta() != null && !message.getMeta().isBlank()) {
-            JsonNode metaNode = parseJsonValue(message.getMeta());
-            if (metaNode != null) {
-                node.set("meta", metaNode);
-            }
-        }
-
-        var partsNode = objectMapper.createArrayNode();
-        for (SkillMessagePart part : partRepository.findByMessageId(message.getId())) {
-            ObjectNode partNode = toSnapshotPart(part);
-            if (partNode != null) {
-                partsNode.add(partNode);
-            }
-        }
-        if (!partsNode.isEmpty()) {
-            node.set("parts", partsNode);
-        }
-
-        return node;
-    }
-
-    private ObjectNode toSnapshotPart(SkillMessagePart part) {
-        if (part == null || part.getPartType() == null) {
-            return null;
-        }
-
-        String normalizedType = normalizeSnapshotPartType(part);
-        if (normalizedType == null) {
-            return null;
-        }
-
-        ObjectNode node = objectMapper.createObjectNode();
-        node.put("partId", part.getPartId());
-        if (part.getSeq() != null) {
-            node.put("partSeq", part.getSeq());
-        }
-        node.put("type", normalizedType);
-
-        if (part.getContent() != null) {
-            node.put("content", part.getContent());
-        }
-
-        switch (normalizedType) {
-            case "tool" -> {
-                putIfPresent(node, "toolName", part.getToolName());
-                putIfPresent(node, "toolCallId", part.getToolCallId());
-                putIfPresent(node, "status", part.getToolStatus());
-                putIfPresent(node, "output", part.getToolOutput());
-                putIfPresent(node, "error", part.getToolError());
-                putIfPresent(node, "title", part.getToolTitle());
-                JsonNode inputNode = parseJsonValue(part.getToolInput());
-                if (inputNode != null) {
-                    node.set("input", inputNode);
-                }
-            }
-            case "question" -> {
-                putIfPresent(node, "toolName", "question");
-                putIfPresent(node, "toolCallId", part.getToolCallId());
-                putIfPresent(node, "status", part.getToolStatus());
-                JsonNode inputNode = parseJsonValue(part.getToolInput());
-                if (inputNode != null && inputNode.isObject()) {
-                    node.set("input", inputNode);
-                    JsonNode questionNode = resolveQuestionPayload(inputNode);
-                    if (questionNode != null && questionNode.isObject()) {
-                        JsonNode header = questionNode.get("header");
-                        JsonNode question = questionNode.get("question");
-                        JsonNode options = questionNode.get("options");
-                        if (header != null && header.isTextual()) {
-                            node.put("header", header.asText());
-                        }
-                        if (question != null && question.isTextual()) {
-                            node.put("question", question.asText());
-                        }
-                        JsonNode normalizedOptions = normalizeQuestionOptions(options);
-                        if (normalizedOptions != null) {
-                            node.set("options", normalizedOptions);
-                        }
-                    }
-                }
-            }
-            case "file" -> {
-                putIfPresent(node, "fileName", part.getFileName());
-                putIfPresent(node, "fileUrl", part.getFileUrl());
-                putIfPresent(node, "fileMime", part.getFileMime());
-            }
-            default -> {
-                // text/thinking already populated via shared fields
-            }
-        }
-
-        return node;
-    }
-
-    private String normalizeSnapshotPartType(SkillMessagePart part) {
-        return switch (part.getPartType()) {
-            case "text" -> "text";
-            case "reasoning" -> "thinking";
-            case "tool" -> "question".equals(part.getToolName()) ? "question" : "tool";
-            case "file" -> "file";
-            default -> null;
-        };
-    }
-
-    private JsonNode parseJsonValue(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        try {
-            return objectMapper.readTree(value);
-        } catch (Exception e) {
-            return objectMapper.getNodeFactory().textNode(value);
-        }
-    }
-
-    private void putIfPresent(ObjectNode node, String field, String value) {
-        if (value != null && !value.isBlank()) {
-            node.put(field, value);
-        }
-    }
-
-    private JsonNode resolveQuestionPayload(JsonNode inputNode) {
-        if (inputNode == null || !inputNode.isObject()) {
-            return null;
-        }
-
-        JsonNode questionsNode = inputNode.get("questions");
-        if (questionsNode != null && questionsNode.isArray() && !questionsNode.isEmpty()) {
-            JsonNode firstQuestion = questionsNode.get(0);
-            if (firstQuestion != null && firstQuestion.isObject()) {
-                return firstQuestion;
-            }
-        }
-
-        return inputNode;
-    }
-
-    private JsonNode normalizeQuestionOptions(JsonNode optionsNode) {
-        if (optionsNode == null || !optionsNode.isArray()) {
-            return null;
-        }
-
-        var normalized = objectMapper.createArrayNode();
-        optionsNode.forEach(optionNode -> {
-            String label = null;
-            if (optionNode.isTextual()) {
-                label = optionNode.asText();
-            } else if (optionNode.isObject()) {
-                JsonNode labelNode = optionNode.get("label");
-                if (labelNode != null && labelNode.isTextual()) {
-                    label = labelNode.asText();
-                }
-            }
-            if (label != null && !label.isBlank()) {
-                normalized.add(label);
-            }
-        });
-
-        return normalized.isEmpty() ? null : normalized;
+        ProtocolMessageView messageView = ProtocolMessageMapper.toProtocolMessage(
+                message,
+                partRepository.findByMessageId(message.getId()),
+                objectMapper);
+        return objectMapper.valueToTree(messageView);
     }
 
     private Set<WebSocketSession> resolveRecipients(String sessionId) {
@@ -512,7 +460,7 @@ public class SkillStreamHandler extends TextWebSocketHandler {
         ObjectNode node = objectMapper.createObjectNode();
         node.put("type", type);
         node.put("seq", seq);
-        node.put("welinkSessionId", sessionId);
+        putWelinkSessionId(node, sessionId);
 
         if (content != null) {
             try {
@@ -528,6 +476,15 @@ public class SkillStreamHandler extends TextWebSocketHandler {
             log.error("Failed to serialize stream message: type={}", type, e);
             return null;
         }
+    }
+
+    private void putWelinkSessionId(ObjectNode node, String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            node.putNull("welinkSessionId");
+            return;
+        }
+        // 以字符串传输，防止 JavaScript IEEE 754 大数精度丢失
+        node.put("welinkSessionId", sessionId);
     }
 
     private long nextTransportSeq(String sessionId) {

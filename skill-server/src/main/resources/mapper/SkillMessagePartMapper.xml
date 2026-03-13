@@ -38,15 +38,15 @@
         created_at, updated_at
     </sql>
 
-    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+    <insert id="insert">
         INSERT INTO skill_message_part
-            (message_id, session_id, part_id, seq, part_type,
+            (id, message_id, session_id, part_id, seq, part_type,
              content, tool_name, tool_call_id, tool_status, tool_input, tool_output, tool_error, tool_title,
              file_name, file_url, file_mime,
              tokens_in, tokens_out, cost, finish_reason,
              created_at, updated_at)
         VALUES
-            (#{messageId}, #{sessionId}, #{partId}, #{seq}, #{partType},
+            (#{id}, #{messageId}, #{sessionId}, #{partId}, #{seq}, #{partType},
              #{content}, #{toolName}, #{toolCallId}, #{toolStatus}, #{toolInput}, #{toolOutput}, #{toolError}, #{toolTitle},
              #{fileName}, #{fileUrl}, #{fileMime},
              #{tokensIn}, #{tokensOut}, #{cost}, #{finishReason},
@@ -56,13 +56,13 @@
     <!-- Upsert: insert or update by (session_id, part_id) unique key -->
     <insert id="upsert">
         INSERT INTO skill_message_part
-            (message_id, session_id, part_id, seq, part_type,
+            (id, message_id, session_id, part_id, seq, part_type,
              content, tool_name, tool_call_id, tool_status, tool_input, tool_output, tool_error, tool_title,
              file_name, file_url, file_mime,
              tokens_in, tokens_out, cost, finish_reason,
              created_at, updated_at)
         VALUES
-            (#{messageId}, #{sessionId}, #{partId}, #{seq}, #{partType},
+            (#{id}, #{messageId}, #{sessionId}, #{partId}, #{seq}, #{partType},
              #{content}, #{toolName}, #{toolCallId}, #{toolStatus}, #{toolInput}, #{toolOutput}, #{toolError}, #{toolTitle},
              #{fileName}, #{fileUrl}, #{fileMime},
              #{tokensIn}, #{tokensOut}, #{cost}, #{finishReason},

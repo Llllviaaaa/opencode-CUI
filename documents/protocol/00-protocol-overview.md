@@ -1,125 +1,125 @@
-# OpenCode CUI 端到端协议全景
+﻿# OpenCode CUI 绔埌绔崗璁叏鏅?
 
-> 版本：1.1  
-> 日期：2026-03-08
+> 鐗堟湰锛?.1  
+> 鏃ユ湡锛?026-03-08
 
 ---
 
-## 系统架构
+## 绯荤粺鏋舵瀯
 
-![系统架构](images/01-system-architecture.png)
+![绯荤粺鏋舵瀯](images/01-system-architecture.png)
 
 <details>
-<summary>查看 Mermaid 源码</summary>
+<summary>鏌ョ湅 Mermaid 婧愮爜</summary>
 
 ```mermaid
 graph LR
-    subgraph "用户侧"
+    subgraph "鐢ㄦ埛渚?
         A["Miniapp<br/>(WeLink H5)"]
     end
 
-    subgraph "服务端"
+    subgraph "鏈嶅姟绔?
         B["Skill Server<br/>(Java/Spring)"]
         C["AI-Gateway<br/>(Java/Spring)"]
     end
 
-    subgraph "桌面端"
+    subgraph "妗岄潰绔?
         D["PC Agent<br/>(OpenCode Plugin)"]
-        E["OpenCode<br/>(本地运行时)"]
+        E["OpenCode<br/>(鏈湴杩愯鏃?"]
     end
 
-    A -- "层① REST + WebSocket" --> B
-    B -- "层② WebSocket + REST" --> C
-    C -- "层③ WebSocket" --> D
-    D -- "层④ SDK API + Event Hook" --> E
+    A -- "灞傗憼 REST + WebSocket" --> B
+    B -- "灞傗憽 WebSocket + REST" --> C
+    C -- "灞傗憿 WebSocket" --> D
+    D -- "灞傗懀 SDK API + Event Hook" --> E
 ```
 
 </details>
 
 ---
 
-## 四层协议总览
+## 鍥涘眰鍗忚鎬昏
 
-| 层  | 链路                      | 下行（指令方向） | 上行（事件方向）         | 认证             |
+| 灞? | 閾捐矾                      | 涓嬭锛堟寚浠ゆ柟鍚戯級 | 涓婅锛堜簨浠舵柟鍚戯級         | 璁よ瘉             |
 | --- | ------------------------- | ---------------- | ------------------------ | ---------------- |
-| ①   | Miniapp ↔ Skill Server    | 10 REST API      | 19 种 StreamMessage (WS) | WeLink Cookie    |
-| ②   | Skill Server ↔ AI-Gateway | 6 种 invoke (WS) | 6 种事件 (WS) + 3 REST   | 内部 Token       |
-| ③   | AI-Gateway ↔ PC Agent     | 7 种消息 (WS)    | 7 种消息 (WS)            | AK/SK 子协议签名 |
-| ④   | PC Agent ↔ OpenCode       | 7 SDK 调用       | 17 种事件 + 12 种 Part   | 无（本机进程间） |
+| 鈶?  | Miniapp 鈫?Skill Server    | 10 REST API      | 19 绉?StreamMessage (WS) | WeLink Cookie    |
+| 鈶?  | Skill Server 鈫?AI-Gateway | 6 绉?invoke (WS) | 6 绉嶄簨浠?(WS) + 3 REST   | 鍐呴儴 Token       |
+| 鈶?  | AI-Gateway 鈫?PC Agent     | 7 绉嶆秷鎭?(WS)    | 7 绉嶆秷鎭?(WS)            | AK/SK 瀛愬崗璁鍚?|
+| 鈶?  | PC Agent 鈫?OpenCode       | 7 SDK 璋冪敤       | 17 绉嶄簨浠?+ 12 绉?Part   | 鏃狅紙鏈満杩涚▼闂达級 |
 
 ---
 
-## 完整流程图
+## 瀹屾暣娴佺▼鍥?
 
-### 流程 1：创建会话
+### 娴佺▼ 1锛氬垱寤轰細璇?
 
-![流程 1：创建会话](images/02-create-session.png)
+![娴佺▼ 1锛氬垱寤轰細璇漖(images/02-create-session.png)
 
 <details>
-<summary>查看 Mermaid 源码</summary>
+<summary>鏌ョ湅 Mermaid 婧愮爜</summary>
 
 ```mermaid
 sequenceDiagram
-    actor User as 用户
+    actor User as 鐢ㄦ埛
     participant MA as Miniapp
     participant SS as Skill Server
     participant GW as AI-Gateway
     participant PA as PC Agent
     participant OC as OpenCode
 
-    User->>MA: 点击"新建会话"
+    User->>MA: 鐐瑰嚮"鏂板缓浼氳瘽"
     MA->>SS: POST /api/skill/sessions<br/>{ak, title, imGroupId}
-    SS->>SS: 创建 SkillSession<br/>(toolSessionId=null)
-    SS->>SS: 订阅 Redis session:{id}
+    SS->>SS: 鍒涘缓 SkillSession<br/>(toolSessionId=null)
+    SS->>SS: 璁㈤槄 Redis session:{id}
     SS-->>MA: 200 {welinkSessionId, status: ACTIVE}
 
     SS->>GW: [WS] invoke<br/>{type:"invoke", ak, action:"create_session",<br/>welinkSessionId:"42", payload:{title}}
-    GW->>GW: ak → agentId 路由
+    GW->>GW: ak 鈫?agentId 璺敱
     GW->>PA: [WS] invoke<br/>{type:"invoke", action:"create_session",<br/>welinkSessionId:"42", payload:{title}}
 
     PA->>OC: [SDK] client.session.create({body:{title}})
     OC-->>PA: Session{id: "ses_abc"}
     PA->>GW: [WS] session_created<br/>{welinkSessionId:"42", toolSessionId:"ses_abc"}
     GW->>SS: [WS] session_created<br/>{welinkSessionId:"42", toolSessionId:"ses_abc"}
-    SS->>SS: 更新 SkillSession.toolSessionId = "ses_abc"
+    SS->>SS: 鏇存柊 SkillSession.toolSessionId = "ses_abc"
 ```
 
 </details>
 
 ---
 
-### 流程 2：发送消息（含 AI 流式回复）
+### 娴佺▼ 2锛氬彂閫佹秷鎭紙鍚?AI 娴佸紡鍥炲锛?
 
-![流程 2：发送消息（含 AI 流式回复）](images/03-send-message.png)
+![娴佺▼ 2锛氬彂閫佹秷鎭紙鍚?AI 娴佸紡鍥炲锛塢(images/03-send-message.png)
 
 <details>
-<summary>查看 Mermaid 源码</summary>
+<summary>鏌ョ湅 Mermaid 婧愮爜</summary>
 
 ```mermaid
 sequenceDiagram
-    actor User as 用户
+    actor User as 鐢ㄦ埛
     participant MA as Miniapp
     participant SS as Skill Server
     participant GW as AI-Gateway
     participant PA as PC Agent
     participant OC as OpenCode
 
-    User->>MA: 输入消息
-    MA->>SS: POST /api/skill/sessions/{id}/messages<br/>{content: "帮我创建React项目"}
-    SS->>SS: 持久化 user message
+    User->>MA: 杈撳叆娑堟伅
+    MA->>SS: POST /api/skill/sessions/{id}/messages<br/>{content: "甯垜鍒涘缓React椤圭洰"}
+    SS->>SS: 鎸佷箙鍖?user message
     SS-->>MA: 200 {id, messageSeq}
 
     SS->>GW: [WS] invoke<br/>{type:"invoke", ak, action:"chat",<br/>payload:{toolSessionId, text}}
     GW->>PA: [WS] invoke<br/>{type:"invoke", action:"chat",<br/>payload:{toolSessionId, text}}
     PA->>OC: [SDK] client.session.prompt({path:{id}, body:{parts}})
 
-    loop AI 流式处理
-        OC-->>PA: [Event] message.part.updated<br/>{part:{type:"text", text:"好的，"}, delta:"好的，"}
+    loop AI 娴佸紡澶勭悊
+        OC-->>PA: [Event] message.part.updated<br/>{part:{type:"text", text:"濂界殑锛?}, delta:"濂界殑锛?}
         PA->>GW: [WS] tool_event<br/>{toolSessionId, event:{...}}
         GW->>SS: [WS] tool_event<br/>{toolSessionId, event:{...}}
-        SS->>SS: 翻译为 StreamMessage
-        SS-->>MA: [WS] text.delta<br/>{welinkSessionId, partId, content:"好的，"}
-        MA-->>User: 流式显示文本
+        SS->>SS: 缈昏瘧涓?StreamMessage
+        SS-->>MA: [WS] text.delta<br/>{welinkSessionId, partId, content:"濂界殑锛?}
+        MA-->>User: 娴佸紡鏄剧ず鏂囨湰
     end
 
     OC-->>PA: [Event] session.idle
@@ -132,40 +132,40 @@ sequenceDiagram
 
 ---
 
-### 流程 3：AI 提问（question tool）+ 用户回答
+### 娴佺▼ 3锛欰I 鎻愰棶锛坬uestion tool锛? 鐢ㄦ埛鍥炵瓟
 
-![流程 3：AI 提问（question tool）+ 用户回答](images/04-question-answer.png)
+![娴佺▼ 3锛欰I 鎻愰棶锛坬uestion tool锛? 鐢ㄦ埛鍥炵瓟](images/04-question-answer.png)
 
 <details>
-<summary>查看 Mermaid 源码</summary>
+<summary>鏌ョ湅 Mermaid 婧愮爜</summary>
 
 ```mermaid
 sequenceDiagram
-    actor User as 用户
+    actor User as 鐢ㄦ埛
     participant MA as Miniapp
     participant SS as Skill Server
     participant GW as AI-Gateway
     participant PA as PC Agent
     participant OC as OpenCode
 
-    Note over OC: AI 调用 question 工具
+    Note over OC: AI 璋冪敤 question 宸ュ叿
 
-    OC-->>PA: [Event] message.part.updated<br/>{part:{type:"tool", tool:"question",<br/>state:{status:"running",<br/>input:{question:"选择框架", options:["Vite","CRA"]}}}}
+    OC-->>PA: [Event] message.part.updated<br/>{part:{type:"tool", tool:"question",<br/>state:{status:"running",<br/>input:{question:"閫夋嫨妗嗘灦", options:["Vite","CRA"]}}}}
     PA->>GW: [WS] tool_event<br/>{toolSessionId, event:{...}}
     GW->>SS: [WS] tool_event
-    SS->>SS: 识别 question tool → 翻译
-    SS-->>MA: [WS] question<br/>{toolCallId:"call_2", question:"选择框架",<br/>options:["Vite","CRA"]}
-    MA-->>User: 显示问题卡片
+    SS->>SS: 璇嗗埆 question tool 鈫?缈昏瘧
+    SS-->>MA: [WS] question<br/>{toolCallId:"call_2", question:"閫夋嫨妗嗘灦",<br/>options:["Vite","CRA"]}
+    MA-->>User: 鏄剧ず闂鍗＄墖
 
-    User->>MA: 选择 "Vite"
+    User->>MA: 閫夋嫨 "Vite"
     MA->>SS: POST /api/skill/sessions/{id}/messages<br/>{content:"Vite", toolCallId:"call_2"}
-    SS->>SS: 有 toolCallId → 走 question_reply
+    SS->>SS: 鏈?toolCallId 鈫?璧?question_reply
 
     SS->>GW: [WS] invoke<br/>{type:"invoke", ak, action:"question_reply",<br/>payload:{toolSessionId, toolCallId:"call_2", answer:"Vite"}}
     GW->>PA: [WS] invoke<br/>{type:"invoke", action:"question_reply",<br/>payload:{toolSessionId, toolCallId:"call_2", answer:"Vite"}}
     PA->>OC: [SDK] client.session.prompt({path:{id},<br/>body:{parts:[{type:"text", text:"Vite"}]}})
 
-    Note over OC: OpenCode 自动识别为 question 回答
+    Note over OC: OpenCode 鑷姩璇嗗埆涓?question 鍥炵瓟
     OC-->>PA: [Event] message.part.updated<br/>{part:{type:"tool", tool:"question",<br/>state:{status:"completed", output:"Vite"}}}
     PA->>GW: [WS] tool_event
     GW->>SS: [WS] tool_event
@@ -176,31 +176,31 @@ sequenceDiagram
 
 ---
 
-### 流程 4：权限请求 + 用户批准
+### 娴佺▼ 4锛氭潈闄愯姹?+ 鐢ㄦ埛鎵瑰噯
 
-![流程 4：权限请求 + 用户批准](images/05-permission-request.png)
+![娴佺▼ 4锛氭潈闄愯姹?+ 鐢ㄦ埛鎵瑰噯](images/05-permission-request.png)
 
 <details>
-<summary>查看 Mermaid 源码</summary>
+<summary>鏌ョ湅 Mermaid 婧愮爜</summary>
 
 ```mermaid
 sequenceDiagram
-    actor User as 用户
+    actor User as 鐢ㄦ埛
     participant MA as Miniapp
     participant SS as Skill Server
     participant GW as AI-Gateway
     participant PA as PC Agent
     participant OC as OpenCode
 
-    Note over OC: AI 需要执行 bash 命令
+    Note over OC: AI 闇€瑕佹墽琛?bash 鍛戒护
 
     OC-->>PA: [Event] permission.updated<br/>{sessionID, permissionID:"perm_1",<br/>toolName:"bash", input:{command:"npm install"}}
     PA->>GW: [WS] tool_event<br/>{toolSessionId, event:{...}}
     GW->>SS: [WS] tool_event
     SS-->>MA: [WS] permission.ask<br/>{permissionId:"perm_1", permType:"bash",<br/>metadata:{command:"npm install"}}
-    MA-->>User: 显示权限审批弹窗
+    MA-->>User: 鏄剧ず鏉冮檺瀹℃壒寮圭獥
 
-    User->>MA: 点击"允许本次"
+    User->>MA: 鐐瑰嚮"鍏佽鏈"
     MA->>SS: POST /api/skill/sessions/{id}/permissions/perm_1<br/>{response:"once"}
 
     SS->>GW: [WS] invoke<br/>{type:"invoke", ak, action:"permission_reply",<br/>payload:{toolSessionId, permissionId:"perm_1", response:"once"}}
@@ -212,30 +212,30 @@ sequenceDiagram
     GW->>SS: [WS] tool_event
     SS-->>MA: [WS] permission.reply<br/>{permissionId:"perm_1", response:"once"}
 
-    Note over OC: 开始执行命令...
+    Note over OC: 寮€濮嬫墽琛屽懡浠?..
 ```
 
 </details>
 
 ---
 
-### 流程 5：中止执行
+### 娴佺▼ 5锛氫腑姝㈡墽琛?
 
-![流程 5：中止执行](images/06-abort-execution.png)
+![娴佺▼ 5锛氫腑姝㈡墽琛宂(images/06-abort-execution.png)
 
 <details>
-<summary>查看 Mermaid 源码</summary>
+<summary>鏌ョ湅 Mermaid 婧愮爜</summary>
 
 ```mermaid
 sequenceDiagram
-    actor User as 用户
+    actor User as 鐢ㄦ埛
     participant MA as Miniapp
     participant SS as Skill Server
     participant GW as AI-Gateway
     participant PA as PC Agent
     participant OC as OpenCode
 
-    User->>MA: 点击"停止"
+    User->>MA: 鐐瑰嚮"鍋滄"
     MA->>SS: POST /api/skill/sessions/{id}/abort
     SS-->>MA: 200 {status: "aborted"}
 
@@ -253,27 +253,27 @@ sequenceDiagram
 
 ---
 
-### 流程 6：关闭会话
+### 娴佺▼ 6锛氬叧闂細璇?
 
-![流程 6：关闭会话](images/07-close-session.png)
+![娴佺▼ 6锛氬叧闂細璇漖(images/07-close-session.png)
 
 <details>
-<summary>查看 Mermaid 源码</summary>
+<summary>鏌ョ湅 Mermaid 婧愮爜</summary>
 
 ```mermaid
 sequenceDiagram
-    actor User as 用户
+    actor User as 鐢ㄦ埛
     participant MA as Miniapp
     participant SS as Skill Server
     participant GW as AI-Gateway
     participant PA as PC Agent
     participant OC as OpenCode
 
-    User->>MA: 点击"删除会话"
+    User->>MA: 鐐瑰嚮"鍒犻櫎浼氳瘽"
     MA->>SS: DELETE /api/skill/sessions/{id}
     SS-->>MA: 200 {status:"closed"}
     SS->>SS: SkillSession.status = CLOSED
-    SS->>SS: 取消 Redis 订阅
+    SS->>SS: 鍙栨秷 Redis 璁㈤槄
 
     SS->>GW: [WS] invoke<br/>{type:"invoke", ak, action:"close_session",<br/>payload:{toolSessionId}}
     GW->>PA: [WS] invoke<br/>{type:"invoke", action:"close_session",<br/>payload:{toolSessionId}}
@@ -285,12 +285,12 @@ sequenceDiagram
 
 ---
 
-### 流程 7：Agent 上线/下线
+### 娴佺▼ 7锛欰gent 涓婄嚎/涓嬬嚎
 
-![流程 7：Agent 上线/下线](images/08-agent-online-offline.png)
+![娴佺▼ 7锛欰gent 涓婄嚎/涓嬬嚎](images/08-agent-online-offline.png)
 
 <details>
-<summary>查看 Mermaid 源码</summary>
+<summary>鏌ョ湅 Mermaid 婧愮爜</summary>
 
 ```mermaid
 sequenceDiagram
@@ -298,38 +298,38 @@ sequenceDiagram
     participant GW as AI-Gateway
     participant PA as PC Agent
 
-    Note over PA: PC Agent 启动
+    Note over PA: PC Agent 鍚姩
 
-    PA->>GW: [WS 握手] Sec-WebSocket-Protocol: auth.{base64url(ak,ts,nonce,sign)}
-    GW->>GW: Base64URL 解码 → AK/SK 签名校验
-    GW-->>PA: 握手成功（回显完整子协议值）
+    PA->>GW: [WS 鎻℃墜] Sec-WebSocket-Protocol: auth.{base64url(ak,ts,nonce,sign)}
+    GW->>GW: Base64URL 瑙ｇ爜 鈫?AK/SK 绛惧悕鏍￠獙
+    GW-->>PA: 鎻℃墜鎴愬姛锛堝洖鏄惧畬鏁村瓙鍗忚鍊硷級
     PA->>GW: [WS] register<br/>{type:"register", deviceName, os, toolType, toolVersion, macAddress}
-    GW->>GW: 设备绑定校验 + 重复连接检测 + 身份持久化
+    GW->>GW: 璁惧缁戝畾鏍￠獙 + 閲嶅杩炴帴妫€娴?+ 韬唤鎸佷箙鍖?
     GW-->>PA: [WS] register_ok
     GW->>SS: [WS] agent_online<br/>{type:"agent_online", ak}
-    SS-->>SS: 更新 Agent 状态 → 通知前端
+    SS-->>SS: 鏇存柊 Agent 鐘舵€?鈫?閫氱煡鍓嶇
 
-    loop 心跳保活
+    loop 蹇冭烦淇濇椿
         PA->>GW: [WS] heartbeat<br/>{type:"heartbeat"}
-        GW->>GW: 更新 last_seen_at
+        GW->>GW: 鏇存柊 last_seen_at
     end
 
-    Note over PA: PC Agent 断开
-    GW->>GW: 检测连接断开
+    Note over PA: PC Agent 鏂紑
+    GW->>GW: 妫€娴嬭繛鎺ユ柇寮€
     GW->>SS: [WS] agent_offline<br/>{type:"agent_offline", ak}
-    SS-->>SS: 更新 Agent 状态 → 通知前端
+    SS-->>SS: 鏇存柊 Agent 鐘舵€?鈫?閫氱煡鍓嶇
 ```
 
 </details>
 
 ---
 
-### 流程 8：健康检查
+### 娴佺▼ 8锛氬仴搴锋鏌?
 
-![流程 8：健康检查](images/09-health-check.png)
+![娴佺▼ 8锛氬仴搴锋鏌(images/09-health-check.png)
 
 <details>
-<summary>查看 Mermaid 源码</summary>
+<summary>鏌ョ湅 Mermaid 婧愮爜</summary>
 
 ```mermaid
 sequenceDiagram
@@ -347,79 +347,80 @@ sequenceDiagram
 
 ---
 
-## 各层协议消息映射
+## 鍚勫眰鍗忚娑堟伅鏄犲皠
 
-### 下行映射（指令方向：用户 → AI）
+### 涓嬭鏄犲皠锛堟寚浠ゆ柟鍚戯細鐢ㄦ埛 鈫?AI锛?
 
-| 用户操作 | 层① Miniapp                                      | 层② Skill→GW              | 层③ GW→Agent              | 层④ Agent→OpenCode                       |
+| 鐢ㄦ埛鎿嶄綔 | 灞傗憼 Miniapp                                      | 灞傗憽 Skill鈫扜W              | 灞傗憿 GW鈫扐gent              | 灞傗懀 Agent鈫扥penCode                       |
 | -------- | ------------------------------------------------ | ------------------------- | ------------------------- | ---------------------------------------- |
-| 创建会话 | `POST /sessions`                                 | `invoke.create_session`   | `invoke.create_session`   | `session.create()`                       |
-| 发消息   | `POST /sessions/{id}/messages`                   | `invoke.chat`             | `invoke.chat`             | `session.prompt()`                       |
-| 回答提问 | `POST /sessions/{id}/messages`<br/>(+toolCallId) | `invoke.question_reply`   | `invoke.question_reply`   | `session.prompt()`                       |
-| 权限批准 | `POST /sessions/{id}/permissions/{permId}`       | `invoke.permission_reply` | `invoke.permission_reply` | `postSessionIdPermissionsPermissionId()` |
-| 中止     | `POST /sessions/{id}/abort`                      | `invoke.abort_session`    | `invoke.abort_session`    | `session.abort()`                        |
-| 关闭会话 | `DELETE /sessions/{id}`                          | `invoke.close_session`    | `invoke.close_session`    | `session.delete()`                       |
-| 转发到IM | `POST /sessions/{id}/send-to-im`                 | —                         | —                         | —                                        |
-| 查Agent  | `GET /agents`                                    | REST `GET /agents`        | —                         | —                                        |
-| 健康检查 | —                                                | REST `GET /agents/status` | `status_query`            | `app.health()`                           |
+| 鍒涘缓浼氳瘽 | `POST /sessions`                                 | `invoke.create_session`   | `invoke.create_session`   | `session.create()`                       |
+| 鍙戞秷鎭?  | `POST /sessions/{id}/messages`                   | `invoke.chat`             | `invoke.chat`             | `session.prompt()`                       |
+| 鍥炵瓟鎻愰棶 | `POST /sessions/{id}/messages`<br/>(+toolCallId) | `invoke.question_reply`   | `invoke.question_reply`   | `session.prompt()`                       |
+| 鏉冮檺鎵瑰噯 | `POST /sessions/{id}/permissions/{permId}`       | `invoke.permission_reply` | `invoke.permission_reply` | `postSessionIdPermissionsPermissionId()` |
+| 涓     | `POST /sessions/{id}/abort`                      | `invoke.abort_session`    | `invoke.abort_session`    | `session.abort()`                        |
+| 鍏抽棴浼氳瘽 | `DELETE /sessions/{id}`                          | `invoke.close_session`    | `invoke.close_session`    | `session.delete()`                       |
+| 杞彂鍒癐M | `POST /sessions/{id}/send-to-im`                 | 鈥?                        | 鈥?                        | 鈥?                                       |
+| 鏌gent  | `GET /agents`                                    | REST `GET /agents`        | 鈥?                        | 鈥?                                       |
+| 鍋ュ悍妫€鏌?| 鈥?                                               | REST `GET /agents/status` | `status_query`            | `app.health()`                           |
 
-### 上行映射（事件方向：AI → 用户）
+### 涓婅鏄犲皠锛堜簨浠舵柟鍚戯細AI 鈫?鐢ㄦ埛锛?
 
-| OpenCode 事件 | 层④ Event                                          | 层③ Agent→GW | 层② GW→Skill    | 层① StreamMessage                  |
+| OpenCode 浜嬩欢 | 灞傗懀 Event                                          | 灞傗憿 Agent鈫扜W | 灞傗憽 GW鈫扴kill    | 灞傗憼 StreamMessage                  |
 | ------------- | -------------------------------------------------- | ------------ | --------------- | ---------------------------------- |
-| 文本生成      | `message.part.updated`<br/>(part.type=text)        | `tool_event` | `tool_event`    | `text.delta` / `text.done`         |
-| 思维链        | `message.part.updated`<br/>(part.type=reasoning)   | `tool_event` | `tool_event`    | `thinking.delta` / `thinking.done` |
-| 工具调用      | `message.part.updated`<br/>(part.type=tool)        | `tool_event` | `tool_event`    | `tool.update`                      |
-| AI 提问       | `message.part.updated`<br/>(tool=question)         | `tool_event` | `tool_event`    | `question`                         |
-| 权限请求      | `permission.updated`                               | `tool_event` | `tool_event`    | `permission.ask`                   |
-| 权限响应      | `permission.replied`                               | `tool_event` | `tool_event`    | `permission.reply`                 |
-| 会话状态      | `session.status`                                   | `tool_event` | `tool_event`    | `session.status`                   |
-| 标题更新      | `session.updated`                                  | `tool_event` | `tool_event`    | `session.title`                    |
-| 推理开始      | `message.part.updated`<br/>(part.type=step-start)  | `tool_event` | `tool_event`    | `step.start`                       |
-| 推理结束      | `message.part.updated`<br/>(part.type=step-finish) | `tool_event` | `tool_event`    | `step.done`                        |
-| 会话错误      | `session.error`                                    | `tool_event` | `tool_error`    | `session.error`                    |
-| 执行完成      | `session.idle`                                     | `tool_done`  | `tool_done`     | `step.done`                        |
-| Agent 上线    | —                                                  | `register`   | `agent_online`  | `agent.online`                     |
-| Agent 下线    | —                                                  | 连接断开     | `agent_offline` | `agent.offline`                    |
+| 鏂囨湰鐢熸垚      | `message.part.updated`<br/>(part.type=text)        | `tool_event` | `tool_event`    | `text.delta` / `text.done`         |
+| 鎬濈淮閾?       | `message.part.updated`<br/>(part.type=reasoning)   | `tool_event` | `tool_event`    | `thinking.delta` / `thinking.done` |
+| 宸ュ叿璋冪敤      | `message.part.updated`<br/>(part.type=tool)        | `tool_event` | `tool_event`    | `tool.update`                      |
+| AI 鎻愰棶       | `message.part.updated`<br/>(tool=question)         | `tool_event` | `tool_event`    | `question`                         |
+| 鏉冮檺璇锋眰      | `permission.updated`                               | `tool_event` | `tool_event`    | `permission.ask`                   |
+| 鏉冮檺鍝嶅簲      | `permission.replied`                               | `tool_event` | `tool_event`    | `permission.reply`                 |
+| 浼氳瘽鐘舵€?     | `session.status`                                   | `tool_event` | `tool_event`    | `session.status`                   |
+| 鏍囬鏇存柊      | `session.updated`                                  | `tool_event` | `tool_event`    | `session.title`                    |
+| 鎺ㄧ悊寮€濮?     | `message.part.updated`<br/>(part.type=step-start)  | `tool_event` | `tool_event`    | `step.start`                       |
+| 鎺ㄧ悊缁撴潫      | `message.part.updated`<br/>(part.type=step-finish) | `tool_event` | `tool_event`    | `step.done`                        |
+| 浼氳瘽閿欒      | `session.error`                                    | `tool_event` | `tool_error`    | `session.error`                    |
+| 鎵ц瀹屾垚      | `session.idle`                                     | `tool_done`  | `tool_done`     | `step.done`                        |
+| Agent 涓婄嚎    | 鈥?                                                 | `register`   | `agent_online`  | `agent.online`                     |
+| Agent 涓嬬嚎    | 鈥?                                                 | 杩炴帴鏂紑     | `agent_offline` | `agent.offline`                    |
 
 ---
 
-## ID 流转全景
+## ID 娴佽浆鍏ㄦ櫙
 
-![ID 流转全景](images/10-id-flow.png)
+![ID 娴佽浆鍏ㄦ櫙](images/10-id-flow.png)
 
 <details>
-<summary>查看 Mermaid 源码</summary>
+<summary>鏌ョ湅 Mermaid 婧愮爜</summary>
 
 ```mermaid
 graph LR
-    subgraph "Skill Server 创建"
+    subgraph "Skill Server 鍒涘缓"
         WID["welinkSessionId"]
     end
 
-    subgraph "OpenCode 创建"
+    subgraph "OpenCode 鍒涘缓"
         TID["toolSessionId"]
     end
 
-    subgraph "预分配"
+    subgraph "棰勫垎閰?
         AK["ak (Access Key)"]
     end
 
-    subgraph "Gateway 内部"
+    subgraph "Gateway 鍐呴儴"
         AID["agentId"]
     end
 
-    WID -->|"层①②③ 全链路透传"| WID
-    TID -->|"层②③④ 全链路路由"| TID
-    AK -->|"层①② 定位 Agent"| AID
-    AID -->|"仅 Gateway 内部"| AID
+    WID -->|"灞傗憼鈶♀憿 鍏ㄩ摼璺€忎紶"| WID
+    TID -->|"灞傗憽鈶⑩懀 鍏ㄩ摼璺矾鐢?| TID
+    AK -->|"灞傗憼鈶?瀹氫綅 Agent"| AID
+    AID -->|"浠?Gateway 鍐呴儴"| AID
 ```
 
 </details>
 
-| ID                | 创建者       | 感知范围                         | 用途                         |
+| ID                | 鍒涘缓鑰?      | 鎰熺煡鑼冨洿                         | 鐢ㄩ€?                        |
 | ----------------- | ------------ | -------------------------------- | ---------------------------- |
-| `welinkSessionId` | Skill Server | 全链路（Skill→GW→Agent→回传）    | 层① 会话标识，其他层原样透传 |
-| `toolSessionId`   | OpenCode SDK | Agent→GW→Skill（回传）           | 层②③④ 会话路由               |
-| `ak`              | 预分配       | Miniapp / Skill Server / Gateway | 定位 Agent 连接              |
-| `agentId`         | Gateway      | 仅 Gateway 内部                  | 内部路由，对外不暴露         |
+| `welinkSessionId` | Skill Server | 鍏ㄩ摼璺紙Skill鈫扜W鈫扐gent鈫掑洖浼狅級    | 灞傗憼 浼氳瘽鏍囪瘑锛屽叾浠栧眰鍘熸牱閫忎紶 |
+| `toolSessionId`   | OpenCode SDK | Agent鈫扜W鈫扴kill锛堝洖浼狅級           | 灞傗憽鈶⑩懀 浼氳瘽璺敱               |
+| `ak`              | 棰勫垎閰?      | Miniapp / Skill Server / Gateway | 瀹氫綅 Agent 杩炴帴              |
+| `agentId`         | Gateway      | 浠?Gateway 鍐呴儴                  | 鍐呴儴璺敱锛屽澶栦笉鏆撮湶         |
+

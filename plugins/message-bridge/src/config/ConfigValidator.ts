@@ -55,10 +55,6 @@ export class ConfigValidator {
       this.validatePositiveInt(c.sdk.timeoutMs, 'sdk.timeoutMs', errors);
     }
 
-    if (c.sdk && 'baseUrl' in c.sdk) {
-      errors.push({ path: 'sdk.baseUrl', code: 'DEPRECATED_FIELD', message: 'sdk.baseUrl is deprecated and should not be used' });
-    }
-
     if (c.events?.allowlist !== undefined) {
       if (!Array.isArray(c.events.allowlist)) {
         errors.push({ path: 'events.allowlist', code: 'INVALID_TYPE', message: 'events.allowlist must be an array' });

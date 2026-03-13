@@ -13,11 +13,14 @@ public class SkillMessageService {
 
     private final SkillMessageRepository messageRepository;
     private final SkillSessionService sessionService;
+    private final SnowflakeIdGenerator snowflakeIdGenerator;
 
     public SkillMessageService(SkillMessageRepository messageRepository,
-            SkillSessionService sessionService) {
+            SkillSessionService sessionService,
+            SnowflakeIdGenerator snowflakeIdGenerator) {
         this.messageRepository = messageRepository;
         this.sessionService = sessionService;
+        this.snowflakeIdGenerator = snowflakeIdGenerator;
     }
 
     /**
@@ -33,6 +36,7 @@ public class SkillMessageService {
                 : generateMessageId(sessionId, nextSeq);
 
         SkillMessage message = SkillMessage.builder()
+                .id(snowflakeIdGenerator.nextId())
                 .messageId(effectiveMessageId)
                 .sessionId(sessionId)
                 .seq(nextSeq)

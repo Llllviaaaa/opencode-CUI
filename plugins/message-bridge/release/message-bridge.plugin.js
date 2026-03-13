@@ -1766,7 +1766,7 @@ var DEFAULT_BRIDGE_CONFIG = {
   config_version: 1,
   gateway: {
     url: "ws://localhost:8081/ws/agent",
-    toolType: "channel",
+    channel: "opencode",
     heartbeatIntervalMs: 30000,
     reconnect: {
       baseMs: 1000,
@@ -1906,8 +1906,8 @@ class ConfigResolver {
     if (process.env.BRIDGE_GATEWAY_URL) {
       gateway.url = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_URL);
     }
-    if (process.env.BRIDGE_GATEWAY_TOOL_TYPE) {
-      gateway.toolType = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_TOOL_TYPE);
+    if (process.env.BRIDGE_GATEWAY_CHANNEL) {
+      gateway.channel = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_CHANNEL);
     }
     const reconnect = {};
     if (process.env.BRIDGE_GATEWAY_RECONNECT_BASE_MS)
@@ -1965,10 +1965,10 @@ class ConfigResolver {
     if (!normalized.gateway.url) {
       normalized.gateway.url = "ws://localhost:8081/ws/agent";
     }
-    if (!normalized.gateway.toolType) {
-      normalized.gateway.toolType = "channel";
+    if (!normalized.gateway.channel) {
+      normalized.gateway.channel = "opencode";
     } else {
-      normalized.gateway.toolType = normalized.gateway.toolType.trim();
+      normalized.gateway.channel = normalized.gateway.channel.trim();
     }
     if (!normalized.gateway.heartbeatIntervalMs) {
       normalized.gateway.heartbeatIntervalMs = 30000;
@@ -2078,9 +2078,6 @@ class ConfigValidator {
     }
     if (c.sdk?.timeoutMs !== undefined) {
       this.validatePositiveInt(c.sdk.timeoutMs, "sdk.timeoutMs", errors);
-    }
-    if (c.sdk && "baseUrl" in c.sdk) {
-      errors.push({ path: "sdk.baseUrl", code: "DEPRECATED_FIELD", message: "sdk.baseUrl is deprecated and should not be used" });
     }
     if (c.events?.allowlist !== undefined) {
       if (!Array.isArray(c.events.allowlist)) {
@@ -3031,39 +3028,6 @@ function requireNonEmptyString2(value, stage, field, messageType, action, welink
   }
   return ok2(value);
 }
-function requireCreateSessionWelinkSessionId(value) {
-  if (value === undefined) {
-    return fail2({
-      stage: "message",
-      code: "missing_required_field",
-      field: "welinkSessionId",
-      message: "create_session missing welinkSessionId",
-      messageType: "invoke",
-      action: "create_session"
-    });
-  }
-  if (typeof value !== "string") {
-    return fail2({
-      stage: "message",
-      code: "invalid_field_type",
-      field: "welinkSessionId",
-      message: "create_session missing welinkSessionId",
-      messageType: "invoke",
-      action: "create_session"
-    });
-  }
-  if (!value.trim()) {
-    return fail2({
-      stage: "message",
-      code: "missing_required_field",
-      field: "welinkSessionId",
-      message: "create_session missing welinkSessionId",
-      messageType: "invoke",
-      action: "create_session"
-    });
-  }
-  return ok2(value);
-}
 function buildEventPreview2(raw) {
   if (!isRecord4(raw)) {
     return { kind: typeof raw };
@@ -3180,7 +3144,7 @@ function normalizeInvokePayload(action, payload, welinkSessionId) {
       return ok2({ type: "invoke", action, payload: normalized.value, welinkSessionId });
     }
     case "create_session": {
-      const requiredWelinkSessionId = requireCreateSessionWelinkSessionId(welinkSessionId);
+      const requiredWelinkSessionId = requireNonEmptyString2(welinkSessionId, "payload", "welinkSessionId", "invoke", "create_session", welinkSessionId);
       if (!requiredWelinkSessionId.ok)
         return requiredWelinkSessionId;
       const normalized = normalizeCreateSessionPayload(payload, welinkSessionId);
@@ -3231,7 +3195,7 @@ function normalizeDownstreamMessage(raw, logger) {
     logDownstreamNormalizationFailure(logger, raw, error);
     return fail2(error);
   }
-  const welinkSessionId = typeof raw.welinkSessionId === "string" && raw.welinkSessionId.trim() ? raw.welinkSessionId : undefined;
+  const welinkSessionId = raw.welinkSessionId;
   if (messageTypeValue === "status_query") {
     return ok2({
       type: "status_query"
@@ -3616,7 +3580,7 @@ class BridgeRuntime {
         deviceName: registerMetadata.deviceName,
         macAddress: registerMetadata.macAddress,
         os: os2.platform(),
-        toolType: config.gateway.toolType,
+        toolType: config.gateway.channel,
         toolVersion: registerMetadata.toolVersion
       },
       logger: this.logger.child({ component: "gateway" })
@@ -3800,6 +3764,9 @@ class BridgeRuntime {
     }, traceId);
     invokeLogger.info("runtime.invoke.received");
     if (message.action === "create_session") {
+      if (!welinkSessionId) {
+        invokeLogger.warn("runtime.create_session.missing_welink_session_id");
+      }
       const result2 = await this.actionRouter.route(message.action, message.payload, this.buildActionContext(welinkSessionId, invokeLogger));
       if (!result2.success) {
         this.sendToolError(result2, welinkSessionId, {
@@ -4148,5 +4115,5 @@ export {
   MessageBridgePlugin
 };
 
-//# debugId=710F8BB07C565B2464756E2164756E21
+//# debugId=D3FE263F0BC8CACE64756E2164756E21
 //# sourceMappingURL=message-bridge.plugin.js.map

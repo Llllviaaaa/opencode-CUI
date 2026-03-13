@@ -185,12 +185,11 @@ describe('downstream message normalizer', () => {
 
     expect(result.ok).toBe(false);
     expect(result.error.code).toBe('missing_required_field');
+    expect(result.error.action).toBe('create_session');
     expect(result.error.field).toBe('welinkSessionId');
-    expect(result.error.message).toBe('create_session missing welinkSessionId');
-    expect(result.error.welinkSessionId).toBeUndefined();
   });
 
-  test('rejects create_session with blank welinkSessionId', () => {
+  test('rejects blank create_session welinkSessionId', () => {
     const { logger } = createLogger();
     const result = normalizeDownstreamMessage(
       {
@@ -204,9 +203,9 @@ describe('downstream message normalizer', () => {
 
     expect(result.ok).toBe(false);
     expect(result.error.code).toBe('missing_required_field');
+    expect(result.error.action).toBe('create_session');
     expect(result.error.field).toBe('welinkSessionId');
-    expect(result.error.message).toBe('create_session missing welinkSessionId');
-    expect(result.error.welinkSessionId).toBeUndefined();
+    expect(result.error.welinkSessionId).toBe('   ');
   });
 
   test('normalizes invoke/abort_session payload', () => {

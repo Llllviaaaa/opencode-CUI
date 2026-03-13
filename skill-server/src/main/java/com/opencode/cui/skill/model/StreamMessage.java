@@ -1,5 +1,6 @@
 package com.opencode.cui.skill.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
@@ -23,8 +24,9 @@ public class StreamMessage {
     private String type;
     private Long seq;
 
-    @JsonProperty("welinkSessionId")
+    @JsonIgnore
     private String sessionId;
+    private String welinkSessionId;
     private String emittedAt;
     private Object raw;
 
@@ -94,5 +96,13 @@ public class StreamMessage {
 
         private Types() {
         }
+    }
+
+    @JsonProperty("welinkSessionId")
+    public String getWelinkSessionId() {
+        if (welinkSessionId != null) {
+            return welinkSessionId;
+        }
+        return (sessionId != null && !sessionId.isBlank()) ? sessionId : null;
     }
 }

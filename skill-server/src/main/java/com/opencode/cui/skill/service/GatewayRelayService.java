@@ -14,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.Iterator;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -21,9 +22,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * Upstream (Gateway -> Skill via WS):
  * - Receives tool_event/done/error/session_created/agent_online/offline
- * - Persists to DB, then publishes to Skill Redis session:{id} for
+ * - Persists to DB, then publishes to Skill Redis user-stream:{userId} for
  * multi-instance broadcast
- * - Each Skill instance subscribes to session:{id} and pushes to local clients
+ * - Each Skill instance subscribes to user-stream:{userId} and pushes to local clients
  *
  * Downstream (Skill -> Gateway):
  * - Sends invoke messages through the active internal WebSocket connection
@@ -31,6 +32,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 @Service
 public class GatewayRelayService {
+
+    public static final String SOURCE = "skill-server";
 
     public interface GatewayRelayTarget {
         boolean sendToGateway(String message);
@@ -86,74 +89,13 @@ public class GatewayRelayService {
 
     /**
      * On startup, wire circular dependency with SkillSessionService.
-     * Redis subscriptions are handled lazily via ensureSessionSubscribed().
      */
     @PostConstruct
     public void init() {
         // Wire circular dependency: SkillSessionService needs GatewayRelayService
         // for Redis unsubscribe during IDLE cleanup
         sessionService.setGatewayRelayService(this);
-        log.info("GatewayRelayService initialized (Redis subscriptions are lazy)");
-    }
-
-    // ==================== Redis Session Broadcast ====================
-
-    /**
-     * Subscribe to Skill Redis session:{id} channel.
-     * When a message is received, push it to local Client subscribers.
-     */
-    public void subscribeToSessionBroadcast(String sessionId) {
-        redisMessageBroker.subscribeToSession(sessionId, message -> {
-            handleSessionBroadcast(sessionId, message);
-        });
-        log.info("Subscribed to session broadcast channel: session:{}", sessionId);
-    }
-
-    /**
-     * Ensure that a session's Redis broadcast channel is subscribed.
-     * This provides lazy subscription for sessions that were not subscribed
-     * during init() (e.g., sessions with CLOSED status or sessions created
-     * by other instances).
-     */
-    public void ensureSessionSubscribed(String sessionId) {
-        if (!redisMessageBroker.isSessionSubscribed(sessionId)) {
-            log.info("Lazy-subscribing to session broadcast channel: session:{}", sessionId);
-            subscribeToSessionBroadcast(sessionId);
-        }
-    }
-
-    /**
-     * Unsubscribe from Skill Redis session channel.
-     */
-    public void unsubscribeFromSession(String sessionId) {
-        redisMessageBroker.unsubscribeFromSession(sessionId);
-        sequenceTracker.resetSession(sessionId);
-        log.info("Unsubscribed from session channel: {}", sessionId);
-    }
-
-    /**
-     * Handle a message received from Skill Redis session:{id} broadcast.
-     * This is called on EVERY Skill instance. Each instance pushes to its local
-     * Clients.
-     */
-    private void handleSessionBroadcast(String sessionId, String rawMessage) {
-        try {
-            JsonNode node = objectMapper.readTree(rawMessage);
-
-            // New format: { sessionId, message: { type, partId, content, ... } }
-            if (node.has("message")) {
-                StreamMessage msg = objectMapper.treeToValue(node.get("message"), StreamMessage.class);
-                skillStreamHandler.pushStreamMessage(sessionId, msg);
-                return;
-            }
-
-            // Legacy format: { type, sessionId, content }
-            String type = node.path("type").asText("delta");
-            String content = node.has("content") ? node.get("content").toString() : null;
-            skillStreamHandler.pushToSession(sessionId, type, content);
-        } catch (JsonProcessingException e) {
-            log.error("Failed to parse session broadcast for session {}: {}", sessionId, e.getMessage());
-        }
+        log.info("GatewayRelayService initialized");
     }
 
     // ==================== Downstream: Skill -> Gateway ====================
@@ -166,11 +108,16 @@ public class GatewayRelayService {
      * @param action    the action to invoke (e.g., "chat", "create_session")
      * @param payload   the action payload as a JSON string
      */
-    public void sendInvokeToGateway(String ak, String sessionId, String action, String payload) {
+    public void sendInvokeToGateway(String ak, String userId, String sessionId, String action, String payload) {
         ObjectNode message = objectMapper.createObjectNode();
         message.put("type", "invoke");
         message.put("ak", ak);
+        message.put("source", SOURCE);
+        if (userId != null && !userId.isBlank()) {
+            message.put("userId", userId);
+        }
         if ("create_session".equals(action) && sessionId != null && !sessionId.isBlank()) {
+            // 使用字符串传输 welinkSessionId，防止 JavaScript IEEE 754 大数精度丢失
             message.put("welinkSessionId", sessionId);
         }
         message.put("action", action);
@@ -195,19 +142,19 @@ public class GatewayRelayService {
 
         GatewayRelayTarget relayTarget = gatewayRelayTarget;
         if (relayTarget == null || !relayTarget.hasActiveConnection()) {
-            log.warn("Gateway WS connection not available, invoke dropped: ak={}, action={}",
-                    ak, action);
+            log.warn("Gateway WS connection not available, invoke dropped: ak={}, userId={}, action={}",
+                    ak, userId, action);
             return;
         }
 
         boolean sent = relayTarget.sendToGateway(messageText);
         if (!sent) {
-            log.warn("Failed to send invoke through Gateway WS: ak={}, action={}",
-                    ak, action);
+            log.warn("Failed to send invoke through Gateway WS: ak={}, userId={}, action={}",
+                    ak, userId, action);
             return;
         }
 
-        log.debug("Invoke sent via Gateway WS: ak={}, action={}", ak, action);
+        log.debug("Invoke sent via Gateway WS: ak={}, userId={}, action={}", ak, userId, action);
     }
 
     // ==================== Upstream: Gateway -> Skill (via WS) ====================
@@ -227,42 +174,38 @@ public class GatewayRelayService {
 
         String type = node.path("type").asText("");
         String ak = node.path("ak").asText(null);
+        String userId = node.path("userId").asText(null);
         if (ak == null || ak.isBlank()) {
             ak = node.path("agentId").asText(null);
         }
 
         // Resolve welinkSessionId: prefer explicit sessionId, fallback to toolSessionId
         // DB lookup
-        String sessionId = resolveSessionId(node);
+        String sessionId = requiresSessionAffinity(type) ? resolveSessionId(type, node) : null;
 
         // Trace: log key fields for full-chain debugging
-        log.debug("Gateway message dispatch: type={}, sessionId={}, ak={}", type, sessionId, ak);
+        log.debug("Gateway message dispatch: type={}, sessionId={}, ak={}, userId={}",
+                type, sessionId, ak, userId);
 
         switch (type) {
-            case "tool_event" -> handleToolEvent(sessionId, node);
-            case "tool_done" -> handleToolDone(sessionId, node);
-            case "tool_error" -> handleToolError(sessionId, node);
-            case "agent_online" -> handleAgentOnline(ak, node);
-            case "agent_offline" -> handleAgentOffline(ak);
-            case "session_created" -> handleSessionCreated(ak, node);
-            case "permission_request" -> handlePermissionRequest(sessionId, node);
+            case "tool_event" -> handleToolEvent(sessionId, userId, node);
+            case "tool_done" -> handleToolDone(sessionId, userId, node);
+            case "tool_error" -> handleToolError(sessionId, userId, node);
+            case "agent_online" -> handleAgentOnline(ak, userId, node);
+            case "agent_offline" -> handleAgentOffline(ak, userId);
+            case "session_created" -> handleSessionCreated(ak, userId, node);
+            case "permission_request" -> handlePermissionRequest(sessionId, userId, node);
             default -> log.warn("Unknown gateway message type: {}", type);
         }
     }
 
     /**
      * Resolve the welink session ID from a gateway message.
-     * Strategy:
-     * 1. If the message contains a "sessionId" field, use it directly (backward
-     * compatible)
-     * 2. Otherwise, extract "toolSessionId" and look up the DB to find the welink
-     * session
+     * Accepts protocol fields only: explicit welinkSessionId, otherwise
+     * resolve via toolSessionId -> DB lookup.
      */
-    private String resolveSessionId(JsonNode node) {
+    private String resolveSessionId(String messageType, JsonNode node) {
         String sessionId = node.path("welinkSessionId").asText(null);
-        if (sessionId == null || sessionId.isBlank()) {
-            sessionId = node.path("sessionId").asText(null);
-        }
         if (sessionId != null) {
             return sessionId;
         }
@@ -273,22 +216,35 @@ public class GatewayRelayService {
             try {
                 SkillSession session = sessionService.findByToolSessionId(toolSessionId);
                 if (session != null) {
-                    log.debug("Resolved toolSessionId={} → welinkSessionId={}", toolSessionId, session.getId());
+                    log.debug("Resolved session affinity: type={}, toolSessionId={} -> welinkSessionId={}",
+                            messageType, toolSessionId, session.getId());
                     return session.getId().toString();
                 } else {
-                    log.warn("No session found for toolSessionId={}", toolSessionId);
+                    log.warn("Dropping upstream message: type={}, toolSessionId={}, reason=session_not_found",
+                            messageType, toolSessionId);
                 }
             } catch (Exception e) {
-                log.error("Failed to resolve toolSessionId={}: {}", toolSessionId, e.getMessage());
+                log.error("Failed to resolve upstream session affinity: type={}, toolSessionId={}, reason={}",
+                        messageType, toolSessionId, e.getMessage());
             }
+        } else {
+            log.warn("Dropping upstream message: type={}, toolSessionId=<missing>, reason=no_session_identifier, keys={}",
+                    messageType, fieldNames(node));
         }
 
         return null;
     }
 
+    private boolean requiresSessionAffinity(String messageType) {
+        return switch (messageType) {
+            case "tool_event", "tool_done", "tool_error", "permission_request" -> true;
+            default -> false;
+        };
+    }
+
     // ==================== Message Handlers ====================
 
-    private void handleToolEvent(String sessionId, JsonNode node) {
+    private void handleToolEvent(String sessionId, String userId, JsonNode node) {
         if (sessionId == null) {
             log.warn("tool_event missing sessionId, agentId={}, raw keys={}",
                     node.path("agentId").asText(null), node.fieldNames());
@@ -296,7 +252,6 @@ public class GatewayRelayService {
         }
 
         // Ensure Redis subscription is active for this session (lazy subscribe)
-        ensureSessionSubscribed(sessionId);
 
         // Activate session if currently IDLE (IDLE → ACTIVE on first successful event)
         try {
@@ -305,9 +260,9 @@ public class GatewayRelayService {
                 // Notify frontend that session is now active
                 StreamMessage activeMsg = StreamMessage.builder()
                         .type(StreamMessage.Types.SESSION_STATUS)
-                        .sessionStatus("active")
+                        .sessionStatus("busy")
                         .build();
-                broadcastStreamMessage(sessionId, activeMsg);
+                broadcastStreamMessage(sessionId, userId, activeMsg);
             }
         } catch (NumberFormatException e) {
             // ignore non-numeric sessionId
@@ -326,7 +281,7 @@ public class GatewayRelayService {
         }
 
         // Broadcast to all subscribers via Skill Redis
-        broadcastStreamMessage(sessionId, msg);
+        broadcastStreamMessage(sessionId, userId, msg);
 
         // Accumulate to Redis buffer (for resume)
         bufferService.accumulate(sessionId, msg);
@@ -341,7 +296,7 @@ public class GatewayRelayService {
         }
     }
 
-    private void handleToolDone(String sessionId, JsonNode node) {
+    private void handleToolDone(String sessionId, String userId, JsonNode node) {
         if (sessionId == null) {
             log.warn("tool_done missing sessionId, agentId={}", node.path("agentId").asText(null));
             return;
@@ -351,7 +306,7 @@ public class GatewayRelayService {
                 .type(StreamMessage.Types.SESSION_STATUS)
                 .sessionStatus("idle")
                 .build();
-        broadcastStreamMessage(sessionId, msg);
+        broadcastStreamMessage(sessionId, userId, msg);
 
         // Accumulate to Redis buffer (clears session on idle)
         bufferService.accumulate(sessionId, msg);
@@ -368,7 +323,7 @@ public class GatewayRelayService {
         log.info("Tool done for session {}", sessionId);
     }
 
-    private void handleToolError(String sessionId, JsonNode node) {
+    private void handleToolError(String sessionId, String userId, JsonNode node) {
         String error = node.path("error").asText("Unknown error");
         String reason = node.path("reason").asText("");
 
@@ -377,7 +332,7 @@ public class GatewayRelayService {
             // Primary: explicit reason from PCAgent
             // Fallback: error message pattern matching for known session-invalid indicators
             if ("session_not_found".equals(reason) || isSessionInvalidError(error)) {
-                handleSessionNotFound(sessionId);
+                handleSessionNotFound(sessionId, userId);
                 return;
             }
 
@@ -390,7 +345,7 @@ public class GatewayRelayService {
                     .type(StreamMessage.Types.ERROR)
                     .error(error)
                     .build();
-            broadcastStreamMessage(sessionId, msg);
+            broadcastStreamMessage(sessionId, userId, msg);
             try {
                 persistenceService.finalizeActiveAssistantTurn(Long.valueOf(sessionId));
             } catch (NumberFormatException e) {
@@ -421,7 +376,7 @@ public class GatewayRelayService {
      * store pending message for retry, and auto-rebuild by sending
      * create_session to Gateway.
      */
-    private void handleSessionNotFound(String sessionId) {
+    private void handleSessionNotFound(String sessionId, String userId) {
         log.warn("Tool session not found for welinkSession={}, initiating rebuild", sessionId);
 
         try {
@@ -431,50 +386,71 @@ public class GatewayRelayService {
             // Clear invalid toolSessionId
             sessionService.clearToolSessionId(sessionIdLong);
 
-            // Store the last user message text for retry after rebuild
+            // Use the last user message text as the pending retry payload
+            String pendingMessage = null;
             SkillMessage lastUserMsg = messageRepository.findLastUserMessage(sessionIdLong);
             if (lastUserMsg != null && lastUserMsg.getContent() != null) {
-                pendingRebuildMessages.put(sessionId, lastUserMsg.getContent());
-                log.info("Stored pending retry message for session {}: '{}'",
-                        sessionId,
-                        lastUserMsg.getContent().substring(0, Math.min(50, lastUserMsg.getContent().length())));
+                pendingMessage = lastUserMsg.getContent();
             }
 
-            // Notify frontend that session is reconnecting
-            StreamMessage reconnecting = StreamMessage.builder()
-                    .type(StreamMessage.Types.SESSION_STATUS)
-                    .sessionStatus("reconnecting")
-                    .build();
-            broadcastStreamMessage(sessionId, reconnecting);
-
-            // Send create_session to Gateway to rebuild toolSession
-            if (session.getAk() != null) {
-                ObjectNode payload = objectMapper.createObjectNode();
-                payload.put("title", session.getTitle() != null ? session.getTitle() : "");
-                String payloadStr;
-                try {
-                    payloadStr = objectMapper.writeValueAsString(payload);
-                } catch (JsonProcessingException e) {
-                    payloadStr = "{}";
-                }
-                sendInvokeToGateway(session.getAk(), sessionId, "create_session", payloadStr);
-                log.info("Rebuild create_session sent for welinkSession={}, ak={}", sessionId, session.getAk());
-            } else {
-                log.error("Cannot rebuild session {}: no ak associated", sessionId);
-                pendingRebuildMessages.remove(sessionId);
-                StreamMessage errorMsg = StreamMessage.builder()
-                        .type(StreamMessage.Types.ERROR)
-                        .error("AI session expired and cannot be rebuilt")
-                        .build();
-                broadcastStreamMessage(sessionId, errorMsg);
-            }
+            rebuildToolSession(sessionId, session, pendingMessage);
         } catch (Exception e) {
             log.error("Failed to rebuild session {}: {}", sessionId, e.getMessage(), e);
             pendingRebuildMessages.remove(sessionId);
         }
     }
 
-    private void handleAgentOnline(String ak, JsonNode node) {
+    /**
+     * Trigger toolSession rebuild: store pending message, notify frontend retry,
+     * send create_session to Gateway.
+     * Can be called by Controller when toolSessionId is null.
+     *
+     * @param sessionId      welinkSessionId (string)
+     * @param session        the SkillSession entity
+     * @param pendingMessage user message to auto-retry after rebuild (nullable)
+     */
+    public void rebuildToolSession(String sessionId, SkillSession session, String pendingMessage) {
+        log.info("Rebuilding toolSession for welinkSession={}", sessionId);
+        // 存储待重发消息
+        if (pendingMessage != null && !pendingMessage.isBlank()) {
+            pendingRebuildMessages.put(sessionId, pendingMessage);
+            log.info("Stored pending retry message for session {}: '{}'",
+                    sessionId,
+                    pendingMessage.substring(0, Math.min(50, pendingMessage.length())));
+        }
+
+        // 通知前端 retry 状态
+        StreamMessage reconnecting = StreamMessage.builder()
+                .type(StreamMessage.Types.SESSION_STATUS)
+                .sessionStatus("retry")
+                .build();
+        broadcastStreamMessage(sessionId, session.getUserId(), reconnecting);
+
+        // 发送 create_session 到 Gateway 重建 toolSession
+        if (session.getAk() != null) {
+            ObjectNode payload = objectMapper.createObjectNode();
+            payload.put("title", session.getTitle() != null ? session.getTitle() : "");
+            String payloadStr;
+            try {
+                payloadStr = objectMapper.writeValueAsString(payload);
+            } catch (JsonProcessingException e) {
+                payloadStr = "{}";
+            }
+            sendInvokeToGateway(session.getAk(), session.getUserId(), sessionId, "create_session", payloadStr);
+            log.info("Rebuild create_session sent for welinkSession={}, ak={}", sessionId, session.getAk());
+        } else {
+            log.error("Cannot rebuild session {}: no ak associated", sessionId);
+            pendingRebuildMessages.remove(sessionId);
+            StreamMessage errorMsg = StreamMessage.builder()
+                    .type(StreamMessage.Types.ERROR)
+                    .error("AI session expired and cannot be rebuilt")
+                    .build();
+            broadcastStreamMessage(sessionId, session.getUserId(), errorMsg);
+        }
+    }
+
+
+    private void handleAgentOnline(String ak, String userId, JsonNode node) {
         String toolType = node.path("toolType").asText("UNKNOWN");
         String toolVersion = node.path("toolVersion").asText("UNKNOWN");
         log.info("Agent online: ak={}, toolType={}, toolVersion={}", ak, toolType, toolVersion);
@@ -484,11 +460,13 @@ public class GatewayRelayService {
                     .type(StreamMessage.Types.AGENT_ONLINE)
                     .build();
             sessionService.findByAk(ak).forEach(
-                    session -> broadcastStreamMessage(session.getId().toString(), msg));
+                    session -> broadcastStreamMessage(session.getId().toString(),
+                            userId != null && !userId.isBlank() ? userId : session.getUserId(),
+                            msg));
         }
     }
 
-    private void handleAgentOffline(String ak) {
+    private void handleAgentOffline(String ak, String userId) {
         log.warn("Agent offline: ak={}", ak);
 
         if (ak != null) {
@@ -496,16 +474,15 @@ public class GatewayRelayService {
                     .type(StreamMessage.Types.AGENT_OFFLINE)
                     .build();
             sessionService.findByAk(ak).forEach(
-                    session -> broadcastStreamMessage(session.getId().toString(), msg));
+                    session -> broadcastStreamMessage(session.getId().toString(),
+                            userId != null && !userId.isBlank() ? userId : session.getUserId(),
+                            msg));
         }
     }
 
-    private void handleSessionCreated(String ak, JsonNode node) {
+    private void handleSessionCreated(String ak, String userId, JsonNode node) {
         String toolSessionId = node.path("toolSessionId").asText(null);
         String sessionId = node.path("welinkSessionId").asText(null);
-        if (sessionId == null || sessionId.isBlank()) {
-            sessionId = node.path("sessionId").asText(null);
-        }
 
         if (sessionId == null || toolSessionId == null) {
             log.warn("session_created missing fields: sessionId={}, toolSessionId={}, ak={}, raw={}",
@@ -533,15 +510,15 @@ public class GatewayRelayService {
                 } catch (JsonProcessingException e) {
                     payloadStr = "{}";
                 }
-                sendInvokeToGateway(ak, sessionId, "chat", payloadStr);
+                sendInvokeToGateway(ak, userId, sessionId, "chat", payloadStr);
                 log.info("Pending message re-sent after rebuild: sessionId={}", sessionId);
 
                 // Notify frontend that session is active again
                 StreamMessage activeMsg = StreamMessage.builder()
                         .type(StreamMessage.Types.SESSION_STATUS)
-                        .sessionStatus("active")
+                        .sessionStatus("busy")
                         .build();
-                broadcastStreamMessage(sessionId, activeMsg);
+                broadcastStreamMessage(sessionId, userId, activeMsg);
             }
         } catch (Exception e) {
             log.error("Failed to update tool session ID: sessionId={}, error={}", sessionId, e.getMessage());
@@ -553,44 +530,64 @@ public class GatewayRelayService {
      * Handle a permission request from OpenCode via AI-Gateway.
      * Pushes the request to connected Skill miniapp clients for user approval.
      */
-    private void handlePermissionRequest(String sessionId, JsonNode node) {
+    private void handlePermissionRequest(String sessionId, String userId, JsonNode node) {
         if (sessionId == null) {
             log.warn("permission_request missing sessionId");
             return;
         }
 
         StreamMessage msg = translator.translatePermissionFromGateway(node);
-        broadcastStreamMessage(sessionId, msg);
+        broadcastStreamMessage(sessionId, userId, msg);
 
         log.info("Permission request broadcast to session {}: permId={}",
                 sessionId, msg.getPermissionId());
     }
 
     public void publishProtocolMessage(String sessionId, StreamMessage msg) {
-        broadcastStreamMessage(sessionId, msg);
+        broadcastStreamMessage(sessionId, null, msg);
         bufferService.accumulate(sessionId, msg);
     }
 
     // ==================== Internal Helpers ====================
 
     /**
-     * Broadcast a StreamMessage to all Skill instances via Skill Redis
-     * session:{id} channel.
-     * Each instance's handleSessionBroadcast() will push to local Client
-     * subscribers.
+     * Broadcast a StreamMessage to all skill instances that currently hold the
+     * user's stream connection via the user-stream Redis channel.
      */
-    private void broadcastStreamMessage(String sessionId, StreamMessage msg) {
+    private void broadcastStreamMessage(String sessionId, String userIdHint, StreamMessage msg) {
         try {
             enrichStreamMessage(sessionId, msg);
+            String userId = resolveUserId(sessionId, userIdHint);
+            if (userId == null || userId.isBlank()) {
+                log.warn("Failed to broadcast StreamMessage without userId: sessionId={}, type={}",
+                        sessionId, msg.getType());
+                return;
+            }
             ObjectNode envelope = objectMapper.createObjectNode();
             envelope.put("sessionId", sessionId);
+            envelope.put("userId", userId);
             envelope.set("message", objectMapper.valueToTree(msg));
 
             String messageText = objectMapper.writeValueAsString(envelope);
-            redisMessageBroker.publishToSession(sessionId, messageText);
+            redisMessageBroker.publishToUser(userId, messageText);
         } catch (Exception e) {
             log.error("Failed to broadcast StreamMessage to session {}: type={}, error={}",
                     sessionId, msg.getType(), e.getMessage());
+        }
+    }
+
+    private String resolveUserId(String sessionId, String userIdHint) {
+        if (userIdHint != null && !userIdHint.isBlank()) {
+            return userIdHint;
+        }
+        if (sessionId == null || sessionId.isBlank()) {
+            return null;
+        }
+        try {
+            return sessionService.getSession(Long.valueOf(sessionId)).getUserId();
+        } catch (Exception e) {
+            log.warn("Failed to resolve userId for session {}: {}", sessionId, e.getMessage());
+            return null;
         }
     }
 
@@ -598,6 +595,7 @@ public class GatewayRelayService {
         // Frontend WS routing expects the skill session id here, not the OpenCode tool
         // session id.
         msg.setSessionId(sessionId);
+        msg.setWelinkSessionId(sessionId);
         if (msg.getEmittedAt() == null || msg.getEmittedAt().isBlank()) {
             msg.setEmittedAt(Instant.now().toString());
         }
@@ -628,6 +626,7 @@ public class GatewayRelayService {
 
                 sendInvokeToGateway(
                         session.getAk(),
+                        session.getUserId(),
                         sessionId,
                         "request_recovery",
                         payloadStr);
@@ -636,5 +635,20 @@ public class GatewayRelayService {
         } catch (Exception e) {
             log.error("Failed to request recovery for session {}: {}", sessionId, e.getMessage());
         }
+    }
+
+
+
+
+    private String fieldNames(JsonNode node) {
+        StringBuilder names = new StringBuilder();
+        Iterator<String> iterator = node.fieldNames();
+        while (iterator.hasNext()) {
+            if (!names.isEmpty()) {
+                names.append(',');
+            }
+            names.append(iterator.next());
+        }
+        return names.toString();
     }
 }

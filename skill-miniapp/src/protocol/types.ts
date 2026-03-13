@@ -37,7 +37,7 @@ export interface StreamTokenUsage {
 export interface StreamMessage {
   type: StreamMessageType;
   seq?: number;
-  welinkSessionId?: string;
+  welinkSessionId?: string | number;
   emittedAt?: string;
   raw?: unknown;
 

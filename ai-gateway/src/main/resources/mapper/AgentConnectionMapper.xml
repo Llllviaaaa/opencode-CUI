@@ -52,11 +52,11 @@
           AND last_seen_at &lt; #{threshold}
     </update>
 
-    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+    <insert id="insert">
         INSERT INTO agent_connection
-            (user_id, ak_id, device_name, mac_address, os, tool_type, tool_version, status, last_seen_at, created_at)
+            (id, user_id, ak_id, device_name, mac_address, os, tool_type, tool_version, status, last_seen_at, created_at)
         VALUES
-            (#{userId}, #{akId}, #{deviceName}, #{macAddress}, #{os}, #{toolType}, #{toolVersion},
+            (#{id}, #{userId}, #{akId}, #{deviceName}, #{macAddress}, #{os}, #{toolType}, #{toolVersion},
              #{status}, #{lastSeenAt}, #{createdAt})
     </insert>
 

@@ -147,8 +147,8 @@ export class ConfigResolver {
     if (process.env.BRIDGE_GATEWAY_URL) {
       gateway.url = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_URL);
     }
-    if (process.env.BRIDGE_GATEWAY_TOOL_TYPE) {
-      gateway.toolType = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_TOOL_TYPE);
+    if (process.env.BRIDGE_GATEWAY_CHANNEL) {
+      gateway.channel = this.substituteEnvVars(process.env.BRIDGE_GATEWAY_CHANNEL);
     }
 
     const reconnect: Record<string, unknown> = {};
@@ -213,10 +213,10 @@ export class ConfigResolver {
       normalized.gateway.url = 'ws://localhost:8081/ws/agent';
     }
 
-    if (!normalized.gateway.toolType) {
-      normalized.gateway.toolType = 'channel';
+    if (!normalized.gateway.channel) {
+      normalized.gateway.channel = 'opencode';
     } else {
-      normalized.gateway.toolType = normalized.gateway.toolType.trim();
+      normalized.gateway.channel = normalized.gateway.channel.trim();
     }
 
     if (!normalized.gateway.heartbeatIntervalMs) {

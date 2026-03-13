@@ -5,22 +5,26 @@ import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.SkillRelayService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.server.ServerHttpRequest;
+import org.springframework.http.server.ServerHttpResponse;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
-import org.springframework.web.util.UriComponentsBuilder;
+import org.springframework.web.socket.server.HandshakeInterceptor;
 
-import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 
 @Slf4j
 @Component
-public class SkillWebSocketHandler extends TextWebSocketHandler {
+public class SkillWebSocketHandler extends TextWebSocketHandler implements HandshakeInterceptor {
 
-    private static final String INVALID_INTERNAL_TOKEN_REASON = "Invalid internal token";
+    private static final String AUTH_PROTOCOL_PREFIX = "auth.";
 
     private final ObjectMapper objectMapper;
     private final SkillRelayService skillRelayService;
@@ -35,14 +39,27 @@ public class SkillWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
-    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        if (!verifyToken(session)) {
-            log.warn("Rejected skill internal connection: sessionId={}, remoteAddr={}",
-                    session.getId(), session.getRemoteAddress());
-            session.close(CloseStatus.NOT_ACCEPTABLE.withReason(INVALID_INTERNAL_TOKEN_REASON));
-            return;
+    public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
+            WebSocketHandler wsHandler, Map<String, Object> attributes) {
+        HandshakeAuth handshakeAuth = extractAcceptedProtocol(request);
+        if (handshakeAuth == null) {
+            log.warn("Rejected skill handshake: invalid auth subprotocol");
+            return false;
         }
 
+        attributes.put(SkillRelayService.SOURCE_ATTR, handshakeAuth.source());
+        response.getHeaders().set("Sec-WebSocket-Protocol", handshakeAuth.protocol());
+        return true;
+    }
+
+    @Override
+    public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response,
+            WebSocketHandler wsHandler, Exception exception) {
+        // No-op
+    }
+
+    @Override
+    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         skillRelayService.registerSkillSession(session);
         log.info("Skill internal WebSocket connected: sessionId={}, remoteAddr={}",
                 session.getId(), session.getRemoteAddress());
@@ -82,31 +99,45 @@ public class SkillWebSocketHandler extends TextWebSocketHandler {
                 session.getId(), exception.getMessage(), exception);
     }
 
-    private boolean verifyToken(WebSocketSession session) {
-        // 1. Try Authorization header first (preferred, avoids token in URL)
-        List<String> authHeaders = session.getHandshakeHeaders().get("Authorization");
-        if (authHeaders != null) {
-            for (String header : authHeaders) {
-                if (header.startsWith("Bearer ")) {
-                    String headerToken = header.substring(7);
-                    if (internalToken.equals(headerToken)) {
-                        return true;
-                    }
+    private HandshakeAuth extractAcceptedProtocol(ServerHttpRequest request) {
+        List<String> protocols = request.getHeaders().get("Sec-WebSocket-Protocol");
+        if (protocols == null || protocols.isEmpty()) {
+            return null;
+        }
+
+        for (String protocolHeader : protocols) {
+            for (String candidate : protocolHeader.split(",")) {
+                String protocol = candidate.trim();
+                if (!protocol.startsWith(AUTH_PROTOCOL_PREFIX)) {
+                    continue;
+                }
+                HandshakeAuth handshakeAuth = verifyProtocolToken(protocol);
+                if (handshakeAuth != null) {
+                    return handshakeAuth;
                 }
             }
         }
+        return null;
+    }
 
-        // 2. Fallback: query parameter (backward compatibility)
-        URI uri = session.getUri();
-        if (uri == null) {
-            return false;
+    private HandshakeAuth verifyProtocolToken(String protocol) {
+        String encodedPayload = protocol.substring(AUTH_PROTOCOL_PREFIX.length());
+        try {
+            byte[] decoded = Base64.getUrlDecoder().decode(encodedPayload);
+            String json = new String(decoded, StandardCharsets.UTF_8);
+            var authNode = objectMapper.readTree(json);
+            String token = authNode.path("token").asText(null);
+            String source = authNode.path("source").asText(null);
+            if (!internalToken.equals(token) || source == null || source.isBlank()) {
+                return null;
+            }
+            return new HandshakeAuth(protocol, source);
+        } catch (Exception e) {
+            log.warn("Failed to decode skill auth subprotocol: {}", e.getMessage());
+            return null;
         }
+    }
 
-        Map<String, String> params = UriComponentsBuilder.fromUri(uri)
-                .build()
-                .getQueryParams()
-                .toSingleValueMap();
-
-        return internalToken.equals(params.get("token"));
+    private record HandshakeAuth(String protocol, String source) {
     }
 }

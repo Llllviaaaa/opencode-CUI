@@ -60,6 +60,16 @@ function normalizeTimestamp(value: string | number | null | undefined): number {
   return Date.now();
 }
 
+function normalizeWelinkSessionId(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.length > 0) {
+    return value;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+  return undefined;
+}
+
 function contentTypeForRole(role: MessageRole): Message['contentType'] {
   switch (role) {
     case 'assistant':
@@ -166,7 +176,7 @@ function normalizeStreamingPart(raw: Record<string, unknown>): StreamMessage | n
   }
 
   const base: Partial<StreamMessage> = {
-    welinkSessionId: typeof raw.welinkSessionId === 'string' ? raw.welinkSessionId : undefined,
+    welinkSessionId: normalizeWelinkSessionId(raw.welinkSessionId),
     emittedAt: typeof raw.emittedAt === 'string' ? raw.emittedAt : undefined,
     messageId: typeof raw.messageId === 'string' ? raw.messageId : undefined,
     messageSeq: typeof raw.messageSeq === 'number' ? raw.messageSeq : undefined,
@@ -236,7 +246,7 @@ function normalizeStreamingPart(raw: Record<string, unknown>): StreamMessage | n
 }
 
 function normalizeIncomingStreamMessage(raw: Record<string, unknown>): StreamMessage {
-  const welinkSessionId = typeof raw.welinkSessionId === 'string' ? raw.welinkSessionId : undefined;
+  const welinkSessionId = normalizeWelinkSessionId(raw.welinkSessionId);
 
   return {
     ...(raw as unknown as StreamMessage),
@@ -260,6 +270,20 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   const knownUserMessageIdsRef = useRef(new Set<string>());
   const pendingTurnRef = useRef(false);
   const sessionIdRef = useRef<string | null>(sessionId);
+
+  const requestResume = useCallback(() => {
+    const ws = wsRef.current;
+    const currentSessionId = sessionIdRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !currentSessionId) {
+      return;
+    }
+
+    try {
+      ws.send(JSON.stringify({ action: 'resume' }));
+    } catch {
+      // Best-effort recovery only.
+    }
+  }, []);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -456,7 +480,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
 
   const handleStreamMessage = useCallback((msg: StreamMessage) => {
     const currentSessionId = sessionIdRef.current;
-    if (msg.welinkSessionId && (!currentSessionId || msg.welinkSessionId !== currentSessionId)) {
+    if (msg.welinkSessionId && (!currentSessionId || String(msg.welinkSessionId) !== String(currentSessionId))) {
       return;
     }
 
@@ -572,16 +596,20 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
         if (!cancelled && historyRequestRef.current === requestId) {
           const normalized = normalizeHistoryMessages(response.content as unknown as Array<Record<string, unknown>>);
           setMessages((prev) => mergeHistoryMessages(prev, normalized));
+          requestResume();
         }
       } catch {
         // History loading failure is non-fatal.
+        if (!cancelled && historyRequestRef.current === requestId) {
+          requestResume();
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [resetStreamingState, sessionId]);
+  }, [requestResume, resetStreamingState, sessionId]);
 
   const connect = useCallback(() => {
     ensureDevUserIdCookie();
@@ -594,6 +622,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
       reconnectAttemptRef.current = 0;
       setError(null);
       setSocketReady(true);
+      requestResume();
     };
 
     ws.onmessage = (event) => {
@@ -616,7 +645,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
       setSocketReady(false);
       scheduleReconnect();
     };
-  }, [handleStreamMessage]);
+  }, [handleStreamMessage, requestResume]);
 
   const scheduleReconnect = useCallback(() => {
     if (reconnectTimerRef.current) {

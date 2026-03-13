@@ -16,6 +16,7 @@ Related documentation:
 - [Protocol Contract](./docs/design/interfaces/protocol-contract.md)
 - [Config Contract](./docs/design/interfaces/config-contract.md)
 - [Validation Report](./docs/quality/validation-report.md)
+- [NPM Publish Guide](./docs/operations/npm-publish-guide.md)
 
 ## Supported Downstream Messages
 
@@ -51,7 +52,7 @@ payload: {
 }
 ```
 
-`create_session` also requires a non-empty top-level `welinkSessionId`; the runtime fails fast with `tool_error` before calling the SDK when it is missing.
+`welinkSessionId` remains optional for `create_session`; when present it is passed through to `session_created` / `tool_error`.
 
 ### `close_session`
 
@@ -148,6 +149,27 @@ Transport response shapes:
 
 ## Configuration
 
+Interactive setup CLI:
+
+- `node ./scripts/setup-message-bridge.mjs`
+
+The CLI will:
+
+- prompt for `ak` and `sk`
+- write `message-bridge.jsonc` in user scope by default
+- enable `@opencode-cui/message-bridge` in OpenCode `plugin` config
+- create a default `.npmrc` scope entry for `@opencode-cui`
+
+The CLI does not prompt for `gateway.url`; existing values are preserved and missing values fall back to the bridge default.
+
+User-scope `.npmrc` path resolution follows this order:
+
+- `NPM_CONFIG_USERCONFIG`, if explicitly set
+- Windows: `%USERPROFILE%\\.npmrc` (falls back to `%HOMEDRIVE%%HOMEPATH%\\.npmrc`)
+- macOS / Linux: `~/.npmrc`
+
+On Windows, the user-scope OpenCode config directory follows the platform-specific config path resolution and prefers `%APPDATA%\\opencode`. The generated npm scope placeholder is written to the resolved `.npmrc` path above and currently keeps the registry value empty for later internal registry completion.
+
 Configuration priority, high to low:
 
 1. `BRIDGE_*` environment variables
@@ -177,7 +199,7 @@ Defaults are defined in:
 | `enabled` | `true` |
 | `config_version` | `1` |
 | `gateway.url` | `ws://localhost:8081/ws/agent` |
-| `gateway.toolType` | `channel` |
+| `gateway.channel` | `opencode` |
 | `gateway.heartbeatIntervalMs` | `30000` |
 | `gateway.reconnect.baseMs` | `1000` |
 | `gateway.reconnect.maxMs` | `30000` |
@@ -186,6 +208,8 @@ Defaults are defined in:
 | `gateway.ping.pongTimeoutMs` | `10000` |
 | `sdk.timeoutMs` | `10000` |
 | `events.allowlist` | `DEFAULT_EVENT_ALLOWLIST` |
+
+`gateway.channel` is mapped to register payload field `toolType` when the bridge connects to ai-gateway.
 
 ## Logging
 
@@ -219,6 +243,21 @@ bun run test:e2e
 bun run test:coverage
 ```
 
+协议回归推荐入口：
+
+```bash
+bun run verify:protocol-smoke
+```
+
+该命令会顺序执行：
+
+- `tests/integration`
+- `tests/e2e/connect-register.test.mjs`
+- `tests/e2e/chat-stream.test.mjs`
+- `tests/e2e/permission-roundtrip.test.mjs`
+
+适合作为修改需求代码后的主回归入口，用于验证 `message-bridge` 与 `ai-gateway` 的协议主链路仍然正确。
+
 Distribution and load verification:
 
 ```bash
@@ -235,3 +274,9 @@ Package installation is the primary path for OpenCode:
 ```
 
 Single-file copy into `.opencode/plugins/` remains available as a compatibility path after `bun run build`.
+
+## Publishing
+
+维护者发布流程、beta 包约定以及私仓切换方式见：
+
+- [NPM Publish Guide](./docs/operations/npm-publish-guide.md)

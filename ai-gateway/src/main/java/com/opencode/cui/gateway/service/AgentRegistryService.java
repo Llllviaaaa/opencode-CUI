@@ -28,14 +28,17 @@ public class AgentRegistryService {
 
     private final AgentConnectionRepository repository;
     private final EventRelayService eventRelayService;
+    private final SnowflakeIdGenerator snowflakeIdGenerator;
 
     @Value("${gateway.agent.heartbeat-timeout-seconds:90}")
     private int heartbeatTimeoutSeconds;
 
     public AgentRegistryService(AgentConnectionRepository repository,
-            EventRelayService eventRelayService) {
+            EventRelayService eventRelayService,
+            SnowflakeIdGenerator snowflakeIdGenerator) {
         this.repository = repository;
         this.eventRelayService = eventRelayService;
+        this.snowflakeIdGenerator = snowflakeIdGenerator;
     }
 
     /**
@@ -47,7 +50,7 @@ public class AgentRegistryService {
      * @return the AgentConnection (reused or newly created)
      */
     @Transactional
-    public AgentConnection register(Long userId, String akId, String deviceName,
+    public AgentConnection register(String userId, String akId, String deviceName,
             String macAddress, String os, String toolType, String toolVersion) {
         String effectiveToolType = toolType != null ? toolType : "channel";
 
@@ -71,6 +74,7 @@ public class AgentRegistryService {
 
         // First-time registration: create new record
         AgentConnection agent = AgentConnection.builder()
+                .id(snowflakeIdGenerator.nextId())
                 .userId(userId)
                 .akId(akId)
                 .deviceName(deviceName)
@@ -117,7 +121,7 @@ public class AgentRegistryService {
     /**
      * Find all online agents for a specific user.
      */
-    public List<AgentConnection> findOnlineByUserId(Long userId) {
+    public List<AgentConnection> findOnlineByUserId(String userId) {
         return repository.findByUserIdAndStatus(userId, AgentStatus.ONLINE);
     }
 

@@ -15,13 +15,13 @@ public interface AgentConnectionRepository {
         List<AgentConnection> findByStatus(@Param("status") AgentStatus status);
 
         /** Find agents by user ID */
-        List<AgentConnection> findByUserId(@Param("userId") Long userId);
+        List<AgentConnection> findByUserId(@Param("userId") String userId);
 
         /**
          * Find agents by user ID and status (e.g. ONLINE agents for a specific user)
          */
         List<AgentConnection> findByUserIdAndStatus(
-                        @Param("userId") Long userId,
+                        @Param("userId") String userId,
                         @Param("status") AgentStatus status);
 
         /**

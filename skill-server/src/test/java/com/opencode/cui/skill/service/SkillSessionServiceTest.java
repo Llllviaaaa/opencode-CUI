@@ -23,11 +23,15 @@ class SkillSessionServiceTest {
     @Mock
     private SkillSessionRepository sessionRepository;
 
+    @Mock
+    private SnowflakeIdGenerator snowflakeIdGenerator;
+
     private SkillSessionService service;
 
     @BeforeEach
     void setUp() {
-        service = new SkillSessionService(sessionRepository);
+        lenient().when(snowflakeIdGenerator.nextId()).thenReturn(42L);
+        service = new SkillSessionService(sessionRepository, snowflakeIdGenerator);
     }
 
     @Test
@@ -35,6 +39,7 @@ class SkillSessionServiceTest {
     void createSessionInsertsAndReturns() {
         SkillSession result = service.createSession("1", "ak-3", "Test", "chat-1");
         assertNotNull(result);
+        assertEquals(42L, result.getId());
         assertEquals(SkillSession.Status.ACTIVE, result.getStatus());
         verify(sessionRepository).insert(any(SkillSession.class));
     }

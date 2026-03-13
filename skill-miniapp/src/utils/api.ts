@@ -119,8 +119,8 @@ export function getDefinitions(): Promise<SkillDefinition[]> {
 
 export interface AgentInfo {
   id: string;
-  userId?: number;
-  akId: string;
+  userId?: string;
+  ak: string;
   deviceName: string;
   os: string;
   toolType: string;
@@ -141,21 +141,21 @@ interface RawAgentInfo {
 }
 
 function normalizeAgent(raw: RawAgentInfo): AgentInfo | null {
-  const akId = raw.akId?.trim() || raw.ak?.trim() || '';
-  if (!akId) {
+  const ak = raw.ak?.trim() || raw.akId?.trim() || '';
+  if (!ak) {
     return null;
   }
 
-  const parsedUserId =
+  const normalizedUserId =
     raw.userId == null || raw.userId === ''
       ? undefined
-      : Number(raw.userId);
+      : String(raw.userId);
 
   return {
-    id: raw.id != null ? String(raw.id) : akId,
-    userId: Number.isFinite(parsedUserId) ? parsedUserId : undefined,
-    akId,
-    deviceName: raw.deviceName?.trim() || akId,
+    id: raw.id != null ? String(raw.id) : ak,
+    userId: normalizedUserId,
+    ak,
+    deviceName: raw.deviceName?.trim() || ak,
     os: raw.os?.trim() || 'UNKNOWN',
     toolType: raw.toolType?.trim() || 'UNKNOWN',
     toolVersion: raw.toolVersion?.trim() || '',
@@ -216,7 +216,7 @@ function normalizeSessionStatus(status: string | null | undefined): Session['sta
 function normalizeSession(raw: BackendSession): Session {
   const createdAt = raw.createdAt ?? new Date().toISOString();
   return {
-    id: raw.welinkSessionId != null ? String(raw.welinkSessionId) : '',
+    id: raw.welinkSessionId != null ? String(raw.welinkSessionId) : '0',
     userId: raw.userId ?? undefined,
     ak: raw.ak ?? undefined,
     title: raw.title ?? '',
@@ -250,7 +250,7 @@ export function getSessions(
 }
 
 /** GET /api/skill/sessions/{id} */
-export function getSession(id: string): Promise<Session> {
+export function getSession(id: string | number): Promise<Session> {
   return request<BackendSession>(`/api/skill/sessions/${id}`).then(normalizeSession);
 }
 
@@ -280,7 +280,7 @@ export async function waitForSessionToolSessionId(
 }
 
 /** DELETE /api/skill/sessions/{id} */
-export function closeSession(id: string): Promise<void> {
+export function closeSession(id: string | number): Promise<void> {
   return request<void>(`/api/skill/sessions/${id}`, { method: 'DELETE' });
 }
 
@@ -290,7 +290,7 @@ export function closeSession(id: string): Promise<void> {
 
 /** POST /api/skill/sessions/{id}/messages */
 export function sendMessage(
-  sessionId: string,
+  sessionId: string | number,
   content: string,
   toolCallId?: string,
 ): Promise<Message> {
@@ -302,7 +302,7 @@ export function sendMessage(
 
 /** GET /api/skill/sessions/{id}/messages */
 export function getMessages(
-  sessionId: string,
+  sessionId: string | number,
   page = 0,
   size = 50,
 ): Promise<PaginatedResponse<Message>> {
@@ -313,7 +313,7 @@ export function getMessages(
 
 /** POST /api/skill/sessions/{id}/permissions/{permId} */
 export function replyPermission(
-  sessionId: string,
+  sessionId: string | number,
   permissionId: string,
   response: 'once' | 'always' | 'reject',
 ): Promise<{ welinkSessionId: string; permissionId: string; response: string }> {
@@ -332,7 +332,7 @@ export function replyPermission(
 
 /** POST /api/skill/sessions/{id}/send-to-im */
 export function sendToIm(
-  sessionId: string,
+  sessionId: string | number,
   content: string,
   chatId: string,
 ): Promise<void> {

@@ -17,6 +17,7 @@ const createValidConfig = (overrides = {}) => ({
   enabled: true,
   gateway: {
     url: 'ws://localhost:8081/ws/agent',
+    channel: 'opencode',
     heartbeatIntervalMs: 30000,
     reconnect: {
       baseMs: 1000,
@@ -45,7 +46,7 @@ afterEach(() => {
   process.env.HOME = originalHome;
 });
 
-describe('config validation for sdk.baseUrl removal', () => {
+describe('config validation for sdk.baseUrl compatibility', () => {
   test('validateConfig passes without sdk.baseUrl', () => {
     const errors = validateConfig({
       config_version: 1,
@@ -74,7 +75,7 @@ describe('config validation for sdk.baseUrl removal', () => {
     expect(errors).toEqual([]);
   });
 
-  test('validateConfig rejects deprecated sdk.baseUrl', () => {
+  test('validateConfig allows sdk.baseUrl', () => {
     const errors = validateConfig({
       config_version: 1,
       enabled: true,
@@ -100,10 +101,10 @@ describe('config validation for sdk.baseUrl removal', () => {
       },
     });
 
-    expect(errors.some((e) => e.path === 'sdk.baseUrl' && e.code === 'DEPRECATED_FIELD')).toBe(true);
+    expect(errors).toEqual([]);
   });
 
-  test('loadConfig throws when project config still contains sdk.baseUrl', async () => {
+  test('loadConfig keeps sdk.baseUrl when project config contains it', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'mb-cfg-'));
     const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
     process.env.HOME = fakeHome;
@@ -139,12 +140,9 @@ describe('config validation for sdk.baseUrl removal', () => {
     );
 
     try {
-      await loadConfig(workspace);
-      throw new Error('expected loadConfig to fail');
-    } catch (error) {
-      expect(error).toBeInstanceOf(ConfigValidationAggregateError);
-      const typed = error;
-      expect(typed.errors.some((e) => e.path === 'sdk.baseUrl' && e.code === 'DEPRECATED_FIELD')).toBe(true);
+      const config = await loadConfig(workspace);
+      expect(config.sdk.timeoutMs).toBe(10000);
+      expect(config.sdk.baseUrl).toBe('http://localhost:54321');
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
@@ -223,7 +221,7 @@ describe('config validation for sdk.baseUrl removal', () => {
     }
   });
 
-  test('loadConfig logs validation failures through logger', async () => {
+  test('loadConfig does not log validation failures for sdk.baseUrl', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'mb-cfg-'));
     const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
     process.env.HOME = fakeHome;
@@ -274,20 +272,13 @@ describe('config validation for sdk.baseUrl removal', () => {
     );
 
     try {
-      await expect(loadConfig(workspace, logger)).rejects.toBeInstanceOf(ConfigValidationAggregateError);
+      const config = await loadConfig(workspace, logger);
+      expect(config.sdk.baseUrl).toBe('http://localhost:54321');
       await new Promise((r) => setTimeout(r, 10));
 
       const failure = calls.find((entry) => entry.body.message === 'config.validation.failed');
-      expect(failure).toBeDefined();
-      expect(failure.body.extra.component).toBe('config');
-      expect(failure.body.extra.errorCount).toBe(1);
-      expect(failure.body.extra.errors).toEqual([
-        {
-          code: 'DEPRECATED_FIELD',
-          path: 'sdk.baseUrl',
-          message: expect.any(String),
-        },
-      ]);
+      expect(failure).toBeUndefined();
+      expect(calls.some((entry) => entry.body.message === 'config.validation.passed')).toBe(true);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
@@ -493,7 +484,7 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
     }
   });
 
-  test('normalizes default toolType to channel', async () => {
+  test('normalizes default channel to opencode', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'mb-json-defaults-'));
     const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
     process.env.HOME = fakeHome;
@@ -510,7 +501,7 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
             maxMs: 30000,
             exponential: true,
           },
-          toolType: 'channel',
+          channel: 'opencode',
         },
       })),
       'utf8',
@@ -518,8 +509,64 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
 
     try {
       const config = await loadConfig(workspace);
-      expect(config.gateway.toolType).toBe('channel');
+      expect(config.gateway.channel).toBe('opencode');
     } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('loads gateway.channel from BRIDGE_GATEWAY_CHANNEL', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-json-env-channel-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    const originalChannel = process.env.BRIDGE_GATEWAY_CHANNEL;
+    process.env.HOME = fakeHome;
+    process.env.BRIDGE_GATEWAY_CHANNEL = '  miniapp  ';
+
+    await mkdir(join(workspace, '.opencode'), { recursive: true });
+    await writeFile(
+      join(workspace, '.opencode', 'message-bridge.json'),
+      JSON.stringify(createValidConfig()),
+      'utf8',
+    );
+
+    try {
+      const config = await loadConfig(workspace);
+      expect(config.gateway.channel).toBe('miniapp');
+    } finally {
+      if (originalChannel === undefined) {
+        delete process.env.BRIDGE_GATEWAY_CHANNEL;
+      } else {
+        process.env.BRIDGE_GATEWAY_CHANNEL = originalChannel;
+      }
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('ignores removed BRIDGE_GATEWAY_TOOL_TYPE override', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-json-env-tooltype-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    const originalToolType = process.env.BRIDGE_GATEWAY_TOOL_TYPE;
+    process.env.HOME = fakeHome;
+    process.env.BRIDGE_GATEWAY_TOOL_TYPE = 'legacy-tool-type';
+
+    await mkdir(join(workspace, '.opencode'), { recursive: true });
+    await writeFile(
+      join(workspace, '.opencode', 'message-bridge.json'),
+      JSON.stringify(createValidConfig()),
+      'utf8',
+    );
+
+    try {
+      const config = await loadConfig(workspace);
+      expect(config.gateway.channel).toBe('opencode');
+    } finally {
+      if (originalToolType === undefined) {
+        delete process.env.BRIDGE_GATEWAY_TOOL_TYPE;
+      } else {
+        process.env.BRIDGE_GATEWAY_TOOL_TYPE = originalToolType;
+      }
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
     }
