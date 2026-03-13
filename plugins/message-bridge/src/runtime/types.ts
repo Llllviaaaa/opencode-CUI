@@ -1,10 +1,16 @@
-import type {
-  Hooks as OpenCodeHooks,
-  Plugin as OpenCodePlugin,
-  PluginInput as OpenCodePluginInput,
-} from '@opencode-ai/plugin' with { 'resolution-mode': 'import' };
+export interface BridgeEvent {
+  type: string;
+  [key: string]: unknown;
+}
 
-export type PluginInput = OpenCodePluginInput;
-export type Hooks = OpenCodeHooks;
-export type Plugin = OpenCodePlugin;
-export type BridgeEvent = Parameters<NonNullable<Hooks['event']>>[0]['event'];
+export interface PluginInput {
+  client: unknown;
+  directory?: string;
+  worktree?: string;
+}
+
+export interface Hooks {
+  event?: (input: { event: BridgeEvent }) => Promise<void> | void;
+}
+
+export type Plugin = (input: PluginInput) => Promise<Hooks> | Hooks;

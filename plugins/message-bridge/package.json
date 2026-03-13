@@ -13,12 +13,14 @@
   },
   "files": [
     "dist",
-    "release",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "license": "MIT",
   "scripts": {
     "build": "node ./scripts/build.mjs",
+    "pack:check": "npm pack --dry-run",
+    "prepublishOnly": "npm run build && npm test",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:unit": "bun test tests/unit",

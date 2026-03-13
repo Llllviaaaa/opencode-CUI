@@ -16,6 +16,7 @@ Related documentation:
 - [Protocol Contract](./docs/design/interfaces/protocol-contract.md)
 - [Config Contract](./docs/design/interfaces/config-contract.md)
 - [Validation Report](./docs/quality/validation-report.md)
+- [NPM Publish Guide](./docs/operations/npm-publish-guide.md)
 
 ## Supported Downstream Messages
 
@@ -252,3 +253,9 @@ Package installation is the primary path for OpenCode:
 ```
 
 Single-file copy into `.opencode/plugins/` remains available as a compatibility path after `bun run build`.
+
+## Publishing
+
+维护者发布流程、beta 包约定以及私仓切换方式见：
+
+- [NPM Publish Guide](./docs/operations/npm-publish-guide.md)
