@@ -1,0 +1,8 @@
+graph LR
+    subgraph PC Agent
+        A["message-bridge Plugin"] -->|"AK/SK 签名认证"| B(("WS /ws/agent"))
+    end
+    subgraph AI-Gateway
+        B --> C["AgentWebSocketHandler"]
+        C <--> D["EventRelayService"]
+    end

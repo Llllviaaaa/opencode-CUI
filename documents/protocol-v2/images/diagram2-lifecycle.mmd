@@ -1,0 +1,26 @@
+sequenceDiagram
+    participant P as Plugin
+    participant GW as AI-Gateway
+
+    P->>GW: WebSocket 连接 (auth. subprotocol)
+    Note over GW: AK/SK 签名验证
+    GW-->>P: 连接建立
+    Note over GW: 启动 register 超时计时器 (10s)
+
+    P->>GW: register 消息
+    Note over GW: 设备绑定校验 + 重复连接检查
+    alt 注册成功
+        GW-->>P: register_ok
+        Note over P: 状态 → READY, 启动心跳
+    else 注册失败
+        GW-->>P: register_rejected
+        GW->>P: 关闭连接 (4403/4409)
+    end
+
+    loop 每 heartbeatIntervalMs
+        P->>GW: heartbeat
+        Note over GW: 更新 last_seen_at
+    end
+
+    Note over P: 断开时
+    GW->>GW: markOffline + 通知 Skill Server agent_offline

@@ -1,0 +1,35 @@
+sequenceDiagram
+    participant P as Plugin
+    participant GW as AI-Gateway
+    participant SS as Skill Server
+
+    Note over P,GW: 连接阶段
+    P->>GW: WS 连接 (AK/SK auth subprotocol)
+    GW-->>P: 连接建立
+    P->>GW: register
+    GW-->>P: register_ok
+    GW->>SS: agent_online
+
+    Note over P,SS: 创建 Session
+    SS->>GW: invoke(create_session, welinkSessionId)
+    GW->>P: invoke(create_session, welinkSessionId)
+    P->>P: SDK session.create()
+    P->>GW: session_created(welinkSessionId, toolSessionId)
+    GW->>SS: session_created(welinkSessionId, toolSessionId)
+
+    Note over P,SS: 用户发消息
+    SS->>GW: invoke(chat, {text, toolSessionId})
+    GW->>P: invoke(chat, {text, toolSessionId})
+    P->>P: SDK session.prompt()
+
+    loop OpenCode 事件流
+        P->>GW: tool_event(toolSessionId, event)
+        GW->>SS: tool_event(toolSessionId, event)
+    end
+
+    P->>GW: tool_done(toolSessionId)
+    GW->>SS: tool_done(toolSessionId)
+
+    Note over P,SS: 断开连接
+    P->>GW: WS 关闭
+    GW->>SS: agent_offline
