@@ -33,7 +33,7 @@ export interface ToolErrorMessage {
 
 export interface SessionCreatedMessage {
   type: "session_created";
-  welinkSessionId?: string;
+  welinkSessionId: string;
   toolSessionId?: string;
   session?: {
     sessionId: string;

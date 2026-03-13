@@ -111,9 +111,10 @@ function normalizeInvoke(message: Record<string, unknown>): NormalizeResult<Invo
     return fail(`unsupported action: ${String(message.action)}`, "unsupported_action", "invoke", action);
   }
 
+  const welinkSessionId = asString(message.welinkSessionId);
   const base = {
     type: "invoke" as const,
-    welinkSessionId: asString(message.welinkSessionId),
+    welinkSessionId,
     action,
   };
 
@@ -123,8 +124,18 @@ function normalizeInvoke(message: Record<string, unknown>): NormalizeResult<Invo
       return payload.ok ? ok({ ...base, action, payload: payload.value }) : payload;
     }
     case "create_session": {
+      if (!welinkSessionId) {
+        return fail("create_session requires welinkSessionId", "missing_required_field", "invoke", "create_session");
+      }
       const payload = normalizeCreateSessionPayload(message.payload);
-      return payload.ok ? ok({ ...base, action, payload: payload.value }) : payload;
+      return payload.ok
+        ? ok({
+            type: "invoke",
+            welinkSessionId,
+            action,
+            payload: payload.value,
+          })
+        : payload;
     }
     case "close_session": {
       const payload = normalizeCloseSessionPayload(message.payload);

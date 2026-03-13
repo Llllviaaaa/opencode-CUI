@@ -39,6 +39,49 @@ class FakeConnection {
 
 function createBridge(runtimeOverride) {
   const connection = new FakeConnection();
+  let agentEventListener = null;
+  const runtimeBase = runtimeOverride ?? {
+    subagent: {
+      async run() {
+        return { runId: "run_1" };
+      },
+      async waitForRun() {
+        return { status: "ok" };
+      },
+      async getSessionMessages() {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "hello from openclaw",
+                },
+              ],
+            },
+          ],
+        };
+      },
+      async deleteSession() {},
+    },
+    channel: {},
+  };
+  const runtime = {
+    ...runtimeBase,
+    events: {
+      ...(runtimeBase.events ?? {}),
+      onAgentEvent(listener) {
+        agentEventListener = listener;
+        const unsubscribe = runtimeBase.events?.onAgentEvent?.(listener);
+        return () => {
+          agentEventListener = null;
+          unsubscribe?.();
+          return true;
+        };
+      },
+    },
+  };
   const bridge = new OpenClawGatewayBridge({
     account: {
       accountId: "default",
@@ -73,37 +116,17 @@ function createBridge(runtimeOverride) {
       },
       channels: {},
     },
-    runtime: runtimeOverride ?? {
-      subagent: {
-        async run() {
-          return { runId: "run_1" };
-        },
-        async waitForRun() {
-          return { status: "ok" };
-        },
-        async getSessionMessages() {
-          return {
-            messages: [
-              {
-                role: "assistant",
-                content: [
-                  {
-                    type: "text",
-                    text: "hello from openclaw",
-                  },
-                ],
-              },
-            ],
-          };
-        },
-        async deleteSession() {},
-      },
-      channel: {},
-    },
+    runtime,
     setStatus() {},
     connectionFactory: () => connection,
   });
-  return { bridge, connection };
+  return {
+    bridge,
+    connection,
+    emitAgentEvent(event) {
+      return agentEventListener?.(event);
+    },
+  };
 }
 
 test("chat invoke produces tool_event and tool_done", async () => {
@@ -147,8 +170,8 @@ test("chat invoke streams delta events through OpenClaw reply dispatcher", async
           return ctx;
         },
         async dispatchReplyWithBufferedBlockDispatcher({ dispatcherOptions }) {
-          await dispatcherOptions.deliver({ text: "hello " });
-          await dispatcherOptions.deliver({ text: "from openclaw" });
+          await dispatcherOptions.deliver({ text: "hello " }, { kind: "block" });
+          await dispatcherOptions.deliver({ text: "from openclaw" }, { kind: "block" });
         },
       },
     },
@@ -183,6 +206,167 @@ test("chat invoke streams delta events through OpenClaw reply dispatcher", async
   assert.equal(connection.sent[4].event.properties.part.text, "hello from openclaw");
   assert.equal("delta" in connection.sent[4].event.properties, false);
   assert.equal(connection.sent.at(-1).type, "tool_done");
+});
+
+test("chat invoke projects tool lifecycle into tool parts", async () => {
+  let emitToolEvent = () => {};
+  const runtime = {
+    events: {
+      onAgentEvent() {
+        return () => true;
+      },
+    },
+    channel: {
+      routing: {
+        resolveAgentRoute() {
+          return {
+            accountId: "default",
+            agentId: "agent_1",
+          };
+        },
+      },
+      reply: {
+        resolveEnvelopeFormatOptions() {
+          return {};
+        },
+        formatAgentEnvelope({ body }) {
+          return body;
+        },
+        finalizeInboundContext(ctx) {
+          return ctx;
+        },
+        async dispatchReplyWithBufferedBlockDispatcher({ dispatcherOptions }) {
+          await emitToolEvent({
+            stream: "tool",
+            sessionKey: "bridge:default:tool_3",
+            data: {
+              phase: "start",
+              name: "write",
+              toolCallId: "call_1",
+            },
+          });
+          await emitToolEvent({
+            stream: "tool",
+            sessionKey: "bridge:default:tool_3",
+            data: {
+              phase: "result",
+              name: "write",
+              toolCallId: "call_1",
+              meta: {
+                summary: "write to ~/Desktop/text.txt",
+              },
+              isError: false,
+            },
+          });
+          await dispatcherOptions.deliver({ text: "saved successfully" }, { kind: "tool" });
+          await dispatcherOptions.deliver({ text: "done" }, { kind: "block" });
+        },
+      },
+    },
+  };
+
+  const { bridge, connection, emitAgentEvent } = createBridge(runtime);
+  emitToolEvent = emitAgentEvent;
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_3",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_3",
+      text: "write file",
+    },
+  });
+
+  const toolEvents = connection.sent
+    .filter((item) => item.type === "tool_event")
+    .map((item) => item.event);
+  const toolUpdates = toolEvents.filter((event) => event.type === "message.part.updated" && event.properties.part.type === "tool");
+
+  assert.equal(toolEvents[1].type, "message.updated");
+  assert.equal(toolUpdates.length, 3);
+  assert.equal(toolUpdates[0].properties.part.tool, "write");
+  assert.equal(toolUpdates[0].properties.part.state.status, "running");
+  assert.equal(toolUpdates[1].properties.part.state.status, "completed");
+  assert.equal(toolUpdates[1].properties.part.state.title, "write to ~/Desktop/text.txt");
+  assert.equal(toolUpdates[2].properties.part.state.output, "saved successfully");
+  assert.equal(toolUpdates[0].properties.part.id, toolUpdates[2].properties.part.id);
+});
+
+test("chat invoke projects tool errors into final error tool parts", async () => {
+  let emitToolEvent = () => {};
+  const runtime = {
+    events: {
+      onAgentEvent() {
+        return () => true;
+      },
+    },
+    channel: {
+      routing: {
+        resolveAgentRoute() {
+          return {
+            accountId: "default",
+            agentId: "agent_1",
+          };
+        },
+      },
+      reply: {
+        resolveEnvelopeFormatOptions() {
+          return {};
+        },
+        formatAgentEnvelope({ body }) {
+          return body;
+        },
+        finalizeInboundContext(ctx) {
+          return ctx;
+        },
+        async dispatchReplyWithBufferedBlockDispatcher({ dispatcherOptions }) {
+          await emitToolEvent({
+            stream: "tool",
+            sessionKey: "bridge:default:tool_4",
+            data: {
+              phase: "start",
+              name: "write",
+              toolCallId: "call_err_1",
+            },
+          });
+          await emitToolEvent({
+            stream: "tool",
+            sessionKey: "bridge:default:tool_4",
+            data: {
+              phase: "result",
+              name: "write",
+              toolCallId: "call_err_1",
+              isError: true,
+            },
+          });
+          await dispatcherOptions.deliver({ text: "failed" }, { kind: "block" });
+        },
+      },
+    },
+  };
+
+  const { bridge, connection, emitAgentEvent } = createBridge(runtime);
+  emitToolEvent = emitAgentEvent;
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_4",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_4",
+      text: "write file",
+    },
+  });
+
+  const toolUpdates = connection.sent
+    .filter((item) => item.type === "tool_event")
+    .map((item) => item.event)
+    .filter((event) => event.type === "message.part.updated" && event.properties.part.type === "tool");
+
+  assert.equal(toolUpdates.length, 2);
+  assert.equal(toolUpdates[1].properties.part.state.status, "error");
+  assert.equal(toolUpdates[1].properties.part.state.error, "tool_write_failed");
 });
 
 test("unsupported actions fail closed", async () => {

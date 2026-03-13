@@ -51,13 +51,19 @@ export interface InvokePayloadByAction {
   question_reply: QuestionReplyPayload;
 }
 
+type InvokeMessageBase<K extends InvokeAction> = {
+  type: "invoke";
+  action: K;
+  payload: InvokePayloadByAction[K];
+};
+
 export type InvokeMessageByAction = {
-  [K in InvokeAction]: {
-    type: "invoke";
-    welinkSessionId?: string;
-    action: K;
-    payload: InvokePayloadByAction[K];
-  };
+  chat: InvokeMessageBase<"chat"> & { welinkSessionId?: string };
+  create_session: InvokeMessageBase<"create_session"> & { welinkSessionId: string };
+  close_session: InvokeMessageBase<"close_session"> & { welinkSessionId?: string };
+  permission_reply: InvokeMessageBase<"permission_reply"> & { welinkSessionId?: string };
+  abort_session: InvokeMessageBase<"abort_session"> & { welinkSessionId?: string };
+  question_reply: InvokeMessageBase<"question_reply"> & { welinkSessionId?: string };
 };
 
 export type InvokeMessage = InvokeMessageByAction[InvokeAction];

@@ -1,7 +1,5 @@
 # Message Bridge OpenClaw 插件使用指南
 
-本文档默认面向 OpenClaw `--dev` 环境。
-
 本文档面向两类使用方式：
 
 - 作为独立插件目录安装到 OpenClaw
@@ -36,7 +34,7 @@
   - `ak`: `test-ak-openclaw-001`
   - `sk`: `test-sk-openclaw-001`
 
-## 2. macOS 安装步骤（OpenClaw dev 环境）
+## 2. macOS 安装步骤
 
 ### 2.1 构建
 
@@ -49,7 +47,7 @@ npm test
 
 ### 2.2 安装为目录插件
 
-OpenClaw dev 环境插件目录通常是：
+OpenClaw dev profile 目录通常是：
 
 - `~/.openclaw-dev/extensions/message-bridge`
 
@@ -62,9 +60,9 @@ cp ./package.json ~/.openclaw-dev/extensions/message-bridge/package.json
 cp ./openclaw.plugin.json ~/.openclaw-dev/extensions/message-bridge/openclaw.plugin.json
 ```
 
-### 2.3 配置 OpenClaw dev 环境
+### 2.3 配置 OpenClaw
 
-编辑 OpenClaw dev 配置文件 `~/.openclaw-dev/openclaw.json`：
+编辑 `~/.openclaw-dev/openclaw.json`：
 
 ```json
 {
@@ -112,13 +110,13 @@ cp ./openclaw.plugin.json ~/.openclaw-dev/extensions/message-bridge/openclaw.plu
 }
 ```
 
-### 2.4 启动 OpenClaw dev gateway
+### 2.4 启动
 
 ```bash
 openclaw --dev gateway run --allow-unconfigured --verbose
 ```
 
-## 3. Windows 安装步骤（OpenClaw dev 环境）
+## 3. Windows 安装步骤
 
 以下示例使用 PowerShell。
 
@@ -133,7 +131,7 @@ npm test
 
 ### 3.2 安装为目录插件
 
-假设 OpenClaw dev 环境目录在：
+假设 OpenClaw dev profile 在：
 
 - `%USERPROFILE%\.openclaw-dev\extensions\message-bridge`
 
@@ -147,7 +145,7 @@ Copy-Item .\package.json "$target\package.json" -Force
 Copy-Item .\openclaw.plugin.json "$target\openclaw.plugin.json" -Force
 ```
 
-### 3.3 配置 OpenClaw dev 环境
+### 3.3 配置
 
 编辑：
 
@@ -155,7 +153,7 @@ Copy-Item .\openclaw.plugin.json "$target\openclaw.plugin.json" -Force
 
 配置内容与 macOS 相同，只需要把 `gateway.url`、`ak`、`sk` 替换成你的实际值。
 
-### 3.4 启动 OpenClaw dev gateway
+### 3.4 启动
 
 ```powershell
 openclaw --dev gateway run --allow-unconfigured --verbose
@@ -163,7 +161,7 @@ openclaw --dev gateway run --allow-unconfigured --verbose
 
 ## 4. 打包为单个 JS 文件
 
-这一方式适合“把插件源码以一个 JS 文件形式直接集成到 OpenClaw dev 环境扩展目录”。
+这一方式适合“把插件源码以一个 JS 文件形式直接集成到 OpenClaw 扩展目录”。
 
 ### 4.1 执行 bundle
 
@@ -184,7 +182,7 @@ npm run build:bundle
 - 这意味着目标环境里仍然需要安装 OpenClaw runtime
 - 但插件自己的本地模块不再需要整目录拷贝
 
-### 4.2 以单文件方式集成到 OpenClaw dev 环境
+### 4.2 以单文件方式集成到 OpenClaw
 
 目标目录最少保留三个文件：
 

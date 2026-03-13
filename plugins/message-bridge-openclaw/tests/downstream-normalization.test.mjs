@@ -26,3 +26,15 @@ test("rejects unsupported message", () => {
   assert.equal(result.ok, false);
   assert.equal(result.error.code, "unsupported_message");
 });
+
+test("create_session requires welinkSessionId", () => {
+  const result = normalizeDownstreamMessage({
+    type: "invoke",
+    action: "create_session",
+    payload: {},
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "missing_required_field");
+  assert.match(result.error.message, /welinkSessionId/);
+});
