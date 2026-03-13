@@ -149,6 +149,19 @@ Transport response shapes:
 
 ## Configuration
 
+Interactive setup CLI:
+
+- macOS / Linux: `bash ./scripts/setup-message-bridge.sh`
+- Windows: `pwsh ./scripts/setup-message-bridge.ps1`
+
+The CLI will:
+
+- prompt for `ak` and `sk`
+- write `message-bridge.jsonc` in user scope by default
+- enable `@opencode-cui/message-bridge` in OpenCode `plugin` config
+
+The CLI does not prompt for `gateway.url`; existing values are preserved and missing values fall back to the bridge default.
+
 Configuration priority, high to low:
 
 1. `BRIDGE_*` environment variables
