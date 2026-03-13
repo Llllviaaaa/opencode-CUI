@@ -13,8 +13,7 @@
   },
   "files": [
     "dist",
-    "scripts/setup-message-bridge.sh",
-    "scripts/setup-message-bridge.ps1",
+    "scripts/setup-message-bridge.mjs",
     "README.md",
     "LICENSE"
   ],

@@ -1,5 +1,6 @@
 {
   "dependencies": {
-    "@opencode-cui/message-bridge": "file:../plugins/message-bridge"
+    "@opencode-cui/message-bridge": "file:../plugins/message-bridge",
+    "@opencode-ai/plugin": "1.2.24"
   }
 }
