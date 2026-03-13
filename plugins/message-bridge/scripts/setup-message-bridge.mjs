@@ -191,17 +191,20 @@ function buildNextOpencodeConfig(content) {
 
 class PromptSession {
   constructor() {
-    this.queue = null;
+    this.queue = [];
+    this.useBufferedInput = false;
     this.readline = null;
   }
 
   async init() {
-    if (stdin.isTTY) {
+    if (stdin.isTTY && stdout.isTTY) {
       this.readline = createInterface({ input: stdin, output: stdout });
       return;
     }
 
-    // 非 TTY 场景统一读取整段 stdin，便于测试和脚本管道调用。
+    this.useBufferedInput = true;
+
+    // 非 TTY/半 TTY 场景统一读取整段 stdin，便于 bat、测试和脚本管道调用。
     const piped = await new Promise((resolve, reject) => {
       let data = '';
       stdin.setEncoding('utf8');
@@ -215,7 +218,8 @@ class PromptSession {
   }
 
   async ask(promptLabel, currentValue = '') {
-    if (this.queue) {
+    if (this.useBufferedInput) {
+      writeLine(currentValue ? `${promptLabel} [${currentValue}]` : promptLabel);
       const value = this.queue.shift() ?? '';
       return value.trim() ? value.trim() : currentValue;
     }
@@ -226,7 +230,8 @@ class PromptSession {
   }
 
   async confirmAction(promptLabel) {
-    if (this.queue) {
+    if (this.useBufferedInput) {
+      writeLine(`${promptLabel} [y/N]`);
       const value = (this.queue.shift() ?? '').trim().toLowerCase();
       return value === 'y' || value === 'yes';
     }

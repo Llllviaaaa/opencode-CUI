@@ -205,6 +205,9 @@ describe('setup cli', () => {
       expect(bridge).toContain('"sk": "sk-stdin"');
       expect(opencode).toContain('"plugin": ["@opencode-cui/message-bridge"]');
       expect(npmrc).toContain('@opencode-cui:registry=');
+      expect(result.stdout).toContain('请输入 AK（必填）');
+      expect(result.stdout).toContain('请输入 SK（必填）');
+      expect(result.stdout).toContain('确认写入以上配置 [y/N]');
     });
   });
 
