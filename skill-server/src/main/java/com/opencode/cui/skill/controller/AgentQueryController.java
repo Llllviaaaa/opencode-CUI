@@ -1,5 +1,6 @@
 package com.opencode.cui.skill.controller;
 
+import com.opencode.cui.skill.model.AgentSummary;
 import com.opencode.cui.skill.model.ApiResponse;
 import com.opencode.cui.skill.service.GatewayApiClient;
 
@@ -13,7 +14,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * Proxy endpoint for querying online agents from AI-Gateway.
@@ -38,11 +38,11 @@ public class AgentQueryController {
      * Returns online agents belonging to the cookie-authenticated user.
      */
     @GetMapping
-    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getOnlineAgents(
+    public ResponseEntity<ApiResponse<List<AgentSummary>>> getOnlineAgents(
             @CookieValue(value = "userId", required = false) String userIdCookie) {
         String userId = accessControlService.requireUserId(userIdCookie);
         log.debug("Querying online agents for userId={}", userId);
-        List<Map<String, Object>> agents = gatewayApiClient.getOnlineAgentsByUserId(userId);
+        List<AgentSummary> agents = gatewayApiClient.getOnlineAgentSummaries(userId);
         return ResponseEntity.ok(ApiResponse.ok(agents));
     }
 }

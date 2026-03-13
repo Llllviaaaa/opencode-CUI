@@ -516,7 +516,9 @@ public class GatewayRelayService {
         // session id.
         msg.setSessionId(sessionId);
         msg.setWelinkSessionId(sessionId);
-        if (msg.getEmittedAt() == null || msg.getEmittedAt().isBlank()) {
+        // 协议规定 permission.reply, agent.online, agent.offline, error 不含 emittedAt
+        if (!isEmittedAtExcluded(msg.getType())
+                && (msg.getEmittedAt() == null || msg.getEmittedAt().isBlank())) {
             msg.setEmittedAt(Instant.now().toString());
         }
         try {
@@ -559,6 +561,19 @@ public class GatewayRelayService {
 
 
 
+
+    /**
+     * 协议规定以下事件类型不含 emittedAt 字段。
+     */
+    private static final java.util.Set<String> EMITTED_AT_EXCLUDED_TYPES = java.util.Set.of(
+            StreamMessage.Types.PERMISSION_REPLY,
+            StreamMessage.Types.AGENT_ONLINE,
+            StreamMessage.Types.AGENT_OFFLINE,
+            StreamMessage.Types.ERROR);
+
+    private boolean isEmittedAtExcluded(String type) {
+        return type != null && EMITTED_AT_EXCLUDED_TYPES.contains(type);
+    }
 
     private String fieldNames(JsonNode node) {
         StringBuilder names = new StringBuilder();

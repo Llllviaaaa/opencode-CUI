@@ -2,6 +2,7 @@ package com.opencode.cui.skill.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.model.AgentSummary;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
@@ -77,6 +78,32 @@ public class GatewayApiClient {
                     userId, e.getMessage());
             return Collections.emptyList();
         }
+    }
+
+    /**
+     * 查询指定用户的在线 Agent 列表，返回类型化的 AgentSummary DTO。
+     */
+    public List<AgentSummary> getOnlineAgentSummaries(String userId) {
+        return getOnlineAgentsByUserId(userId).stream()
+                .map(this::toAgentSummary)
+                .toList();
+    }
+
+    private AgentSummary toAgentSummary(Map<String, Object> raw) {
+        return AgentSummary.builder()
+                .ak(strVal(raw, "ak"))
+                .status(strVal(raw, "status"))
+                .deviceName(strVal(raw, "deviceName"))
+                .os(strVal(raw, "os"))
+                .toolType(strVal(raw, "toolType"))
+                .toolVersion(strVal(raw, "toolVersion"))
+                .connectedAt(strVal(raw, "connectedAt"))
+                .build();
+    }
+
+    private static String strVal(Map<String, Object> map, String key) {
+        Object v = map.get(key);
+        return v != null ? v.toString() : null;
     }
 
     public boolean isAkOwnedByUser(String ak, String userId) {

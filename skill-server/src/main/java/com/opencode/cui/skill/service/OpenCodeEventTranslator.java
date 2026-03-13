@@ -79,8 +79,8 @@ public class OpenCodeEventTranslator {
      */
     public StreamMessage translatePermissionFromGateway(JsonNode node) {
         String sessionId = node.path("welinkSessionId").asText(null);
-        return baseBuilder(StreamMessage.Types.PERMISSION_ASK, sessionId)
-                .role("assistant")
+        String messageId = node.path("messageId").asText(null);
+        return messageBuilder(StreamMessage.Types.PERMISSION_ASK, sessionId, messageId)
                 .permissionId(node.path("permissionId").asText(null))
                 .permType(node.path("permType").asText(null))
                 .title(node.path("command").asText(null))
@@ -383,6 +383,7 @@ public class OpenCodeEventTranslator {
 
         return partBuilder(StreamMessage.Types.QUESTION, sessionId, messageId, partId, partSeq)
                 .toolName("question")
+                .toolCallId(props.path("callID").asText(props.path("toolCallId").asText(null)))
                 .status("running")
                 .input(jsonNodeToMap(props))
                 .header(firstQuestion.path("header").asText(null))

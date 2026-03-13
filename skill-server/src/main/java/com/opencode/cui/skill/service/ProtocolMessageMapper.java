@@ -151,6 +151,7 @@ public final class ProtocolMessageMapper {
             case "text" -> "text";
             case "reasoning" -> "thinking";
             case "tool" -> "question".equals(part.getToolName()) ? "question" : "tool";
+            case "permission" -> "permission";
             case "file" -> "file";
             default -> null;
         };

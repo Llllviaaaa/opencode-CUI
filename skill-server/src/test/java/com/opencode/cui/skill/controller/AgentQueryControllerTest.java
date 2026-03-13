@@ -12,7 +12,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -37,18 +36,18 @@ class AgentQueryControllerTest {
     @Test
     @DisplayName("getOnlineAgents returns 200 for cookie-authenticated user")
     void getOnlineAgentsWithCookie() {
-        List<Map<String, Object>> agents = List.of(Map.of("ak", "ak-1"));
+        var agent = com.opencode.cui.skill.model.AgentSummary.builder().ak("ak-1").build();
+        List<com.opencode.cui.skill.model.AgentSummary> agents = List.of(agent);
         when(accessControlService.requireUserId("10001")).thenReturn("10001");
-        when(gatewayApiClient.getOnlineAgentsByUserId("10001")).thenReturn(agents);
+        when(gatewayApiClient.getOnlineAgentSummaries("10001")).thenReturn(agents);
 
         var response = controller.getOnlineAgents("10001");
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
         assertEquals(0, response.getBody().getCode());
-        assertEquals("ak-1", response.getBody().getData().get(0).get("ak"));
-        assertEquals("ak-1", response.getBody().getData().get(0).get("akId"));
-        verify(gatewayApiClient).getOnlineAgentsByUserId("10001");
+        assertEquals("ak-1", response.getBody().getData().get(0).getAk());
+        verify(gatewayApiClient).getOnlineAgentSummaries("10001");
     }
 
     @Test

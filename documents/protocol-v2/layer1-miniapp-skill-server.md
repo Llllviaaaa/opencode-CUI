@@ -62,7 +62,7 @@ POST /api/skill/sessions
 
 **副作用**：若 `ak` 非空，发送 `create_session` invoke 到 AI-Gateway。
 
-**代码**：[SkillSessionController.java L53-79](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillSessionController.java#L53-L79)
+**代码**：[SkillSessionController.java L53-75](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillSessionController.java#L53-L75)
 
 ---
 
@@ -93,7 +93,7 @@ GET /api/skill/sessions?page=0&size=20&status=ACTIVE&ak=xxx&imGroupId=yyy
 }
 ```
 
-**代码**：[SkillSessionController.java L81-123](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillSessionController.java#L81-L123)
+**代码**：[SkillSessionController.java L81-94](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillSessionController.java#L81-L94)
 
 ---
 
@@ -127,7 +127,7 @@ DELETE /api/skill/sessions/{id}
 1. 状态改为 `CLOSED`
 2. 若 `ak != null && toolSessionId != null`，发送 `close_session` invoke 到 Gateway
 
-**代码**：[SkillSessionController.java L125-163](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillSessionController.java#L125-L163)
+**代码**：[SkillSessionController.java L118-147](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillSessionController.java#L118-L147)
 
 ---
 
@@ -147,7 +147,7 @@ POST /api/skill/sessions/{id}/abort
 
 **副作用**：若 `ak != null && toolSessionId != null`，发送 `abort_session` invoke 到 Gateway（不改变 session 状态）。
 
-**代码**：[SkillSessionController.java L165-208](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillSessionController.java#L165-L208)
+**代码**：[SkillSessionController.java L154-188](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillSessionController.java#L154-L188)
 
 ---
 
@@ -173,7 +173,7 @@ POST /api/skill/sessions/{sessionId}/messages
 
 **错误**：`400` content 为空 / `409` 会话已关闭
 
-**代码**：[SkillMessageController.java L75-145](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillMessageController.java#L75-L145)
+**代码**：[SkillMessageController.java L75-139](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillMessageController.java#L75-L139)
 
 ---
 
@@ -222,7 +222,7 @@ GET /api/skill/sessions/{sessionId}/messages?page=0&size=50
 
 > 使用 `@JsonInclude(NON_NULL)`，null 字段不输出。
 
-**代码**：[SkillMessageController.java L147-184](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillMessageController.java#L147-L184)
+**代码**：[SkillMessageController.java L145-172](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillMessageController.java#L145-L172)
 
 ---
 
@@ -239,7 +239,7 @@ POST /api/skill/sessions/{sessionId}/send-to-im
 
 **响应 `data`**：`{ "success": true }`
 
-**代码**：[SkillMessageController.java L186-235](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillMessageController.java#L186-L235)
+**代码**：[SkillMessageController.java L178-217](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillMessageController.java#L178-L217)
 
 ---
 
@@ -265,7 +265,7 @@ POST /api/skill/sessions/{sessionId}/permissions/{permId}
 1. 发送 `permission_reply` invoke 到 Gateway
 2. 推送 `permission.reply` StreamMessage 到 WS
 
-**代码**：[SkillMessageController.java L237-312](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillMessageController.java#L237-L312)
+**代码**：[SkillMessageController.java L225-288](file:///D:/02_Lab/Projects/sandbox/opencode-CUI/skill-server/src/main/java/com/opencode/cui/skill/controller/SkillMessageController.java#L225-L288)
 
 ---
 
@@ -396,7 +396,6 @@ ws://{host}/ws/skill/stream
   "status": "running",
   "input": { "command": "ls -la" },
   "output": "file1.txt",
-  "error": null,
   "title": "执行命令"
 }
 ```
@@ -408,7 +407,7 @@ ws://{host}/ws/skill/stream
 | `status` | `part.state.status` |
 | `input` | `part.state.input` |
 | `output` | `part.state.output` |
-| `error` | `part.state.error` |
+| `error` | `part.state.error`（null 时省略） |
 | `title` | `part.state.title` |
 
 > 当 `toolName == "question"` 且 `status == "running"` 时，转为 `question` 类型。
