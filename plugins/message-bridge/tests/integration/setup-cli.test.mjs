@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-const scriptPath = resolve('scripts/setup-message-bridge.sh');
+const scriptPath = resolve('scripts/setup-message-bridge.mjs');
 
 async function withTempDirs(fn) {
   const home = await mkdtemp(join(tmpdir(), 'mb-cli-home-'));
@@ -18,7 +18,7 @@ async function withTempDirs(fn) {
 }
 
 function runSetup({ cwd, home, input, scope = 'user' }) {
-  return spawnSync('bash', [scriptPath, '--scope', scope], {
+  return spawnSync('node', [scriptPath, '--scope', scope], {
     cwd,
     env: {
       ...process.env,
@@ -30,13 +30,12 @@ function runSetup({ cwd, home, input, scope = 'user' }) {
   });
 }
 
-function runPowerShellSetup({ cwd, home, input, scope = 'user' }) {
-  return spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-File', resolve('scripts/setup-message-bridge.ps1'), '-Scope', scope], {
+function runSetupWithEnv({ cwd, env: extraEnv, input, scope = 'user' }) {
+  return spawnSync('node', [scriptPath, '--scope', scope], {
     cwd,
     env: {
       ...process.env,
-      HOME: home,
-      XDG_CONFIG_HOME: join(home, '.config'),
+      ...extraEnv,
     },
     input,
     encoding: 'utf8',
@@ -57,10 +56,14 @@ describe('setup cli', () => {
       const configRoot = join(home, '.config', 'opencode');
       const bridge = await readFile(join(configRoot, 'message-bridge.jsonc'), 'utf8');
       const opencode = await readFile(join(configRoot, 'opencode.jsonc'), 'utf8');
+      const npmrc = await readFile(join(home, '.npmrc'), 'utf8');
 
       expect(bridge).toContain('"ak": "ak-test"');
       expect(bridge).toContain('"sk": "sk-test"');
       expect(opencode).toContain('"plugin": ["@opencode-cui/message-bridge"]');
+      expect(npmrc).toContain('@opencode-cui:registry=');
+      expect(result.stdout).toContain('- AK: ak-test');
+      expect(result.stdout).toContain('- SK: sk-test');
       expect(result.stdout).toContain('下次启动 OpenCode 时会自动安装并加载 npm 插件。');
     });
   });
@@ -83,7 +86,7 @@ describe('setup cli', () => {
       const result = runSetup({
         cwd: project,
         home,
-        input: '\nnew-sk\ny\n',
+        input: 'old-ak\nnew-sk\ny\n',
       });
 
       expect(result.status).toBe(0);
@@ -95,6 +98,30 @@ describe('setup cli', () => {
       expect(bridge).toContain('"ak": "old-ak"');
       expect(bridge).toContain('"sk": "new-sk"');
       expect(opencode.match(/@opencode-cui\/message-bridge/g)?.length).toBe(1);
+    });
+  });
+
+  test('adds missing sk into existing auth object without breaking json', async () => {
+    await withTempDirs(async ({ home, project }) => {
+      const configRoot = join(home, '.config', 'opencode');
+      await mkdir(configRoot, { recursive: true });
+      await writeFile(
+        join(configRoot, 'message-bridge.jsonc'),
+        '{\n  "auth": {\n    "ak": "only-ak"\n  }\n}\n',
+        'utf8',
+      );
+
+      const result = runSetup({
+        cwd: project,
+        home,
+        input: 'only-ak\nadded-sk\ny\n',
+      });
+
+      expect(result.status).toBe(0);
+
+      const bridge = await readFile(join(configRoot, 'message-bridge.jsonc'), 'utf8');
+      expect(bridge).toContain('"ak": "only-ak",');
+      expect(bridge).toContain('"sk": "added-sk"');
     });
   });
 
@@ -128,10 +155,12 @@ describe('setup cli', () => {
 
       const bridge = await readFile(join(project, '.opencode', 'message-bridge.jsonc'), 'utf8');
       const opencode = await readFile(join(project, 'opencode.jsonc'), 'utf8');
+      const npmrc = await readFile(join(project, '.npmrc'), 'utf8');
 
       expect(bridge).toContain('"ak": "ak-project"');
       expect(bridge).toContain('"sk": "sk-project"');
       expect(opencode).toContain('"plugin": ["@opencode-cui/message-bridge"]');
+      expect(npmrc).toContain('@opencode-cui:registry=');
     });
   });
 
@@ -151,17 +180,18 @@ describe('setup cli', () => {
         await Promise.all([
           readFile(join(configRoot, 'message-bridge.jsonc'), 'utf8').then(() => true).catch(() => false),
           readFile(join(configRoot, 'opencode.jsonc'), 'utf8').then(() => true).catch(() => false),
+          readFile(join(home, '.npmrc'), 'utf8').then(() => true).catch(() => false),
         ]),
-      ).toEqual([false, false]);
+      ).toEqual([false, false, false]);
     });
   });
 
-  test('powershell script creates user-scope bridge and opencode config', async () => {
+  test('supports stdin input without tty', async () => {
     await withTempDirs(async ({ home, project }) => {
-      const result = runPowerShellSetup({
+      const result = runSetup({
         cwd: project,
         home,
-        input: "ak-ps\nsk-ps\ny\n",
+        input: "ak-stdin\nsk-stdin\ny\n",
       });
 
       expect(result.status).toBe(0);
@@ -169,10 +199,82 @@ describe('setup cli', () => {
       const configRoot = join(home, '.config', 'opencode');
       const bridge = await readFile(join(configRoot, 'message-bridge.jsonc'), 'utf8');
       const opencode = await readFile(join(configRoot, 'opencode.jsonc'), 'utf8');
+      const npmrc = await readFile(join(home, '.npmrc'), 'utf8');
 
-      expect(bridge).toContain('"ak": "ak-ps"');
-      expect(bridge).toContain('"sk": "sk-ps"');
+      expect(bridge).toContain('"ak": "ak-stdin"');
+      expect(bridge).toContain('"sk": "sk-stdin"');
       expect(opencode).toContain('"plugin": ["@opencode-cui/message-bridge"]');
+      expect(npmrc).toContain('@opencode-cui:registry=');
+    });
+  });
+
+  test('requires non-empty ak and sk before confirmation', async () => {
+    await withTempDirs(async ({ home, project }) => {
+      const result = runSetup({
+        cwd: project,
+        home,
+        input: '\nak-required\n\nsk-required\ny\n',
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain('AK 不能为空，请重新输入');
+      expect(result.stderr).toContain('SK 不能为空，请重新输入');
+
+      const configRoot = join(home, '.config', 'opencode');
+      const bridge = await readFile(join(configRoot, 'message-bridge.jsonc'), 'utf8');
+      expect(bridge).toContain('"ak": "ak-required"');
+      expect(bridge).toContain('"sk": "sk-required"');
+    });
+  });
+
+  test('uses windows-style global paths when platform is win32', async () => {
+    await withTempDirs(async ({ home, project }) => {
+      const appData = join(home, 'AppData', 'Roaming');
+      await mkdir(appData, { recursive: true });
+      const result = runSetupWithEnv({
+        cwd: project,
+        env: {
+          HOME: home,
+          USERPROFILE: home,
+          APPDATA: appData,
+          MB_SETUP_PLATFORM: 'win32',
+        },
+        input: 'ak-win\nsk-win\ny\n',
+      });
+
+      expect(result.status).toBe(0);
+
+      const configRoot = join(appData, 'opencode');
+      const bridge = await readFile(join(configRoot, 'message-bridge.jsonc'), 'utf8');
+      const opencode = await readFile(join(configRoot, 'opencode.jsonc'), 'utf8');
+      const npmrc = await readFile(join(home, '.npmrc'), 'utf8');
+
+      expect(bridge).toContain('"ak": "ak-win"');
+      expect(opencode).toContain('"plugin": ["@opencode-cui/message-bridge"]');
+      expect(npmrc).toContain('@opencode-cui:registry=');
+    });
+  });
+
+  test('prefers NPM_CONFIG_USERCONFIG for user-scope npmrc path', async () => {
+    await withTempDirs(async ({ home, project }) => {
+      const customNpmrc = join(home, 'custom', 'npmrc', '.npmrc');
+      const result = runSetupWithEnv({
+        cwd: project,
+        env: {
+          HOME: home,
+          XDG_CONFIG_HOME: join(home, '.config'),
+          NPM_CONFIG_USERCONFIG: customNpmrc,
+        },
+        input: 'ak-custom\nsk-custom\ny\n',
+      });
+
+      expect(result.status).toBe(0);
+
+      const npmrc = await readFile(customNpmrc, 'utf8');
+      expect(npmrc).toContain('@opencode-cui:registry=');
+      expect(
+        await readFile(join(home, '.npmrc'), 'utf8').then(() => true).catch(() => false),
+      ).toBe(false);
     });
   });
 });

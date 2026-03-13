@@ -151,16 +151,24 @@ Transport response shapes:
 
 Interactive setup CLI:
 
-- macOS / Linux: `bash ./scripts/setup-message-bridge.sh`
-- Windows: `pwsh ./scripts/setup-message-bridge.ps1`
+- `node ./scripts/setup-message-bridge.mjs`
 
 The CLI will:
 
 - prompt for `ak` and `sk`
 - write `message-bridge.jsonc` in user scope by default
 - enable `@opencode-cui/message-bridge` in OpenCode `plugin` config
+- create a default `.npmrc` scope entry for `@opencode-cui`
 
 The CLI does not prompt for `gateway.url`; existing values are preserved and missing values fall back to the bridge default.
+
+User-scope `.npmrc` path resolution follows this order:
+
+- `NPM_CONFIG_USERCONFIG`, if explicitly set
+- Windows: `%USERPROFILE%\\.npmrc` (falls back to `%HOMEDRIVE%%HOMEPATH%\\.npmrc`)
+- macOS / Linux: `~/.npmrc`
+
+On Windows, the user-scope OpenCode config directory follows the platform-specific config path resolution and prefers `%APPDATA%\\opencode`. The generated npm scope placeholder is written to the resolved `.npmrc` path above and currently keeps the registry value empty for later internal registry completion.
 
 Configuration priority, high to low:
 
