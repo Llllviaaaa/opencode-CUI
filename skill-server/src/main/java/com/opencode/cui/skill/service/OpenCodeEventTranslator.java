@@ -109,6 +109,29 @@ public class OpenCodeEventTranslator {
         String role = resolveMessageRole(sessionId, messageId);
 
         rememberPartType(sessionId, partId, partType);
+
+        // User 消息文本特殊处理（必须在 shouldIgnoreMessage 之前）
+        // 解决事件时序问题：message.part.updated 和 message.updated 到达顺序不确定
+        if ("text".equals(partType) && delta == null) {
+            String textContent = part.path("text").asText("");
+            if ("user".equals(role)) {
+                // Case A：message.updated(role=user) 已到达，role 已缓存
+                // 直接发射 TEXT_DONE(role=user)，绕过 shouldIgnoreMessage 过滤
+                if (!textContent.isBlank()) {
+                    log.info("Emitting user TEXT_DONE (role cached): sessionId={}, messageId={}", sessionId, messageId);
+                    return partBuilder(StreamMessage.Types.TEXT_DONE, sessionId, messageId, partId, partSeq, role)
+                            .content(textContent)
+                            .build();
+                }
+            } else {
+                // Case B：message.updated 还没到，role 未知（默认 assistant）
+                // 缓存文本，等 translateMessageUpdated(role=user) 到达时回溯使用
+                if (sessionId != null && messageId != null && !textContent.isBlank()) {
+                    messageTexts.put(messageCacheKey(sessionId, messageId), textContent);
+                }
+            }
+        }
+
         if (shouldIgnoreMessage(role)) {
             return null;
         }
