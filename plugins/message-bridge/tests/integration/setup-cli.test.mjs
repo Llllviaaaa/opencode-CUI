@@ -227,7 +227,7 @@ describe('setup cli', () => {
     });
   });
 
-  test('uses windows-style global paths when platform is win32', async () => {
+  test('uses windows-style global config path when platform is win32', async () => {
     await withTempDirs(async ({ home, project }) => {
       const appData = join(home, 'AppData', 'Roaming');
       await mkdir(appData, { recursive: true });
@@ -244,7 +244,7 @@ describe('setup cli', () => {
 
       expect(result.status).toBe(0);
 
-      const configRoot = join(appData, 'opencode');
+      const configRoot = join(home, '.config', 'opencode');
       const bridge = await readFile(join(configRoot, 'message-bridge.jsonc'), 'utf8');
       const opencode = await readFile(join(configRoot, 'opencode.jsonc'), 'utf8');
       const npmrc = await readFile(join(home, '.npmrc'), 'utf8');

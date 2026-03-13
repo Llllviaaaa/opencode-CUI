@@ -65,12 +65,7 @@ function resolveGlobalConfigDir() {
     return join(env.XDG_CONFIG_HOME, 'opencode');
   }
   if (currentPlatform === 'win32') {
-    if (env.APPDATA) {
-      return join(env.APPDATA, 'opencode');
-    }
-    if (env.USERPROFILE) {
-      return join(env.USERPROFILE, '.config', 'opencode');
-    }
+    return join(resolveWindowsHomeDir(), '.config', 'opencode');
   }
   return join(homedir(), '.config', 'opencode');
 }

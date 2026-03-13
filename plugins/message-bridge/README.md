@@ -168,7 +168,7 @@ User-scope `.npmrc` path resolution follows this order:
 - Windows: `%USERPROFILE%\\.npmrc` (falls back to `%HOMEDRIVE%%HOMEPATH%\\.npmrc`)
 - macOS / Linux: `~/.npmrc`
 
-On Windows, the user-scope OpenCode config directory follows the platform-specific config path resolution and prefers `%APPDATA%\\opencode`. The generated npm scope placeholder is written to the resolved `.npmrc` path above and currently keeps the registry value empty for later internal registry completion.
+On Windows, the user-scope OpenCode config directory follows the same path convention as OpenCode itself: `%USERPROFILE%\\.config\\opencode`. The generated npm scope placeholder is written to the resolved `.npmrc` path above and currently keeps the registry value empty for later internal registry completion.
 
 Configuration priority, high to low:
 
