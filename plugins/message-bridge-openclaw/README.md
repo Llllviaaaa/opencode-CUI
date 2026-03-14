@@ -16,6 +16,20 @@ Implementation plan:
 
 - `docs/implementation-plan.md`
 
+Protocol conversion sequences:
+
+- `docs/protocol-sequence.md`
+
+## 安装方式
+
+当前仓库已验证的安装方式都属于本地扩展安装：
+
+- 目录复制安装（推荐）：复制 `dist/`、`package.json`、`openclaw.plugin.json` 到 `~/.openclaw/extensions/message-bridge` 或 `~/.openclaw-dev/extensions/message-bridge`
+- 符号链接安装（开发联调）：把插件根目录链接到 profile 的 `extensions/message-bridge`
+- bundle 单文件安装：执行 `npm run build:bundle`，复制 `bundle/index.js`、`package.json`、`openclaw.plugin.json`，并把入口改成 `index.js`
+
+`openclaw plugins install` 是 OpenClaw 的通用安装入口，但本仓库当前没有已验证的已发布分发流程；安装命令、配置示例和 bundle 入口修改方式见 `docs/USAGE.zh-CN.md`。
+
 ## V1 scope
 
 Supported:
@@ -193,4 +207,4 @@ Confirm the actual assistant output in the latest session file under:
 - `permission_reply` is not implemented
 - `question_reply` is not implemented
 - streaming is block-level, not token-level
-- install flow is still dev-profile oriented, not a published distribution flow
+- published `openclaw plugins install` distribution flow is not yet validated for this package
