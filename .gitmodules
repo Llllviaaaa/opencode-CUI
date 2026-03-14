@@ -8,3 +8,6 @@
 	url = https://github.com/yuzhangCZ/message-bridge-opencode-plugin.git
 	branch = feat/testApp
 	shallow = true
+[submodule "plugins/openclaw-feishu"]
+	path = plugins/openclaw-feishu
+	url = https://github.com/AlexAnys/openclaw-feishu.git
