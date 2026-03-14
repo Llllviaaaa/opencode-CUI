@@ -16,6 +16,7 @@
     "build": "tsc",
     "build:bundle": "node scripts/build-bundle.mjs",
     "install:bundle:dev": "node -e \"const {execSync}=require('node:child_process'); const isWin=process.platform==='win32'; const cmd=isWin ? 'powershell -ExecutionPolicy Bypass -File scripts/install-bundle-dev.ps1' : 'sh scripts/install-bundle-dev.sh'; execSync('npm run build:bundle', {stdio:'inherit'}); execSync(cmd, {stdio:'inherit'});\"",
+    "validate:skill-relay": "node scripts/skill-relay-live-check.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test tests/**/*.test.mjs"
   },

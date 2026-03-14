@@ -730,6 +730,128 @@ test("bridge status tracks ready, inbound, outbound and heartbeat timestamps", a
   assert.equal(typeof heartbeatStatus?.lastOutboundAt, "number");
 });
 
+test("status_query returns status_response", async () => {
+  const { bridge, connection } = createBridge();
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "status_query",
+  });
+
+  assert.deepEqual(connection.sent, [
+    {
+      type: "status_response",
+      opencodeOnline: true,
+    },
+  ]);
+});
+
+test("create_session returns session_created with bridged session id", async () => {
+  const { bridge, connection } = createBridge();
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_create_1",
+    action: "create_session",
+    payload: {
+      sessionId: "tool_create_1",
+    },
+  });
+
+  assert.deepEqual(connection.sent, [
+    {
+      type: "session_created",
+      welinkSessionId: "wl_create_1",
+      toolSessionId: "tool_create_1",
+      session: {
+        sessionId: "bridge:default:tool_create_1",
+      },
+    },
+  ]);
+});
+
+test("close_session deletes session and returns tool_done", async () => {
+  const deletedSessionKeys = [];
+  const { bridge, connection } = createBridge({
+    subagent: {
+      async deleteSession({ sessionKey }) {
+        deletedSessionKeys.push(sessionKey);
+      },
+    },
+    channel: {},
+  });
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_close_1",
+    action: "create_session",
+    payload: {
+      sessionId: "tool_close_1",
+    },
+  });
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_close_1",
+    action: "close_session",
+    payload: {
+      toolSessionId: "tool_close_1",
+    },
+  });
+
+  assert.deepEqual(deletedSessionKeys, ["bridge:default:tool_close_1"]);
+  assert.equal(connection.sent.at(-1).type, "tool_done");
+  assert.equal(connection.sent.at(-1).toolSessionId, "tool_close_1");
+});
+
+test("abort_session deletes session and returns tool_done", async () => {
+  const deletedSessionKeys = [];
+  const { bridge, connection } = createBridge({
+    subagent: {
+      async deleteSession({ sessionKey }) {
+        deletedSessionKeys.push(sessionKey);
+      },
+    },
+    channel: {},
+  });
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_abort_1",
+    action: "create_session",
+    payload: {
+      sessionId: "tool_abort_1",
+    },
+  });
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_abort_1",
+    action: "abort_session",
+    payload: {
+      toolSessionId: "tool_abort_1",
+    },
+  });
+
+  assert.deepEqual(deletedSessionKeys, ["bridge:default:tool_abort_1"]);
+  assert.equal(connection.sent.at(-1).type, "tool_done");
+  assert.equal(connection.sent.at(-1).toolSessionId, "tool_abort_1");
+});
+
+test("abort_session returns unknown_tool_session for missing session", async () => {
+  const { bridge, connection } = createBridge();
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_abort_missing",
+    action: "abort_session",
+    payload: {
+      toolSessionId: "tool_abort_missing",
+    },
+  });
+
+  assert.equal(connection.sent.at(-1).type, "tool_error");
+  assert.equal(connection.sent.at(-1).toolSessionId, "tool_abort_missing");
+  assert.equal(connection.sent.at(-1).error, "unknown_tool_session");
+});
+
 test("unsupported actions fail closed", async () => {
   const { bridge, connection } = createBridge();
   await bridge.start();

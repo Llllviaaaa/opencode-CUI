@@ -75,6 +75,42 @@ function isAuthRejectedReason(reason: string): boolean {
   );
 }
 
+function getProbeReason(probe: Record<string, unknown> | null): string {
+  if (!probe || typeof probe.reason !== "string") {
+    return "";
+  }
+  return probe.reason.trim();
+}
+
+function getHeartbeatThresholdMs(snapshot: MessageBridgeAccountSnapshot): number {
+  const heartbeatIntervalMs =
+    typeof snapshot.heartbeatIntervalMs === "number" ? snapshot.heartbeatIntervalMs : 0;
+  if (heartbeatIntervalMs <= 0) {
+    return 0;
+  }
+  return heartbeatIntervalMs * 2 + HEARTBEAT_GRACE_MS;
+}
+
+function isRuntimeHealthyForDuplicateConnection(
+  snapshot: MessageBridgeAccountSnapshot,
+  nowAt: number,
+): boolean {
+  if (snapshot.connected !== true || typeof snapshot.lastReadyAt !== "number") {
+    return false;
+  }
+
+  if (typeof snapshot.lastHeartbeatAt !== "number") {
+    return true;
+  }
+
+  const heartbeatThresholdMs = getHeartbeatThresholdMs(snapshot);
+  if (heartbeatThresholdMs <= 0) {
+    return true;
+  }
+
+  return nowAt - snapshot.lastHeartbeatAt <= heartbeatThresholdMs;
+}
+
 function createProbeConnection(account: MessageBridgeResolvedAccount): GatewayConnection {
   return new DefaultGatewayConnection({
     url: account.gateway.url,
@@ -293,6 +329,11 @@ export function collectMessageBridgeStatusIssues(
   for (const rawSnapshot of accounts) {
     const snapshot = asMessageBridgeSnapshot(rawSnapshot);
     const probe = isRecord(snapshot.probe) ? snapshot.probe : null;
+    const probeReason = getProbeReason(probe);
+    const suppressDuplicateConnectionIssue =
+      probe?.state === "rejected" &&
+      probeReason === "duplicate_connection" &&
+      isRuntimeHealthyForDuplicateConnection(snapshot, nowAt);
     const missingConfigFields = getMissingConfigFields(snapshot);
     const heartbeatIntervalMs =
       typeof snapshot.heartbeatIntervalMs === "number" ? snapshot.heartbeatIntervalMs : 0;
@@ -327,8 +368,8 @@ export function collectMessageBridgeStatusIssues(
       );
     }
 
-    if (probe && probe.state === "rejected") {
-      const rawReason = typeof probe.reason === "string" ? probe.reason.trim() : "";
+    if (probe && probe.state === "rejected" && !suppressDuplicateConnectionIssue) {
+      const rawReason = probeReason;
       const reason = rawReason ? `：${rawReason}` : "";
       if (rawReason && isAuthRejectedReason(rawReason)) {
         issues.push(
@@ -387,7 +428,7 @@ export function collectMessageBridgeStatusIssues(
       continue;
     }
 
-    const heartbeatThresholdMs = heartbeatIntervalMs * 2 + HEARTBEAT_GRACE_MS;
+    const heartbeatThresholdMs = getHeartbeatThresholdMs(snapshot);
     if (
       heartbeatIntervalMs > 0 &&
       typeof snapshot.lastHeartbeatAt === "number" &&

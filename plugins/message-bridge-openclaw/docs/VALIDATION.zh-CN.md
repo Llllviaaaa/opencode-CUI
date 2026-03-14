@@ -12,6 +12,7 @@
 - 安装与联调：`docs/USAGE.zh-CN.md`
 - 实施计划：`docs/implementation-plan.md`
 - 协议时序：`docs/protocol-sequence.md`
+- 本轮验证与覆盖审计：`docs/VALIDATION-AUDIT.zh-CN.md`
 
 ## 1. 验证范围
 
@@ -23,6 +24,7 @@
 - `status_query`
 - `create_session`
 - `chat`
+- `close_session`
 - 不支持动作是否 fail-closed
 - 新会话能否稳定走到回复完成
 
@@ -43,6 +45,11 @@
 - `pairing` / `security` / `directory` / `outbound`
 - 更高层的流式体验优化
 
+说明：
+
+- `abort_session` 属于支持能力，但本手册把它定义为“自动化主验证，手工可选补充”
+- 原因是它依赖运行中会话和更严格的时序，手工联调的稳定性不如自动化测试
+
 ## 2. 前置条件
 
 执行本文步骤前，先确保：
@@ -52,6 +59,7 @@
 - 插件已构建并安装到 OpenClaw profile
 - `~/.openclaw-dev/openclaw.json` 或 `~/.openclaw/openclaw.json` 中已允许加载 `message-bridge`
 - 已准备可用的 `gateway.url`、`auth.ak`、`auth.sk`
+- 如果要做 live 验证，`gateway.mode` 必须显式配置成 `local`
 
 如果你还没完成安装和基础配置，先按 `docs/USAGE.zh-CN.md` 执行：
 
@@ -68,6 +76,22 @@
 
 除非特别说明，下面所有 `openclaw` 命令都默认带 `--dev`。
 如果你验证的是默认 profile，把命令中的 `--dev` 去掉即可。
+
+### 2.1 当前 live 阻塞前置项
+
+如果下面两条命令还不能成功：
+
+```bash
+openclaw --dev channels status --probe --json
+openclaw --dev doctor
+```
+
+那么依赖 OpenClaw dev gateway 的手工步骤只能判定为“阻塞”，不能判定为“失败”或“通过”。
+
+最常见的阻塞原因有两个：
+
+- `~/.openclaw-dev/openclaw.json` 里没有 `gateway.mode=local`
+- 本地没有启动 `openclaw --dev gateway run --allow-unconfigured --verbose`
 
 ## 3. 快速入口
 
@@ -90,7 +114,11 @@ node --test tests/downstream-normalization.test.mjs tests/bridge-chat.test.mjs
 
 - 下行协议归一化
 - `create_session` 参数约束
+- `status_query -> status_response`
+- `create_session -> session_created`
 - `chat -> tool_event -> tool_done`
+- `close_session`
+- `abort_session`
 - dispatcher / subagent fallback
 - 超时与错误路径
 - ready / inbound / outbound / heartbeat 运行时状态
@@ -198,7 +226,19 @@ redis-cli publish agent:test-ak-openclaw-001 '{"type":"invoke","action":"chat","
 
 - `~/.openclaw-dev/agents/main/sessions`
 
-#### 步骤 6：验证 unsupported action fail-closed
+#### 步骤 6：验证 `close_session`
+
+```bash
+redis-cli publish agent:test-ak-openclaw-001 '{"type":"invoke","action":"close_session","welinkSessionId":"welink-stage1-session-001","payload":{"toolSessionId":"session-stage1-001"}}'
+```
+
+预期结果：
+
+- `ai-gateway.log` 中出现 `tool_done`
+- 响应里包含 `toolSessionId=session-stage1-001`
+- 后续同一 `toolSessionId` 不应再继续复用旧 session 状态
+
+#### 步骤 7：验证 unsupported action fail-closed
 
 ```bash
 redis-cli publish agent:test-ak-openclaw-001 '{"type":"invoke","action":"permission_reply","welinkSessionId":"welink-stage1-unsupported-001","payload":{"toolSessionId":"tool-stage1-unsupported-001","permissionId":"perm-001","response":"once"}}'
@@ -214,7 +254,7 @@ redis-cli publish agent:test-ak-openclaw-001 '{"type":"invoke","action":"permiss
 
 阶段一可视为通过，需要同时满足：
 
-- 注册、心跳、`status_query`、`create_session`、`chat` 均可联通
+- 注册、心跳、`status_query`、`create_session`、`chat`、`close_session` 均可联通
 - 新会话下 `chat` 能稳定产生回复，不依赖旧会话残留状态
 - unsupported action 走 fail-closed，而不是静默成功
 - 自动化回归全部通过
@@ -421,6 +461,12 @@ openclaw --dev channels remove --channel message-bridge --delete
 - 这个场景已由自动化测试覆盖
 - 推荐以 `tests/config-status.test.mjs` 为准
 - 如果要手工复现，需先构造 disabled 配置，再走交互式 `channels add` 的 `Add display names for these accounts?` 分支
+
+关于 `abort_session`：
+
+- 这个场景以自动化测试为主验证
+- 当前已覆盖成功中止和 `unknown_tool_session` 错误分支
+- 如果要做 live 补充验证，建议只在可稳定复现“运行中会话”的环境里执行
 
 ### 5.3 阶段二通过标准
 

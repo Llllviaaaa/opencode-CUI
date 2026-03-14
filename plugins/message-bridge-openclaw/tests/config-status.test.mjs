@@ -615,3 +615,69 @@ test("message bridge onboarding skips legacy accounts config instead of reportin
     true,
   );
 });
+
+test("collectMessageBridgeStatusIssues suppresses duplicate_connection when runtime is already healthy", async () => {
+  const issues = collectMessageBridgeStatusIssues(
+    [
+      {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        running: true,
+        connected: true,
+        lastError: null,
+        probe: {
+          ok: false,
+          state: "rejected",
+          latencyMs: 20,
+          reason: "duplicate_connection",
+        },
+        heartbeatIntervalMs: 1_000,
+        runTimeoutMs: 2_000,
+        lastReadyAt: 4_000,
+        lastHeartbeatAt: 4_500,
+        lastInboundAt: 4_700,
+        lastOutboundAt: 4_800,
+        missingConfigFields: [],
+        legacyAccountsConfigured: false,
+      },
+    ],
+    () => 6_000,
+  );
+
+  assert.deepEqual(issues, []);
+});
+
+test("collectMessageBridgeStatusIssues still reports duplicate_connection when runtime is not healthy", async () => {
+  const issues = collectMessageBridgeStatusIssues(
+    [
+      {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        running: true,
+        connected: false,
+        lastError: null,
+        probe: {
+          ok: false,
+          state: "rejected",
+          latencyMs: 20,
+          reason: "duplicate_connection",
+        },
+        heartbeatIntervalMs: 1_000,
+        runTimeoutMs: 2_000,
+        lastReadyAt: null,
+        lastHeartbeatAt: null,
+        lastInboundAt: null,
+        lastOutboundAt: null,
+        missingConfigFields: [],
+        legacyAccountsConfigured: false,
+      },
+    ],
+    () => 6_000,
+  );
+
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].kind, "runtime");
+  assert.match(issues[0].message, /duplicate_connection/);
+});
