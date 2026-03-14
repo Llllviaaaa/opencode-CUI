@@ -293,6 +293,89 @@ test("chat invoke projects tool lifecycle into tool parts", async () => {
   assert.equal(toolUpdates[0].properties.part.id, toolUpdates[2].properties.part.id);
 });
 
+test("chat invoke maps tool lifecycle by runId when agent events omit sessionKey", async () => {
+  let emitToolEvent = () => {};
+  const runtime = {
+    events: {
+      onAgentEvent() {
+        return () => true;
+      },
+    },
+    channel: {
+      routing: {
+        resolveAgentRoute() {
+          return {
+            accountId: "default",
+            agentId: "agent_1",
+          };
+        },
+      },
+      reply: {
+        resolveEnvelopeFormatOptions() {
+          return {};
+        },
+        formatAgentEnvelope({ body }) {
+          return body;
+        },
+        finalizeInboundContext(ctx) {
+          return ctx;
+        },
+        async dispatchReplyWithBufferedBlockDispatcher({ dispatcherOptions, replyOptions }) {
+          replyOptions?.onAgentRunStart?.("run_tool_5");
+          await emitToolEvent({
+            runId: "run_tool_5",
+            stream: "tool",
+            data: {
+              phase: "start",
+              name: "write",
+              toolCallId: "call_5",
+            },
+          });
+          await emitToolEvent({
+            runId: "run_tool_5",
+            stream: "tool",
+            data: {
+              phase: "result",
+              name: "write",
+              toolCallId: "call_5",
+              meta: {
+                summary: "write via run mapping",
+              },
+              isError: false,
+            },
+          });
+          await dispatcherOptions.deliver({ text: "saved via runId" }, { kind: "tool" });
+          await dispatcherOptions.deliver({ text: "done" }, { kind: "block" });
+        },
+      },
+    },
+  };
+
+  const { bridge, connection, emitAgentEvent } = createBridge(runtime);
+  emitToolEvent = emitAgentEvent;
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_5",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_5",
+      text: "write file",
+    },
+  });
+
+  const toolUpdates = connection.sent
+    .filter((item) => item.type === "tool_event")
+    .map((item) => item.event)
+    .filter((event) => event.type === "message.part.updated" && event.properties.part.type === "tool");
+
+  assert.equal(toolUpdates.length, 3);
+  assert.equal(toolUpdates[0].properties.part.state.status, "running");
+  assert.equal(toolUpdates[1].properties.part.state.status, "completed");
+  assert.equal(toolUpdates[1].properties.part.state.title, "write via run mapping");
+  assert.equal(toolUpdates[2].properties.part.state.output, "saved via runId");
+});
+
 test("chat invoke projects tool errors into final error tool parts", async () => {
   let emitToolEvent = () => {};
   const runtime = {

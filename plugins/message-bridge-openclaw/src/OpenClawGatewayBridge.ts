@@ -266,11 +266,13 @@ export class OpenClawGatewayBridge {
     string,
     {
       toolSessionId: string;
+      runId: string | null;
       assistantStream: AssistantStreamState;
       toolStates: Map<string, ToolPartState>;
       pendingToolResultTarget: string | null;
     }
   >();
+  private readonly activeRunToSessionKey = new Map<string, string>();
   private running = false;
   private status: MessageBridgeStatusSnapshot;
   private unsubscribeAgentEvents: (() => boolean) | null = null;
@@ -354,6 +356,7 @@ export class OpenClawGatewayBridge {
     this.unsubscribeAgentEvents?.();
     this.unsubscribeAgentEvents = null;
     this.activeToolSessions.clear();
+    this.activeRunToSessionKey.clear();
     this.status.running = false;
     this.status.connected = false;
     this.status.lastStopAt = Date.now();
@@ -410,6 +413,7 @@ export class OpenClawGatewayBridge {
     const startedAt = Date.now();
     this.activeToolSessions.set(record.sessionKey, {
       toolSessionId: record.toolSessionId,
+      runId: null,
       assistantStream,
       toolStates,
       pendingToolResultTarget: null,
@@ -539,12 +543,15 @@ export class OpenClawGatewayBridge {
           },
         },
         replyOptions: {
+          onAgentRunStart: (runId) => {
+            this.trackSessionRunId(record.sessionKey, runId);
+          },
           onModelSelected,
           timeoutOverrideSeconds: Math.ceil(this.options.account.runTimeoutMs / 1000),
         },
       });
     } catch (error) {
-      this.activeToolSessions.delete(record.sessionKey);
+      this.clearActiveToolSession(record.sessionKey);
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.sendToolEvent({
         type: "tool_event",
@@ -583,7 +590,7 @@ export class OpenClawGatewayBridge {
       toolSessionId: record.toolSessionId,
       welinkSessionId: record.welinkSessionId,
     });
-    this.activeToolSessions.delete(record.sessionKey);
+    this.clearActiveToolSession(record.sessionKey);
   }
 
   private async handleChatWithSubagentFallback(
@@ -657,6 +664,7 @@ export class OpenClawGatewayBridge {
       toolSessionId: record.toolSessionId,
       welinkSessionId: record.welinkSessionId,
     });
+    this.clearActiveToolSession(record.sessionKey);
   }
 
   private handleCreateSession(message: Extract<InvokeMessage, { action: "create_session" }>): void {
@@ -675,6 +683,7 @@ export class OpenClawGatewayBridge {
   private async handleCloseSession(message: Extract<InvokeMessage, { action: "close_session" }>): Promise<void> {
     const record = this.sessionRegistry.delete(message.payload.toolSessionId);
     if (record) {
+      this.clearActiveToolSession(record.sessionKey);
       await this.getSubagentRuntime()?.deleteSession({
         sessionKey: record.sessionKey,
       });
@@ -698,6 +707,7 @@ export class OpenClawGatewayBridge {
       return;
     }
 
+    this.clearActiveToolSession(record.sessionKey);
     await this.getSubagentRuntime()?.deleteSession({
       sessionKey: record.sessionKey,
     });
@@ -815,18 +825,45 @@ export class OpenClawGatewayBridge {
     });
   }
 
-  private handleRuntimeAgentEvent(evt: ToolAgentEvent): void {
-    if (evt.stream !== "tool" || !isRecord(evt.data)) {
-      return;
-    }
-
-    const sessionKey = typeof evt.sessionKey === "string" ? evt.sessionKey : undefined;
-    if (!sessionKey) {
+  private trackSessionRunId(sessionKey: string, runId: string): void {
+    if (!runId) {
       return;
     }
 
     const activeSession = this.activeToolSessions.get(sessionKey);
     if (!activeSession) {
+      return;
+    }
+
+    if (activeSession.runId && activeSession.runId !== runId) {
+      this.activeRunToSessionKey.delete(activeSession.runId);
+    }
+
+    activeSession.runId = runId;
+    this.activeRunToSessionKey.set(runId, sessionKey);
+  }
+
+  private clearActiveToolSession(sessionKey: string): void {
+    const activeSession = this.activeToolSessions.get(sessionKey);
+    if (activeSession?.runId) {
+      this.activeRunToSessionKey.delete(activeSession.runId);
+    }
+    this.activeToolSessions.delete(sessionKey);
+  }
+
+  private handleRuntimeAgentEvent(evt: ToolAgentEvent): void {
+    if (evt.stream !== "tool" || !isRecord(evt.data)) {
+      return;
+    }
+
+    const directSessionKey = typeof evt.sessionKey === "string" ? evt.sessionKey : undefined;
+    const mappedSessionKey =
+      typeof evt.runId === "string" && evt.runId.length > 0 ? this.activeRunToSessionKey.get(evt.runId) : undefined;
+    const sessionKey = directSessionKey ?? mappedSessionKey;
+    const activeSession =
+      (directSessionKey ? this.activeToolSessions.get(directSessionKey) : undefined) ??
+      (mappedSessionKey ? this.activeToolSessions.get(mappedSessionKey) : undefined);
+    if (!sessionKey || !activeSession) {
       return;
     }
 
@@ -841,7 +878,7 @@ export class OpenClawGatewayBridge {
 
     let toolState = activeSession.toolStates.get(toolCallId);
     if (!toolState) {
-      toolState = {
+      const nextToolState: ToolPartState = {
         toolCallId,
         toolName,
         partId: `tool_${randomUUID()}`,
@@ -849,7 +886,8 @@ export class OpenClawGatewayBridge {
         sessionKey,
         status: "running",
       };
-      activeSession.toolStates.set(toolCallId, toolState);
+      activeSession.toolStates.set(toolCallId, nextToolState);
+      toolState = nextToolState;
     }
 
     toolState.toolName = toolName;
