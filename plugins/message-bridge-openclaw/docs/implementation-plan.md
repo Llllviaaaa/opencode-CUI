@@ -1,14 +1,20 @@
 # Message Bridge OpenClaw 插件实施计划
 
-**Version:** 0.5
+**Version:** 0.6
 **Date:** 2026-03-14  
-**Status:** 阶段二最小交付已完成，当前重心回到阶段一稳定性与阶段三体验优化
+**Status:** 阶段二最小交付已完成，阶段一诊断能力已增强，当前重心回到阶段一稳定性与阶段三体验优化
 **Owner:** message-bridge maintainers  
 **Scope:** OpenClaw `--dev` 环境下的 `message-bridge` 插件
 
 ## TL;DR
 
 当前插件已经完成一个可运行的 OpenClaw `message-bridge` V1 适配器，并且阶段二的最小产品化交付已经落地。
+
+**最新更新（v0.6）：**
+
+- 新增 duplicate_connection 抑制逻辑，避免健康运行时误报重复连接问题
+- 新增诊断辅助函数和 skill-relay 实时检查脚本
+- 验证审计文档已补充
 
 已完成：
 
@@ -23,6 +29,10 @@
   - `setAccountEnabled` / `deleteAccount`
   - bundle 交付目录
   - 阶段一、阶段二验证手册
+- **阶段一诊断增强**
+  - duplicate_connection 抑制逻辑（避免健康运行时误报）
+  - `validate:skill-relay` 脚本命令
+  - `VALIDATION-AUDIT.zh-CN.md` 验证审计文档
 
 当前主要阻塞：
 
@@ -31,11 +41,12 @@
 - `permission_reply` / `question_reply` 仍未实现
 - `pairing/security/messaging/directory/outbound` 仍未评估为本插件职责
 
-本次刷新重点：
+本次刷新重点（v0.6）：
 
-- 把阶段二从“待设计”更新为“最小交付已完成”
-- 把后续优先级重新调整为阶段一稳定性与阶段三体验优化
-- 明确单账号策略是当前有意收口，而不是阶段二临时过渡
+- 增强阶段一诊断能力，新增 duplicate_connection 抑制逻辑
+- 新增 `validate:skill-relay` 脚本命令和实时检查脚本
+- 新增 `docs/VALIDATION-AUDIT.zh-CN.md` 验证审计文档
+- 补充 duplicate_connection 场景测试用例（healthy/unhealthy 状态）
 
 ## 当前进展
 
@@ -101,6 +112,12 @@
   - 已支持 `buildAccountSnapshot`
   - 已支持 `collectStatusIssues`
   - `openclaw channels status --probe` 与 `openclaw doctor` 可以消费这些结果
+  - **v0.6 新增诊断增强**：
+    - duplicate_connection 抑制逻辑（避免健康运行时误报）
+    - `getHeartbeatThresholdMs` 辅助函数
+    - `isRuntimeHealthyForDuplicateConnection` 辅助函数
+    - `getProbeReason` 函数统一提取探活原因
+    - duplicate_connection 场景测试用例（healthy/unhealthy）
 
 关键文件：
 
@@ -121,12 +138,14 @@
 - `chat -> tool_event -> tool_done` 闭环正常
 - `channels add` / `channels status --probe` / `doctor` 已能覆盖阶段二能力
 - 阶段一、阶段二验证手册已补齐
+- **v0.6 新增**：duplicate_connection 场景测试用例（healthy/unhealthy 状态）
 
 相关文档：
 
 - `README.md`
 - `docs/USAGE.zh-CN.md`
 - `docs/VALIDATION.zh-CN.md`
+- `docs/VALIDATION-AUDIT.zh-CN.md`（v0.6 新增验证审计文档）
 - `docs/protocol-sequence.md`
 
 ### 5. 交付与安装形态
@@ -137,11 +156,15 @@
 - bundle 目录安装方式
 - bundle 构建脚本自动生成最小安装产物
 - 运行时版本冲突排查说明
+- **v0.6 新增**：
+  - `validate:skill-relay` 脚本命令
+  - `scripts/skill-relay-live-check.mjs` skill relay 实时检查脚本
 
 相关文件：
 
 - `package.json`
 - `scripts/build-bundle.mjs`
+- `scripts/skill-relay-live-check.mjs`（v0.6 新增）
 - `bundle/index.js`
 - `bundle/package.json`
 - `bundle/openclaw.plugin.json`
@@ -200,12 +223,12 @@
 
 | 阶段 | 目标 | 当前状态 | 主要输出 |
 | --- | --- | --- | --- |
-| 阶段一 | 先让新会话稳定回复 | 进行中 | timeout 原因收敛、reply timeout 调整、最小回复回归验证 |
+| 阶段一 | 先让新会话稳定回复 | 进行中（v0.6 诊断增强已落地） | timeout 原因收敛、reply timeout 调整、duplicate_connection 抑制、skill-relay 检查脚本、最小回复回归验证 |
 | 阶段二 | 补齐插件产品化能力 | 已完成（最小交付） | `configSchema`、单账号 `setup/onboarding`、`probe/status/issues`、账号启停/删除 |
 | 阶段三 | 优化 block 级流式体验 | 未开始 | 首块延迟分析、chunk 策略优化、用户侧可感知流式 |
 | 阶段四 | 补齐 deferred actions | 未开始 | `permission_reply`、`question_reply` 协议实现或明确后置 |
 | 阶段五 | 评估完整 channel 能力边界 | 未开始 | `pairing/security/messaging/directory/outbound` 的职责判断 |
-| 阶段六 | 交付整理 | 进行中 | `dist/`、bundle 目录、安装说明、验证手册、正式分发路径评估 |
+| 阶段六 | 交付整理 | 进行中 | `dist/`、bundle 目录、验证审计文档、skill-relay 检查脚本、安装说明、验证手册 |
 
 ## 后续计划
 
@@ -222,6 +245,13 @@
 - 用干净新会话做最小回复验证
 - 明确模型、超时、首块延迟之间的关系
 - 把 `docs/VALIDATION.zh-CN.md` 纳入固定回归流程
+- **v0.6 已完成**：
+  - 实现 duplicate_connection 抑制逻辑，避免健康运行时误报
+  - 新增 `getHeartbeatThresholdMs` / `isRuntimeHealthyForDuplicateConnection` / `getProbeReason` 辅助函数
+  - 新增 `validate:skill-relay` 脚本命令
+  - 新增 `scripts/skill-relay-live-check.mjs` skill relay 实时检查脚本
+  - 新增 `docs/VALIDATION-AUDIT.zh-CN.md` 验证审计文档
+  - 补充 duplicate_connection 场景测试用例
 
 验收标准：
 
@@ -328,6 +358,10 @@
 - 继续维护 bundle 目录安装方式
 - 维护 `README.md`、`docs/USAGE.zh-CN.md`、`docs/VALIDATION.zh-CN.md`
 - 评估是否需要正式发布或安装渠道
+- **v0.6 已完成**：
+  - 新增 `validate:skill-relay` 脚本命令
+  - 新增 `scripts/skill-relay-live-check.mjs` skill relay 实时检查脚本
+  - 新增 `docs/VALIDATION-AUDIT.zh-CN.md` 验证审计文档
 
 验收标准：
 
@@ -361,3 +395,22 @@
 - 不需要等待协议升级
 - 能先把“能配置、能诊断”继续推进到“能稳定使用”
 - 能为后续是否补 `permission_reply` / `question_reply` 提供更可靠的基础链路
+
+---
+
+## 修改记录
+
+### v0.6 (2026-03-14)
+
+**阶段一诊断增强：**
+
+- 新增 duplicate_connection 抑制逻辑，避免健康运行时误报重复连接问题
+- 新增 `getHeartbeatThresholdMs` 辅助函数
+- 新增 `isRuntimeHealthyForDuplicateConnection` 辅助函数
+- 新增 `getProbeReason` 函数统一提取探活原因
+- 新增 `validate:skill-relay` 脚本命令
+- 新增 `scripts/skill-relay-live-check.mjs` skill relay 实时检查脚本
+- 新增 `docs/VALIDATION-AUDIT.zh-CN.md` 验证审计文档
+- 补充 duplicate_connection 场景测试用例（healthy/unhealthy 两种情况）
+
+**关联提交：** `85b4920`
