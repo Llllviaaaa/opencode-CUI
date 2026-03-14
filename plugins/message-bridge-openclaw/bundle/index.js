@@ -25,7 +25,7 @@ var DEFAULT_ACCOUNT_CONFIG = {
     sk: ""
   },
   agentIdPrefix: "message-bridge",
-  runTimeoutMs: 12e4
+  runTimeoutMs: 3e5
 };
 function isRecord(value) {
   return value !== null && typeof value === "object";
@@ -542,6 +542,13 @@ function createAssistantStreamState(sessionKey) {
     firstChunkAt: null
   };
 }
+function createSelectedModelState() {
+  return {
+    provider: null,
+    model: null,
+    thinkLevel: null
+  };
+}
 function buildAssistantMessageUpdated(sessionKey, messageId) {
   return {
     type: "message.updated",
@@ -750,6 +757,9 @@ var OpenClawGatewayBridge = class {
     const assistantStream = createAssistantStreamState(record.sessionKey);
     const toolStates = /* @__PURE__ */ new Map();
     const startedAt = Date.now();
+    const configuredTimeoutMs = this.options.account.runTimeoutMs;
+    const selectedModel = createSelectedModelState();
+    const executionPath = this.runtime.channel?.routing && this.runtime.channel?.reply ? "runtime_reply" : "subagent_fallback";
     this.activeToolSessions.set(record.sessionKey, {
       toolSessionId: record.toolSessionId,
       runId: null,
@@ -762,15 +772,17 @@ var OpenClawGatewayBridge = class {
       toolSessionId: record.toolSessionId,
       event: buildBusyEvent(record.sessionKey)
     });
-    this.options.logger.info("bridge.chat.started", {
+    this.logChatStarted({
       toolSessionId: record.toolSessionId,
       welinkSessionId: record.welinkSessionId,
       sessionKey: record.sessionKey,
       textLength: message.payload.text.length,
-      startedAt
+      startedAt,
+      configuredTimeoutMs,
+      executionPath
     });
     if (!this.runtime.channel?.routing?.resolveAgentRoute || !this.runtime.channel?.reply) {
-      await this.handleChatWithSubagentFallback(record, message.payload.text);
+      await this.handleChatWithSubagentFallback(record, message.payload.text, startedAt, selectedModel);
       return;
     }
     const route = this.runtime.channel.routing.resolveAgentRoute({
@@ -817,6 +829,22 @@ var OpenClawGatewayBridge = class {
       channel: "message-bridge",
       accountId: this.options.account.accountId
     });
+    const handleModelSelected = (selection) => {
+      selectedModel.provider = selection.provider;
+      selectedModel.model = selection.model;
+      selectedModel.thinkLevel = selection.thinkLevel ?? null;
+      this.options.logger.info("bridge.chat.model_selected", {
+        toolSessionId: record.toolSessionId,
+        sessionKey: record.sessionKey,
+        configuredTimeoutMs,
+        runTimeoutMs: configuredTimeoutMs,
+        executionPath: "runtime_reply",
+        provider: selection.provider,
+        model: selection.model,
+        thinkLevel: selection.thinkLevel ?? null
+      });
+      onModelSelected?.(selection);
+    };
     const deliver = async (rawPayload, info) => {
       const payload = isRecord4(rawPayload) ? normalizeOutboundReplyPayload(rawPayload) : normalizeOutboundReplyPayload({});
       if (info.kind === "tool") {
@@ -876,13 +904,23 @@ var OpenClawGatewayBridge = class {
           onAgentRunStart: (runId) => {
             this.trackSessionRunId(record.sessionKey, runId);
           },
-          onModelSelected,
-          timeoutOverrideSeconds: Math.ceil(this.options.account.runTimeoutMs / 1e3)
+          onModelSelected: handleModelSelected,
+          timeoutOverrideSeconds: Math.ceil(configuredTimeoutMs / 1e3)
         }
       });
     } catch (error) {
       this.clearActiveToolSession(record.sessionKey);
       const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logChatFailed({
+        toolSessionId: record.toolSessionId,
+        sessionKey: record.sessionKey,
+        configuredTimeoutMs,
+        startedAt,
+        assistantStream,
+        selectedModel,
+        executionPath: "runtime_reply",
+        error: errorMessage
+      });
       this.sendToolEvent({
         type: "tool_event",
         toolSessionId: record.toolSessionId,
@@ -896,18 +934,21 @@ var OpenClawGatewayBridge = class {
       });
       return;
     }
+    const finalText = assistantStream.accumulatedText || "(empty response)";
     this.sendAssistantFinalResponse(
       record.toolSessionId,
       assistantStream,
-      assistantStream.accumulatedText || "(empty response)"
+      finalText
     );
-    this.options.logger.info("bridge.chat.completed", {
+    this.logChatCompleted({
       toolSessionId: record.toolSessionId,
       sessionKey: record.sessionKey,
-      totalLatencyMs: Date.now() - startedAt,
-      firstChunkLatencyMs: assistantStream.firstChunkAt === null ? null : assistantStream.firstChunkAt - startedAt,
-      chunkCount: assistantStream.chunkCount,
-      responseLength: assistantStream.accumulatedText.length
+      configuredTimeoutMs,
+      startedAt,
+      assistantStream,
+      selectedModel,
+      executionPath: "runtime_reply",
+      responseLength: finalText.length
     });
     this.sendToolEvent({
       type: "tool_event",
@@ -921,35 +962,23 @@ var OpenClawGatewayBridge = class {
     });
     this.clearActiveToolSession(record.sessionKey);
   }
-  async handleChatWithSubagentFallback(record, text) {
+  async handleChatWithSubagentFallback(record, text, startedAt, selectedModel) {
     const assistantStream = createAssistantStreamState(record.sessionKey);
+    const configuredTimeoutMs = this.options.account.runTimeoutMs;
     const subagent = this.getSubagentRuntime();
     if (!subagent) {
-      this.sendToolEvent({
-        type: "tool_event",
+      const errorMessage = "openclaw_runtime_missing_reply_executor";
+      this.clearActiveToolSession(record.sessionKey);
+      this.logChatFailed({
         toolSessionId: record.toolSessionId,
-        event: buildSessionErrorEvent(record.sessionKey, "openclaw_runtime_missing_reply_executor")
+        sessionKey: record.sessionKey,
+        configuredTimeoutMs,
+        startedAt,
+        assistantStream,
+        selectedModel,
+        executionPath: "subagent_fallback",
+        error: errorMessage
       });
-      this.sendToolError({
-        type: "tool_error",
-        toolSessionId: record.toolSessionId,
-        welinkSessionId: record.welinkSessionId,
-        error: "openclaw_runtime_missing_reply_executor"
-      });
-      return;
-    }
-    const run = await subagent.run({
-      sessionKey: record.sessionKey,
-      message: text,
-      deliver: false,
-      idempotencyKey: `${record.toolSessionId}:${text}`
-    });
-    const wait = await subagent.waitForRun({
-      runId: run.runId,
-      timeoutMs: this.options.account.runTimeoutMs
-    });
-    if (wait.status !== "ok") {
-      const errorMessage = wait.error || `subagent_${wait.status}`;
       this.sendToolEvent({
         type: "tool_event",
         toolSessionId: record.toolSessionId,
@@ -963,29 +992,103 @@ var OpenClawGatewayBridge = class {
       });
       return;
     }
-    const session = await subagent.getSessionMessages({
-      sessionKey: record.sessionKey,
-      limit: 50
-    });
-    const assistantText = extractAssistantText(session.messages) || "(empty response)";
-    this.sendAssistantFinalResponse(record.toolSessionId, assistantStream, assistantText);
-    this.options.logger.info("bridge.chat.completed_fallback", {
-      toolSessionId: record.toolSessionId,
-      sessionKey: record.sessionKey,
-      chunkCount: assistantStream.chunkCount,
-      responseLength: assistantText.length
-    });
-    this.sendToolEvent({
-      type: "tool_event",
-      toolSessionId: record.toolSessionId,
-      event: buildIdleEvent(record.sessionKey)
-    });
-    this.sendToolDone({
-      type: "tool_done",
-      toolSessionId: record.toolSessionId,
-      welinkSessionId: record.welinkSessionId
-    });
-    this.clearActiveToolSession(record.sessionKey);
+    try {
+      const run = await subagent.run({
+        sessionKey: record.sessionKey,
+        message: text,
+        deliver: false,
+        idempotencyKey: `${record.toolSessionId}:${text}`
+      });
+      const wait = await subagent.waitForRun({
+        runId: run.runId,
+        timeoutMs: configuredTimeoutMs
+      });
+      if (wait.status !== "ok") {
+        const errorMessage = wait.error || `subagent_${wait.status}`;
+        this.clearActiveToolSession(record.sessionKey);
+        this.logChatFailed({
+          toolSessionId: record.toolSessionId,
+          sessionKey: record.sessionKey,
+          configuredTimeoutMs,
+          startedAt,
+          assistantStream,
+          selectedModel,
+          executionPath: "subagent_fallback",
+          error: errorMessage,
+          extra: {
+            waitStatus: wait.status,
+            waitError: wait.error ?? null
+          }
+        });
+        this.sendToolEvent({
+          type: "tool_event",
+          toolSessionId: record.toolSessionId,
+          event: buildSessionErrorEvent(record.sessionKey, errorMessage)
+        });
+        this.sendToolError({
+          type: "tool_error",
+          toolSessionId: record.toolSessionId,
+          welinkSessionId: record.welinkSessionId,
+          error: errorMessage
+        });
+        return;
+      }
+      const session = await subagent.getSessionMessages({
+        sessionKey: record.sessionKey,
+        limit: 50
+      });
+      const assistantText = extractAssistantText(session.messages) || "(empty response)";
+      this.sendAssistantFinalResponse(record.toolSessionId, assistantStream, assistantText);
+      this.logChatCompleted({
+        toolSessionId: record.toolSessionId,
+        sessionKey: record.sessionKey,
+        configuredTimeoutMs,
+        startedAt,
+        assistantStream,
+        selectedModel,
+        executionPath: "subagent_fallback",
+        responseLength: assistantText.length,
+        extra: {
+          waitStatus: wait.status,
+          waitError: wait.error ?? null
+        }
+      });
+      this.sendToolEvent({
+        type: "tool_event",
+        toolSessionId: record.toolSessionId,
+        event: buildIdleEvent(record.sessionKey)
+      });
+      this.sendToolDone({
+        type: "tool_done",
+        toolSessionId: record.toolSessionId,
+        welinkSessionId: record.welinkSessionId
+      });
+      this.clearActiveToolSession(record.sessionKey);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.clearActiveToolSession(record.sessionKey);
+      this.logChatFailed({
+        toolSessionId: record.toolSessionId,
+        sessionKey: record.sessionKey,
+        configuredTimeoutMs,
+        startedAt,
+        assistantStream,
+        selectedModel,
+        executionPath: "subagent_fallback",
+        error: errorMessage
+      });
+      this.sendToolEvent({
+        type: "tool_event",
+        toolSessionId: record.toolSessionId,
+        event: buildSessionErrorEvent(record.sessionKey, errorMessage)
+      });
+      this.sendToolError({
+        type: "tool_error",
+        toolSessionId: record.toolSessionId,
+        welinkSessionId: record.welinkSessionId,
+        error: errorMessage
+      });
+    }
   }
   handleCreateSession(message) {
     const record = this.sessionRegistry.create(message.welinkSessionId, message.payload.sessionId);
@@ -1184,6 +1287,52 @@ var OpenClawGatewayBridge = class {
       activeSession.pendingToolResultTarget = toolCallId;
       this.emitToolPartUpdate(activeSession.toolSessionId, toolState);
     }
+  }
+  logChatStarted(params) {
+    this.options.logger.info("bridge.chat.started", {
+      toolSessionId: params.toolSessionId,
+      welinkSessionId: params.welinkSessionId,
+      sessionKey: params.sessionKey,
+      textLength: params.textLength,
+      startedAt: params.startedAt,
+      configuredTimeoutMs: params.configuredTimeoutMs,
+      runTimeoutMs: params.configuredTimeoutMs,
+      executionPath: params.executionPath
+    });
+  }
+  logChatCompleted(params) {
+    this.options.logger.info("bridge.chat.completed", {
+      ...this.buildChatDiagnostics(params),
+      responseLength: params.responseLength,
+      ...params.extra ?? {}
+    });
+  }
+  logChatFailed(params) {
+    const errorLower = params.error.toLowerCase();
+    const isTimeout = errorLower.includes("timed out") || errorLower.includes("timeout");
+    this.options.logger.warn("bridge.chat.failed", {
+      ...this.buildChatDiagnostics(params),
+      error: params.error,
+      failureStage: params.assistantStream.firstChunkAt === null ? "before_first_chunk" : "after_first_chunk",
+      errorCategory: isTimeout ? "timeout" : "runtime_error",
+      timedOut: isTimeout,
+      ...params.extra ?? {}
+    });
+  }
+  buildChatDiagnostics(params) {
+    return {
+      toolSessionId: params.toolSessionId,
+      sessionKey: params.sessionKey,
+      configuredTimeoutMs: params.configuredTimeoutMs,
+      runTimeoutMs: params.configuredTimeoutMs,
+      executionPath: params.executionPath,
+      provider: params.selectedModel.provider,
+      model: params.selectedModel.model,
+      thinkLevel: params.selectedModel.thinkLevel,
+      chunkCount: params.assistantStream.chunkCount,
+      firstChunkLatencyMs: params.assistantStream.firstChunkAt === null ? null : params.assistantStream.firstChunkAt - params.startedAt,
+      totalLatencyMs: Date.now() - params.startedAt
+    };
   }
 };
 

@@ -37,9 +37,14 @@ class FakeConnection {
   }
 }
 
-function createBridge(runtimeOverride) {
+function createBridge(runtimeOverride, options = {}) {
   const connection = new FakeConnection();
   let agentEventListener = null;
+  const logs = {
+    info: [],
+    warn: [],
+    error: [],
+  };
   const runtimeBase = runtimeOverride ?? {
     subagent: {
       async run() {
@@ -82,33 +87,52 @@ function createBridge(runtimeOverride) {
       },
     },
   };
-  const bridge = new OpenClawGatewayBridge({
-    account: {
-      accountId: "default",
-      enabled: true,
-      gateway: {
-        url: "ws://localhost:8081/ws/agent",
-        toolType: "OPENCLAW",
-        toolVersion: "0.1.0",
-        deviceName: "test",
-        heartbeatIntervalMs: 30000,
-        reconnect: {
-          baseMs: 1000,
-          maxMs: 30000,
-          exponential: true,
-        },
+  const defaultAccount = {
+    accountId: "default",
+    enabled: true,
+    gateway: {
+      url: "ws://localhost:8081/ws/agent",
+      toolType: "OPENCLAW",
+      toolVersion: "0.1.0",
+      deviceName: "test",
+      heartbeatIntervalMs: 30000,
+      reconnect: {
+        baseMs: 1000,
+        maxMs: 30000,
+        exponential: true,
       },
-      auth: {
-        ak: "ak",
-        sk: "sk",
-      },
-      agentIdPrefix: "bridge",
-      runTimeoutMs: 5000,
     },
+    auth: {
+      ak: "ak",
+      sk: "sk",
+    },
+    agentIdPrefix: "bridge",
+    runTimeoutMs: 5000,
+  };
+  const account = {
+    ...defaultAccount,
+    ...(options.accountOverride ?? {}),
+    gateway: {
+      ...defaultAccount.gateway,
+      ...(options.accountOverride?.gateway ?? {}),
+    },
+    auth: {
+      ...defaultAccount.auth,
+      ...(options.accountOverride?.auth ?? {}),
+    },
+  };
+  const bridge = new OpenClawGatewayBridge({
+    account,
     logger: {
-      info() {},
-      warn() {},
-      error() {},
+      info(message, meta) {
+        logs.info.push({ message, meta });
+      },
+      warn(message, meta) {
+        logs.warn.push({ message, meta });
+      },
+      error(message, meta) {
+        logs.error.push({ message, meta });
+      },
     },
     config: {
       agents: {
@@ -123,6 +147,7 @@ function createBridge(runtimeOverride) {
   return {
     bridge,
     connection,
+    logs,
     emitAgentEvent(event) {
       return agentEventListener?.(event);
     },
@@ -206,6 +231,113 @@ test("chat invoke streams delta events through OpenClaw reply dispatcher", async
   assert.equal(connection.sent[4].event.properties.part.text, "hello from openclaw");
   assert.equal("delta" in connection.sent[4].event.properties, false);
   assert.equal(connection.sent.at(-1).type, "tool_done");
+});
+
+test("chat invoke passes runTimeoutMs to reply dispatcher and logs model selection", async () => {
+  let timeoutOverrideSeconds = null;
+  const runtime = {
+    channel: {
+      routing: {
+        resolveAgentRoute() {
+          return {
+            accountId: "default",
+            agentId: "agent_timeout_1",
+          };
+        },
+      },
+      reply: {
+        resolveEnvelopeFormatOptions() {
+          return {};
+        },
+        formatAgentEnvelope({ body }) {
+          return body;
+        },
+        finalizeInboundContext(ctx) {
+          return ctx;
+        },
+        async dispatchReplyWithBufferedBlockDispatcher({ dispatcherOptions, replyOptions }) {
+          timeoutOverrideSeconds = replyOptions?.timeoutOverrideSeconds ?? null;
+          replyOptions?.onModelSelected?.({
+            provider: "openai-codex",
+            model: "gpt-5.3-codex",
+            thinkLevel: "high",
+          });
+          await dispatcherOptions.deliver({ text: "hello from model" }, { kind: "block" });
+        },
+      },
+    },
+  };
+
+  const { bridge, logs } = createBridge(runtime, {
+    accountOverride: {
+      runTimeoutMs: 5501,
+    },
+  });
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_timeout_1",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_timeout_1",
+      text: "hello",
+    },
+  });
+
+  assert.equal(timeoutOverrideSeconds, 6);
+  const startedLog = logs.info.find((entry) => entry.message === "bridge.chat.started");
+  const modelSelectedLog = logs.info.find((entry) => entry.message === "bridge.chat.model_selected");
+  assert.equal(startedLog?.meta.configuredTimeoutMs, 5501);
+  assert.equal(startedLog?.meta.executionPath, "runtime_reply");
+  assert.equal(modelSelectedLog?.meta.provider, "openai-codex");
+  assert.equal(modelSelectedLog?.meta.model, "gpt-5.3-codex");
+  assert.equal(modelSelectedLog?.meta.thinkLevel, "high");
+});
+
+test("chat invoke falls back when routing lacks resolveAgentRoute", async () => {
+  const runtime = {
+    subagent: {
+      async run() {
+        return { runId: "run_missing_route_resolver" };
+      },
+      async waitForRun() {
+        return { status: "ok" };
+      },
+      async getSessionMessages() {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: "hello from fallback",
+            },
+          ],
+        };
+      },
+      async deleteSession() {},
+    },
+    channel: {
+      routing: {},
+      reply: {},
+    },
+  };
+
+  const { bridge, connection } = createBridge(runtime);
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_missing_route_resolver",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_missing_route_resolver",
+      text: "hello",
+    },
+  });
+
+  const messageTypes = connection.sent.map((message) => message.type);
+  assert.deepEqual(messageTypes, ["tool_event", "tool_event", "tool_event", "tool_event", "tool_done"]);
+  assert.equal(connection.sent[1].event.type, "message.updated");
+  assert.equal(connection.sent[2].event.properties.part.text, "hello from fallback");
+  assert.equal(connection.sent[3].event.type, "session.idle");
 });
 
 test("chat invoke projects tool lifecycle into tool parts", async () => {
@@ -450,6 +582,109 @@ test("chat invoke projects tool errors into final error tool parts", async () =>
   assert.equal(toolUpdates.length, 2);
   assert.equal(toolUpdates[1].properties.part.state.status, "error");
   assert.equal(toolUpdates[1].properties.part.state.error, "tool_write_failed");
+});
+
+test("chat invoke fallback uses runTimeoutMs for waitForRun and logs completion diagnostics", async () => {
+  let waitTimeoutMs = null;
+  const runtime = {
+    subagent: {
+      async run() {
+        return { runId: "run_fallback_1" };
+      },
+      async waitForRun({ timeoutMs }) {
+        waitTimeoutMs = timeoutMs;
+        return { status: "ok" };
+      },
+      async getSessionMessages() {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: "hello from fallback",
+            },
+          ],
+        };
+      },
+      async deleteSession() {},
+    },
+    channel: {},
+  };
+
+  const { bridge, logs } = createBridge(runtime, {
+    accountOverride: {
+      runTimeoutMs: 4321,
+    },
+  });
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_fallback_1",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_fallback_1",
+      text: "hello",
+    },
+  });
+
+  assert.equal(waitTimeoutMs, 4321);
+  const completedLog = logs.info.find(
+    (entry) => entry.message === "bridge.chat.completed" && entry.meta.executionPath === "subagent_fallback",
+  );
+  assert.equal(completedLog?.meta.runTimeoutMs, 4321);
+  assert.equal(completedLog?.meta.waitStatus, "ok");
+  assert.equal(completedLog?.meta.waitError, null);
+  assert.equal(completedLog?.meta.responseLength, "hello from fallback".length);
+});
+
+test("chat invoke emits session error and tool_error when dispatcher times out before first chunk", async () => {
+  const runtime = {
+    channel: {
+      routing: {
+        resolveAgentRoute() {
+          return {
+            accountId: "default",
+            agentId: "agent_timeout_failure",
+          };
+        },
+      },
+      reply: {
+        resolveEnvelopeFormatOptions() {
+          return {};
+        },
+        formatAgentEnvelope({ body }) {
+          return body;
+        },
+        finalizeInboundContext(ctx) {
+          return ctx;
+        },
+        async dispatchReplyWithBufferedBlockDispatcher() {
+          throw new Error("LLM request timed out.");
+        },
+      },
+    },
+  };
+
+  const { bridge, connection, logs } = createBridge(runtime);
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_timeout_fail",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_timeout_fail",
+      text: "hello",
+    },
+  });
+
+  const messageTypes = connection.sent.map((message) => message.type);
+  assert.deepEqual(messageTypes, ["tool_event", "tool_event", "tool_error"]);
+  assert.equal(connection.sent[1].event.type, "session.error");
+  assert.equal(connection.sent.some((message) => message.type === "tool_done"), false);
+  const failedLog = logs.warn.find((entry) => entry.message === "bridge.chat.failed");
+  assert.equal(failedLog?.meta.failureStage, "before_first_chunk");
+  assert.equal(failedLog?.meta.errorCategory, "timeout");
+  assert.equal(failedLog?.meta.timedOut, true);
+  assert.equal(failedLog?.meta.firstChunkLatencyMs, null);
 });
 
 test("unsupported actions fail closed", async () => {

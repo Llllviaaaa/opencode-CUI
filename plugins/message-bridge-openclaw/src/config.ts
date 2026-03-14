@@ -25,7 +25,7 @@ export const DEFAULT_ACCOUNT_CONFIG: MessageBridgeAccountConfig = {
     sk: "",
   },
   agentIdPrefix: "message-bridge",
-  runTimeoutMs: 120_000,
+  runTimeoutMs: 300_000,
 };
 
 type GenericRecord = Record<string, unknown>;

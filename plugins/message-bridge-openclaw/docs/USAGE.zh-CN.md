@@ -227,6 +227,7 @@ Copy-Item .\openclaw.plugin.json "$target\openclaw.plugin.json" -Force
     "message-bridge": {
       "enabled": true,
       "blockStreaming": true,
+      "runTimeoutMs": 300000,
       "gateway": {
         "url": "ws://127.0.0.1:8081/ws/agent",
         "toolType": "OPENCLAW",
@@ -247,6 +248,13 @@ Copy-Item .\openclaw.plugin.json "$target\openclaw.plugin.json" -Force
 - `channels.message-bridge.gateway.url`
 - `channels.message-bridge.auth.ak`
 - `channels.message-bridge.auth.sk`
+
+当前阶段默认 `runTimeoutMs` 已提高到 `300000`，它当前同时作用于两条执行链：
+
+- `dispatchReplyWithBufferedBlockDispatcher(... replyOptions.timeoutOverrideSeconds)`
+- `subagent.waitForRun(... timeoutMs)`
+
+如果你没有显式配置 `runTimeoutMs`，插件会使用这个更保守的默认值；如果你已经在配置里写了该字段，则继续以你的显式值为准。
 
 如果你想进一步调细 block 级 streaming，再按需补充：
 
@@ -331,15 +339,22 @@ redis-cli publish agent:test-ak-openclaw-001 '{"type":"invoke","action":"chat","
 
 ### 10.1 新建会话没有回复
 
-先看 OpenClaw 日志里是否出现：
+阶段一修复后，插件默认 `runTimeoutMs` 已提高到 `300000`。如果新建会话仍然没有回复，先按这个顺序看 OpenClaw 日志：
 
 - `bridge.chat.started`
+- `bridge.chat.model_selected`
+- `bridge.chat.first_chunk`
+- `bridge.chat.failed`
 - `embedded run agent end: ... LLM request timed out.`
 
 如果有，说明：
 
-- 会话创建和消息路由是正常的
-- 问题在模型请求超时，不在插件安装
+- 只有 `bridge.chat.started`：插件已收到请求，但还没进入可见回复阶段
+- 有 `bridge.chat.model_selected`，没有 `bridge.chat.first_chunk`：通常是首块过慢或首块前 timeout
+- 出现 `bridge.chat.failed`：看其中的 `failureStage`、`errorCategory`、`configuredTimeoutMs`
+- 同时出现 `embedded run agent end: ... LLM request timed out.`：问题在模型请求超时，不在插件安装
+
+当前阶段不调整模型路由策略，只修桥接层 timeout 与诊断链路。
 
 ### 10.2 有 `tool_event`，但没有可见流式文本
 
