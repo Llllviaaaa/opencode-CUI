@@ -1,12 +1,22 @@
 // src/index.ts
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 
+// src/channel.ts
+import {
+  applyAccountNameToChannelSection
+} from "openclaw/plugin-sdk";
+
 // src/config.ts
 import { homedir } from "node:os";
 import path from "node:path";
+import {
+  deleteAccountFromConfigSection,
+  setAccountEnabledInConfigSection
+} from "openclaw/plugin-sdk";
 var CHANNEL_ID = "message-bridge";
 var DEFAULT_ACCOUNT_ID = "default";
 var LEGACY_ACCOUNTS_MIGRATION_FIX = "\u5220\u9664 channels.message-bridge.accounts\uFF0C\u5E76\u628A\u552F\u4E00\u8D26\u53F7\u914D\u7F6E\u8FC1\u79FB\u5230 channels.message-bridge \u9876\u5C42\u3002";
+var CHANNEL_ADD_FIX = "\u8FD0\u884C openclaw channels add --channel message-bridge --url <gateway-url> --token <ak> --password <sk>\u3002";
 var NON_DEFAULT_ACCOUNT_ERROR_PREFIX = "message_bridge_single_account_only";
 var DEFAULT_ACCOUNT_CONFIG = {
   enabled: true,
@@ -32,6 +42,13 @@ var DEFAULT_ACCOUNT_CONFIG = {
 function isRecord(value) {
   return value !== null && typeof value === "object";
 }
+function trimOrUndefined(value) {
+  if (typeof value !== "string") {
+    return void 0;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : void 0;
+}
 function readChannelSection(cfg) {
   const channels = cfg.channels;
   if (!isRecord(channels)) {
@@ -46,6 +63,10 @@ function stripLegacyAccounts(section) {
   }
   const { accounts: _accounts, ...rest } = section;
   return rest;
+}
+function getSectionField(section, key) {
+  const value = section?.[key];
+  return isRecord(value) ? value : void 0;
 }
 function deepMerge(base, override) {
   if (!override) {
@@ -84,15 +105,24 @@ function assertSupportedAccountId(accountId) {
   }
   return normalizedAccountId;
 }
-function getMissingRequiredConfigPaths(account) {
+function resolveSupportedAccountId(accountId) {
+  return assertSupportedAccountId(accountId);
+}
+function getMissingRequiredConfigPaths(account, cfg) {
+  const section = cfg ? stripLegacyAccounts(readChannelSection(cfg)) : void 0;
+  const gatewaySection = cfg ? getSectionField(section, "gateway") : void 0;
+  const authSection = cfg ? getSectionField(section, "auth") : void 0;
+  const gatewayUrl = cfg ? trimOrUndefined(gatewaySection?.url) : trimOrUndefined(account.gateway.url);
+  const authAk = cfg ? trimOrUndefined(authSection?.ak) : trimOrUndefined(account.auth.ak);
+  const authSk = cfg ? trimOrUndefined(authSection?.sk) : trimOrUndefined(account.auth.sk);
   const missing = [];
-  if (!account.gateway.url.trim()) {
+  if (!gatewayUrl) {
     missing.push(`channels.${CHANNEL_ID}.gateway.url`);
   }
-  if (!account.auth.ak.trim()) {
+  if (!authAk) {
     missing.push(`channels.${CHANNEL_ID}.auth.ak`);
   }
-  if (!account.auth.sk.trim()) {
+  if (!authSk) {
     missing.push(`channels.${CHANNEL_ID}.auth.sk`);
   }
   return missing;
@@ -101,7 +131,7 @@ function resolveTokenSource(account) {
   return account.auth.ak.trim() || account.auth.sk.trim() ? "config" : "none";
 }
 function isAccountConfigured(account, cfg) {
-  return getMissingRequiredConfigPaths(account).length === 0 && !hasLegacyAccountsConfig(cfg);
+  return getMissingRequiredConfigPaths(account, cfg).length === 0 && !hasLegacyAccountsConfig(cfg);
 }
 function resolveAccount(cfg, accountId) {
   const normalizedAccountId = assertSupportedAccountId(accountId);
@@ -126,6 +156,98 @@ function resolveUnconfiguredReason(cfg) {
     return `channels.${CHANNEL_ID}.accounts \u5DF2\u5E9F\u5F03\u3002${LEGACY_ACCOUNTS_MIGRATION_FIX}`;
   }
   return `channels.${CHANNEL_ID}.gateway.url\u3001channels.${CHANNEL_ID}.auth.ak\u3001channels.${CHANNEL_ID}.auth.sk \u4E3A\u5FC5\u586B\u9879`;
+}
+function validateGatewayUrl(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      return "Message Bridge \u7684 gateway.url \u5FC5\u987B\u4F7F\u7528 ws:// \u6216 wss://\u3002";
+    }
+    return null;
+  } catch {
+    return "Message Bridge \u7684 gateway.url \u4E0D\u662F\u5408\u6CD5\u7684 WebSocket URL\u3002";
+  }
+}
+function validateMessageBridgeSetupInput(params) {
+  const { cfg, accountId, input } = params;
+  try {
+    resolveSupportedAccountId(accountId);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  if (hasLegacyAccountsConfig(cfg)) {
+    return `\u68C0\u6D4B\u5230\u5DF2\u5E9F\u5F03\u7684 channels.${CHANNEL_ID}.accounts \u914D\u7F6E\u3002${LEGACY_ACCOUNTS_MIGRATION_FIX}`;
+  }
+  if (input.useEnv) {
+    return "Message Bridge \u5F53\u524D\u4E0D\u652F\u6301 --use-env\uFF0C\u8BF7\u663E\u5F0F\u4F20\u5165 --url\u3001--token\u3001--password\u3002";
+  }
+  const nextCfg = applyMessageBridgeSetupConfig({
+    cfg,
+    accountId,
+    input
+  });
+  const nextAccount = resolveAccount(nextCfg, accountId);
+  const missing = getMissingRequiredConfigPaths(nextAccount, nextCfg);
+  if (missing.length > 0) {
+    return `Message Bridge \u7F3A\u5C11\u5FC5\u586B\u914D\u7F6E\uFF1A${missing.join("\u3001")}\u3002${CHANNEL_ADD_FIX}`;
+  }
+  const urlError = validateGatewayUrl(nextAccount.gateway.url);
+  if (urlError) {
+    return urlError;
+  }
+  return null;
+}
+function applyMessageBridgeSetupConfig(params) {
+  const normalizedAccountId = resolveSupportedAccountId(params.accountId);
+  const section = stripLegacyAccounts(readChannelSection(params.cfg));
+  const gatewaySection = getSectionField(section, "gateway");
+  const authSection = getSectionField(section, "auth");
+  const nextName = params.input.name === void 0 ? section?.name : trimOrUndefined(params.input.name);
+  const nextGatewayUrl = trimOrUndefined(params.input.url);
+  const nextDeviceName = trimOrUndefined(params.input.deviceName);
+  const nextAk = trimOrUndefined(params.input.token);
+  const nextSk = trimOrUndefined(params.input.password);
+  void normalizedAccountId;
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      [CHANNEL_ID]: {
+        ...section,
+        enabled: true,
+        ...nextName !== void 0 ? { name: nextName } : {},
+        gateway: {
+          ...gatewaySection,
+          ...nextGatewayUrl !== void 0 ? { url: nextGatewayUrl } : {},
+          ...nextDeviceName !== void 0 ? { deviceName: nextDeviceName } : {}
+        },
+        auth: {
+          ...authSection,
+          ...nextAk !== void 0 ? { ak: nextAk } : {},
+          ...nextSk !== void 0 ? { sk: nextSk } : {}
+        }
+      }
+    }
+  };
+}
+function setMessageBridgeAccountEnabled(params) {
+  resolveSupportedAccountId(params.accountId);
+  return setAccountEnabledInConfigSection({
+    cfg: params.cfg,
+    sectionKey: CHANNEL_ID,
+    accountId: params.accountId,
+    enabled: params.enabled,
+    allowTopLevel: true
+  });
+}
+function deleteMessageBridgeAccount(params) {
+  resolveSupportedAccountId(params.accountId);
+  return deleteAccountFromConfigSection({
+    cfg: params.cfg,
+    sectionKey: CHANNEL_ID,
+    accountId: params.accountId,
+    clearBaseFields: ["enabled", "name", "gateway", "auth", "agentIdPrefix", "runTimeoutMs"]
+  });
 }
 function resolveConfigSearchPaths(workspaceDir) {
   const paths = [];
@@ -1405,6 +1527,126 @@ var OpenClawGatewayBridge = class {
   }
 };
 
+// src/onboarding.ts
+var SETUP_TITLE = "Message Bridge setup";
+var SETUP_INTRO = [
+  "\u914D\u7F6E ai-gateway \u7684 WebSocket \u5730\u5740\u4EE5\u53CA\u5BF9\u5E94\u7684 AK/SK\u3002",
+  "\u66F4\u65B0\u73B0\u6709\u914D\u7F6E\u65F6\uFF0C\u51ED\u8BC1\u7559\u7A7A\u4F1A\u4FDD\u7559\u5F53\u524D\u503C\u3002"
+].join("\n");
+function buildSelectionHint(configured, enabled, requiresMigration) {
+  if (requiresMigration) {
+    return "migration required";
+  }
+  if (!configured) {
+    return "not configured";
+  }
+  return enabled ? "configured" : "configured \xB7 disabled";
+}
+function buildLegacyAccountsMessage() {
+  return `\u68C0\u6D4B\u5230\u5DF2\u5E9F\u5F03\u7684 channels.${CHANNEL_ID}.accounts \u914D\u7F6E\u3002${LEGACY_ACCOUNTS_MIGRATION_FIX}`;
+}
+async function promptMessageBridgeSetup(params) {
+  const { cfg, prompter } = params;
+  if (hasLegacyAccountsConfig(cfg)) {
+    await prompter.note(buildLegacyAccountsMessage(), SETUP_TITLE);
+    return "skip";
+  }
+  const account = resolveAccount(cfg, DEFAULT_ACCOUNT_ID);
+  await prompter.note(SETUP_INTRO, SETUP_TITLE);
+  let draft = {
+    name: account.name ?? "",
+    url: account.gateway.url,
+    token: account.auth.ak ?? "",
+    password: account.auth.sk ?? "",
+    deviceName: account.gateway.deviceName
+  };
+  while (true) {
+    const name = await prompter.text({
+      message: "Account name (optional)",
+      placeholder: "Message Bridge",
+      initialValue: draft.name
+    });
+    const url = await prompter.text({
+      message: "Gateway WebSocket URL",
+      placeholder: "ws://localhost:8081/ws/agent",
+      initialValue: draft.url
+    });
+    const ak = await prompter.text({
+      message: account.auth.ak ? "AK (\u7559\u7A7A\u4FDD\u6301\u5F53\u524D\u503C)" : "AK",
+      initialValue: draft.token
+    });
+    const sk = await prompter.text({
+      message: account.auth.sk ? "SK (\u7559\u7A7A\u4FDD\u6301\u5F53\u524D\u503C)" : "SK",
+      initialValue: draft.password
+    });
+    const deviceName = await prompter.text({
+      message: "Device name",
+      initialValue: draft.deviceName
+    });
+    draft = {
+      name,
+      url,
+      token: ak,
+      password: sk,
+      deviceName
+    };
+    const input = {
+      ...name !== void 0 ? { name } : {},
+      ...url !== void 0 ? { url } : {},
+      ...ak !== void 0 ? { token: ak } : {},
+      ...sk !== void 0 ? { password: sk } : {},
+      ...deviceName !== void 0 ? { deviceName } : {}
+    };
+    const validationError = validateMessageBridgeSetupInput({
+      cfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input
+    });
+    if (!validationError) {
+      return {
+        cfg: applyMessageBridgeSetupConfig({
+          cfg,
+          accountId: DEFAULT_ACCOUNT_ID,
+          input
+        }),
+        accountId: DEFAULT_ACCOUNT_ID
+      };
+    }
+    await prompter.note(validationError, SETUP_TITLE);
+  }
+}
+var messageBridgeOnboardingAdapter = {
+  channel: CHANNEL_ID,
+  async getStatus({ cfg }) {
+    const account = resolveAccount(cfg, DEFAULT_ACCOUNT_ID);
+    const requiresMigration = hasLegacyAccountsConfig(cfg);
+    const configured = isAccountConfigured(account, cfg);
+    const summary = describeAccount(account, cfg);
+    const status = buildSelectionHint(configured, account.enabled, requiresMigration);
+    return {
+      channel: CHANNEL_ID,
+      configured,
+      selectionHint: status,
+      quickstartScore: configured ? 1 : 0,
+      statusLines: [
+        requiresMigration ? `Message Bridge: migration required` : `Message Bridge: ${status}${configured ? ` \xB7 ${account.gateway.url}` : ""}`,
+        ...summary.name ? [`name: ${summary.name}`] : [],
+        ...requiresMigration ? [LEGACY_ACCOUNTS_MIGRATION_FIX] : []
+      ]
+    };
+  },
+  async configure({ cfg, prompter }) {
+    const result = await promptMessageBridgeSetup({ cfg, prompter });
+    if (result === "skip") {
+      throw new Error(buildLegacyAccountsMessage());
+    }
+    return result;
+  },
+  async configureInteractive({ cfg, prompter }) {
+    return await promptMessageBridgeSetup({ cfg, prompter });
+  }
+};
+
 // src/runtime/store.ts
 var pluginRuntime = null;
 function setPluginRuntime(runtime) {
@@ -1445,8 +1687,13 @@ function asMessageBridgeSnapshot(value) {
 function getMissingConfigFields(snapshot) {
   return Array.isArray(snapshot.missingConfigFields) ? snapshot.missingConfigFields : [];
 }
-function isRejectedError(message) {
+function isRejectedProbeError(message) {
   return message !== "gateway_websocket_error" && message !== "gateway_not_connected";
+}
+function isAuthRejectedReason(reason) {
+  return /(ak|sk|auth|credential|forbidden|secret|signature|token|unauthor|未授权|鉴权|凭证|密钥|签名)/i.test(
+    reason
+  );
 }
 function createProbeConnection(account) {
   return new DefaultGatewayConnection({
@@ -1511,13 +1758,22 @@ async function probeMessageBridgeAccount(params, deps = {}) {
           state: "ready",
           latencyMs: elapsedMs(startedAt, now)
         });
+        return;
+      }
+      if (state === "DISCONNECTED") {
+        finish({
+          ok: false,
+          state: "connect_error",
+          latencyMs: elapsedMs(startedAt, now),
+          reason: "probe disconnected before READY"
+        });
       }
     });
     connection.on("error", (error) => {
       const message = error instanceof Error ? error.message : String(error);
       finish({
         ok: false,
-        state: isRejectedError(message) ? "rejected" : "connect_error",
+        state: isRejectedProbeError(message) ? "rejected" : "connect_error",
         latencyMs: elapsedMs(startedAt, now),
         reason: message
       });
@@ -1536,7 +1792,7 @@ async function probeMessageBridgeAccount(params, deps = {}) {
 function buildMessageBridgeAccountSnapshot(params) {
   const { account, cfg, probe } = params;
   const runtime = params.runtime;
-  const missingConfigFields = getMissingRequiredConfigPaths(account);
+  const missingConfigFields = getMissingRequiredConfigPaths(account, cfg);
   const legacyAccountsConfigured = hasLegacyAccountsConfig(cfg);
   const configured = missingConfigFields.length === 0 && !legacyAccountsConfigured;
   return {
@@ -1609,6 +1865,7 @@ function collectMessageBridgeStatusIssues(accounts, now = Date.now) {
   const nowAt = now();
   for (const rawSnapshot of accounts) {
     const snapshot = asMessageBridgeSnapshot(rawSnapshot);
+    const probe = isRecord5(snapshot.probe) ? snapshot.probe : null;
     const missingConfigFields = getMissingConfigFields(snapshot);
     const heartbeatIntervalMs = typeof snapshot.heartbeatIntervalMs === "number" ? snapshot.heartbeatIntervalMs : 0;
     const runTimeoutMs = typeof snapshot.runTimeoutMs === "number" ? snapshot.runTimeoutMs : 0;
@@ -1626,22 +1883,42 @@ function collectMessageBridgeStatusIssues(accounts, now = Date.now) {
         createConfigIssue({
           accountId: snapshot.accountId,
           message: `\u7F3A\u5C11\u5FC5\u586B\u914D\u7F6E\uFF1A${missingConfigFields.join("\u3001")}`,
-          fix: "\u5728 channels.message-bridge \u9876\u5C42\u8865\u9F50 gateway.url\u3001auth.ak\u3001auth.sk \u540E\u91CD\u65B0\u52A0\u8F7D\u63D2\u4EF6\u3002"
+          fix: CHANNEL_ADD_FIX
         })
       );
     }
-    if (isRecord5(snapshot.probe) && snapshot.probe.state === "rejected") {
-      const reason = typeof snapshot.probe.reason === "string" && snapshot.probe.reason.trim() ? `\uFF1A${snapshot.probe.reason.trim()}` : "";
+    if (probe && typeof probe.error === "string" && probe.error.trim()) {
       issues.push(
-        createAuthIssue({
+        createRuntimeIssue({
           accountId: snapshot.accountId,
-          message: `\u7F51\u5173\u9274\u6743\u88AB\u62D2\u7EDD${reason}`,
-          fix: "\u68C0\u67E5 channels.message-bridge.auth.ak / auth.sk \u662F\u5426\u4E0E ai-gateway \u4FA7\u914D\u7F6E\u4E00\u81F4\u3002"
+          message: `\u63A2\u6D3B\u6267\u884C\u5931\u8D25\uFF1A${probe.error.trim()}`,
+          fix: "\u68C0\u67E5 gateway.url\u3001\u8FD0\u884C\u73AF\u5883\u4E2D\u7684 WebSocket \u652F\u6301\u4E0E ai-gateway \u8FDB\u7A0B\u72B6\u6001\u3002"
         })
       );
     }
-    if (isRecord5(snapshot.probe) && snapshot.probe.state === "connect_error") {
-      const reason = typeof snapshot.probe.reason === "string" && snapshot.probe.reason.trim() ? `\uFF1A${snapshot.probe.reason.trim()}` : "";
+    if (probe && probe.state === "rejected") {
+      const rawReason = typeof probe.reason === "string" ? probe.reason.trim() : "";
+      const reason = rawReason ? `\uFF1A${rawReason}` : "";
+      if (rawReason && isAuthRejectedReason(rawReason)) {
+        issues.push(
+          createAuthIssue({
+            accountId: snapshot.accountId,
+            message: `\u7F51\u5173\u9274\u6743\u88AB\u62D2\u7EDD${reason}`,
+            fix: "\u68C0\u67E5 channels.message-bridge.auth.ak / auth.sk \u662F\u5426\u4E0E ai-gateway \u4FA7\u914D\u7F6E\u4E00\u81F4\u3002"
+          })
+        );
+      } else {
+        issues.push(
+          createRuntimeIssue({
+            accountId: snapshot.accountId,
+            message: `\u7F51\u5173\u62D2\u7EDD\u6CE8\u518C${reason}`,
+            fix: "\u68C0\u67E5 ai-gateway \u7684\u6CE8\u518C\u7B56\u7565\u3001toolType/toolVersion\u3001deviceName \u4E0E\u534F\u8BAE\u517C\u5BB9\u6027\u3002"
+          })
+        );
+      }
+    }
+    if (probe && probe.state === "connect_error") {
+      const reason = typeof probe.reason === "string" && probe.reason.trim() ? `\uFF1A${probe.reason.trim()}` : "";
       issues.push(
         createRuntimeIssue({
           accountId: snapshot.accountId,
@@ -1650,7 +1927,7 @@ function collectMessageBridgeStatusIssues(accounts, now = Date.now) {
         })
       );
     }
-    if (isRecord5(snapshot.probe) && snapshot.probe.state === "timeout") {
+    if (probe && probe.state === "timeout") {
       issues.push(
         createRuntimeIssue({
           accountId: snapshot.accountId,
@@ -1769,6 +2046,7 @@ var messageBridgePlugin = {
     nativeCommands: false,
     blockStreaming: true
   },
+  onboarding: messageBridgeOnboardingAdapter,
   reload: {
     configPrefixes: [`channels.${CHANNEL_ID}`]
   },
@@ -1777,10 +2055,39 @@ var messageBridgePlugin = {
     listAccountIds: (cfg) => listAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveAccount(cfg, accountId),
     defaultAccountId: () => DEFAULT_ACCOUNT_ID,
+    setAccountEnabled: ({ cfg, accountId, enabled }) => setMessageBridgeAccountEnabled({
+      cfg,
+      accountId,
+      enabled
+    }),
+    deleteAccount: ({ cfg, accountId }) => deleteMessageBridgeAccount({
+      cfg,
+      accountId
+    }),
     isEnabled: (account) => account.enabled,
+    disabledReason: () => "disabled",
     isConfigured: (account, cfg) => isAccountConfigured(account, cfg),
     unconfiguredReason: (_account, cfg) => resolveUnconfiguredReason(cfg),
     describeAccount: (account, cfg) => describeAccount(account, cfg)
+  },
+  setup: {
+    resolveAccountId: ({ accountId }) => resolveSupportedAccountId(accountId),
+    applyAccountName: ({ cfg, accountId, name }) => applyAccountNameToChannelSection({
+      cfg,
+      channelKey: CHANNEL_ID,
+      accountId,
+      name
+    }),
+    validateInput: ({ cfg, accountId, input }) => validateMessageBridgeSetupInput({
+      cfg,
+      accountId,
+      input
+    }),
+    applyAccountConfig: ({ cfg, accountId, input }) => applyMessageBridgeSetupConfig({
+      cfg,
+      accountId,
+      input
+    })
   },
   status: {
     defaultRuntime: createDefaultMessageBridgeRuntimeState(),
@@ -1844,12 +2151,15 @@ var plugin = {
 };
 var index_default = plugin;
 export {
+  CHANNEL_ADD_FIX,
   CHANNEL_ID,
   DEFAULT_ACCOUNT_CONFIG,
   DEFAULT_ACCOUNT_ID,
   LEGACY_ACCOUNTS_MIGRATION_FIX,
   OpenClawGatewayBridge,
+  applyMessageBridgeSetupConfig,
   index_default as default,
+  deleteMessageBridgeAccount,
   describeAccount,
   getMissingRequiredConfigPaths,
   hasLegacyAccountsConfig,
@@ -1860,6 +2170,9 @@ export {
   resolveAccount,
   resolveConfigSearchPaths,
   resolveNonDefaultAccountError,
+  resolveSupportedAccountId,
   resolveTokenSource,
-  resolveUnconfiguredReason
+  resolveUnconfiguredReason,
+  setMessageBridgeAccountEnabled,
+  validateMessageBridgeSetupInput
 };

@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { DefaultAkSkAuth } from "./connection/AkSkAuth.js";
 import { DefaultGatewayConnection, type GatewayConnection } from "./connection/GatewayConnection.js";
 import {
+  CHANNEL_ADD_FIX,
   DEFAULT_ACCOUNT_ID,
   LEGACY_ACCOUNTS_MIGRATION_FIX,
   getMissingRequiredConfigPaths,
@@ -64,8 +65,14 @@ function getMissingConfigFields(snapshot: MessageBridgeAccountSnapshot): string[
   return Array.isArray(snapshot.missingConfigFields) ? snapshot.missingConfigFields : [];
 }
 
-function isRejectedError(message: string): boolean {
+function isRejectedProbeError(message: string): boolean {
   return message !== "gateway_websocket_error" && message !== "gateway_not_connected";
+}
+
+function isAuthRejectedReason(reason: string): boolean {
+  return /(ak|sk|auth|credential|forbidden|secret|signature|token|unauthor|未授权|鉴权|凭证|密钥|签名)/i.test(
+    reason,
+  );
 }
 
 function createProbeConnection(account: MessageBridgeResolvedAccount): GatewayConnection {
@@ -147,6 +154,16 @@ export async function probeMessageBridgeAccount(
           state: "ready",
           latencyMs: elapsedMs(startedAt, now),
         });
+        return;
+      }
+
+      if (state === "DISCONNECTED") {
+        finish({
+          ok: false,
+          state: "connect_error",
+          latencyMs: elapsedMs(startedAt, now),
+          reason: "probe disconnected before READY",
+        });
       }
     });
 
@@ -154,7 +171,7 @@ export async function probeMessageBridgeAccount(
       const message = error instanceof Error ? error.message : String(error);
       finish({
         ok: false,
-        state: isRejectedError(message) ? "rejected" : "connect_error",
+        state: isRejectedProbeError(message) ? "rejected" : "connect_error",
         latencyMs: elapsedMs(startedAt, now),
         reason: message,
       });
@@ -180,7 +197,7 @@ export function buildMessageBridgeAccountSnapshot(params: {
 }): MessageBridgeAccountSnapshot {
   const { account, cfg, probe } = params;
   const runtime = params.runtime as MessageBridgeStatusSnapshot | undefined;
-  const missingConfigFields = getMissingRequiredConfigPaths(account);
+  const missingConfigFields = getMissingRequiredConfigPaths(account, cfg);
   const legacyAccountsConfigured = hasLegacyAccountsConfig(cfg);
   const configured = missingConfigFields.length === 0 && !legacyAccountsConfigured;
 
@@ -275,6 +292,7 @@ export function collectMessageBridgeStatusIssues(
 
   for (const rawSnapshot of accounts) {
     const snapshot = asMessageBridgeSnapshot(rawSnapshot);
+    const probe = isRecord(snapshot.probe) ? snapshot.probe : null;
     const missingConfigFields = getMissingConfigFields(snapshot);
     const heartbeatIntervalMs =
       typeof snapshot.heartbeatIntervalMs === "number" ? snapshot.heartbeatIntervalMs : 0;
@@ -294,29 +312,47 @@ export function collectMessageBridgeStatusIssues(
         createConfigIssue({
           accountId: snapshot.accountId,
           message: `缺少必填配置：${missingConfigFields.join("、")}`,
-          fix: "在 channels.message-bridge 顶层补齐 gateway.url、auth.ak、auth.sk 后重新加载插件。",
+          fix: CHANNEL_ADD_FIX,
         }),
       );
     }
 
-    if (isRecord(snapshot.probe) && snapshot.probe.state === "rejected") {
-      const reason =
-        typeof snapshot.probe.reason === "string" && snapshot.probe.reason.trim()
-          ? `：${snapshot.probe.reason.trim()}`
-          : "";
+    if (probe && typeof probe.error === "string" && probe.error.trim()) {
       issues.push(
-        createAuthIssue({
+        createRuntimeIssue({
           accountId: snapshot.accountId,
-          message: `网关鉴权被拒绝${reason}`,
-          fix: "检查 channels.message-bridge.auth.ak / auth.sk 是否与 ai-gateway 侧配置一致。",
+          message: `探活执行失败：${probe.error.trim()}`,
+          fix: "检查 gateway.url、运行环境中的 WebSocket 支持与 ai-gateway 进程状态。",
         }),
       );
     }
 
-    if (isRecord(snapshot.probe) && snapshot.probe.state === "connect_error") {
+    if (probe && probe.state === "rejected") {
+      const rawReason = typeof probe.reason === "string" ? probe.reason.trim() : "";
+      const reason = rawReason ? `：${rawReason}` : "";
+      if (rawReason && isAuthRejectedReason(rawReason)) {
+        issues.push(
+          createAuthIssue({
+            accountId: snapshot.accountId,
+            message: `网关鉴权被拒绝${reason}`,
+            fix: "检查 channels.message-bridge.auth.ak / auth.sk 是否与 ai-gateway 侧配置一致。",
+          }),
+        );
+      } else {
+        issues.push(
+          createRuntimeIssue({
+            accountId: snapshot.accountId,
+            message: `网关拒绝注册${reason}`,
+            fix: "检查 ai-gateway 的注册策略、toolType/toolVersion、deviceName 与协议兼容性。",
+          }),
+        );
+      }
+    }
+
+    if (probe && probe.state === "connect_error") {
       const reason =
-        typeof snapshot.probe.reason === "string" && snapshot.probe.reason.trim()
-          ? `：${snapshot.probe.reason.trim()}`
+        typeof probe.reason === "string" && probe.reason.trim()
+          ? `：${probe.reason.trim()}`
           : "";
       issues.push(
         createRuntimeIssue({
@@ -327,7 +363,7 @@ export function collectMessageBridgeStatusIssues(
       );
     }
 
-    if (isRecord(snapshot.probe) && snapshot.probe.state === "timeout") {
+    if (probe && probe.state === "timeout") {
       issues.push(
         createRuntimeIssue({
           accountId: snapshot.accountId,

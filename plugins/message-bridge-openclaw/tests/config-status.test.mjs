@@ -3,9 +3,15 @@ import assert from "node:assert/strict";
 import Ajv from "ajv";
 import { messageBridgePlugin } from "../dist/index.js";
 import {
+  applyMessageBridgeSetupConfig,
+  deleteMessageBridgeAccount,
+  isAccountConfigured,
   listAccountIds,
   resolveAccount,
+  resolveSupportedAccountId,
   resolveUnconfiguredReason,
+  setMessageBridgeAccountEnabled,
+  validateMessageBridgeSetupInput,
 } from "../dist/config.js";
 import {
   buildMessageBridgeAccountSnapshot,
@@ -76,8 +82,16 @@ class FakeProbeConnection {
         this.handlers.get("error")?.(new Error("bad ak/sk"));
         return;
       }
+      if (this.mode === "rejected_runtime") {
+        this.handlers.get("error")?.(new Error("unsupported tool version"));
+        return;
+      }
       if (this.mode === "connect_error") {
         this.handlers.get("error")?.(new Error("gateway_websocket_error"));
+        return;
+      }
+      if (this.mode === "disconnect_before_ready") {
+        this.handlers.get("stateChange")?.("DISCONNECTED");
       }
     });
   }
@@ -187,7 +201,7 @@ test("message bridge listAccountIds is fixed to default and rejects non-default 
   assert.throws(() => resolveAccount(cfg, "secondary"), /single_account_only/);
 });
 
-test("probeMessageBridgeAccount covers ready, rejected, connect_error and timeout", async () => {
+test("probeMessageBridgeAccount covers ready, rejected, connect_error, disconnect-before-ready and timeout", async () => {
   const account = createAccount();
 
   const ready = await probeMessageBridgeAccount(
@@ -231,6 +245,19 @@ test("probeMessageBridgeAccount covers ready, rejected, connect_error and timeou
   assert.equal(connectError.state, "connect_error");
   assert.equal(connectError.reason, "gateway_websocket_error");
 
+  const disconnectBeforeReady = await probeMessageBridgeAccount(
+    {
+      account,
+      timeoutMs: 50,
+    },
+    {
+      connectionFactory: () => new FakeProbeConnection("disconnect_before_ready"),
+    },
+  );
+  assert.equal(disconnectBeforeReady.ok, false);
+  assert.equal(disconnectBeforeReady.state, "connect_error");
+  assert.match(disconnectBeforeReady.reason, /disconnected before READY/);
+
   const timeout = await probeMessageBridgeAccount(
     {
       account,
@@ -243,6 +270,83 @@ test("probeMessageBridgeAccount covers ready, rejected, connect_error and timeou
   assert.equal(timeout.ok, false);
   assert.equal(timeout.state, "timeout");
   assert.match(timeout.reason, /timed out/);
+});
+
+test("single-account config still requires an explicit gateway url and setup writes top-level config", async () => {
+  const cfgWithoutUrl = {
+    channels: {
+      "message-bridge": {
+        auth: {
+          ak: "ak",
+          sk: "sk",
+        },
+      },
+    },
+  };
+  const unresolvedAccount = resolveAccount(cfgWithoutUrl);
+  assert.equal(isAccountConfigured(unresolvedAccount, cfgWithoutUrl), false);
+  assert.match(resolveUnconfiguredReason(cfgWithoutUrl), /gateway.url/);
+
+  assert.equal(resolveSupportedAccountId("default"), "default");
+  assert.throws(() => resolveSupportedAccountId("secondary"), /single_account_only/);
+
+  const setupValidationError = validateMessageBridgeSetupInput({
+    cfg: {
+      channels: {},
+    },
+    accountId: "default",
+    input: {
+      url: "ws://localhost:8081/ws/agent",
+      token: "ak",
+      password: "sk",
+      deviceName: "cli-device",
+    },
+  });
+  assert.equal(setupValidationError, null);
+
+  const nextCfg = applyMessageBridgeSetupConfig({
+    cfg: {
+      channels: {},
+    },
+    accountId: "default",
+    input: {
+      name: "Primary bridge",
+      url: "ws://localhost:8081/ws/agent",
+      token: "ak",
+      password: "sk",
+      deviceName: "cli-device",
+    },
+  });
+  assert.equal(nextCfg.channels["message-bridge"].name, "Primary bridge");
+  assert.equal(nextCfg.channels["message-bridge"].enabled, true);
+  assert.equal(nextCfg.channels["message-bridge"].gateway.url, "ws://localhost:8081/ws/agent");
+  assert.equal(nextCfg.channels["message-bridge"].gateway.deviceName, "cli-device");
+  assert.equal(nextCfg.channels["message-bridge"].auth.ak, "ak");
+  assert.equal(nextCfg.channels["message-bridge"].auth.sk, "sk");
+
+  const configuredAccount = resolveAccount(nextCfg);
+  assert.equal(isAccountConfigured(configuredAccount, nextCfg), true);
+
+  const disabledCfg = setMessageBridgeAccountEnabled({
+    cfg: nextCfg,
+    accountId: "default",
+    enabled: false,
+  });
+  assert.equal(disabledCfg.channels["message-bridge"].enabled, false);
+
+  const renamedCfg = messageBridgePlugin.setup.applyAccountName({
+    cfg: disabledCfg,
+    accountId: "default",
+    name: "Renamed bridge",
+  });
+  assert.equal(renamedCfg.channels["message-bridge"].name, "Renamed bridge");
+  assert.equal(renamedCfg.channels["message-bridge"].enabled, false);
+
+  const deletedCfg = deleteMessageBridgeAccount({
+    cfg: renamedCfg,
+    accountId: "default",
+  });
+  assert.equal(deletedCfg.channels?.["message-bridge"], undefined);
 });
 
 test("buildMessageBridgeAccountSnapshot and buildChannelSummary expose operational fields", async () => {
@@ -369,6 +473,46 @@ test("collectMessageBridgeStatusIssues reports config, auth and runtime problems
         missingConfigFields: [],
         legacyAccountsConfigured: false,
       },
+      {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        running: true,
+        connected: false,
+        lastError: null,
+        probe: {
+          ok: false,
+          state: "rejected",
+          latencyMs: 20,
+          reason: "unsupported tool version",
+        },
+        heartbeatIntervalMs: 1_000,
+        runTimeoutMs: 2_000,
+        lastHeartbeatAt: null,
+        lastInboundAt: null,
+        lastOutboundAt: null,
+        missingConfigFields: [],
+        legacyAccountsConfigured: false,
+      },
+      {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        running: true,
+        connected: false,
+        lastError: null,
+        probe: {
+          ok: false,
+          error: "WebSocket is not defined",
+        },
+        heartbeatIntervalMs: 1_000,
+        runTimeoutMs: 2_000,
+        lastHeartbeatAt: null,
+        lastInboundAt: null,
+        lastOutboundAt: null,
+        missingConfigFields: [],
+        legacyAccountsConfigured: false,
+      },
     ],
     () => 10_000,
   );
@@ -376,10 +520,98 @@ test("collectMessageBridgeStatusIssues reports config, auth and runtime problems
   assert.equal(issues.some((issue) => issue.kind === "config" && /缺少必填配置/.test(issue.message)), true);
   assert.equal(issues.some((issue) => issue.kind === "config" && /accounts/.test(issue.message)), true);
   assert.equal(issues.some((issue) => issue.kind === "auth" && /鉴权被拒绝/.test(issue.message)), true);
+  assert.equal(issues.some((issue) => issue.kind === "auth" && /unsupported tool version/.test(issue.message)), false);
+  assert.equal(issues.some((issue) => issue.kind === "runtime" && /网关拒绝注册：unsupported tool version/.test(issue.message)), true);
   assert.equal(issues.some((issue) => issue.kind === "runtime" && /无法连接 ai-gateway/.test(issue.message)), true);
+  assert.equal(issues.some((issue) => issue.kind === "runtime" && /探活执行失败：WebSocket is not defined/.test(issue.message)), true);
   assert.equal(issues.some((issue) => issue.kind === "runtime" && /探活在进入 READY 前超时/.test(issue.message)), true);
   assert.equal(issues.some((issue) => issue.kind === "runtime" && /最近一次运行错误/.test(issue.message)), true);
   assert.equal(issues.some((issue) => issue.kind === "runtime" && /心跳超过阈值未更新/.test(issue.message)), true);
   assert.equal(issues.some((issue) => issue.kind === "runtime" && /最近收发活动超过阈值未更新/.test(issue.message)), true);
   assert.equal(issues.every((issue) => typeof issue.fix === "string" && issue.fix.length > 0), true);
+});
+
+test("message bridge onboarding retries invalid input until the default account is configured", async () => {
+  const notes = [];
+  const textAnswers = [
+    "Primary bridge",
+    "http://localhost:8081/ws/agent",
+    "",
+    "",
+    "wizard-device",
+    "Primary bridge",
+    "ws://localhost:8081/ws/agent",
+    "ak",
+    "sk",
+    "wizard-device",
+  ];
+
+  const result = await messageBridgePlugin.onboarding.configure({
+    cfg: {
+      channels: {},
+    },
+    runtime: {},
+    prompter: {
+      async note(message, title) {
+        notes.push({ message, title });
+      },
+      async text() {
+        return textAnswers.shift();
+      },
+    },
+    options: {},
+    accountOverrides: {},
+    shouldPromptAccountIds: false,
+    forceAllowFrom: false,
+  });
+
+  assert.equal(result.accountId, "default");
+  assert.equal(result.cfg.channels["message-bridge"].name, "Primary bridge");
+  assert.equal(result.cfg.channels["message-bridge"].gateway.url, "ws://localhost:8081/ws/agent");
+  assert.equal(result.cfg.channels["message-bridge"].gateway.deviceName, "wizard-device");
+  assert.equal(result.cfg.channels["message-bridge"].auth.ak, "ak");
+  assert.equal(result.cfg.channels["message-bridge"].auth.sk, "sk");
+  assert.equal(notes.some((entry) => /gateway.url/.test(entry.message) || /WebSocket URL/.test(entry.message)), true);
+});
+
+test("message bridge onboarding skips legacy accounts config instead of reporting success", async () => {
+  const notes = [];
+  const configureInteractive = messageBridgePlugin.onboarding.configureInteractive;
+  assert.equal(typeof configureInteractive, "function");
+
+  const result = await configureInteractive({
+    cfg: {
+      channels: {
+        "message-bridge": {
+          accounts: {
+            legacy: {
+              gateway: { url: "ws://legacy/ws" },
+              auth: { ak: "ak", sk: "sk" },
+            },
+          },
+        },
+      },
+    },
+    runtime: {},
+    prompter: {
+      async note(message, title) {
+        notes.push({ message, title });
+      },
+      async text() {
+        throw new Error("should not prompt when legacy accounts config is present");
+      },
+    },
+    options: {},
+    accountOverrides: {},
+    shouldPromptAccountIds: false,
+    forceAllowFrom: false,
+    configured: false,
+    label: "Message Bridge",
+  });
+
+  assert.equal(result, "skip");
+  assert.equal(
+    notes.some((entry) => entry.message.includes("channels.message-bridge.accounts")),
+    true,
+  );
 });

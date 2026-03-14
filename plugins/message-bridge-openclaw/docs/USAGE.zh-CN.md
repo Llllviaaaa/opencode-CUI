@@ -30,10 +30,10 @@
 - 符号链接安装（开发联调）
   - 把插件根目录链接到 `extensions/message-bridge/`
   - 每次修改代码后重新执行 `npm run build`
-- bundle 单文件安装
-  - 生成 `bundle/index.js`
-  - 目标目录保留 `index.js`、`package.json`、`openclaw.plugin.json`
-  - 同时把插件入口改成 `index.js`
+- bundle 安装（推荐交付）
+  - 生成完整的 `bundle/` 安装目录
+  - 目标目录直接复制 `bundle/` 的内容
+  - 不需要手动修改任何文件
 - `openclaw plugins install`
   - 这是 OpenClaw 的通用安装入口
   - 但本仓库当前没有已验证的 npm 发布安装流，本文不把它作为主路径
@@ -42,7 +42,7 @@
 
 1. 本地部署或交付验证：目录复制安装
 2. 本地开发联调：符号链接安装
-3. 需要最小文件集交付：bundle 单文件安装
+3. 需要最小手工安装步骤的交付：bundle 安装
 
 ## 2. 前置条件
 
@@ -89,7 +89,7 @@ npm run build
 npm test
 ```
 
-如果你需要单文件 bundle，再额外执行：
+如果你需要可直接复制安装的 bundle，再额外执行：
 
 ```bash
 npm run build:bundle
@@ -163,9 +163,9 @@ npm run build
 - 如果不方便创建符号链接，继续使用“目录复制安装”即可
 - 如果使用符号链接，确保插件根目录下没有会干扰宿主版本解析的 `node_modules/openclaw`
 
-## 6. bundle 单文件安装
+## 6. bundle 安装
 
-这一方式适合“交付最小插件文件集”，但仍然需要同时保留 `package.json` 和 `openclaw.plugin.json`。
+这一方式适合“减少手工配置并直接复制安装”。`npm run build:bundle` 会直接生成一个可安装目录。
 
 ### 6.1 执行 bundle
 
@@ -177,12 +177,15 @@ npm run build:bundle
 输出文件：
 
 - `bundle/index.js`
+- `bundle/package.json`
+- `bundle/openclaw.plugin.json`
+- `bundle/README.md`
 
 说明：
 
 - `openclaw` / `openclaw/*` 被保留为 external
 - 目标环境里仍然需要安装 OpenClaw runtime
-- 但插件自己的本地模块不再需要整目录拷贝
+- bundle 目录内容可以直接复制到插件安装目录
 
 ### 6.2 macOS / Linux
 
@@ -190,8 +193,9 @@ npm run build:bundle
 export OPENCLAW_EXT_DIR=~/.openclaw-dev/extensions/message-bridge
 mkdir -p "$OPENCLAW_EXT_DIR"
 cp ./bundle/index.js "$OPENCLAW_EXT_DIR/index.js"
-cp ./package.json "$OPENCLAW_EXT_DIR/package.json"
-cp ./openclaw.plugin.json "$OPENCLAW_EXT_DIR/openclaw.plugin.json"
+cp ./bundle/package.json "$OPENCLAW_EXT_DIR/package.json"
+cp ./bundle/openclaw.plugin.json "$OPENCLAW_EXT_DIR/openclaw.plugin.json"
+cp ./bundle/README.md "$OPENCLAW_EXT_DIR/README.md"
 ```
 
 ### 6.3 Windows PowerShell
@@ -200,24 +204,12 @@ cp ./openclaw.plugin.json "$OPENCLAW_EXT_DIR/openclaw.plugin.json"
 $target = "$env:USERPROFILE\.openclaw-dev\extensions\message-bridge"
 New-Item -ItemType Directory -Force -Path $target | Out-Null
 Copy-Item .\bundle\index.js "$target\index.js" -Force
-Copy-Item .\package.json "$target\package.json" -Force
-Copy-Item .\openclaw.plugin.json "$target\openclaw.plugin.json" -Force
+Copy-Item .\bundle\package.json "$target\package.json" -Force
+Copy-Item .\bundle\openclaw.plugin.json "$target\openclaw.plugin.json" -Force
+Copy-Item .\bundle\README.md "$target\README.md" -Force
 ```
 
-### 6.4 修改目标目录里的 `package.json`
-
-把入口从 `dist/index.js` 改成 bundle 文件：
-
-```json
-{
-  "main": "index.js",
-  "openclaw": {
-    "extensions": ["./index.js"]
-  }
-}
-```
-
-只需要修改这两个字段，其余字段保持不变。
+Bundle 安装目录不需要再修改 `package.json`。生成的 `bundle/package.json` 已经固定为 `index.js` 入口。
 
 ## 6.5 运行时版本冲突排查
 

@@ -1,15 +1,25 @@
-import type { ChannelConfigSchema, ChannelPlugin } from "openclaw/plugin-sdk";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
+  applyAccountNameToChannelSection,
+  type ChannelConfigSchema,
+  type ChannelPlugin,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk";
+import {
+  applyMessageBridgeSetupConfig,
   CHANNEL_ID,
   DEFAULT_ACCOUNT_ID,
+  deleteMessageBridgeAccount,
   describeAccount,
+  isAccountConfigured,
   listAccountIds,
   resolveAccount,
+  resolveSupportedAccountId,
   resolveUnconfiguredReason,
-  isAccountConfigured,
+  setMessageBridgeAccountEnabled,
+  validateMessageBridgeSetupInput,
 } from "./config.js";
 import { OpenClawGatewayBridge } from "./OpenClawGatewayBridge.js";
+import { messageBridgeOnboardingAdapter } from "./onboarding.js";
 import { getPluginRuntime } from "./runtime/store.js";
 import type { MessageBridgeResolvedAccount } from "./types.js";
 import {
@@ -91,6 +101,7 @@ export const messageBridgePlugin: ChannelPlugin<MessageBridgeResolvedAccount> = 
     nativeCommands: false,
     blockStreaming: true,
   },
+  onboarding: messageBridgeOnboardingAdapter,
   reload: {
     configPrefixes: [`channels.${CHANNEL_ID}`],
   },
@@ -99,10 +110,44 @@ export const messageBridgePlugin: ChannelPlugin<MessageBridgeResolvedAccount> = 
     listAccountIds: (cfg: OpenClawConfig) => listAccountIds(cfg),
     resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => resolveAccount(cfg, accountId),
     defaultAccountId: () => DEFAULT_ACCOUNT_ID,
+    setAccountEnabled: ({ cfg, accountId, enabled }) =>
+      setMessageBridgeAccountEnabled({
+        cfg,
+        accountId,
+        enabled,
+      }),
+    deleteAccount: ({ cfg, accountId }) =>
+      deleteMessageBridgeAccount({
+        cfg,
+        accountId,
+      }),
     isEnabled: (account) => account.enabled,
+    disabledReason: () => "disabled",
     isConfigured: (account, cfg) => isAccountConfigured(account, cfg),
     unconfiguredReason: (_account, cfg) => resolveUnconfiguredReason(cfg),
     describeAccount: (account, cfg) => describeAccount(account, cfg),
+  },
+  setup: {
+    resolveAccountId: ({ accountId }) => resolveSupportedAccountId(accountId),
+    applyAccountName: ({ cfg, accountId, name }) =>
+      applyAccountNameToChannelSection({
+        cfg,
+        channelKey: CHANNEL_ID,
+        accountId,
+        name,
+      }),
+    validateInput: ({ cfg, accountId, input }) =>
+      validateMessageBridgeSetupInput({
+        cfg,
+        accountId,
+        input,
+      }),
+    applyAccountConfig: ({ cfg, accountId, input }) =>
+      applyMessageBridgeSetupConfig({
+        cfg,
+        accountId,
+        input,
+      }),
   },
   status: {
     defaultRuntime: createDefaultMessageBridgeRuntimeState(),

@@ -1,12 +1,19 @@
 import { homedir } from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import {
+  deleteAccountFromConfigSection,
+  setAccountEnabledInConfigSection,
+  type ChannelSetupInput,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk";
 import type { MessageBridgeAccountConfig, MessageBridgeResolvedAccount } from "./types.js";
 
 export const CHANNEL_ID = "message-bridge";
 export const DEFAULT_ACCOUNT_ID = "default";
 export const LEGACY_ACCOUNTS_MIGRATION_FIX =
   "删除 channels.message-bridge.accounts，并把唯一账号配置迁移到 channels.message-bridge 顶层。";
+export const CHANNEL_ADD_FIX =
+  "运行 openclaw channels add --channel message-bridge --url <gateway-url> --token <ak> --password <sk>。";
 const NON_DEFAULT_ACCOUNT_ERROR_PREFIX = "message_bridge_single_account_only";
 
 export const DEFAULT_ACCOUNT_CONFIG: MessageBridgeAccountConfig = {
@@ -32,9 +39,19 @@ export const DEFAULT_ACCOUNT_CONFIG: MessageBridgeAccountConfig = {
 };
 
 type GenericRecord = Record<string, unknown>;
+type MessageBridgeSetupInput = Pick<ChannelSetupInput, "deviceName" | "name" | "password" | "token" | "url" | "useEnv">;
 
 function isRecord(value: unknown): value is GenericRecord {
   return value !== null && typeof value === "object";
+}
+
+function trimOrUndefined(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function readChannelSection(cfg: OpenClawConfig): GenericRecord | undefined {
@@ -53,6 +70,11 @@ function stripLegacyAccounts(section: GenericRecord | undefined): GenericRecord 
 
   const { accounts: _accounts, ...rest } = section;
   return rest;
+}
+
+function getSectionField(section: GenericRecord | undefined, key: string): GenericRecord | undefined {
+  const value = section?.[key];
+  return isRecord(value) ? value : undefined;
 }
 
 function deepMerge<T extends GenericRecord>(base: T, override: GenericRecord | undefined): T {
@@ -99,15 +121,28 @@ function assertSupportedAccountId(accountId?: string | null): string {
   return normalizedAccountId;
 }
 
-export function getMissingRequiredConfigPaths(account: MessageBridgeAccountConfig): string[] {
+export function resolveSupportedAccountId(accountId?: string | null): string {
+  return assertSupportedAccountId(accountId);
+}
+
+export function getMissingRequiredConfigPaths(
+  account: MessageBridgeAccountConfig,
+  cfg?: OpenClawConfig,
+): string[] {
+  const section = cfg ? stripLegacyAccounts(readChannelSection(cfg)) : undefined;
+  const gatewaySection = cfg ? getSectionField(section, "gateway") : undefined;
+  const authSection = cfg ? getSectionField(section, "auth") : undefined;
+  const gatewayUrl = cfg ? trimOrUndefined(gatewaySection?.url) : trimOrUndefined(account.gateway.url);
+  const authAk = cfg ? trimOrUndefined(authSection?.ak) : trimOrUndefined(account.auth.ak);
+  const authSk = cfg ? trimOrUndefined(authSection?.sk) : trimOrUndefined(account.auth.sk);
   const missing: string[] = [];
-  if (!account.gateway.url.trim()) {
+  if (!gatewayUrl) {
     missing.push(`channels.${CHANNEL_ID}.gateway.url`);
   }
-  if (!account.auth.ak.trim()) {
+  if (!authAk) {
     missing.push(`channels.${CHANNEL_ID}.auth.ak`);
   }
-  if (!account.auth.sk.trim()) {
+  if (!authSk) {
     missing.push(`channels.${CHANNEL_ID}.auth.sk`);
   }
   return missing;
@@ -118,7 +153,7 @@ export function resolveTokenSource(account: MessageBridgeAccountConfig): "config
 }
 
 export function isAccountConfigured(account: MessageBridgeAccountConfig, cfg: OpenClawConfig): boolean {
-  return getMissingRequiredConfigPaths(account).length === 0 && !hasLegacyAccountsConfig(cfg);
+  return getMissingRequiredConfigPaths(account, cfg).length === 0 && !hasLegacyAccountsConfig(cfg);
 }
 
 export function resolveAccount(cfg: OpenClawConfig, accountId?: string | null): MessageBridgeResolvedAccount {
@@ -147,6 +182,126 @@ export function resolveUnconfiguredReason(cfg: OpenClawConfig): string {
   }
 
   return `channels.${CHANNEL_ID}.gateway.url、channels.${CHANNEL_ID}.auth.ak、channels.${CHANNEL_ID}.auth.sk 为必填项`;
+}
+
+function validateGatewayUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      return "Message Bridge 的 gateway.url 必须使用 ws:// 或 wss://。";
+    }
+    return null;
+  } catch {
+    return "Message Bridge 的 gateway.url 不是合法的 WebSocket URL。";
+  }
+}
+
+export function validateMessageBridgeSetupInput(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  input: MessageBridgeSetupInput;
+}): string | null {
+  const { cfg, accountId, input } = params;
+
+  try {
+    resolveSupportedAccountId(accountId);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  if (hasLegacyAccountsConfig(cfg)) {
+    return `检测到已废弃的 channels.${CHANNEL_ID}.accounts 配置。${LEGACY_ACCOUNTS_MIGRATION_FIX}`;
+  }
+
+  if (input.useEnv) {
+    return "Message Bridge 当前不支持 --use-env，请显式传入 --url、--token、--password。";
+  }
+
+  const nextCfg = applyMessageBridgeSetupConfig({
+    cfg,
+    accountId,
+    input,
+  });
+  const nextAccount = resolveAccount(nextCfg, accountId);
+  const missing = getMissingRequiredConfigPaths(nextAccount, nextCfg);
+  if (missing.length > 0) {
+    return `Message Bridge 缺少必填配置：${missing.join("、")}。${CHANNEL_ADD_FIX}`;
+  }
+
+  const urlError = validateGatewayUrl(nextAccount.gateway.url);
+  if (urlError) {
+    return urlError;
+  }
+
+  return null;
+}
+
+export function applyMessageBridgeSetupConfig(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  input: MessageBridgeSetupInput;
+}): OpenClawConfig {
+  const normalizedAccountId = resolveSupportedAccountId(params.accountId);
+  const section = stripLegacyAccounts(readChannelSection(params.cfg));
+  const gatewaySection = getSectionField(section, "gateway");
+  const authSection = getSectionField(section, "auth");
+  const nextName = params.input.name === undefined ? section?.name : trimOrUndefined(params.input.name);
+  const nextGatewayUrl = trimOrUndefined(params.input.url);
+  const nextDeviceName = trimOrUndefined(params.input.deviceName);
+  const nextAk = trimOrUndefined(params.input.token);
+  const nextSk = trimOrUndefined(params.input.password);
+
+  void normalizedAccountId;
+
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      [CHANNEL_ID]: {
+        ...section,
+        enabled: true,
+        ...(nextName !== undefined ? { name: nextName } : {}),
+        gateway: {
+          ...gatewaySection,
+          ...(nextGatewayUrl !== undefined ? { url: nextGatewayUrl } : {}),
+          ...(nextDeviceName !== undefined ? { deviceName: nextDeviceName } : {}),
+        },
+        auth: {
+          ...authSection,
+          ...(nextAk !== undefined ? { ak: nextAk } : {}),
+          ...(nextSk !== undefined ? { sk: nextSk } : {}),
+        },
+      },
+    },
+  };
+}
+
+export function setMessageBridgeAccountEnabled(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  enabled: boolean;
+}): OpenClawConfig {
+  resolveSupportedAccountId(params.accountId);
+  return setAccountEnabledInConfigSection({
+    cfg: params.cfg,
+    sectionKey: CHANNEL_ID,
+    accountId: params.accountId,
+    enabled: params.enabled,
+    allowTopLevel: true,
+  });
+}
+
+export function deleteMessageBridgeAccount(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+}): OpenClawConfig {
+  resolveSupportedAccountId(params.accountId);
+  return deleteAccountFromConfigSection({
+    cfg: params.cfg,
+    sectionKey: CHANNEL_ID,
+    accountId: params.accountId,
+    clearBaseFields: ["enabled", "name", "gateway", "auth", "agentIdPrefix", "runTimeoutMs"],
+  });
 }
 
 export function resolveConfigSearchPaths(workspaceDir?: string): string[] {
