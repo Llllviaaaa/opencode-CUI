@@ -11,3 +11,6 @@
 [submodule "plugins/openclaw-feishu"]
 	path = plugins/openclaw-feishu
 	url = https://github.com/AlexAnys/openclaw-feishu.git
+[submodule "plugins/openclaw"]
+	path = plugins/openclaw
+	url = https://github.com/openclaw/openclaw.git
