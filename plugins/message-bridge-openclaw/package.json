@@ -18,13 +18,21 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test tests/**/*.test.mjs"
   },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.11"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
   "dependencies": {
-    "jsonc-parser": "^3.3.1",
-    "openclaw": "2026.3.2"
+    "jsonc-parser": "^3.3.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "esbuild": "^0.27.4",
+    "openclaw": "2026.3.11",
     "typescript": "^5.7.2"
   },
   "openclaw": {

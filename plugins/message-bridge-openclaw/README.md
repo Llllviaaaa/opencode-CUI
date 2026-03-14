@@ -12,6 +12,10 @@ Chinese usage guide:
 
 - `docs/USAGE.zh-CN.md`
 
+Validation manual:
+
+- `docs/VALIDATION.zh-CN.md`
+
 Implementation plan:
 
 - `docs/implementation-plan.md`
@@ -29,6 +33,12 @@ Protocol conversion sequences:
 - bundle 单文件安装：执行 `npm run build:bundle`，复制 `bundle/index.js`、`package.json`、`openclaw.plugin.json`，并把入口改成 `index.js`
 
 `openclaw plugins install` 是 OpenClaw 的通用安装入口，但本仓库当前没有已验证的已发布分发流程；安装命令、配置示例和 bundle 入口修改方式见 `docs/USAGE.zh-CN.md`。
+
+关键约束：
+
+- 不要把 `node_modules/` 复制到 `extensions/message-bridge`
+- 插件运行时必须使用宿主 OpenClaw 提供的 `plugin-sdk`
+- 如果插件目录里出现 `node_modules/openclaw`，可能会和宿主 `openclaw --version` 解析到的版本冲突
 
 ## V1 scope
 
@@ -53,7 +63,7 @@ Deferred actions fail closed with `tool_error(unsupported_in_openclaw_v1)`.
 
 Current validated environment:
 
-- OpenClaw `2026.3.2`
+- OpenClaw `2026.3.11`
 - local `ai-gateway`
 - Redis on `127.0.0.1:6379`
 - MariaDB on `127.0.0.1:3306`
@@ -94,6 +104,18 @@ cp -R /Users/zy/.codex/worktrees/3eda/opencode-CUI/plugins/message-bridge-opencl
 cp /Users/zy/.codex/worktrees/3eda/opencode-CUI/plugins/message-bridge-openclaw/package.json /Users/zy/.openclaw-dev/extensions/message-bridge/
 cp /Users/zy/.codex/worktrees/3eda/opencode-CUI/plugins/message-bridge-openclaw/openclaw.plugin.json /Users/zy/.openclaw-dev/extensions/message-bridge/
 ```
+
+安装目录中不要包含：
+
+- `node_modules/`
+- 特别是 `node_modules/openclaw`
+
+推荐安装后的目录只包含：
+
+- `dist/`
+- `package.json`
+- `openclaw.plugin.json`
+- 文档文件可选
 
 ## OpenClaw dev config
 
@@ -159,6 +181,27 @@ Healthy startup should show:
 - the `message-bridge` channel account starts
 - the gateway connection becomes ready
 
+## Runtime Version Conflicts
+
+如果启动时报类似下面的错误：
+
+- `Cannot access 'ANTHROPIC_MODEL_ALIASES' before initialization`
+
+优先检查插件目录里是否存在私有 OpenClaw runtime：
+
+```bash
+find ~/.openclaw-dev/extensions/message-bridge -maxdepth 2 -type d | grep node_modules
+```
+
+如果存在 `~/.openclaw-dev/extensions/message-bridge/node_modules/openclaw`，先删除整个 `node_modules/`，再按本文档重新安装最小文件集。
+
+这类错误通常不是 OpenClaw 配置字段错误，而是：
+
+- 宿主 `openclaw --version`
+- 插件目录里的私有 `node_modules/openclaw`
+
+两者版本混用导致的模块初始化冲突。
+
 ## Verify registration and heartbeat
 
 Check the gateway log:
@@ -208,3 +251,4 @@ Confirm the actual assistant output in the latest session file under:
 - `question_reply` is not implemented
 - streaming is block-level, not token-level
 - published `openclaw plugins install` distribution flow is not yet validated for this package
+- plugin install must not include `node_modules/openclaw`

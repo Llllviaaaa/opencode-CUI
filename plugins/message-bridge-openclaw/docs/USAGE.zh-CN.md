@@ -2,6 +2,10 @@
 
 本文档说明 `message-bridge-openclaw` 当前在 OpenClaw 中的已验证安装方式，以及构建、配置、联调步骤。
 
+如果你要按阶段执行验收，而不是只做一次联调，请同时参考：
+
+- `docs/VALIDATION.zh-CN.md`
+
 当前插件目录：
 
 - `/Users/zy/.codex/worktrees/3eda/opencode-CUI/plugins/message-bridge-openclaw`
@@ -12,6 +16,12 @@
 - 未支持：`permission_reply`、`question_reply`
 - 文本输出为 block 级 streaming，不是 token 级 streaming
 - 当前环境里模型首块延迟和超时仍可能影响实际流式体验
+
+运行时依赖约束：
+
+- 插件运行时使用宿主 OpenClaw 提供的 `plugin-sdk`
+- 安装目录中不要复制 `node_modules/`
+- 尤其不要包含 `node_modules/openclaw`
 
 ## 1. 当前支持的安装方式
 
@@ -112,6 +122,17 @@ Copy-Item .\package.json "$target\package.json" -Force
 Copy-Item .\openclaw.plugin.json "$target\openclaw.plugin.json" -Force
 ```
 
+安装后的目标目录建议只保留：
+
+- `dist/`
+- `package.json`
+- `openclaw.plugin.json`
+
+不要保留：
+
+- `node_modules/`
+- `node_modules/openclaw`
+
 ## 5. 符号链接安装（开发联调）
 
 这一方式适合频繁改代码、频繁重启网关的场景。插件目录直接指向仓库工作区，不用每次手动拷贝文件。
@@ -140,6 +161,7 @@ npm run build
 
 - Windows 创建符号链接通常需要管理员权限或启用 Developer Mode
 - 如果不方便创建符号链接，继续使用“目录复制安装”即可
+- 如果使用符号链接，确保插件根目录下没有会干扰宿主版本解析的 `node_modules/openclaw`
 
 ## 6. bundle 单文件安装
 
@@ -196,6 +218,35 @@ Copy-Item .\openclaw.plugin.json "$target\openclaw.plugin.json" -Force
 ```
 
 只需要修改这两个字段，其余字段保持不变。
+
+## 6.5 运行时版本冲突排查
+
+如果启动 `openclaw gateway run` 时出现类似：
+
+- `Cannot access 'ANTHROPIC_MODEL_ALIASES' before initialization`
+
+先排查插件目录里是否混入了私有 OpenClaw runtime。
+
+macOS / Linux：
+
+```bash
+find ~/.openclaw-dev/extensions/message-bridge -maxdepth 2 -type d | grep node_modules
+```
+
+Windows PowerShell：
+
+```powershell
+Get-ChildItem "$env:USERPROFILE\.openclaw-dev\extensions\message-bridge" -Depth 2 -Directory |
+  Where-Object { $_.FullName -match 'node_modules' }
+```
+
+如果发现 `node_modules/openclaw`：
+
+1. 删除插件目录中的 `node_modules`
+2. 重新按“目录复制安装”或“bundle 单文件安装”部署
+3. 再执行 `openclaw --dev gateway run --allow-unconfigured --verbose`
+
+这类错误通常不是 `openclaw.json` 配置字段错误，而是插件目录中的私有 `openclaw` 和宿主 OpenClaw 版本混用导致的模块初始化问题。
 
 ## 7. 配置 OpenClaw
 
@@ -377,6 +428,17 @@ redis-cli publish agent:test-ak-openclaw-001 '{"type":"invoke","action":"chat","
 原因：
 
 - 插件是从本地扩展目录直接加载的，不是正式安装记录
+
+### 10.4 启动时报 `ANTHROPIC_MODEL_ALIASES before initialization`
+
+优先怀疑安装产物中混入了私有 `node_modules/openclaw`，而不是配置字段本身错误。
+
+先检查：
+
+- `openclaw --version`
+- 插件目录下是否存在 `node_modules/openclaw`
+
+如果同时存在宿主 OpenClaw 和插件私有 OpenClaw 两套版本，Node 可能优先解析插件目录中的旧版本，导致启动期模块初始化冲突。
 
 ## 11. 建议的交付方式
 
