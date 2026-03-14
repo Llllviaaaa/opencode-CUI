@@ -31,8 +31,9 @@
   - 把插件根目录链接到 `extensions/message-bridge/`
   - 每次修改代码后重新执行 `npm run build`
 - bundle 安装（推荐交付）
-  - 生成完整的 `bundle/` 安装目录
-  - 目标目录直接复制 `bundle/` 的内容
+  - 执行 `npm run install:bundle:dev`
+  - 自动生成完整的 `bundle/` 安装目录
+  - 自动安装到 `~/.openclaw-dev/extensions/message-bridge`
   - 不需要手动修改任何文件
 - `openclaw plugins install`
   - 这是 OpenClaw 的通用安装入口
@@ -93,6 +94,12 @@ npm test
 
 ```bash
 npm run build:bundle
+```
+
+如果你希望直接安装到 OpenClaw `--dev` 插件目录，执行：
+
+```bash
+npm run install:bundle:dev
 ```
 
 ## 4. 目录复制安装（推荐）
@@ -165,16 +172,24 @@ npm run build
 
 ## 6. bundle 安装
 
-这一方式适合“减少手工配置并直接复制安装”。`npm run build:bundle` 会直接生成一个可安装目录。
+这一方式适合“减少手工配置并直接复制安装”。推荐命令是 `npm run install:bundle:dev`。
 
 ### 6.1 执行 bundle
 
 ```bash
 cd /Users/zy/.codex/worktrees/3eda/opencode-CUI/plugins/message-bridge-openclaw
-npm run build:bundle
+npm run install:bundle:dev
 ```
 
-输出文件：
+该命令会：
+
+- 执行 `npm run build:bundle`
+- 检查 `bundle/` 中的安装产物
+- 安装到 `~/.openclaw-dev/extensions/message-bridge`
+- 打印已安装文件列表
+- 打印下一步启动命令
+
+`build:bundle` 的输出文件：
 
 - `bundle/index.js`
 - `bundle/package.json`
@@ -187,7 +202,20 @@ npm run build:bundle
 - 目标环境里仍然需要安装 OpenClaw runtime
 - bundle 目录内容可以直接复制到插件安装目录
 
-### 6.2 macOS / Linux
+### 6.2 一键安装脚本
+
+当前仓库提供：
+
+- macOS / Linux: `scripts/install-bundle-dev.sh`
+- Windows PowerShell: `scripts/install-bundle-dev.ps1`
+
+这两个脚本都只从 `bundle/` 安装，不会从源码目录复制，也不会把 `node_modules/openclaw` 混入目标目录。
+
+### 6.3 手动复制安装（备选）
+
+如果你不想用一键安装脚本，也可以手动复制 `bundle/` 内容。
+
+macOS / Linux：
 
 ```bash
 export OPENCLAW_EXT_DIR=~/.openclaw-dev/extensions/message-bridge
@@ -198,7 +226,7 @@ cp ./bundle/openclaw.plugin.json "$OPENCLAW_EXT_DIR/openclaw.plugin.json"
 cp ./bundle/README.md "$OPENCLAW_EXT_DIR/README.md"
 ```
 
-### 6.3 Windows PowerShell
+Windows PowerShell：
 
 ```powershell
 $target = "$env:USERPROFILE\.openclaw-dev\extensions\message-bridge"

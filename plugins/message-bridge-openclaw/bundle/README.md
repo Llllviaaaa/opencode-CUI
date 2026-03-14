@@ -30,7 +30,7 @@ Protocol conversion sequences:
 
 - 目录复制安装（推荐）：复制 `dist/`、`package.json`、`openclaw.plugin.json` 到 `~/.openclaw/extensions/message-bridge` 或 `~/.openclaw-dev/extensions/message-bridge`
 - 符号链接安装（开发联调）：把插件根目录链接到 profile 的 `extensions/message-bridge`
-- bundle 安装（推荐交付）：执行 `npm run build:bundle`，直接复制 `bundle/` 目录内容到 profile 的 `extensions/message-bridge`
+- bundle 安装（推荐交付）：执行 `npm run install:bundle:dev`，自动把 `bundle/` 安装到 `~/.openclaw-dev/extensions/message-bridge`
 
 `openclaw plugins install` 是 OpenClaw 的通用安装入口，但本仓库当前没有已验证的已发布分发流程；安装命令、配置示例和 bundle 入口修改方式见 `docs/USAGE.zh-CN.md`。
 
@@ -81,11 +81,13 @@ cd /Users/zy/.codex/worktrees/3eda/opencode-CUI/plugins/message-bridge-openclaw
 npm install
 npm run build
 npm run build:bundle
+npm run install:bundle:dev
 npm test
 ```
 
 Successful build should produce `dist/` and a green `npm test`.
 `npm run build:bundle` produces a ready-to-install bundle directory at `bundle/`.
+`npm run install:bundle:dev` builds the bundle and installs it into the OpenClaw `--dev` profile.
 
 ## Install into OpenClaw dev environment
 
@@ -187,10 +189,17 @@ Run:
 
 ```bash
 cd /Users/zy/.codex/worktrees/3eda/opencode-CUI/plugins/message-bridge-openclaw
-npm run build:bundle
+npm run install:bundle:dev
 ```
 
-Then copy the generated bundle directory contents into:
+This command will:
+
+- run `npm run build:bundle`
+- install the generated bundle into `~/.openclaw-dev/extensions/message-bridge`
+- print the installed files
+- print the next gateway start command
+
+If you need manual install instead, copy the generated `bundle/` directory contents into:
 
 - `~/.openclaw-dev/extensions/message-bridge`
 
@@ -201,7 +210,7 @@ The generated bundle directory already contains:
 - `openclaw.plugin.json`
 - `README.md`
 
-No manual `package.json` edits are required after copying.
+No manual `package.json` edits are required.
 
 ## Runtime Version Conflicts
 

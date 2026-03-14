@@ -66,6 +66,9 @@
 - 插件目录：`~/.openclaw-dev/extensions/message-bridge`
 - 配置文件：`~/.openclaw-dev/openclaw.json`
 
+除非特别说明，下面所有 `openclaw` 命令都默认带 `--dev`。
+如果你验证的是默认 profile，把命令中的 `--dev` 去掉即可。
+
 ## 3. 快速入口
 
 ### 全量自动化回归
@@ -246,7 +249,7 @@ node --test tests/config-status.test.mjs
 先备份当前配置，再执行：
 
 ```bash
-openclaw channels add --channel message-bridge --url ws://127.0.0.1:8081/ws/agent --token test-ak-openclaw-001 --password test-sk-openclaw-001 --name "Primary bridge"
+openclaw --dev channels add --channel message-bridge --url ws://127.0.0.1:8081/ws/agent --token test-ak-openclaw-001 --password test-sk-openclaw-001 --name "Primary bridge"
 ```
 
 预期结果：
@@ -259,7 +262,7 @@ openclaw channels add --channel message-bridge --url ws://127.0.0.1:8081/ws/agen
 #### 步骤 2：验证单账号限制
 
 ```bash
-openclaw channels add --channel message-bridge --account secondary --url ws://127.0.0.1:8081/ws/agent --token test-ak-openclaw-001 --password test-sk-openclaw-001
+openclaw --dev channels add --channel message-bridge --account secondary --url ws://127.0.0.1:8081/ws/agent --token test-ak-openclaw-001 --password test-sk-openclaw-001
 ```
 
 预期结果：
@@ -273,7 +276,7 @@ openclaw channels add --channel message-bridge --account secondary --url ws://12
 执行：
 
 ```bash
-openclaw channels add
+openclaw --dev channels add
 ```
 
 在 wizard 中选择 `message-bridge`，第一次故意输入：
@@ -326,7 +329,7 @@ openclaw channels add
 然后再次执行：
 
 ```bash
-openclaw channels add
+openclaw --dev channels add
 ```
 
 预期结果：
@@ -338,7 +341,7 @@ openclaw channels add
 #### 步骤 5：验证 `status/probe`
 
 ```bash
-openclaw channels status --probe --json
+openclaw --dev channels status --probe --json
 ```
 
 预期结果：
@@ -358,7 +361,7 @@ openclaw channels status --probe --json
 #### 步骤 6：验证 `doctor`
 
 ```bash
-openclaw doctor
+openclaw --dev doctor
 ```
 
 预期结果：
@@ -371,8 +374,8 @@ openclaw doctor
 建议按下面几组场景分别修改配置，再重复执行：
 
 ```bash
-openclaw channels status --probe
-openclaw doctor
+openclaw --dev channels status --probe
+openclaw --dev doctor
 ```
 
 | 场景 | 操作 | 预期 issue |
@@ -394,7 +397,7 @@ openclaw doctor
 禁用：
 
 ```bash
-openclaw channels remove --channel message-bridge
+openclaw --dev channels remove --channel message-bridge
 ```
 
 预期结果：
@@ -405,7 +408,7 @@ openclaw channels remove --channel message-bridge
 删除：
 
 ```bash
-openclaw channels remove --channel message-bridge --delete
+openclaw --dev channels remove --channel message-bridge --delete
 ```
 
 预期结果：
@@ -442,13 +445,13 @@ tail -f /Users/zy/Code/opencode/opencode-CUI/logs/local-stack/ai-gateway.log
 ### 查看当前 channel 状态
 
 ```bash
-openclaw channels status --probe --json
+openclaw --dev channels status --probe --json
 ```
 
 ### 查看全局诊断
 
 ```bash
-openclaw doctor
+openclaw --dev doctor
 ```
 
 ### 查看当前配置中的 `message-bridge`
