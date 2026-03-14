@@ -5,6 +5,9 @@ import type { MessageBridgeAccountConfig, MessageBridgeResolvedAccount } from ".
 
 export const CHANNEL_ID = "message-bridge";
 export const DEFAULT_ACCOUNT_ID = "default";
+export const LEGACY_ACCOUNTS_MIGRATION_FIX =
+  "删除 channels.message-bridge.accounts，并把唯一账号配置迁移到 channels.message-bridge 顶层。";
+const NON_DEFAULT_ACCOUNT_ERROR_PREFIX = "message_bridge_single_account_only";
 
 export const DEFAULT_ACCOUNT_CONFIG: MessageBridgeAccountConfig = {
   enabled: true,
@@ -43,6 +46,15 @@ function readChannelSection(cfg: OpenClawConfig): GenericRecord | undefined {
   return isRecord(section) ? section : undefined;
 }
 
+function stripLegacyAccounts(section: GenericRecord | undefined): GenericRecord | undefined {
+  if (!section) {
+    return undefined;
+  }
+
+  const { accounts: _accounts, ...rest } = section;
+  return rest;
+}
+
 function deepMerge<T extends GenericRecord>(base: T, override: GenericRecord | undefined): T {
   if (!override) {
     return structuredClone(base);
@@ -64,36 +76,77 @@ function normalizeAccountConfig(raw: GenericRecord | undefined): MessageBridgeAc
 }
 
 export function listAccountIds(cfg: OpenClawConfig): string[] {
+  void cfg;
+  return [DEFAULT_ACCOUNT_ID];
+}
+
+export function hasLegacyAccountsConfig(cfg: OpenClawConfig): boolean {
   const section = readChannelSection(cfg);
-  const accounts = section?.accounts;
-  if (!isRecord(accounts)) {
-    return [DEFAULT_ACCOUNT_ID];
+  return isRecord(section?.accounts);
+}
+
+export function resolveNonDefaultAccountError(accountId: string): Error {
+  return new Error(
+    `${NON_DEFAULT_ACCOUNT_ERROR_PREFIX}: Message Bridge 只支持 default 单账号，收到 accountId=${accountId}`,
+  );
+}
+
+function assertSupportedAccountId(accountId?: string | null): string {
+  const normalizedAccountId = accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  if (normalizedAccountId !== DEFAULT_ACCOUNT_ID) {
+    throw resolveNonDefaultAccountError(normalizedAccountId);
   }
-  const ids = Object.keys(accounts);
-  return ids.length > 0 ? ids : [DEFAULT_ACCOUNT_ID];
+  return normalizedAccountId;
+}
+
+export function getMissingRequiredConfigPaths(account: MessageBridgeAccountConfig): string[] {
+  const missing: string[] = [];
+  if (!account.gateway.url.trim()) {
+    missing.push(`channels.${CHANNEL_ID}.gateway.url`);
+  }
+  if (!account.auth.ak.trim()) {
+    missing.push(`channels.${CHANNEL_ID}.auth.ak`);
+  }
+  if (!account.auth.sk.trim()) {
+    missing.push(`channels.${CHANNEL_ID}.auth.sk`);
+  }
+  return missing;
+}
+
+export function resolveTokenSource(account: MessageBridgeAccountConfig): "config" | "none" {
+  return account.auth.ak.trim() || account.auth.sk.trim() ? "config" : "none";
+}
+
+export function isAccountConfigured(account: MessageBridgeAccountConfig, cfg: OpenClawConfig): boolean {
+  return getMissingRequiredConfigPaths(account).length === 0 && !hasLegacyAccountsConfig(cfg);
 }
 
 export function resolveAccount(cfg: OpenClawConfig, accountId?: string | null): MessageBridgeResolvedAccount {
-  const normalizedAccountId = accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  const normalizedAccountId = assertSupportedAccountId(accountId);
   const section = readChannelSection(cfg);
-  const baseConfig = normalizeAccountConfig(section);
-  const accounts = section?.accounts;
-  const override = isRecord(accounts) && isRecord(accounts[normalizedAccountId]) ? accounts[normalizedAccountId] : undefined;
-  const merged = normalizeAccountConfig(override ? deepMerge(baseConfig as unknown as GenericRecord, override) : baseConfig as unknown as GenericRecord);
+  const merged = normalizeAccountConfig(stripLegacyAccounts(section));
   return {
     accountId: normalizedAccountId,
     ...merged,
   };
 }
 
-export function describeAccount(account: MessageBridgeResolvedAccount) {
+export function describeAccount(account: MessageBridgeResolvedAccount, cfg: OpenClawConfig) {
   return {
     accountId: account.accountId,
     name: account.name,
     enabled: account.enabled,
-    configured: Boolean(account.gateway.url && account.auth.ak && account.auth.sk),
-    tokenSource: account.auth.ak ? "config" : "none",
+    configured: isAccountConfigured(account, cfg),
+    tokenSource: resolveTokenSource(account),
   };
+}
+
+export function resolveUnconfiguredReason(cfg: OpenClawConfig): string {
+  if (hasLegacyAccountsConfig(cfg)) {
+    return `channels.${CHANNEL_ID}.accounts 已废弃。${LEGACY_ACCOUNTS_MIGRATION_FIX}`;
+  }
+
+  return `channels.${CHANNEL_ID}.gateway.url、channels.${CHANNEL_ID}.auth.ak、channels.${CHANNEL_ID}.auth.sk 为必填项`;
 }
 
 export function resolveConfigSearchPaths(workspaceDir?: string): string[] {

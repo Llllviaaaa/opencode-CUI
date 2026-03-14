@@ -21,6 +21,10 @@ class FakeConnection {
 
   send(message) {
     this.sent.push(message);
+    this.handlers.get("outbound")?.(message);
+    if (message?.type === "heartbeat") {
+      this.handlers.get("heartbeat")?.(message);
+    }
   }
 
   isConnected() {
@@ -35,11 +39,16 @@ class FakeConnection {
     this.handlers.set(event, listener);
     return this;
   }
+
+  emitInbound(message) {
+    this.handlers.get("inbound")?.(message);
+  }
 }
 
 function createBridge(runtimeOverride, options = {}) {
   const connection = new FakeConnection();
   let agentEventListener = null;
+  const statusSnapshots = [];
   const logs = {
     info: [],
     warn: [],
@@ -141,13 +150,19 @@ function createBridge(runtimeOverride, options = {}) {
       channels: {},
     },
     runtime,
-    setStatus() {},
+    setStatus(status) {
+      statusSnapshots.push({ ...status });
+    },
     connectionFactory: () => connection,
   });
   return {
     bridge,
     connection,
     logs,
+    statusSnapshots,
+    getLatestStatus() {
+      return statusSnapshots.at(-1) ?? null;
+    },
     emitAgentEvent(event) {
       return agentEventListener?.(event);
     },
@@ -685,6 +700,34 @@ test("chat invoke emits session error and tool_error when dispatcher times out b
   assert.equal(failedLog?.meta.errorCategory, "timeout");
   assert.equal(failedLog?.meta.timedOut, true);
   assert.equal(failedLog?.meta.firstChunkLatencyMs, null);
+});
+
+test("bridge status tracks ready, inbound, outbound and heartbeat timestamps", async () => {
+  const { bridge, connection, getLatestStatus } = createBridge();
+  await bridge.start();
+
+  const readyStatus = getLatestStatus();
+  assert.equal(readyStatus?.connected, true);
+  assert.equal(typeof readyStatus?.lastReadyAt, "number");
+
+  connection.emitInbound({
+    type: "status_query",
+  });
+  await bridge.handleDownstreamMessage({
+    type: "status_query",
+  });
+
+  const ioStatus = getLatestStatus();
+  assert.equal(typeof ioStatus?.lastInboundAt, "number");
+  assert.equal(typeof ioStatus?.lastOutboundAt, "number");
+
+  connection.send({
+    type: "heartbeat",
+  });
+
+  const heartbeatStatus = getLatestStatus();
+  assert.equal(typeof heartbeatStatus?.lastHeartbeatAt, "number");
+  assert.equal(typeof heartbeatStatus?.lastOutboundAt, "number");
 });
 
 test("unsupported actions fail closed", async () => {

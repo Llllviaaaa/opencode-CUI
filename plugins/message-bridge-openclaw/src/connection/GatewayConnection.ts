@@ -8,6 +8,9 @@ export type ConnectionState = "DISCONNECTED" | "CONNECTING" | "CONNECTED" | "REA
 export interface GatewayConnectionEvents {
   stateChange: (state: ConnectionState) => void;
   message: (message: unknown) => void;
+  inbound: (message: unknown) => void;
+  outbound: (message: unknown) => void;
+  heartbeat: (message: unknown) => void;
   error: (error: Error) => void;
 }
 
@@ -106,6 +109,8 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
           return;
         }
 
+        this.emit("inbound", parsed);
+
         if (isGatewayControlMessage(parsed)) {
           if (parsed.type === "register_ok") {
             this.setState("READY");
@@ -157,6 +162,10 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
       throw new Error("gateway_not_connected");
     }
     this.ws.send(JSON.stringify(message));
+    this.emit("outbound", message);
+    if (isRecord(message) && message.type === "heartbeat") {
+      this.emit("heartbeat", message);
+    }
   }
 
   private setState(state: ConnectionState): void {

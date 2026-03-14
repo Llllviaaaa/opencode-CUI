@@ -1,11 +1,81 @@
-import type { ChannelPlugin } from "openclaw/plugin-sdk";
+import type { ChannelConfigSchema, ChannelPlugin } from "openclaw/plugin-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { CHANNEL_ID, DEFAULT_ACCOUNT_ID, describeAccount, listAccountIds, resolveAccount } from "./config.js";
+import {
+  CHANNEL_ID,
+  DEFAULT_ACCOUNT_ID,
+  describeAccount,
+  listAccountIds,
+  resolveAccount,
+  resolveUnconfiguredReason,
+  isAccountConfigured,
+} from "./config.js";
 import { OpenClawGatewayBridge } from "./OpenClawGatewayBridge.js";
 import { getPluginRuntime } from "./runtime/store.js";
 import type { MessageBridgeResolvedAccount } from "./types.js";
+import {
+  buildMessageBridgeAccountSnapshot,
+  buildMessageBridgeChannelSummary,
+  collectMessageBridgeStatusIssues,
+  createDefaultMessageBridgeRuntimeState,
+  probeMessageBridgeAccount,
+} from "./status.js";
 
 const activeBridges = new Map<string, OpenClawGatewayBridge>();
+
+const messageBridgeConfigSchema: ChannelConfigSchema = {
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      enabled: { type: "boolean" },
+      name: { type: "string", minLength: 1 },
+      gateway: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          url: { type: "string", minLength: 1 },
+          toolType: { type: "string", minLength: 1 },
+          toolVersion: { type: "string", minLength: 1 },
+          deviceName: { type: "string", minLength: 1 },
+          macAddress: { type: "string", minLength: 1 },
+          heartbeatIntervalMs: { type: "integer", minimum: 1 },
+          reconnect: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              baseMs: { type: "integer", minimum: 1 },
+              maxMs: { type: "integer", minimum: 1 },
+              exponential: { type: "boolean" },
+            },
+          },
+        },
+        required: ["url"],
+      },
+      auth: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ak: { type: "string", minLength: 1 },
+          sk: { type: "string", minLength: 1 },
+        },
+        required: ["ak", "sk"],
+      },
+      agentIdPrefix: { type: "string", minLength: 1 },
+      runTimeoutMs: { type: "integer", minimum: 1_000 },
+    },
+    required: ["gateway", "auth"],
+  },
+  uiHints: {
+    "auth.ak": {
+      label: "AK",
+      sensitive: true,
+    },
+    "auth.sk": {
+      label: "SK",
+      sensitive: true,
+    },
+  },
+};
 
 export const messageBridgePlugin: ChannelPlugin<MessageBridgeResolvedAccount> = {
   id: CHANNEL_ID,
@@ -24,24 +94,28 @@ export const messageBridgePlugin: ChannelPlugin<MessageBridgeResolvedAccount> = 
   reload: {
     configPrefixes: [`channels.${CHANNEL_ID}`],
   },
+  configSchema: messageBridgeConfigSchema,
   config: {
     listAccountIds: (cfg: OpenClawConfig) => listAccountIds(cfg),
     resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => resolveAccount(cfg, accountId),
     defaultAccountId: () => DEFAULT_ACCOUNT_ID,
     isEnabled: (account) => account.enabled,
-    isConfigured: (account) => Boolean(account.gateway.url && account.auth.ak && account.auth.sk),
-    unconfiguredReason: () => "gateway.url, auth.ak, auth.sk are required",
-    describeAccount: (account) => describeAccount(account),
+    isConfigured: (account, cfg) => isAccountConfigured(account, cfg),
+    unconfiguredReason: (_account, cfg) => resolveUnconfiguredReason(cfg),
+    describeAccount: (account, cfg) => describeAccount(account, cfg),
   },
   status: {
-    defaultRuntime: {
-      accountId: DEFAULT_ACCOUNT_ID,
-      running: false,
-      connected: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
-    },
+    defaultRuntime: createDefaultMessageBridgeRuntimeState(),
+    buildChannelSummary: ({ snapshot }) => buildMessageBridgeChannelSummary(snapshot),
+    probeAccount: async ({ account, timeoutMs }) => await probeMessageBridgeAccount({ account, timeoutMs }),
+    buildAccountSnapshot: ({ account, cfg, runtime, probe }) =>
+      buildMessageBridgeAccountSnapshot({
+        account,
+        cfg,
+        runtime,
+        probe,
+      }),
+    collectStatusIssues: (accounts) => collectMessageBridgeStatusIssues(accounts),
   },
   gateway: {
     startAccount: async (ctx) => {

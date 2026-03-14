@@ -6,6 +6,8 @@ import { homedir } from "node:os";
 import path from "node:path";
 var CHANNEL_ID = "message-bridge";
 var DEFAULT_ACCOUNT_ID = "default";
+var LEGACY_ACCOUNTS_MIGRATION_FIX = "\u5220\u9664 channels.message-bridge.accounts\uFF0C\u5E76\u628A\u552F\u4E00\u8D26\u53F7\u914D\u7F6E\u8FC1\u79FB\u5230 channels.message-bridge \u9876\u5C42\u3002";
+var NON_DEFAULT_ACCOUNT_ERROR_PREFIX = "message_bridge_single_account_only";
 var DEFAULT_ACCOUNT_CONFIG = {
   enabled: true,
   gateway: {
@@ -38,6 +40,13 @@ function readChannelSection(cfg) {
   const section = channels[CHANNEL_ID];
   return isRecord(section) ? section : void 0;
 }
+function stripLegacyAccounts(section) {
+  if (!section) {
+    return void 0;
+  }
+  const { accounts: _accounts, ...rest } = section;
+  return rest;
+}
 function deepMerge(base, override) {
   if (!override) {
     return structuredClone(base);
@@ -56,34 +65,67 @@ function normalizeAccountConfig(raw) {
   return deepMerge(DEFAULT_ACCOUNT_CONFIG, raw);
 }
 function listAccountIds(cfg) {
+  void cfg;
+  return [DEFAULT_ACCOUNT_ID];
+}
+function hasLegacyAccountsConfig(cfg) {
   const section = readChannelSection(cfg);
-  const accounts = section?.accounts;
-  if (!isRecord(accounts)) {
-    return [DEFAULT_ACCOUNT_ID];
+  return isRecord(section?.accounts);
+}
+function resolveNonDefaultAccountError(accountId) {
+  return new Error(
+    `${NON_DEFAULT_ACCOUNT_ERROR_PREFIX}: Message Bridge \u53EA\u652F\u6301 default \u5355\u8D26\u53F7\uFF0C\u6536\u5230 accountId=${accountId}`
+  );
+}
+function assertSupportedAccountId(accountId) {
+  const normalizedAccountId = accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  if (normalizedAccountId !== DEFAULT_ACCOUNT_ID) {
+    throw resolveNonDefaultAccountError(normalizedAccountId);
   }
-  const ids = Object.keys(accounts);
-  return ids.length > 0 ? ids : [DEFAULT_ACCOUNT_ID];
+  return normalizedAccountId;
+}
+function getMissingRequiredConfigPaths(account) {
+  const missing = [];
+  if (!account.gateway.url.trim()) {
+    missing.push(`channels.${CHANNEL_ID}.gateway.url`);
+  }
+  if (!account.auth.ak.trim()) {
+    missing.push(`channels.${CHANNEL_ID}.auth.ak`);
+  }
+  if (!account.auth.sk.trim()) {
+    missing.push(`channels.${CHANNEL_ID}.auth.sk`);
+  }
+  return missing;
+}
+function resolveTokenSource(account) {
+  return account.auth.ak.trim() || account.auth.sk.trim() ? "config" : "none";
+}
+function isAccountConfigured(account, cfg) {
+  return getMissingRequiredConfigPaths(account).length === 0 && !hasLegacyAccountsConfig(cfg);
 }
 function resolveAccount(cfg, accountId) {
-  const normalizedAccountId = accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  const normalizedAccountId = assertSupportedAccountId(accountId);
   const section = readChannelSection(cfg);
-  const baseConfig = normalizeAccountConfig(section);
-  const accounts = section?.accounts;
-  const override = isRecord(accounts) && isRecord(accounts[normalizedAccountId]) ? accounts[normalizedAccountId] : void 0;
-  const merged = normalizeAccountConfig(override ? deepMerge(baseConfig, override) : baseConfig);
+  const merged = normalizeAccountConfig(stripLegacyAccounts(section));
   return {
     accountId: normalizedAccountId,
     ...merged
   };
 }
-function describeAccount(account) {
+function describeAccount(account, cfg) {
   return {
     accountId: account.accountId,
     name: account.name,
     enabled: account.enabled,
-    configured: Boolean(account.gateway.url && account.auth.ak && account.auth.sk),
-    tokenSource: account.auth.ak ? "config" : "none"
+    configured: isAccountConfigured(account, cfg),
+    tokenSource: resolveTokenSource(account)
   };
+}
+function resolveUnconfiguredReason(cfg) {
+  if (hasLegacyAccountsConfig(cfg)) {
+    return `channels.${CHANNEL_ID}.accounts \u5DF2\u5E9F\u5F03\u3002${LEGACY_ACCOUNTS_MIGRATION_FIX}`;
+  }
+  return `channels.${CHANNEL_ID}.gateway.url\u3001channels.${CHANNEL_ID}.auth.ak\u3001channels.${CHANNEL_ID}.auth.sk \u4E3A\u5FC5\u586B\u9879`;
 }
 function resolveConfigSearchPaths(workspaceDir) {
   const paths = [];
@@ -180,6 +222,7 @@ var DefaultGatewayConnection = class extends EventEmitter {
         } catch {
           return;
         }
+        this.emit("inbound", parsed);
         if (isGatewayControlMessage(parsed)) {
           if (parsed.type === "register_ok") {
             this.setState("READY");
@@ -225,6 +268,10 @@ var DefaultGatewayConnection = class extends EventEmitter {
       throw new Error("gateway_not_connected");
     }
     this.ws.send(JSON.stringify(message));
+    this.emit("outbound", message);
+    if (isRecord2(message) && message.type === "heartbeat") {
+      this.emit("heartbeat", message);
+    }
   }
   setState(state) {
     this.state = state;
@@ -654,10 +701,32 @@ var OpenClawGatewayBridge = class {
       connected: false,
       lastStartAt: null,
       lastStopAt: null,
-      lastError: null
+      lastError: null,
+      lastReadyAt: null,
+      lastInboundAt: null,
+      lastOutboundAt: null,
+      lastHeartbeatAt: null,
+      probe: null,
+      lastProbeAt: null
     };
     this.connection.on("stateChange", (state) => {
+      const now = Date.now();
       this.status.connected = state === "CONNECTED" || state === "READY";
+      if (state === "READY") {
+        this.status.lastReadyAt = now;
+      }
+      this.options.setStatus({ ...this.status });
+    });
+    this.connection.on("inbound", () => {
+      this.status.lastInboundAt = Date.now();
+      this.options.setStatus({ ...this.status });
+    });
+    this.connection.on("outbound", () => {
+      this.status.lastOutboundAt = Date.now();
+      this.options.setStatus({ ...this.status });
+    });
+    this.connection.on("heartbeat", () => {
+      this.status.lastHeartbeatAt = Date.now();
       this.options.setStatus({ ...this.status });
     });
     this.connection.on("message", (message) => {
@@ -1348,8 +1417,344 @@ function getPluginRuntime() {
   return pluginRuntime;
 }
 
+// src/status.ts
+import os2 from "node:os";
+import {
+  buildBaseAccountStatusSnapshot,
+  buildProbeChannelStatusSummary,
+  createDefaultChannelRuntimeState
+} from "openclaw/plugin-sdk";
+var HEARTBEAT_GRACE_MS = 5e3;
+var silentLogger = {
+  info() {
+  },
+  warn() {
+  },
+  error() {
+  }
+};
+function elapsedMs(startedAt, now) {
+  return Math.max(0, now() - startedAt);
+}
+function isRecord5(value) {
+  return value !== null && typeof value === "object";
+}
+function asMessageBridgeSnapshot(value) {
+  return value;
+}
+function getMissingConfigFields(snapshot) {
+  return Array.isArray(snapshot.missingConfigFields) ? snapshot.missingConfigFields : [];
+}
+function isRejectedError(message) {
+  return message !== "gateway_websocket_error" && message !== "gateway_not_connected";
+}
+function createProbeConnection(account) {
+  return new DefaultGatewayConnection({
+    url: account.gateway.url,
+    reconnectBaseMs: account.gateway.reconnect.baseMs,
+    reconnectMaxMs: account.gateway.reconnect.maxMs,
+    reconnectExponential: account.gateway.reconnect.exponential,
+    heartbeatIntervalMs: account.gateway.heartbeatIntervalMs,
+    authPayloadProvider: () => new DefaultAkSkAuth(account.auth.ak, account.auth.sk).generateAuthPayload(),
+    registerMessage: {
+      type: "register",
+      deviceName: account.gateway.deviceName,
+      macAddress: account.gateway.macAddress || "unknown",
+      os: os2.platform(),
+      toolType: account.gateway.toolType,
+      toolVersion: account.gateway.toolVersion
+    },
+    logger: silentLogger
+  });
+}
+function createDefaultMessageBridgeRuntimeState() {
+  return createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
+    connected: false,
+    lastReadyAt: null,
+    lastInboundAt: null,
+    lastOutboundAt: null,
+    lastHeartbeatAt: null,
+    probe: null,
+    lastProbeAt: null
+  });
+}
+async function probeMessageBridgeAccount(params, deps = {}) {
+  const now = deps.now ?? Date.now;
+  const startedAt = now();
+  const connection = deps.connectionFactory?.(params.account) ?? createProbeConnection(params.account);
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      try {
+        connection.disconnect();
+      } catch {
+      }
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      finish({
+        ok: false,
+        state: "timeout",
+        latencyMs: elapsedMs(startedAt, now),
+        reason: "probe timed out before READY"
+      });
+    }, params.timeoutMs);
+    connection.on("stateChange", (state) => {
+      if (state === "READY") {
+        finish({
+          ok: true,
+          state: "ready",
+          latencyMs: elapsedMs(startedAt, now)
+        });
+      }
+    });
+    connection.on("error", (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      finish({
+        ok: false,
+        state: isRejectedError(message) ? "rejected" : "connect_error",
+        latencyMs: elapsedMs(startedAt, now),
+        reason: message
+      });
+    });
+    connection.connect().catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      finish({
+        ok: false,
+        state: "connect_error",
+        latencyMs: elapsedMs(startedAt, now),
+        reason: message
+      });
+    });
+  });
+}
+function buildMessageBridgeAccountSnapshot(params) {
+  const { account, cfg, probe } = params;
+  const runtime = params.runtime;
+  const missingConfigFields = getMissingRequiredConfigPaths(account);
+  const legacyAccountsConfigured = hasLegacyAccountsConfig(cfg);
+  const configured = missingConfigFields.length === 0 && !legacyAccountsConfigured;
+  return {
+    ...buildBaseAccountStatusSnapshot({
+      account: {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured
+      },
+      runtime,
+      probe
+    }),
+    connected: runtime?.connected ?? false,
+    gatewayUrl: account.gateway.url || null,
+    toolType: account.gateway.toolType,
+    toolVersion: account.gateway.toolVersion,
+    deviceName: account.gateway.deviceName,
+    heartbeatIntervalMs: account.gateway.heartbeatIntervalMs,
+    runTimeoutMs: account.runTimeoutMs,
+    tokenSource: resolveTokenSource(account),
+    legacyAccountsConfigured,
+    missingConfigFields,
+    lastInboundAt: runtime?.lastInboundAt ?? null,
+    lastOutboundAt: runtime?.lastOutboundAt ?? null,
+    lastReadyAt: runtime?.lastReadyAt ?? null,
+    lastHeartbeatAt: runtime?.lastHeartbeatAt ?? null,
+    lastProbeAt: runtime?.lastProbeAt ?? null
+  };
+}
+function buildMessageBridgeChannelSummary(snapshot) {
+  const bridgeSnapshot = asMessageBridgeSnapshot(snapshot);
+  return {
+    ...buildProbeChannelStatusSummary(snapshot, {
+      connected: bridgeSnapshot.connected ?? false,
+      lastReadyAt: bridgeSnapshot.lastReadyAt ?? null,
+      lastHeartbeatAt: bridgeSnapshot.lastHeartbeatAt ?? null
+    })
+  };
+}
+function createConfigIssue(params) {
+  return {
+    channel: "message-bridge",
+    accountId: params.accountId,
+    kind: "config",
+    message: params.message,
+    fix: params.fix
+  };
+}
+function createRuntimeIssue(params) {
+  return {
+    channel: "message-bridge",
+    accountId: params.accountId,
+    kind: "runtime",
+    message: params.message,
+    fix: params.fix
+  };
+}
+function createAuthIssue(params) {
+  return {
+    channel: "message-bridge",
+    accountId: params.accountId,
+    kind: "auth",
+    message: params.message,
+    fix: params.fix
+  };
+}
+function collectMessageBridgeStatusIssues(accounts, now = Date.now) {
+  const issues = [];
+  const nowAt = now();
+  for (const rawSnapshot of accounts) {
+    const snapshot = asMessageBridgeSnapshot(rawSnapshot);
+    const missingConfigFields = getMissingConfigFields(snapshot);
+    const heartbeatIntervalMs = typeof snapshot.heartbeatIntervalMs === "number" ? snapshot.heartbeatIntervalMs : 0;
+    const runTimeoutMs = typeof snapshot.runTimeoutMs === "number" ? snapshot.runTimeoutMs : 0;
+    if (snapshot.legacyAccountsConfigured) {
+      issues.push(
+        createConfigIssue({
+          accountId: snapshot.accountId,
+          message: `\u68C0\u6D4B\u5230\u5DF2\u5E9F\u5F03\u7684 channels.message-bridge.accounts \u914D\u7F6E\u3002`,
+          fix: LEGACY_ACCOUNTS_MIGRATION_FIX
+        })
+      );
+    }
+    if (missingConfigFields.length > 0) {
+      issues.push(
+        createConfigIssue({
+          accountId: snapshot.accountId,
+          message: `\u7F3A\u5C11\u5FC5\u586B\u914D\u7F6E\uFF1A${missingConfigFields.join("\u3001")}`,
+          fix: "\u5728 channels.message-bridge \u9876\u5C42\u8865\u9F50 gateway.url\u3001auth.ak\u3001auth.sk \u540E\u91CD\u65B0\u52A0\u8F7D\u63D2\u4EF6\u3002"
+        })
+      );
+    }
+    if (isRecord5(snapshot.probe) && snapshot.probe.state === "rejected") {
+      const reason = typeof snapshot.probe.reason === "string" && snapshot.probe.reason.trim() ? `\uFF1A${snapshot.probe.reason.trim()}` : "";
+      issues.push(
+        createAuthIssue({
+          accountId: snapshot.accountId,
+          message: `\u7F51\u5173\u9274\u6743\u88AB\u62D2\u7EDD${reason}`,
+          fix: "\u68C0\u67E5 channels.message-bridge.auth.ak / auth.sk \u662F\u5426\u4E0E ai-gateway \u4FA7\u914D\u7F6E\u4E00\u81F4\u3002"
+        })
+      );
+    }
+    if (isRecord5(snapshot.probe) && snapshot.probe.state === "connect_error") {
+      const reason = typeof snapshot.probe.reason === "string" && snapshot.probe.reason.trim() ? `\uFF1A${snapshot.probe.reason.trim()}` : "";
+      issues.push(
+        createRuntimeIssue({
+          accountId: snapshot.accountId,
+          message: `\u63A2\u6D3B\u65E0\u6CD5\u8FDE\u63A5 ai-gateway${reason}`,
+          fix: "\u68C0\u67E5 gateway.url\u3001\u7F51\u7EDC\u8FDE\u901A\u6027\u548C ai-gateway \u8FDB\u7A0B\u72B6\u6001\u3002"
+        })
+      );
+    }
+    if (isRecord5(snapshot.probe) && snapshot.probe.state === "timeout") {
+      issues.push(
+        createRuntimeIssue({
+          accountId: snapshot.accountId,
+          message: "\u63A2\u6D3B\u5728\u8FDB\u5165 READY \u524D\u8D85\u65F6\u3002",
+          fix: "\u68C0\u67E5 ai-gateway \u5F53\u524D\u8D1F\u8F7D\u3001\u9274\u6743\u94FE\u8DEF\u4E0E\u7F51\u7EDC\u65F6\u5EF6\u3002"
+        })
+      );
+    }
+    if (typeof snapshot.lastError === "string" && snapshot.lastError.trim()) {
+      issues.push(
+        createRuntimeIssue({
+          accountId: snapshot.accountId,
+          message: `\u6700\u8FD1\u4E00\u6B21\u8FD0\u884C\u9519\u8BEF\uFF1A${snapshot.lastError.trim()}`,
+          fix: "\u7ED3\u5408 ai-gateway \u65E5\u5FD7\u4E0E bridge.chat.failed \u8BCA\u65AD\u94FE\u8DEF\u95EE\u9898\u3002"
+        })
+      );
+    }
+    if (snapshot.running !== true) {
+      continue;
+    }
+    const heartbeatThresholdMs = heartbeatIntervalMs * 2 + HEARTBEAT_GRACE_MS;
+    if (heartbeatIntervalMs > 0 && typeof snapshot.lastHeartbeatAt === "number" && nowAt - snapshot.lastHeartbeatAt > heartbeatThresholdMs) {
+      issues.push(
+        createRuntimeIssue({
+          accountId: snapshot.accountId,
+          message: "\u5FC3\u8DF3\u8D85\u8FC7\u9608\u503C\u672A\u66F4\u65B0\uFF0C\u53EF\u80FD\u5DF2\u4E0E ai-gateway \u65AD\u8FDE\u3002",
+          fix: "\u68C0\u67E5 gateway \u8FDE\u63A5\u72B6\u6001\u4E0E heartbeatIntervalMs \u914D\u7F6E\uFF0C\u5FC5\u8981\u65F6\u91CD\u542F channel\u3002"
+        })
+      );
+    }
+    const latestActivityAt = Math.max(snapshot.lastInboundAt ?? 0, snapshot.lastOutboundAt ?? 0);
+    const activityThresholdMs = Math.max(
+      runTimeoutMs,
+      heartbeatIntervalMs * 3
+    );
+    if (activityThresholdMs > 0 && latestActivityAt > 0 && nowAt - latestActivityAt > activityThresholdMs) {
+      issues.push(
+        createRuntimeIssue({
+          accountId: snapshot.accountId,
+          message: "\u6700\u8FD1\u6536\u53D1\u6D3B\u52A8\u8D85\u8FC7\u9608\u503C\u672A\u66F4\u65B0\uFF0Cbridge \u53EF\u80FD\u5DF2\u5361\u4F4F\u3002",
+          fix: "\u68C0\u67E5 ai-gateway \u94FE\u8DEF\u4E0E runTimeoutMs \u914D\u7F6E\uFF0C\u5FC5\u8981\u65F6\u91CD\u542F channel\u3002"
+        })
+      );
+    }
+  }
+  return issues;
+}
+
 // src/channel.ts
 var activeBridges = /* @__PURE__ */ new Map();
+var messageBridgeConfigSchema = {
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      enabled: { type: "boolean" },
+      name: { type: "string", minLength: 1 },
+      gateway: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          url: { type: "string", minLength: 1 },
+          toolType: { type: "string", minLength: 1 },
+          toolVersion: { type: "string", minLength: 1 },
+          deviceName: { type: "string", minLength: 1 },
+          macAddress: { type: "string", minLength: 1 },
+          heartbeatIntervalMs: { type: "integer", minimum: 1 },
+          reconnect: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              baseMs: { type: "integer", minimum: 1 },
+              maxMs: { type: "integer", minimum: 1 },
+              exponential: { type: "boolean" }
+            }
+          }
+        },
+        required: ["url"]
+      },
+      auth: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ak: { type: "string", minLength: 1 },
+          sk: { type: "string", minLength: 1 }
+        },
+        required: ["ak", "sk"]
+      },
+      agentIdPrefix: { type: "string", minLength: 1 },
+      runTimeoutMs: { type: "integer", minimum: 1e3 }
+    },
+    required: ["gateway", "auth"]
+  },
+  uiHints: {
+    "auth.ak": {
+      label: "AK",
+      sensitive: true
+    },
+    "auth.sk": {
+      label: "SK",
+      sensitive: true
+    }
+  }
+};
 var messageBridgePlugin = {
   id: CHANNEL_ID,
   meta: {
@@ -1367,24 +1772,27 @@ var messageBridgePlugin = {
   reload: {
     configPrefixes: [`channels.${CHANNEL_ID}`]
   },
+  configSchema: messageBridgeConfigSchema,
   config: {
     listAccountIds: (cfg) => listAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveAccount(cfg, accountId),
     defaultAccountId: () => DEFAULT_ACCOUNT_ID,
     isEnabled: (account) => account.enabled,
-    isConfigured: (account) => Boolean(account.gateway.url && account.auth.ak && account.auth.sk),
-    unconfiguredReason: () => "gateway.url, auth.ak, auth.sk are required",
-    describeAccount: (account) => describeAccount(account)
+    isConfigured: (account, cfg) => isAccountConfigured(account, cfg),
+    unconfiguredReason: (_account, cfg) => resolveUnconfiguredReason(cfg),
+    describeAccount: (account, cfg) => describeAccount(account, cfg)
   },
   status: {
-    defaultRuntime: {
-      accountId: DEFAULT_ACCOUNT_ID,
-      running: false,
-      connected: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null
-    }
+    defaultRuntime: createDefaultMessageBridgeRuntimeState(),
+    buildChannelSummary: ({ snapshot }) => buildMessageBridgeChannelSummary(snapshot),
+    probeAccount: async ({ account, timeoutMs }) => await probeMessageBridgeAccount({ account, timeoutMs }),
+    buildAccountSnapshot: ({ account, cfg, runtime, probe }) => buildMessageBridgeAccountSnapshot({
+      account,
+      cfg,
+      runtime,
+      probe
+    }),
+    collectStatusIssues: (accounts) => collectMessageBridgeStatusIssues(accounts)
   },
   gateway: {
     startAccount: async (ctx) => {
@@ -1439,12 +1847,19 @@ export {
   CHANNEL_ID,
   DEFAULT_ACCOUNT_CONFIG,
   DEFAULT_ACCOUNT_ID,
+  LEGACY_ACCOUNTS_MIGRATION_FIX,
   OpenClawGatewayBridge,
   index_default as default,
   describeAccount,
+  getMissingRequiredConfigPaths,
+  hasLegacyAccountsConfig,
+  isAccountConfigured,
   listAccountIds,
   messageBridgePlugin,
   normalizeDownstreamMessage,
   resolveAccount,
-  resolveConfigSearchPaths
+  resolveConfigSearchPaths,
+  resolveNonDefaultAccountError,
+  resolveTokenSource,
+  resolveUnconfiguredReason
 };

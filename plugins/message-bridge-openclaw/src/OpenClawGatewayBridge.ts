@@ -324,10 +324,32 @@ export class OpenClawGatewayBridge {
       lastStartAt: null,
       lastStopAt: null,
       lastError: null,
+      lastReadyAt: null,
+      lastInboundAt: null,
+      lastOutboundAt: null,
+      lastHeartbeatAt: null,
+      probe: null,
+      lastProbeAt: null,
     };
 
     this.connection.on("stateChange", (state) => {
+      const now = Date.now();
       this.status.connected = state === "CONNECTED" || state === "READY";
+      if (state === "READY") {
+        this.status.lastReadyAt = now;
+      }
+      this.options.setStatus({ ...this.status });
+    });
+    this.connection.on("inbound", () => {
+      this.status.lastInboundAt = Date.now();
+      this.options.setStatus({ ...this.status });
+    });
+    this.connection.on("outbound", () => {
+      this.status.lastOutboundAt = Date.now();
+      this.options.setStatus({ ...this.status });
+    });
+    this.connection.on("heartbeat", () => {
+      this.status.lastHeartbeatAt = Date.now();
       this.options.setStatus({ ...this.status });
     });
     this.connection.on("message", (message) => {

@@ -32,6 +32,15 @@ export interface MessageBridgeResolvedAccount extends MessageBridgeAccountConfig
   accountId: string;
 }
 
+export type MessageBridgeProbeState = "ready" | "rejected" | "connect_error" | "timeout";
+
+export interface MessageBridgeProbeResult {
+  ok: boolean;
+  state: MessageBridgeProbeState;
+  latencyMs: number;
+  reason?: string;
+}
+
 export interface MessageBridgeSessionRecord {
   toolSessionId: string;
   sessionKey: string;
@@ -45,6 +54,12 @@ export interface MessageBridgeStatusSnapshot {
   lastStartAt: number | null;
   lastStopAt: number | null;
   lastError: string | null;
+  lastReadyAt: number | null;
+  lastInboundAt: number | null;
+  lastOutboundAt: number | null;
+  lastHeartbeatAt: number | null;
+  probe: MessageBridgeProbeResult | null;
+  lastProbeAt: number | null;
 }
 
 export type BridgeLogger = {
