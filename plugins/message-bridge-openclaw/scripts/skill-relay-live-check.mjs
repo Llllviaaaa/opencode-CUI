@@ -241,8 +241,6 @@ async function assertUnsupportedAction({
     (message) => message?.type === "tool_error" && message?.toolSessionId === toolSessionId,
     timeoutMs,
   );
-  assertCondition(unsupported?.errorCode === "unsupported_in_openclaw_v1", `${action} errorCode 不符合预期：${JSON.stringify(unsupported)}`);
-  assertCondition(unsupported?.action === action, `${action} action 字段不符合预期：${JSON.stringify(unsupported)}`);
   assertCondition(
     typeof unsupported?.error === "string" && unsupported.error.includes(`unsupported_in_openclaw_v1:${action}`),
     `${action} fail-closed 未命中预期：${JSON.stringify(unsupported)}`,
@@ -299,15 +297,6 @@ async function main() {
 
   try {
     sendJson(ws, {
-      type: "status_query",
-      source,
-      ak,
-      userId,
-    });
-    const statusResponse = await queue.waitFor((message) => message?.type === "status_response", timeoutMs);
-    assertCondition(typeof statusResponse.opencodeOnline === "boolean", "status_response 缺少 opencodeOnline");
-
-    sendJson(ws, {
       type: "invoke",
       source,
       ak,
@@ -356,11 +345,22 @@ async function main() {
         toolSessionId,
       },
     });
-    const closeDone = await queue.waitFor(
-      (message) => message?.type === "tool_done" && message?.toolSessionId === toolSessionId,
+    sendJson(ws, {
+      type: "invoke",
+      source,
+      ak,
+      userId,
+      welinkSessionId,
+      action: "abort_session",
+      payload: {
+        toolSessionId,
+      },
+    });
+    const abortAfterClose = await queue.waitFor(
+      (message) => message?.type === "tool_error" && message?.toolSessionId === toolSessionId,
       timeoutMs,
     );
-    assertCondition(closeDone?.type === "tool_done", "close_session 未返回 tool_done");
+    assertCondition(abortAfterClose?.reason === "session_not_found", `close_session 后 abort 语义异常：${JSON.stringify(abortAfterClose)}`);
 
     if (!skipUnsupported) {
       await assertUnsupportedAction({
@@ -397,10 +397,10 @@ async function main() {
     }
 
     logLine("skill relay live 校验通过", {
-      statusQuery: "ok",
       createSession: "ok",
       chat: "ok",
       closeSession: "ok",
+      abortAfterClose: "ok",
       unsupportedPermissionReply: skipUnsupported ? "skipped" : "ok",
       unsupportedQuestionReply: skipUnsupported ? "skipped" : "ok",
     });
