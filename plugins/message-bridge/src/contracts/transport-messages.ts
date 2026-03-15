@@ -1,7 +1,7 @@
 import type {
   CreateSessionResultData,
-} from './downstream-messages';
-import type { SupportedUpstreamEvent } from './upstream-events';
+} from './downstream-messages.js';
+import type { SupportedUpstreamEvent } from './upstream-events.js';
 
 export const TRANSPORT_UPSTREAM_MESSAGE_TYPES = [
   'register',

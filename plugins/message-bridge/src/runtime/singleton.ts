@@ -1,8 +1,8 @@
-import { BridgeRuntime } from './BridgeRuntime';
-import type { PluginInput } from './types';
-import { AppLogger } from './AppLogger';
-import { buildClientShapeSummary } from './clientShapeSummary';
-import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
+import { BridgeRuntime } from './BridgeRuntime.js';
+import type { PluginInput } from './types.js';
+import { AppLogger } from './AppLogger.js';
+import { buildClientShapeSummary } from './clientShapeSummary.js';
+import { getErrorDetailsForLog, getErrorMessage } from '../utils/error.js';
 
 let runtime: BridgeRuntime | null = null;
 let initializing: Promise<BridgeRuntime> | null = null;

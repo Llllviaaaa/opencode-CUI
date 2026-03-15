@@ -1,1 +1,1 @@
-export * from '../contracts/protocol';
+export * from '../contracts/protocol.js';

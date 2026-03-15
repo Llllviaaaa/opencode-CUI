@@ -1,5 +1,5 @@
-import type { BridgeLogger } from '../../runtime/AppLogger';
-import type { BridgeEvent } from '../../runtime/types';
+import type { BridgeLogger } from '../../runtime/AppLogger.js';
+import type { BridgeEvent } from '../../runtime/types.js';
 import {
   isSupportedUpstreamEventType,
   type MessagePartDeltaEvent,
@@ -16,7 +16,7 @@ import {
   type SessionUpdatedEvent,
   type SupportedUpstreamEvent,
   type SupportedUpstreamEventType,
-} from './SupportedUpstreamEvents';
+} from './SupportedUpstreamEvents.js';
 import type {
   CommonUpstreamFields,
   ExtractResult,
@@ -26,7 +26,7 @@ import type {
   MessageUpdatedExtra,
   NormalizedUpstreamEvent,
   SessionStatusExtra,
-} from './UpstreamEventTypes';
+} from './UpstreamEventTypes.js';
 
 // The upstream extractor is the only layer allowed to read raw OpenCode event
 // field paths. Runtime and actions must consume normalized output only.

@@ -1,7 +1,7 @@
-import type { BridgeConfig, ConfigValidationError } from '../types';
-import { AppLogger, type BridgeLogger } from '../runtime/AppLogger';
-import { ConfigResolver } from './ConfigResolver';
-import { ConfigValidator } from './ConfigValidator';
+import type { BridgeConfig, ConfigValidationError } from '../types/index.js';
+import { AppLogger, type BridgeLogger } from '../runtime/AppLogger.js';
+import { ConfigResolver } from './ConfigResolver.js';
+import { ConfigValidator } from './ConfigValidator.js';
 
 /**
  * Configuration validation error that aggregates multiple validation errors

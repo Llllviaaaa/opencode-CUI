@@ -21,11 +21,11 @@ export type {
   CloseSessionResultData,
   StatusQueryPayload,
   StatusQueryResultData,
-} from '../contracts/downstream-messages';
+} from '../contracts/downstream-messages.js';
 export type {
   Action,
   ActionContext,
   ActionFailure,
   ActionResult,
   ActionSuccess,
-} from './action-runtime';
+} from './action-runtime.js';

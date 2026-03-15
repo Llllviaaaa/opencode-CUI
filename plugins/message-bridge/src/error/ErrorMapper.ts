@@ -1,4 +1,4 @@
-import { ERROR_CODES, type ErrorCode } from '../types';
+import { ERROR_CODES, type ErrorCode } from '../types/index.js';
 
 export class ErrorMapper {
   fromSDKError(error: Error): ErrorCode {

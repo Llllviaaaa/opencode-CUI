@@ -1,4 +1,4 @@
-import type { BridgeLogger } from '../../runtime/AppLogger';
+import type { BridgeLogger } from '../../runtime/AppLogger.js';
 import type {
   AbortSessionPayload,
   DownstreamMessage,
@@ -9,15 +9,15 @@ import type {
   InvokeAction,
   PermissionReplyPayload,
   QuestionReplyPayload,
-} from '../../contracts/downstream-messages';
-import { isSupportedDownstreamMessageType, isSupportedInvokeAction } from './SupportedDownstreamMessages';
+} from '../../contracts/downstream-messages.js';
+import { isSupportedDownstreamMessageType, isSupportedInvokeAction } from './SupportedDownstreamMessages.js';
 import type {
   DownstreamNormalizationError,
   DownstreamNormalizationStage,
   NormalizeResult,
   NormalizedDownstreamMessage,
   NormalizedInvokeMessage,
-} from './DownstreamMessageTypes';
+} from './DownstreamMessageTypes.js';
 
 // The downstream normalizer is the only layer allowed to read raw gateway
 // message fields. Runtime and actions must use normalized commands/payloads.

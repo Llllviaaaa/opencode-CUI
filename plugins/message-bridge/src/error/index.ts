@@ -1,6 +1,6 @@
-import type { ToolErrorMessage, ToolErrorReason } from '../types';
-import { FastFailDetector } from './FastFailDetector';
-import { ErrorMapper } from './ErrorMapper';
+import type { ToolErrorMessage, ToolErrorReason } from '../contracts/transport-messages.js';
+import { FastFailDetector } from './FastFailDetector.js';
+import { ErrorMapper } from './ErrorMapper.js';
 
 export class BridgeError extends Error {
   constructor(message: string, public code?: string) {

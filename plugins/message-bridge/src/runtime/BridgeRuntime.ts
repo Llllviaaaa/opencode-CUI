@@ -4,40 +4,39 @@ import {
   ActionResult,
   StatusQueryPayload,
   StatusQueryResultData,
-  TOOL_ERROR_REASON,
-  type ToolErrorReason,
-} from '../types';
-import { ChatAction } from '../action/ChatAction';
-import { CreateSessionAction } from '../action/CreateSessionAction';
-import { CloseSessionAction } from '../action/CloseSessionAction';
-import { PermissionReplyAction } from '../action/PermissionReplyAction';
-import { StatusQueryAction } from '../action/StatusQueryAction';
-import { AbortSessionAction } from '../action/AbortSessionAction';
-import { QuestionReplyAction } from '../action/QuestionReplyAction';
-import { DefaultActionRouter } from '../action/ActionRouter';
-import { DefaultActionRegistry } from '../action/ActionRegistry';
-import { loadConfig } from '../config';
-import { DefaultAkSkAuth } from '../connection/AkSkAuth';
-import { DefaultGatewayConnection, GatewayConnection } from '../connection/GatewayConnection';
-import { DefaultStateManager } from '../connection/StateManager';
-import { EventFilter } from '../event/EventFilter';
+} from '../types/index.js';
+import { TOOL_ERROR_REASON, type ToolErrorReason } from '../contracts/transport-messages.js';
+import { ChatAction } from '../action/ChatAction.js';
+import { CreateSessionAction } from '../action/CreateSessionAction.js';
+import { CloseSessionAction } from '../action/CloseSessionAction.js';
+import { PermissionReplyAction } from '../action/PermissionReplyAction.js';
+import { StatusQueryAction } from '../action/StatusQueryAction.js';
+import { AbortSessionAction } from '../action/AbortSessionAction.js';
+import { QuestionReplyAction } from '../action/QuestionReplyAction.js';
+import { DefaultActionRouter } from '../action/ActionRouter.js';
+import { DefaultActionRegistry } from '../action/ActionRegistry.js';
+import { loadConfig } from '../config/index.js';
+import { DefaultAkSkAuth } from '../connection/AkSkAuth.js';
+import { DefaultGatewayConnection, GatewayConnection } from '../connection/GatewayConnection.js';
+import { DefaultStateManager } from '../connection/StateManager.js';
+import { EventFilter } from '../event/EventFilter.js';
 import {
   extractUpstreamEvent,
   type MessagePartExtra,
   type MessageUpdatedExtra,
   type NormalizedUpstreamEvent,
   type SessionStatusExtra,
-} from '../protocol/upstream';
+} from '../protocol/upstream/index.js';
 import {
   normalizeDownstreamMessage,
-} from '../protocol/downstream';
-import { BridgeEvent } from './types';
-import { createSdkAdapter, getMissingSdkCapabilities, toHostClientLike } from './SdkAdapter';
-import { AppLogger, type BridgeLogger } from './AppLogger';
-import { ToolDoneCompat, type ToolDoneSource } from './compat/ToolDoneCompat';
-import { resolveRegisterMetadata } from './RegisterMetadata';
-import { isBridgeStartupError, type BridgeStartupError, validateBridgeStartup } from './Startup';
-import type { HostClientLike, OpencodeClient } from '../types';
+} from '../protocol/downstream/index.js';
+import { BridgeEvent } from './types.js';
+import { createSdkAdapter, getMissingSdkCapabilities, toHostClientLike } from './SdkAdapter.js';
+import { AppLogger, type BridgeLogger } from './AppLogger.js';
+import { ToolDoneCompat, type ToolDoneSource } from './compat/ToolDoneCompat.js';
+import { resolveRegisterMetadata } from './RegisterMetadata.js';
+import { isBridgeStartupError, type BridgeStartupError, validateBridgeStartup } from './Startup.js';
+import type { HostClientLike, OpencodeClient } from '../types/index.js';
 
 export interface BridgeRuntimeOptions {
   workspacePath?: string;

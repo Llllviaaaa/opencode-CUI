@@ -1,4 +1,4 @@
-import { Action, ActionResultDataByName, ActionName, ActionPayloadByName } from '../types';
+import { Action, ActionResultDataByName, ActionName, ActionPayloadByName } from '../types/index.js';
 
 export interface ActionRegistry {
   register(action: Action): void;

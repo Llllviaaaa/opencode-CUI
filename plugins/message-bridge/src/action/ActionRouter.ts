@@ -1,5 +1,5 @@
-import { ActionContext, ActionResult, ActionResultDataByName, ActionName, ActionPayloadByName } from '../types';
-import { ActionRegistry } from './ActionRegistry';
+import { ActionContext, ActionResult, ActionResultDataByName, ActionName, ActionPayloadByName } from '../types/index.js';
+import { ActionRegistry } from './ActionRegistry.js';
 
 export interface ActionRouter {
   route<K extends ActionName>(

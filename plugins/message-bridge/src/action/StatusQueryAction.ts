@@ -5,7 +5,7 @@ import {
   ActionResult,
   ActionContext,
   ErrorCode,
-} from '../types';
+} from '../types/index.js';
 
 /**
  * Concrete implementation of status_query action for online status retrieval

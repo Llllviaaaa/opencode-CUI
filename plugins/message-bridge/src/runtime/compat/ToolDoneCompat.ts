@@ -1,4 +1,4 @@
-import type { BridgeLogger } from '../AppLogger';
+import type { BridgeLogger } from '../AppLogger.js';
 
 export type ToolDoneSource = 'invoke_complete' | 'session_idle';
 

@@ -1,8 +1,9 @@
 import { EventEmitter } from 'events';
-import { ConnectionState, HeartbeatMessage, RegisterMessage } from '../types';
-import type { BridgeLogger } from '../runtime/AppLogger';
-import type { AkSkAuthPayload } from './AkSkAuth';
-import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
+import { ConnectionState } from '../types/index.js';
+import type { HeartbeatMessage, RegisterMessage } from '../contracts/transport-messages.js';
+import type { BridgeLogger } from '../runtime/AppLogger.js';
+import type { AkSkAuthPayload } from './AkSkAuth.js';
+import { getErrorDetailsForLog, getErrorMessage } from '../utils/error.js';
 
 export interface GatewayConnectionEvents {
   stateChange: (state: ConnectionState) => void;

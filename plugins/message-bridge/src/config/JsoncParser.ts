@@ -1,6 +1,6 @@
 import { parse as jsoncParse } from 'jsonc-parser';
 import { promises as fs } from 'fs';
-import { getErrorMessage } from '../utils/error';
+import { getErrorMessage } from '../utils/error.js';
 
 /**
  * JSONC parser that supports comments and trailing commas

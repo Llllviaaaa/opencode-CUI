@@ -1,3 +1,3 @@
-export * from './upstream-events';
-export * from './downstream-messages';
-export * from './transport-messages';
+export * from './upstream-events.js';
+export * from './downstream-messages.js';
+export * from './transport-messages.js';

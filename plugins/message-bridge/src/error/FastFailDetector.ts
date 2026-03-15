@@ -1,4 +1,4 @@
-import { CONNECTION_STATES, type ConnectionState, type ErrorCode } from '../types';
+import { CONNECTION_STATES, type ConnectionState, type ErrorCode } from '../types/index.js';
 
 export class FastFailDetector {
   static readonly connectionCheckTimeoutMs = 100;

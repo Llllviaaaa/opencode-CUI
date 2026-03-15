@@ -1,10 +1,10 @@
-import type { ConnectionState, ErrorCode } from './common';
+import type { ConnectionState, ErrorCode } from './common.js';
 import type {
   ActionName,
   ActionPayloadByName,
   ActionResultDataByName,
-} from '../contracts/downstream-messages';
-import type { HostClientLike, OpencodeClient } from './sdk';
+} from '../contracts/downstream-messages.js';
+import type { HostClientLike, OpencodeClient } from './sdk.js';
 
 export interface ActionContext {
   client: OpencodeClient;

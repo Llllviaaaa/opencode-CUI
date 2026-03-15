@@ -8,8 +8,8 @@ import {
   hasError,
   safeExecute,
   stateToErrorCode
-} from '../types';
-import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
+} from '../types/index.js';
+import { getErrorDetailsForLog, getErrorMessage } from '../utils/error.js';
 
 /**
  * Concrete implementation of create_session action for creating OpenCode sessions

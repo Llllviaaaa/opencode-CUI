@@ -1,5 +1,5 @@
 import os from 'os';
-import type { BridgeLogger } from './AppLogger';
+import type { BridgeLogger } from './AppLogger.js';
 
 export interface RegisterMetadata {
   deviceName: string;

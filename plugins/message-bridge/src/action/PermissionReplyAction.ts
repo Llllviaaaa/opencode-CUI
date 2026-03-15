@@ -8,7 +8,7 @@ import {
   hasError,
   safeExecute,
   stateToErrorCode
-} from '../types';
+} from '../types/index.js';
 
 /**
  * Concrete implementation of permission_reply action.
