@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, test, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
 
 import { DefaultGatewayConnection } from '../../src/connection/GatewayConnection.ts';
 
@@ -34,7 +35,7 @@ class FakeWebSocket {
   }
 }
 
-describe('gateway connection bun-only contract', () => {
+describe('gateway connection contract', () => {
   const originalWebSocket = globalThis.WebSocket;
 
   beforeEach(() => {
@@ -64,7 +65,7 @@ describe('gateway connection bun-only contract', () => {
     await conn.connect();
 
     const ws = FakeWebSocket.instances[0];
-    expect(ws.sent[0]).toEqual({
+    assert.deepStrictEqual(ws.sent[0], {
       type: 'register',
       deviceName: 'dev',
       macAddress: 'aa:bb:cc:dd:ee:ff',
@@ -95,9 +96,9 @@ describe('gateway connection bun-only contract', () => {
 
     const ws = FakeWebSocket.instances[0];
     const heartbeat = ws.sent.find((item) => item.type === 'heartbeat');
-    expect(heartbeat).toBeDefined();
-    expect(typeof heartbeat.timestamp).toBe('string');
-    expect('ts' in heartbeat).toBe(false);
+    assert.notStrictEqual(heartbeat, undefined);
+    assert.strictEqual(typeof heartbeat.timestamp, 'string');
+    assert.strictEqual('ts' in heartbeat, false);
 
     conn.disconnect();
   });
@@ -119,8 +120,8 @@ describe('gateway connection bun-only contract', () => {
       },
     });
 
-    await expect(conn.connect()).rejects.toBeDefined();
+    await assert.rejects(conn.connect());
     await new Promise((r) => setTimeout(r, 30));
-    expect(FakeWebSocket.instances.length).toBe(1);
+    assert.strictEqual(FakeWebSocket.instances.length, 1);
   });
 });
