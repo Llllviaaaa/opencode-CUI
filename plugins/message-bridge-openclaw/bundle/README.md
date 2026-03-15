@@ -24,6 +24,26 @@ Protocol conversion sequences:
 
 - `docs/protocol-sequence.md`
 
+P0 首块稳定性专题（需求 + 方案）:
+
+- `docs/topics/mb-p0-first-chunk-stability.md`
+- `docs/topics/mb-p0-first-chunk-stability-solution.md`
+
+P0 阶段四 permission_reply 专题（需求 + 方案）:
+
+- `docs/topics/mb-p0-permission-bridge-requirements.md`
+- `docs/topics/mb-p0-permission-bridge-solution.md`
+  - 阶段四文档已冻结：`permissionId` 透传、插件不承担唯一性保障、实现进行中
+  - FR: `FR-MB-OPENCLAW-P0-PERMISSION-BRIDGE`
+  - 目标：`permission_reply` 映射 OpenClaw `exec approvals`
+  - 范围外：`question_reply` 继续 fail-closed
+
+P0 参考专题（feishu-openclaw 能力需求清单）:
+
+- `docs/topics/mb-p0-feishu-openclaw-reference-requirements.md`
+  - FR: `FR-MB-OPENCLAW-P0-FEISHU-REFERENCE`
+  - 内容：需求描述 + 优先级 + OpenClaw 插件接口一对一主依赖映射
+
 ## 安装方式
 
 当前仓库已验证的安装方式都属于本地扩展安装：
@@ -57,11 +77,17 @@ Deferred in V1:
 - `permission_reply`
 - `question_reply`
 
-Deferred actions fail closed with standard `tool_error`:
+Deferred actions fail closed with stable shape:
 
+- `type=tool_error`
 - `error=unsupported_in_openclaw_v1:<action>`
 - no `errorCode` / `action` wire extension fields
-- no `tool_done` fallback receipt
+- no `tool_done` fallback receipt for deferred actions
+
+Upgrade path:
+
+- current phase keeps both actions unsupported by design
+- implementation target and rollout gate are tracked in `docs/implementation-plan.md` (phase four)
 
 ## Environment
 
@@ -173,12 +199,12 @@ Interactive `setup` / `onboarding` only writes:
 - `channels.message-bridge.auth.ak`
 - `channels.message-bridge.auth.sk`
 
-Register metadata is runtime-derived and not user-configurable:
+The following register metadata fields are runtime-derived and not user-configurable:
 
-- `toolType=openclaw`
-- `deviceName=os.hostname()`
-- `toolVersion=plugin package version`
-- `macAddress=first usable local interface or ""`
+- `toolType` is fixed to `openclaw`
+- `deviceName` comes from `os.hostname()`
+- `toolVersion` comes from the plugin package version at runtime
+- `macAddress` comes from the first usable local network interface, or `""` when unavailable
 
 To enable progressive text delivery, also set:
 
@@ -295,6 +321,7 @@ Confirm the actual assistant output in the latest session file under:
 
 - `permission_reply` is not implemented
 - `question_reply` is not implemented
+- both actions return fail-closed standard `tool_error` with `error=unsupported_in_openclaw_v1:<action>`
 - `close_session` success only clears local session state and does not emit `tool_done`
 - streaming is block-level, not token-level
 - published `openclaw plugins install` distribution flow is not yet validated for this package

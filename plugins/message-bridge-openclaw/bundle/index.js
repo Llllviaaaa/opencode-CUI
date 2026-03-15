@@ -22,9 +22,6 @@ var DEFAULT_ACCOUNT_CONFIG = {
   enabled: true,
   gateway: {
     url: "ws://localhost:8081/ws/agent",
-    toolType: "OPENCLAW",
-    toolVersion: "0.1.0",
-    deviceName: "OpenClaw Gateway",
     heartbeatIntervalMs: 3e4,
     reconnect: {
       baseMs: 1e3,
@@ -39,6 +36,7 @@ var DEFAULT_ACCOUNT_CONFIG = {
   agentIdPrefix: "message-bridge",
   runTimeoutMs: 3e5
 };
+var DEPRECATED_GATEWAY_FIELDS = /* @__PURE__ */ new Set(["toolType", "toolVersion", "deviceName", "macAddress"]);
 function isRecord(value) {
   return value !== null && typeof value === "object";
 }
@@ -61,8 +59,12 @@ function stripLegacyAccounts(section) {
   if (!section) {
     return void 0;
   }
-  const { accounts: _accounts, ...rest } = section;
-  return rest;
+  const { accounts: _accounts, gateway, ...rest } = section;
+  const nextGateway = isRecord(gateway) ? Object.fromEntries(Object.entries(gateway).filter(([key]) => !DEPRECATED_GATEWAY_FIELDS.has(key))) : gateway;
+  return {
+    ...rest,
+    ...isRecord(nextGateway) ? { gateway: nextGateway } : {}
+  };
 }
 function getSectionField(section, key) {
   const value = section?.[key];
@@ -204,7 +206,6 @@ function applyMessageBridgeSetupConfig(params) {
   const authSection = getSectionField(section, "auth");
   const nextName = params.input.name === void 0 ? section?.name : trimOrUndefined(params.input.name);
   const nextGatewayUrl = trimOrUndefined(params.input.url);
-  const nextDeviceName = trimOrUndefined(params.input.deviceName);
   const nextAk = trimOrUndefined(params.input.token);
   const nextSk = trimOrUndefined(params.input.password);
   void normalizedAccountId;
@@ -218,8 +219,7 @@ function applyMessageBridgeSetupConfig(params) {
         ...nextName !== void 0 ? { name: nextName } : {},
         gateway: {
           ...gatewaySection,
-          ...nextGatewayUrl !== void 0 ? { url: nextGatewayUrl } : {},
-          ...nextDeviceName !== void 0 ? { deviceName: nextDeviceName } : {}
+          ...nextGatewayUrl !== void 0 ? { url: nextGatewayUrl } : {}
         },
         auth: {
           ...authSection,
@@ -262,11 +262,16 @@ function resolveConfigSearchPaths(workspaceDir) {
 
 // src/OpenClawGatewayBridge.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
-import os from "node:os";
+import os2 from "node:os";
 import {
   createReplyPrefixOptions,
   normalizeOutboundReplyPayload
 } from "openclaw/plugin-sdk";
+
+// src/contracts/transport.ts
+var TOOL_ERROR_REASON = {
+  SESSION_NOT_FOUND: "session_not_found"
+};
 
 // src/connection/AkSkAuth.ts
 import { createHmac, randomUUID } from "node:crypto";
@@ -470,6 +475,9 @@ function isRecord3(value) {
 function asString(value) {
   return typeof value === "string" && value.trim() ? value : void 0;
 }
+function hasKey(record, key) {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
 function ok(value) {
   return { ok: true, value };
 }
@@ -522,9 +530,12 @@ function normalizePermissionReplyPayload(payload) {
   }
   const toolSessionId = asString(payload.toolSessionId);
   const permissionId = asString(payload.permissionId);
-  const response = asString(payload.response);
-  if (!toolSessionId || !permissionId || !response) {
+  if (!toolSessionId || !permissionId || !hasKey(payload, "response")) {
     return fail("permission_reply requires toolSessionId, permissionId, response", "missing_required_field", "invoke", "permission_reply");
+  }
+  const response = payload.response;
+  if (response !== "once" && response !== "always" && response !== "reject") {
+    return fail('permission_reply response must be "once", "always", or "reject"', "invalid_payload", "invoke", "permission_reply");
   }
   return ok({ toolSessionId, permissionId, response });
 }
@@ -536,6 +547,9 @@ function normalizeQuestionReplyPayload(payload) {
   const answer = asString(payload.answer);
   if (!toolSessionId || !answer) {
     return fail("question_reply requires toolSessionId and answer", "missing_required_field", "invoke", "question_reply");
+  }
+  if (hasKey(payload, "toolCallId") && !asString(payload.toolCallId)) {
+    return fail("question_reply toolCallId must be a non-empty string when provided", "invalid_payload", "invoke", "question_reply");
   }
   return ok({ toolSessionId, answer, toolCallId: asString(payload.toolCallId) });
 }
@@ -598,6 +612,83 @@ function normalizeDownstreamMessage(message) {
     return ok({ type: "status_query" });
   }
   return normalizeInvoke(message);
+}
+
+// src/runtime/RegisterMetadata.ts
+import { existsSync, readFileSync } from "node:fs";
+import os from "node:os";
+import path2 from "node:path";
+import { fileURLToPath } from "node:url";
+var MESSAGE_BRIDGE_TOOL_TYPE = "openclaw";
+var EMPTY_MAC_ADDRESS = "";
+var UNKNOWN_TOOL_VERSION = "unknown";
+var ZERO_MAC_ADDRESS = "00:00:00:00:00:00";
+var MAC_ADDRESS_PATTERN = /^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i;
+function normalizeMacAddress(macAddress) {
+  return macAddress.trim().replace(/-/g, ":").toLowerCase();
+}
+function isUsableMacAddress(macAddress) {
+  if (!macAddress) {
+    return false;
+  }
+  const normalized = normalizeMacAddress(macAddress);
+  return MAC_ADDRESS_PATTERN.test(normalized) && normalized !== ZERO_MAC_ADDRESS;
+}
+function resolveMacAddress(logger, networkInterfaces) {
+  const interfaces = networkInterfaces();
+  let interfaceCount = 0;
+  for (const entries of Object.values(interfaces)) {
+    if (!entries) {
+      continue;
+    }
+    interfaceCount += entries.length;
+    for (const entry of entries) {
+      if (entry.internal || !isUsableMacAddress(entry.mac)) {
+        continue;
+      }
+      return normalizeMacAddress(entry.mac);
+    }
+  }
+  logger.warn("runtime.mac_address.unavailable", {
+    platform: os.platform(),
+    interfaceCount
+  });
+  return EMPTY_MAC_ADDRESS;
+}
+function resolvePackageVersion(logger) {
+  const moduleFile = fileURLToPath(import.meta.url);
+  let currentDir = path2.dirname(moduleFile);
+  for (let depth = 0; depth < 6; depth += 1) {
+    const packageJsonPath = path2.join(currentDir, "package.json");
+    if (existsSync(packageJsonPath)) {
+      try {
+        const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+        if (typeof packageJson.version === "string" && packageJson.version.trim()) {
+          return packageJson.version.trim();
+        }
+      } catch (error) {
+        logger.warn("runtime.tool_version.read_failed", {
+          packageJsonPath,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+    const parentDir = path2.dirname(currentDir);
+    if (parentDir === currentDir) {
+      break;
+    }
+    currentDir = parentDir;
+  }
+  logger.warn("runtime.tool_version.unavailable");
+  return UNKNOWN_TOOL_VERSION;
+}
+function resolveRegisterMetadata(logger, deps = {}) {
+  return {
+    deviceName: deps.hostname?.() ?? os.hostname(),
+    toolType: MESSAGE_BRIDGE_TOOL_TYPE,
+    toolVersion: deps.toolVersion?.trim() || resolvePackageVersion(logger),
+    macAddress: resolveMacAddress(logger, deps.networkInterfaces ?? os.networkInterfaces)
+  };
 }
 
 // src/session/SessionRegistry.ts
@@ -799,6 +890,7 @@ var OpenClawGatewayBridge = class {
   constructor(options) {
     this.options = options;
     this.runtime = options.runtime;
+    this.registerMetadata = options.registerMetadata ?? resolveRegisterMetadata(options.logger);
     this.sessionRegistry = new SessionRegistry(`${options.account.agentIdPrefix}:${options.account.accountId}`);
     this.connection = options.connectionFactory?.(options.account, options.logger) ?? new DefaultGatewayConnection({
       url: options.account.gateway.url,
@@ -809,11 +901,11 @@ var OpenClawGatewayBridge = class {
       authPayloadProvider: () => new DefaultAkSkAuth(options.account.auth.ak, options.account.auth.sk).generateAuthPayload(),
       registerMessage: {
         type: "register",
-        deviceName: options.account.gateway.deviceName,
-        macAddress: options.account.gateway.macAddress || "unknown",
-        os: os.platform(),
-        toolType: options.account.gateway.toolType,
-        toolVersion: options.account.gateway.toolVersion
+        deviceName: this.registerMetadata.deviceName,
+        macAddress: this.registerMetadata.macAddress,
+        os: os2.platform(),
+        toolType: this.registerMetadata.toolType,
+        toolVersion: this.registerMetadata.toolVersion
       },
       logger: options.logger
     });
@@ -866,6 +958,7 @@ var OpenClawGatewayBridge = class {
   sessionRegistry;
   connection;
   runtime;
+  registerMetadata;
   activeToolSessions = /* @__PURE__ */ new Map();
   activeRunToSessionKey = /* @__PURE__ */ new Map();
   running = false;
@@ -948,6 +1041,7 @@ var OpenClawGatewayBridge = class {
     const assistantStream = createAssistantStreamState(record.sessionKey);
     const toolStates = /* @__PURE__ */ new Map();
     const startedAt = Date.now();
+    const chatRequestId = randomUUID3();
     const configuredTimeoutMs = this.options.account.runTimeoutMs;
     const selectedModel = createSelectedModelState();
     const executionPath = this.runtime.channel?.routing && this.runtime.channel?.reply ? "runtime_reply" : "subagent_fallback";
@@ -970,139 +1064,202 @@ var OpenClawGatewayBridge = class {
       textLength: message.payload.text.length,
       startedAt,
       configuredTimeoutMs,
-      executionPath
+      executionPath,
+      chatRequestId,
+      retryAttempt: 0
     });
-    if (!this.runtime.channel?.routing?.resolveAgentRoute || !this.runtime.channel?.reply) {
-      await this.handleChatWithSubagentFallback(record, message.payload.text, startedAt, selectedModel);
-      return;
-    }
-    const route = this.runtime.channel.routing.resolveAgentRoute({
-      cfg: this.options.config,
-      channel: "message-bridge",
-      accountId: this.options.account.accountId,
-      peer: {
-        kind: "direct",
-        id: record.welinkSessionId || record.toolSessionId
-      }
-    });
-    const envelopeOptions = this.runtime.channel.reply.resolveEnvelopeFormatOptions(this.options.config);
-    const body = this.runtime.channel.reply.formatAgentEnvelope({
-      channel: "message-bridge",
-      from: `ai-gateway:${record.welinkSessionId || record.toolSessionId}`,
-      timestamp: /* @__PURE__ */ new Date(),
-      previousTimestamp: void 0,
-      envelope: envelopeOptions,
-      body: message.payload.text
-    });
-    const ctxPayload = this.runtime.channel.reply.finalizeInboundContext({
-      Body: body,
-      BodyForAgent: message.payload.text,
-      RawBody: message.payload.text,
-      CommandBody: message.payload.text,
-      From: `message-bridge:${record.welinkSessionId || record.toolSessionId}`,
-      To: `message-bridge:${record.toolSessionId}`,
-      SessionKey: record.sessionKey,
-      AccountId: route.accountId,
-      ChatType: "direct",
-      ConversationLabel: `ai-gateway:${record.welinkSessionId || record.toolSessionId}`,
-      SenderName: "ai-gateway",
-      SenderId: record.welinkSessionId || record.toolSessionId,
-      Provider: "message-bridge",
-      Surface: "message-bridge",
-      Timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      OriginatingChannel: "message-bridge",
-      OriginatingTo: `message-bridge:${record.toolSessionId}`,
-      CommandAuthorized: false
-    });
-    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-      cfg: this.options.config,
-      agentId: route.agentId,
-      channel: "message-bridge",
-      accountId: this.options.account.accountId
-    });
-    const handleModelSelected = (selection) => {
-      selectedModel.provider = selection.provider;
-      selectedModel.model = selection.model;
-      selectedModel.thinkLevel = selection.thinkLevel ?? null;
-      this.options.logger.info("bridge.chat.model_selected", {
-        toolSessionId: record.toolSessionId,
-        sessionKey: record.sessionKey,
-        configuredTimeoutMs,
-        runTimeoutMs: configuredTimeoutMs,
-        executionPath: "runtime_reply",
-        provider: selection.provider,
-        model: selection.model,
-        thinkLevel: selection.thinkLevel ?? null
-      });
-      onModelSelected?.(selection);
-    };
-    const deliver = async (rawPayload, info) => {
-      const payload = isRecord4(rawPayload) ? normalizeOutboundReplyPayload(rawPayload) : normalizeOutboundReplyPayload({});
-      if (info.kind === "tool") {
-        const activeSession = this.activeToolSessions.get(record.sessionKey);
-        const toolCallId = activeSession?.pendingToolResultTarget;
-        if (!toolCallId) {
+    let retryAttempt = 0;
+    let lastErrorMessage = null;
+    let lastErrorExtra;
+    while (true) {
+      if (!this.runtime.channel?.routing?.resolveAgentRoute || !this.runtime.channel?.reply) {
+        const fallbackResult = await this.handleChatWithSubagentFallback(
+          record,
+          message.payload.text,
+          startedAt,
+          selectedModel,
+          chatRequestId,
+          retryAttempt
+        );
+        if (fallbackResult.ok) {
           return;
         }
-        const toolState = activeSession.toolStates.get(toolCallId);
-        if (!toolState) {
-          return;
-        }
-        const output = typeof payload.text === "string" ? payload.text.trim() : "";
-        if (output.length === 0) {
-          return;
-        }
-        toolState.output = output;
-        this.emitToolPartUpdate(record.toolSessionId, toolState);
-        return;
-      }
-      if (typeof payload.text === "string" && payload.text.length > 0) {
-        const now = Date.now();
-        assistantStream.chunkCount += 1;
-        if (assistantStream.firstChunkAt === null) {
-          assistantStream.firstChunkAt = now;
-          this.options.logger.info("bridge.chat.first_chunk", {
+        lastErrorMessage = fallbackResult.errorMessage;
+        lastErrorExtra = fallbackResult.extra;
+        if (retryAttempt === 0 && this.shouldRetryBeforeFirstChunkTimeout(lastErrorMessage, assistantStream)) {
+          retryAttempt = 1;
+          this.logChatStarted({
             toolSessionId: record.toolSessionId,
+            welinkSessionId: record.welinkSessionId,
             sessionKey: record.sessionKey,
-            latencyMs: now - startedAt,
-            chunkLength: payload.text.length
+            textLength: message.payload.text.length,
+            startedAt,
+            configuredTimeoutMs,
+            executionPath,
+            chatRequestId,
+            retryAttempt
           });
-        } else {
-          this.options.logger.info("bridge.chat.chunk", {
-            toolSessionId: record.toolSessionId,
-            sessionKey: record.sessionKey,
-            chunkIndex: assistantStream.chunkCount,
-            chunkLength: payload.text.length,
-            sinceStartMs: now - startedAt,
-            sinceFirstChunkMs: now - assistantStream.firstChunkAt
-          });
+          continue;
         }
-        this.sendAssistantStreamChunk(record.toolSessionId, assistantStream, payload.text);
+        break;
       }
-    };
-    try {
-      await this.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-        ctx: ctxPayload,
+      const route = this.runtime.channel.routing.resolveAgentRoute({
         cfg: this.options.config,
-        dispatcherOptions: {
-          ...prefixOptions,
-          deliver,
-          onError: (error) => {
-            throw error;
-          }
-        },
-        replyOptions: {
-          onAgentRunStart: (runId) => {
-            this.trackSessionRunId(record.sessionKey, runId);
-          },
-          onModelSelected: handleModelSelected,
-          timeoutOverrideSeconds: Math.ceil(configuredTimeoutMs / 1e3)
+        channel: "message-bridge",
+        accountId: this.options.account.accountId,
+        peer: {
+          kind: "direct",
+          id: record.welinkSessionId || record.toolSessionId
         }
       });
-    } catch (error) {
-      this.clearActiveToolSession(record.sessionKey);
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logChatFailed({
+      const envelopeOptions = this.runtime.channel.reply.resolveEnvelopeFormatOptions(this.options.config);
+      const body = this.runtime.channel.reply.formatAgentEnvelope({
+        channel: "message-bridge",
+        from: `ai-gateway:${record.welinkSessionId || record.toolSessionId}`,
+        timestamp: /* @__PURE__ */ new Date(),
+        previousTimestamp: void 0,
+        envelope: envelopeOptions,
+        body: message.payload.text
+      });
+      const ctxPayload = this.runtime.channel.reply.finalizeInboundContext({
+        Body: body,
+        BodyForAgent: message.payload.text,
+        RawBody: message.payload.text,
+        CommandBody: message.payload.text,
+        From: `message-bridge:${record.welinkSessionId || record.toolSessionId}`,
+        To: `message-bridge:${record.toolSessionId}`,
+        SessionKey: record.sessionKey,
+        AccountId: route.accountId,
+        ChatType: "direct",
+        ConversationLabel: `ai-gateway:${record.welinkSessionId || record.toolSessionId}`,
+        SenderName: "ai-gateway",
+        SenderId: record.welinkSessionId || record.toolSessionId,
+        Provider: "message-bridge",
+        Surface: "message-bridge",
+        Timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        OriginatingChannel: "message-bridge",
+        OriginatingTo: `message-bridge:${record.toolSessionId}`,
+        CommandAuthorized: false
+      });
+      const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+        cfg: this.options.config,
+        agentId: route.agentId,
+        channel: "message-bridge",
+        accountId: this.options.account.accountId
+      });
+      const handleModelSelected = (selection) => {
+        selectedModel.provider = selection.provider;
+        selectedModel.model = selection.model;
+        selectedModel.thinkLevel = selection.thinkLevel ?? null;
+        this.options.logger.info("bridge.chat.model_selected", {
+          toolSessionId: record.toolSessionId,
+          sessionKey: record.sessionKey,
+          configuredTimeoutMs,
+          runTimeoutMs: configuredTimeoutMs,
+          executionPath: "runtime_reply",
+          chatRequestId,
+          retryAttempt,
+          provider: selection.provider,
+          model: selection.model,
+          thinkLevel: selection.thinkLevel ?? null
+        });
+        onModelSelected?.(selection);
+      };
+      const deliver = async (rawPayload, info) => {
+        const payload = isRecord4(rawPayload) ? normalizeOutboundReplyPayload(rawPayload) : normalizeOutboundReplyPayload({});
+        if (info.kind === "tool") {
+          const activeSession = this.activeToolSessions.get(record.sessionKey);
+          const toolCallId = activeSession?.pendingToolResultTarget;
+          if (!toolCallId) {
+            return;
+          }
+          const toolState = activeSession.toolStates.get(toolCallId);
+          if (!toolState) {
+            return;
+          }
+          const output = typeof payload.text === "string" ? payload.text.trim() : "";
+          if (output.length === 0) {
+            return;
+          }
+          toolState.output = output;
+          this.emitToolPartUpdate(record.toolSessionId, toolState);
+          return;
+        }
+        if (typeof payload.text === "string" && payload.text.length > 0) {
+          const now = Date.now();
+          assistantStream.chunkCount += 1;
+          if (assistantStream.firstChunkAt === null) {
+            assistantStream.firstChunkAt = now;
+            this.options.logger.info("bridge.chat.first_chunk", {
+              toolSessionId: record.toolSessionId,
+              sessionKey: record.sessionKey,
+              chatRequestId,
+              retryAttempt,
+              latencyMs: now - startedAt,
+              chunkLength: payload.text.length
+            });
+          } else {
+            this.options.logger.info("bridge.chat.chunk", {
+              toolSessionId: record.toolSessionId,
+              sessionKey: record.sessionKey,
+              chatRequestId,
+              retryAttempt,
+              chunkIndex: assistantStream.chunkCount,
+              chunkLength: payload.text.length,
+              sinceStartMs: now - startedAt,
+              sinceFirstChunkMs: now - assistantStream.firstChunkAt
+            });
+          }
+          this.sendAssistantStreamChunk(record.toolSessionId, assistantStream, payload.text);
+        }
+      };
+      try {
+        await this.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+          ctx: ctxPayload,
+          cfg: this.options.config,
+          dispatcherOptions: {
+            ...prefixOptions,
+            deliver,
+            onError: (error) => {
+              throw error;
+            }
+          },
+          replyOptions: {
+            onAgentRunStart: (runId) => {
+              this.trackSessionRunId(record.sessionKey, runId);
+            },
+            onModelSelected: handleModelSelected,
+            timeoutOverrideSeconds: Math.ceil(configuredTimeoutMs / 1e3)
+          }
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (retryAttempt === 0 && this.shouldRetryBeforeFirstChunkTimeout(errorMessage, assistantStream)) {
+          retryAttempt = 1;
+          this.logChatStarted({
+            toolSessionId: record.toolSessionId,
+            welinkSessionId: record.welinkSessionId,
+            sessionKey: record.sessionKey,
+            textLength: message.payload.text.length,
+            startedAt,
+            configuredTimeoutMs,
+            executionPath,
+            chatRequestId,
+            retryAttempt
+          });
+          continue;
+        }
+        lastErrorMessage = errorMessage;
+        lastErrorExtra = void 0;
+        break;
+      }
+      const finalText = assistantStream.accumulatedText || "(empty response)";
+      this.sendAssistantFinalResponse(
+        record.toolSessionId,
+        assistantStream,
+        finalText
+      );
+      this.logChatCompleted({
         toolSessionId: record.toolSessionId,
         sessionKey: record.sessionKey,
         configuredTimeoutMs,
@@ -1110,85 +1267,64 @@ var OpenClawGatewayBridge = class {
         assistantStream,
         selectedModel,
         executionPath: "runtime_reply",
-        error: errorMessage
+        chatRequestId,
+        retryAttempt,
+        responseLength: finalText.length
       });
       this.sendToolEvent({
         type: "tool_event",
         toolSessionId: record.toolSessionId,
-        event: buildSessionErrorEvent(record.sessionKey, errorMessage)
+        event: buildIdleEvent(record.sessionKey)
       });
-      this.sendToolError({
-        type: "tool_error",
+      this.sendToolDone({
+        type: "tool_done",
         toolSessionId: record.toolSessionId,
-        welinkSessionId: record.welinkSessionId,
-        error: errorMessage
+        welinkSessionId: record.welinkSessionId
       });
+      this.clearActiveToolSession(record.sessionKey);
       return;
     }
-    const finalText = assistantStream.accumulatedText || "(empty response)";
-    this.sendAssistantFinalResponse(
-      record.toolSessionId,
-      assistantStream,
-      finalText
-    );
-    this.logChatCompleted({
+    this.clearActiveToolSession(record.sessionKey);
+    const finalErrorMessage = lastErrorMessage ?? "chat_failed_without_error";
+    this.logChatFailed({
       toolSessionId: record.toolSessionId,
       sessionKey: record.sessionKey,
       configuredTimeoutMs,
       startedAt,
       assistantStream,
       selectedModel,
-      executionPath: "runtime_reply",
-      responseLength: finalText.length
+      executionPath,
+      chatRequestId,
+      retryAttempt,
+      error: finalErrorMessage,
+      extra: lastErrorExtra
     });
     this.sendToolEvent({
       type: "tool_event",
       toolSessionId: record.toolSessionId,
-      event: buildIdleEvent(record.sessionKey)
+      event: buildSessionErrorEvent(record.sessionKey, finalErrorMessage)
     });
-    this.sendToolDone({
-      type: "tool_done",
+    this.sendToolError({
+      type: "tool_error",
       toolSessionId: record.toolSessionId,
-      welinkSessionId: record.welinkSessionId
+      welinkSessionId: record.welinkSessionId,
+      error: finalErrorMessage
     });
-    this.clearActiveToolSession(record.sessionKey);
   }
-  async handleChatWithSubagentFallback(record, text, startedAt, selectedModel) {
+  async handleChatWithSubagentFallback(record, text, startedAt, selectedModel, chatRequestId, retryAttempt) {
     const assistantStream = createAssistantStreamState(record.sessionKey);
     const configuredTimeoutMs = this.options.account.runTimeoutMs;
     const subagent = this.getSubagentRuntime();
     if (!subagent) {
       const errorMessage = "openclaw_runtime_missing_reply_executor";
-      this.clearActiveToolSession(record.sessionKey);
-      this.logChatFailed({
-        toolSessionId: record.toolSessionId,
-        sessionKey: record.sessionKey,
-        configuredTimeoutMs,
-        startedAt,
-        assistantStream,
-        selectedModel,
-        executionPath: "subagent_fallback",
-        error: errorMessage
-      });
-      this.sendToolEvent({
-        type: "tool_event",
-        toolSessionId: record.toolSessionId,
-        event: buildSessionErrorEvent(record.sessionKey, errorMessage)
-      });
-      this.sendToolError({
-        type: "tool_error",
-        toolSessionId: record.toolSessionId,
-        welinkSessionId: record.welinkSessionId,
-        error: errorMessage
-      });
-      return;
+      return { ok: false, errorMessage };
     }
     try {
       const run = await subagent.run({
         sessionKey: record.sessionKey,
         message: text,
         deliver: false,
-        idempotencyKey: `${record.toolSessionId}:${text}`
+        idempotencyKey: `chat:${record.toolSessionId}:${chatRequestId}`
       });
       const wait = await subagent.waitForRun({
         runId: run.runId,
@@ -1196,33 +1332,14 @@ var OpenClawGatewayBridge = class {
       });
       if (wait.status !== "ok") {
         const errorMessage = wait.error || `subagent_${wait.status}`;
-        this.clearActiveToolSession(record.sessionKey);
-        this.logChatFailed({
-          toolSessionId: record.toolSessionId,
-          sessionKey: record.sessionKey,
-          configuredTimeoutMs,
-          startedAt,
-          assistantStream,
-          selectedModel,
-          executionPath: "subagent_fallback",
-          error: errorMessage,
+        return {
+          ok: false,
+          errorMessage,
           extra: {
             waitStatus: wait.status,
             waitError: wait.error ?? null
           }
-        });
-        this.sendToolEvent({
-          type: "tool_event",
-          toolSessionId: record.toolSessionId,
-          event: buildSessionErrorEvent(record.sessionKey, errorMessage)
-        });
-        this.sendToolError({
-          type: "tool_error",
-          toolSessionId: record.toolSessionId,
-          welinkSessionId: record.welinkSessionId,
-          error: errorMessage
-        });
-        return;
+        };
       }
       const session = await subagent.getSessionMessages({
         sessionKey: record.sessionKey,
@@ -1238,6 +1355,8 @@ var OpenClawGatewayBridge = class {
         assistantStream,
         selectedModel,
         executionPath: "subagent_fallback",
+        chatRequestId,
+        retryAttempt,
         responseLength: assistantText.length,
         extra: {
           waitStatus: wait.status,
@@ -1255,31 +1374,16 @@ var OpenClawGatewayBridge = class {
         welinkSessionId: record.welinkSessionId
       });
       this.clearActiveToolSession(record.sessionKey);
+      return { ok: true };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.clearActiveToolSession(record.sessionKey);
-      this.logChatFailed({
-        toolSessionId: record.toolSessionId,
-        sessionKey: record.sessionKey,
-        configuredTimeoutMs,
-        startedAt,
-        assistantStream,
-        selectedModel,
-        executionPath: "subagent_fallback",
-        error: errorMessage
-      });
-      this.sendToolEvent({
-        type: "tool_event",
-        toolSessionId: record.toolSessionId,
-        event: buildSessionErrorEvent(record.sessionKey, errorMessage)
-      });
-      this.sendToolError({
-        type: "tool_error",
-        toolSessionId: record.toolSessionId,
-        welinkSessionId: record.welinkSessionId,
-        error: errorMessage
-      });
+      return { ok: false, errorMessage };
     }
+  }
+  shouldRetryBeforeFirstChunkTimeout(errorMessage, assistantStream) {
+    const lowered = errorMessage.toLowerCase();
+    const isTimeout = lowered.includes("timed out") || lowered.includes("timeout");
+    return assistantStream.firstChunkAt === null && isTimeout;
   }
   handleCreateSession(message) {
     const record = this.sessionRegistry.create(message.welinkSessionId, message.payload.sessionId);
@@ -1301,11 +1405,6 @@ var OpenClawGatewayBridge = class {
         sessionKey: record.sessionKey
       });
     }
-    this.sendToolDone({
-      type: "tool_done",
-      toolSessionId: message.payload.toolSessionId,
-      welinkSessionId: message.welinkSessionId
-    });
   }
   async handleAbortSession(message) {
     const record = this.sessionRegistry.get(message.payload.toolSessionId);
@@ -1314,7 +1413,8 @@ var OpenClawGatewayBridge = class {
         type: "tool_error",
         toolSessionId: message.payload.toolSessionId,
         welinkSessionId: message.welinkSessionId,
-        error: "unknown_tool_session"
+        error: "unknown_tool_session",
+        reason: TOOL_ERROR_REASON.SESSION_NOT_FOUND
       });
       return;
     }
@@ -1488,7 +1588,9 @@ var OpenClawGatewayBridge = class {
       startedAt: params.startedAt,
       configuredTimeoutMs: params.configuredTimeoutMs,
       runTimeoutMs: params.configuredTimeoutMs,
-      executionPath: params.executionPath
+      executionPath: params.executionPath,
+      chatRequestId: params.chatRequestId,
+      retryAttempt: params.retryAttempt
     });
   }
   logChatCompleted(params) {
@@ -1517,6 +1619,8 @@ var OpenClawGatewayBridge = class {
       configuredTimeoutMs: params.configuredTimeoutMs,
       runTimeoutMs: params.configuredTimeoutMs,
       executionPath: params.executionPath,
+      chatRequestId: params.chatRequestId,
+      retryAttempt: params.retryAttempt,
       provider: params.selectedModel.provider,
       model: params.selectedModel.model,
       thinkLevel: params.selectedModel.thinkLevel,
@@ -1557,8 +1661,7 @@ async function promptMessageBridgeSetup(params) {
     name: account.name ?? "",
     url: account.gateway.url,
     token: account.auth.ak ?? "",
-    password: account.auth.sk ?? "",
-    deviceName: account.gateway.deviceName
+    password: account.auth.sk ?? ""
   };
   while (true) {
     const name = await prompter.text({
@@ -1579,23 +1682,17 @@ async function promptMessageBridgeSetup(params) {
       message: account.auth.sk ? "SK (\u7559\u7A7A\u4FDD\u6301\u5F53\u524D\u503C)" : "SK",
       initialValue: draft.password
     });
-    const deviceName = await prompter.text({
-      message: "Device name",
-      initialValue: draft.deviceName
-    });
     draft = {
       name,
       url,
       token: ak,
-      password: sk,
-      deviceName
+      password: sk
     };
     const input = {
       ...name !== void 0 ? { name } : {},
       ...url !== void 0 ? { url } : {},
       ...ak !== void 0 ? { token: ak } : {},
-      ...sk !== void 0 ? { password: sk } : {},
-      ...deviceName !== void 0 ? { deviceName } : {}
+      ...sk !== void 0 ? { password: sk } : {}
     };
     const validationError = validateMessageBridgeSetupInput({
       cfg,
@@ -1660,7 +1757,7 @@ function getPluginRuntime() {
 }
 
 // src/status.ts
-import os2 from "node:os";
+import os3 from "node:os";
 import {
   buildBaseAccountStatusSnapshot,
   buildProbeChannelStatusSummary,
@@ -1695,7 +1792,34 @@ function isAuthRejectedReason(reason) {
     reason
   );
 }
+function getProbeReason(probe) {
+  if (!probe || typeof probe.reason !== "string") {
+    return "";
+  }
+  return probe.reason.trim();
+}
+function getHeartbeatThresholdMs(snapshot) {
+  const heartbeatIntervalMs = typeof snapshot.heartbeatIntervalMs === "number" ? snapshot.heartbeatIntervalMs : 0;
+  if (heartbeatIntervalMs <= 0) {
+    return 0;
+  }
+  return heartbeatIntervalMs * 2 + HEARTBEAT_GRACE_MS;
+}
+function isRuntimeHealthyForDuplicateConnection(snapshot, nowAt) {
+  if (snapshot.connected !== true || typeof snapshot.lastReadyAt !== "number") {
+    return false;
+  }
+  if (typeof snapshot.lastHeartbeatAt !== "number") {
+    return true;
+  }
+  const heartbeatThresholdMs = getHeartbeatThresholdMs(snapshot);
+  if (heartbeatThresholdMs <= 0) {
+    return true;
+  }
+  return nowAt - snapshot.lastHeartbeatAt <= heartbeatThresholdMs;
+}
 function createProbeConnection(account) {
+  const registerMetadata = resolveRegisterMetadata(silentLogger);
   return new DefaultGatewayConnection({
     url: account.gateway.url,
     reconnectBaseMs: account.gateway.reconnect.baseMs,
@@ -1705,11 +1829,11 @@ function createProbeConnection(account) {
     authPayloadProvider: () => new DefaultAkSkAuth(account.auth.ak, account.auth.sk).generateAuthPayload(),
     registerMessage: {
       type: "register",
-      deviceName: account.gateway.deviceName,
-      macAddress: account.gateway.macAddress || "unknown",
-      os: os2.platform(),
-      toolType: account.gateway.toolType,
-      toolVersion: account.gateway.toolVersion
+      deviceName: registerMetadata.deviceName,
+      macAddress: registerMetadata.macAddress,
+      os: os3.platform(),
+      toolType: registerMetadata.toolType,
+      toolVersion: registerMetadata.toolVersion
     },
     logger: silentLogger
   });
@@ -1792,6 +1916,7 @@ async function probeMessageBridgeAccount(params, deps = {}) {
 function buildMessageBridgeAccountSnapshot(params) {
   const { account, cfg, probe } = params;
   const runtime = params.runtime;
+  const registerMetadata = params.registerMetadata ?? resolveRegisterMetadata(silentLogger);
   const missingConfigFields = getMissingRequiredConfigPaths(account, cfg);
   const legacyAccountsConfigured = hasLegacyAccountsConfig(cfg);
   const configured = missingConfigFields.length === 0 && !legacyAccountsConfigured;
@@ -1808,9 +1933,9 @@ function buildMessageBridgeAccountSnapshot(params) {
     }),
     connected: runtime?.connected ?? false,
     gatewayUrl: account.gateway.url || null,
-    toolType: account.gateway.toolType,
-    toolVersion: account.gateway.toolVersion,
-    deviceName: account.gateway.deviceName,
+    toolType: registerMetadata.toolType,
+    toolVersion: registerMetadata.toolVersion,
+    deviceName: registerMetadata.deviceName,
     heartbeatIntervalMs: account.gateway.heartbeatIntervalMs,
     runTimeoutMs: account.runTimeoutMs,
     tokenSource: resolveTokenSource(account),
@@ -1866,6 +1991,8 @@ function collectMessageBridgeStatusIssues(accounts, now = Date.now) {
   for (const rawSnapshot of accounts) {
     const snapshot = asMessageBridgeSnapshot(rawSnapshot);
     const probe = isRecord5(snapshot.probe) ? snapshot.probe : null;
+    const probeReason = getProbeReason(probe);
+    const suppressDuplicateConnectionIssue = probe?.state === "rejected" && probeReason === "duplicate_connection" && isRuntimeHealthyForDuplicateConnection(snapshot, nowAt);
     const missingConfigFields = getMissingConfigFields(snapshot);
     const heartbeatIntervalMs = typeof snapshot.heartbeatIntervalMs === "number" ? snapshot.heartbeatIntervalMs : 0;
     const runTimeoutMs = typeof snapshot.runTimeoutMs === "number" ? snapshot.runTimeoutMs : 0;
@@ -1896,8 +2023,8 @@ function collectMessageBridgeStatusIssues(accounts, now = Date.now) {
         })
       );
     }
-    if (probe && probe.state === "rejected") {
-      const rawReason = typeof probe.reason === "string" ? probe.reason.trim() : "";
+    if (probe && probe.state === "rejected" && !suppressDuplicateConnectionIssue) {
+      const rawReason = probeReason;
       const reason = rawReason ? `\uFF1A${rawReason}` : "";
       if (rawReason && isAuthRejectedReason(rawReason)) {
         issues.push(
@@ -1948,7 +2075,7 @@ function collectMessageBridgeStatusIssues(accounts, now = Date.now) {
     if (snapshot.running !== true) {
       continue;
     }
-    const heartbeatThresholdMs = heartbeatIntervalMs * 2 + HEARTBEAT_GRACE_MS;
+    const heartbeatThresholdMs = getHeartbeatThresholdMs(snapshot);
     if (heartbeatIntervalMs > 0 && typeof snapshot.lastHeartbeatAt === "number" && nowAt - snapshot.lastHeartbeatAt > heartbeatThresholdMs) {
       issues.push(
         createRuntimeIssue({
@@ -1990,10 +2117,6 @@ var messageBridgeConfigSchema = {
         additionalProperties: false,
         properties: {
           url: { type: "string", minLength: 1 },
-          toolType: { type: "string", minLength: 1 },
-          toolVersion: { type: "string", minLength: 1 },
-          deviceName: { type: "string", minLength: 1 },
-          macAddress: { type: "string", minLength: 1 },
           heartbeatIntervalMs: { type: "integer", minimum: 1 },
           reconnect: {
             type: "object",
@@ -2156,6 +2279,7 @@ export {
   DEFAULT_ACCOUNT_CONFIG,
   DEFAULT_ACCOUNT_ID,
   LEGACY_ACCOUNTS_MIGRATION_FIX,
+  MESSAGE_BRIDGE_TOOL_TYPE,
   OpenClawGatewayBridge,
   applyMessageBridgeSetupConfig,
   index_default as default,
@@ -2170,6 +2294,7 @@ export {
   resolveAccount,
   resolveConfigSearchPaths,
   resolveNonDefaultAccountError,
+  resolveRegisterMetadata,
   resolveSupportedAccountId,
   resolveTokenSource,
   resolveUnconfiguredReason,
