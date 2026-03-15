@@ -32,6 +32,7 @@
     "test:coverage": "node ./scripts/check-coverage.mjs",
     "smoke:e2e": "node ./scripts/e2e-smoke.mjs",
     "debug:e2e": "node ./scripts/debug-e2e.mjs",
+    "example:start-opencode": "node ./scripts/minimal-start-opencode.mjs",
     "logs:fetch": "node ./scripts/fetch-logs.mjs",
     "verify:core": "pnpm run typecheck && pnpm test && pnpm run test:coverage && pnpm run pack:check",
     "verify:env": "node ./scripts/verify-env.mjs",

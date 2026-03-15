@@ -153,6 +153,10 @@ Interactive setup CLI:
 
 - `node ./scripts/setup-message-bridge.mjs`
 
+Self-contained startup example (idempotent `.npmrc` + runtime `OPENCODE_CONFIG_CONTENT` plugin injection + `opencode serve`):
+
+- `node ./scripts/minimal-start-opencode.mjs`
+
 The CLI will:
 
 - prompt for `ak` and `sk`
