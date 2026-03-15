@@ -1,4 +1,5 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 
 import { BridgeRuntime } from '../../src/runtime/BridgeRuntime.ts';
 
@@ -52,10 +53,10 @@ describe('downlink -> uplink protocol', () => {
       payload: { toolSessionId: 'tool-1', text: 'hi' },
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_done');
-    expect(sent[0].toolSessionId).toBe('tool-1');
-    expect(sent[0].welinkSessionId).toBe('s-1');
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].type, 'tool_done');
+    assert.strictEqual(sent[0].toolSessionId, 'tool-1');
+    assert.strictEqual(sent[0].welinkSessionId, 's-1');
   });
 
   test('invoke/create_session -> session_created', async () => {
@@ -70,10 +71,10 @@ describe('downlink -> uplink protocol', () => {
       payload: {},
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('session_created');
-    expect(sent[0].welinkSessionId).toBe('skill-1');
-    expect(sent[0].toolSessionId).toBe('created-1');
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].type, 'session_created');
+    assert.strictEqual(sent[0].welinkSessionId, 'skill-1');
+    assert.strictEqual(sent[0].toolSessionId, 'created-1');
   });
 
   test('invalid payload failure -> tool_error without code field', async () => {
@@ -88,10 +89,10 @@ describe('downlink -> uplink protocol', () => {
       payload: { bad: true },
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].error).toBe('Invalid invoke payload shape');
-    expect('code' in sent[0]).toBe(false);
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].type, 'tool_error');
+    assert.strictEqual(sent[0].error, 'Invalid invoke payload shape');
+    assert.strictEqual('code' in sent[0], false);
   });
 
   test('status_query -> status_response', async () => {
@@ -103,9 +104,9 @@ describe('downlink -> uplink protocol', () => {
       type: 'status_query',
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('status_response');
-    expect(sent[0].opencodeOnline).toBe(true);
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].type, 'status_response');
+    assert.strictEqual(sent[0].opencodeOnline, true);
   });
 
   test('invoke/status_query variant -> tool_error', async () => {
@@ -118,8 +119,8 @@ describe('downlink -> uplink protocol', () => {
       payload: { sessionId: 's-3' },
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].welinkSessionId).toBe('s-3');
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].type, 'tool_error');
+    assert.strictEqual(sent[0].welinkSessionId, 's-3');
   });
 });

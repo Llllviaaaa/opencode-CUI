@@ -1,4 +1,5 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -66,13 +67,13 @@ describe('protocol chat-stream', () => {
     await runtime.handleEvent(deltaEvent);
     await runtime.handleEvent(updatedEvent);
 
-    expect(sent).toHaveLength(2);
-    expect(sent[0]).toEqual({
+    assert.strictEqual(sent.length, 2);
+    assert.deepStrictEqual(sent[0], {
       type: 'tool_event',
       toolSessionId: 'ses_fixture_delta',
       event: deltaEvent,
     });
-    expect(sent[1]).toEqual({
+    assert.deepStrictEqual(sent[1], {
       type: 'tool_event',
       toolSessionId: 'ses_32c9fea15ffe2Rnv8tITmfmGmQ',
       event: updatedEvent,
@@ -105,8 +106,8 @@ describe('protocol chat-stream', () => {
       },
     });
 
-    expect(sent.filter((message) => message.type === 'tool_done')).toHaveLength(1);
-    expect(sent.filter((message) => message.type === 'tool_event')).toEqual([
+    assert.strictEqual(sent.filter((message) => message.type === 'tool_done').length, 1);
+    assert.deepStrictEqual(sent.filter((message) => message.type === 'tool_event'), [
       {
         type: 'tool_event',
         toolSessionId: 'tool-chat-1',

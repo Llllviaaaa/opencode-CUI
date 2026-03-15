@@ -1,4 +1,5 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -87,7 +88,7 @@ describe('protocol question-roundtrip', () => {
     const questionAskedEvent = await loadFixture('question.asked.json');
     await runtime.handleEvent(questionAskedEvent);
 
-    expect(sent).toEqual([
+    assert.deepStrictEqual(sent, [
       {
         type: 'tool_event',
         toolSessionId: 'ses_question_1',
@@ -106,8 +107,8 @@ describe('protocol question-roundtrip', () => {
       },
     });
 
-    expect(getCalls).toEqual([{ url: '/question' }]);
-    expect(postCalls).toEqual([
+    assert.deepStrictEqual(getCalls, [{ url: '/question' }]);
+    assert.deepStrictEqual(postCalls, [
       {
         url: '/question/{requestID}/reply',
         path: { requestID: 'question-request-1' },
@@ -115,7 +116,7 @@ describe('protocol question-roundtrip', () => {
         headers: { 'Content-Type': 'application/json' },
       },
     ]);
-    expect(sent).toHaveLength(1);
+    assert.strictEqual(sent.length, 1);
   });
 
   test('returns tool_error when question_reply cannot resolve a unique pending request', async () => {
@@ -154,12 +155,13 @@ describe('protocol question-roundtrip', () => {
       },
     });
 
-    expect(sent).toEqual([
+    assert.deepStrictEqual(sent, [
       {
         type: 'tool_error',
         welinkSessionId: 'wl-question-ambiguous',
         toolSessionId: 'ses_question_1',
         error: 'Unable to resolve a unique pending question request for toolSessionId=ses_question_1',
+        reason: undefined,
       },
     ]);
   });
@@ -204,12 +206,13 @@ describe('protocol question-roundtrip', () => {
       },
     });
 
-    expect(sent).toEqual([
+    assert.deepStrictEqual(sent, [
       {
         type: 'tool_error',
         welinkSessionId: 'wl-question-miss',
         toolSessionId: 'ses_question_1',
         error: 'Unable to resolve pending question request for toolSessionId=ses_question_1, toolCallId=call_question_1',
+        reason: undefined,
       },
     ]);
   });

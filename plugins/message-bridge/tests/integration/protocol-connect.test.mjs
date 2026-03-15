@@ -1,4 +1,5 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 
 import { BridgeRuntime } from '../../src/runtime/BridgeRuntime.ts';
 
@@ -38,13 +39,13 @@ describe('protocol status-query', () => {
 
     await runtime.handleDownstreamMessage({ type: 'status_query' });
 
-    expect(sent).toEqual([
+    assert.deepStrictEqual(sent, [
       {
         type: 'status_response',
         opencodeOnline: true,
       },
     ]);
-    expect('welinkSessionId' in sent[0]).toBe(false);
-    expect('sessionId' in sent[0]).toBe(false);
+    assert.strictEqual('welinkSessionId' in sent[0], false);
+    assert.strictEqual('sessionId' in sent[0], false);
   });
 });

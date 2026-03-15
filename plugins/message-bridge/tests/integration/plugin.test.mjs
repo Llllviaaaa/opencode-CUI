@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -57,14 +58,14 @@ describe('plugin contract', () => {
   });
 
   test('exports named and default as same plugin function', () => {
-    expect(typeof MessageBridgePlugin).toBe('function');
-    expect(DefaultPlugin).toBe(MessageBridgePlugin);
+    assert.strictEqual(typeof MessageBridgePlugin, 'function');
+    assert.strictEqual(DefaultPlugin, MessageBridgePlugin);
   });
 
   test('PluginInput -> Hooks', async () => {
     const hooks = await MessageBridgePlugin(mockInput());
-    expect(hooks).toBeObject();
-    expect(typeof hooks.event).toBe('function');
+    assert.ok(hooks !== null && typeof hooks === 'object');
+    assert.strictEqual(typeof hooks.event, 'function');
   });
 
   test('singleton runtime is idempotent across repeated init', async () => {
@@ -73,10 +74,10 @@ describe('plugin contract', () => {
     const hooks2 = await MessageBridgePlugin(mockInput());
     const runtime2 = getRuntime();
 
-    expect(runtime1).toBeDefined();
-    expect(runtime2).toBe(runtime1);
-    expect(typeof hooks1.event).toBe('function');
-    expect(typeof hooks2.event).toBe('function');
+    assert.notStrictEqual(runtime1, undefined);
+    assert.strictEqual(runtime2, runtime1);
+    assert.strictEqual(typeof hooks1.event, 'function');
+    assert.strictEqual(typeof hooks2.event, 'function');
   });
 
   test('logs injected client shape only once during first singleton init', async () => {
@@ -95,16 +96,16 @@ describe('plugin contract', () => {
     await new Promise((r) => setTimeout(r, 10));
 
     const shapeLogs = logs.filter((entry) => entry?.message === 'runtime.singleton.client_shape');
-    expect(shapeLogs).toHaveLength(1);
-    expect(shapeLogs[0].extra.clientTopLevelKeys).toContain('app');
-    expect(shapeLogs[0].extra.clientTopLevelKeys).toContain('global');
-    expect(shapeLogs[0].extra.clientTopLevelKeys).toContain('session');
-    expect(shapeLogs[0].extra.hasGlobalHealth).toBe(false);
-    expect(shapeLogs[0].extra.hasAppHealth).toBe(false);
-    expect(shapeLogs[0].extra.hasAppLog).toBe(true);
-    expect(shapeLogs[0].extra.hasSessionCreate).toBe(true);
-    expect(shapeLogs[0].extra.hasRawClientGet).toBe(true);
-    expect(shapeLogs[0].extra.hasRawClientPost).toBe(true);
+    assert.strictEqual(shapeLogs.length, 1);
+    assert.ok(shapeLogs[0].extra.clientTopLevelKeys.includes('app'));
+    assert.ok(shapeLogs[0].extra.clientTopLevelKeys.includes('global'));
+    assert.ok(shapeLogs[0].extra.clientTopLevelKeys.includes('session'));
+    assert.strictEqual(shapeLogs[0].extra.hasGlobalHealth, false);
+    assert.strictEqual(shapeLogs[0].extra.hasAppHealth, false);
+    assert.strictEqual(shapeLogs[0].extra.hasAppLog, true);
+    assert.strictEqual(shapeLogs[0].extra.hasSessionCreate, true);
+    assert.strictEqual(shapeLogs[0].extra.hasRawClientGet, true);
+    assert.strictEqual(shapeLogs[0].extra.hasRawClientPost, true);
   });
 
   test('loader semantics: Object.entries + duplicate function references only init once', async () => {
@@ -119,8 +120,8 @@ describe('plugin contract', () => {
       hooks.push(await fn(mockInput()));
     }
 
-    expect(hooks.length).toBe(1);
-    expect(getRuntime()).toBeDefined();
+    assert.strictEqual(hooks.length, 1);
+    assert.notStrictEqual(getRuntime(), undefined);
   });
 
   test('failed initialization does not poison singleton and can recover on next init', async () => {
@@ -145,14 +146,14 @@ describe('plugin contract', () => {
         directory: fakeWorkspace,
         worktree: fakeWorkspace,
       });
-      await expect(MessageBridgePlugin(isolatedInput)).rejects.toBeDefined();
-      expect(getRuntime()).toBeNull();
+      await assert.rejects(MessageBridgePlugin(isolatedInput));
+      assert.strictEqual(getRuntime(), null);
 
       process.env.BRIDGE_ENABLED = 'false';
       delete process.env.BRIDGE_GATEWAY_URL;
       const hooks = await MessageBridgePlugin(isolatedInput);
-      expect(typeof hooks.event).toBe('function');
-      expect(getRuntime()).toBeDefined();
+      assert.strictEqual(typeof hooks.event, 'function');
+      assert.notStrictEqual(getRuntime(), undefined);
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;
@@ -216,9 +217,9 @@ describe('plugin contract', () => {
     try {
       const initializingPromise = getOrCreateRuntime(mockInput({ client: createPluginClient() }));
       stopRuntime();
-      await expect(initializingPromise).rejects.toBeDefined();
+      await assert.rejects(initializingPromise);
       await new Promise((r) => setTimeout(r, 80));
-      expect(getRuntime()).toBeNull();
+      assert.strictEqual(getRuntime(), null);
     } finally {
       globalThis.WebSocket = originalWebSocket;
       delete process.env.BRIDGE_AUTH_AK;

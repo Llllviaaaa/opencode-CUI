@@ -1,4 +1,5 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { access, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -21,12 +22,12 @@ describe('plugin distribution artifact', () => {
 
     const mod = await import(pathToFileURL(artifactPath).href);
 
-    expect(typeof mod.default).toBe('function');
-    expect(typeof mod.MessageBridgePlugin).toBe('function');
-    expect(mod.default).toBe(mod.MessageBridgePlugin);
+    assert.strictEqual(typeof mod.default, 'function');
+    assert.strictEqual(typeof mod.MessageBridgePlugin, 'function');
+    assert.strictEqual(mod.default, mod.MessageBridgePlugin);
   });
 
-  test('builds package entrypoint for Bun package loading', async () => {
+  test('builds package entrypoint for Node package loading', async () => {
     execFileSync('node', ['./scripts/build.mjs'], {
       cwd: process.cwd(),
       stdio: 'pipe',
@@ -40,10 +41,10 @@ describe('plugin distribution artifact', () => {
       await symlink(process.cwd(), join(packageScopeDir, 'message-bridge'), process.platform === 'win32' ? 'junction' : 'dir');
 
       const stdout = execFileSync(
-        'bun',
+        process.execPath,
         [
           '-e',
-          `const mod = await import(${JSON.stringify(PACKAGE_NAME)}); console.log(typeof mod.default, typeof mod.MessageBridgePlugin, mod.default === mod.MessageBridgePlugin);`,
+          `import(${JSON.stringify(PACKAGE_NAME)}).then(mod => { console.log(typeof mod.default, typeof mod.MessageBridgePlugin, mod.default === mod.MessageBridgePlugin); })`,
         ],
         {
           cwd: tempDir,
@@ -52,7 +53,7 @@ describe('plugin distribution artifact', () => {
         },
       ).toString().trim();
 
-      expect(stdout).toBe('function function true');
+      assert.strictEqual(stdout, 'function function true');
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
