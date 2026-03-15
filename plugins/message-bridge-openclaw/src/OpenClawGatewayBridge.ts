@@ -17,11 +17,13 @@ import type {
   ToolErrorMessage,
   ToolEventMessage,
 } from "./contracts/transport.js";
+import { TOOL_ERROR_REASON } from "./contracts/transport.js";
 import type { BridgeLogger, MessageBridgeResolvedAccount, MessageBridgeStatusSnapshot } from "./types.js";
 import type { GatewayConnection } from "./connection/GatewayConnection.js";
 import { DefaultAkSkAuth } from "./connection/AkSkAuth.js";
 import { DefaultGatewayConnection } from "./connection/GatewayConnection.js";
 import { normalizeDownstreamMessage } from "./protocol/downstream.js";
+import { resolveRegisterMetadata, type RegisterMetadata } from "./runtime/RegisterMetadata.js";
 import { SessionRegistry } from "./session/SessionRegistry.js";
 
 export interface OpenClawGatewayBridgeOptions {
@@ -30,6 +32,7 @@ export interface OpenClawGatewayBridgeOptions {
   logger: BridgeLogger;
   runtime: PluginRuntime;
   setStatus: (status: MessageBridgeStatusSnapshot) => void;
+  registerMetadata?: RegisterMetadata;
   connectionFactory?: (account: MessageBridgeResolvedAccount, logger: BridgeLogger) => GatewayConnection;
 }
 
@@ -279,6 +282,7 @@ export class OpenClawGatewayBridge {
   private readonly sessionRegistry: SessionRegistry;
   private readonly connection: GatewayConnection;
   private readonly runtime: PluginRuntime;
+  private readonly registerMetadata: RegisterMetadata;
   private readonly activeToolSessions = new Map<
     string,
     {
@@ -296,6 +300,7 @@ export class OpenClawGatewayBridge {
 
   constructor(private readonly options: OpenClawGatewayBridgeOptions) {
     this.runtime = options.runtime;
+    this.registerMetadata = options.registerMetadata ?? resolveRegisterMetadata(options.logger);
     this.sessionRegistry = new SessionRegistry(`${options.account.agentIdPrefix}:${options.account.accountId}`);
     this.connection =
       options.connectionFactory?.(options.account, options.logger) ??
@@ -309,11 +314,11 @@ export class OpenClawGatewayBridge {
           new DefaultAkSkAuth(options.account.auth.ak, options.account.auth.sk).generateAuthPayload(),
         registerMessage: {
           type: "register",
-          deviceName: options.account.gateway.deviceName,
-          macAddress: options.account.gateway.macAddress || "unknown",
+          deviceName: this.registerMetadata.deviceName,
+          macAddress: this.registerMetadata.macAddress,
           os: os.platform(),
-          toolType: options.account.gateway.toolType,
-          toolVersion: options.account.gateway.toolVersion,
+          toolType: this.registerMetadata.toolType,
+          toolVersion: this.registerMetadata.toolVersion,
         },
         logger: options.logger,
       });
@@ -407,8 +412,6 @@ export class OpenClawGatewayBridge {
     if (!normalized.ok) {
       this.sendToolError({
         type: "tool_error",
-        errorCode: normalized.error.code,
-        action: normalized.error.action,
         error: normalized.error.message,
       });
       return;
@@ -844,11 +847,6 @@ export class OpenClawGatewayBridge {
         sessionKey: record.sessionKey,
       });
     }
-    this.sendToolDone({
-      type: "tool_done",
-      toolSessionId: message.payload.toolSessionId,
-      welinkSessionId: message.welinkSessionId,
-    });
   }
 
   private async handleAbortSession(message: Extract<InvokeMessage, { action: "abort_session" }>): Promise<void> {
@@ -859,6 +857,7 @@ export class OpenClawGatewayBridge {
         toolSessionId: message.payload.toolSessionId,
         welinkSessionId: message.welinkSessionId,
         error: "unknown_tool_session",
+        reason: TOOL_ERROR_REASON.SESSION_NOT_FOUND,
       });
       return;
     }
@@ -880,8 +879,6 @@ export class OpenClawGatewayBridge {
       type: "tool_error",
       toolSessionId,
       welinkSessionId,
-      errorCode: "unsupported_in_openclaw_v1",
-      action,
       error: `unsupported_in_openclaw_v1:${action}`,
     });
   }

@@ -6,10 +6,6 @@ export interface MessageBridgeReconnectConfig {
 
 export interface MessageBridgeGatewayConfig {
   url: string;
-  toolType: string;
-  toolVersion: string;
-  deviceName: string;
-  macAddress?: string;
   heartbeatIntervalMs: number;
   reconnect: MessageBridgeReconnectConfig;
 }

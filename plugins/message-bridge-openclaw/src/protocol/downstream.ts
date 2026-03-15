@@ -19,6 +19,10 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function hasKey(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
 export interface DownstreamNormalizationError {
   code: string;
   message: string;
@@ -86,11 +90,14 @@ function normalizePermissionReplyPayload(payload: unknown): NormalizeResult<Perm
   }
   const toolSessionId = asString(payload.toolSessionId);
   const permissionId = asString(payload.permissionId);
-  const response = asString(payload.response);
-  if (!toolSessionId || !permissionId || !response) {
+  if (!toolSessionId || !permissionId || !hasKey(payload, "response")) {
     return fail("permission_reply requires toolSessionId, permissionId, response", "missing_required_field", "invoke", "permission_reply");
   }
-  return ok({ toolSessionId, permissionId, response: response as PermissionReplyPayload["response"] });
+  const response = payload.response;
+  if (response !== "once" && response !== "always" && response !== "reject") {
+    return fail('permission_reply response must be "once", "always", or "reject"', "invalid_payload", "invoke", "permission_reply");
+  }
+  return ok({ toolSessionId, permissionId, response });
 }
 
 function normalizeQuestionReplyPayload(payload: unknown): NormalizeResult<QuestionReplyPayload> {
@@ -101,6 +108,9 @@ function normalizeQuestionReplyPayload(payload: unknown): NormalizeResult<Questi
   const answer = asString(payload.answer);
   if (!toolSessionId || !answer) {
     return fail("question_reply requires toolSessionId and answer", "missing_required_field", "invoke", "question_reply");
+  }
+  if (hasKey(payload, "toolCallId") && !asString(payload.toolCallId)) {
+    return fail("question_reply toolCallId must be a non-empty string when provided", "invalid_payload", "invoke", "question_reply");
   }
   return ok({ toolSessionId, answer, toolCallId: asString(payload.toolCallId) });
 }

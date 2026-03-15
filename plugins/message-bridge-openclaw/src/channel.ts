@@ -44,10 +44,6 @@ const messageBridgeConfigSchema: ChannelConfigSchema = {
         additionalProperties: false,
         properties: {
           url: { type: "string", minLength: 1 },
-          toolType: { type: "string", minLength: 1 },
-          toolVersion: { type: "string", minLength: 1 },
-          deviceName: { type: "string", minLength: 1 },
-          macAddress: { type: "string", minLength: 1 },
           heartbeatIntervalMs: { type: "integer", minimum: 1 },
           reconnect: {
             type: "object",

@@ -77,6 +77,9 @@ sequenceDiagram
 - Output protocol
   - upstream `register`
   - upstream periodic `heartbeat`
+- Register metadata
+  - `toolType` is fixed to `openclaw`
+  - `deviceName` / `toolVersion` / `macAddress` are runtime-derived, not user-configured
 - ID mapping
   - none yet; `SessionRegistry` is not populated during startup
 
@@ -113,7 +116,7 @@ sequenceDiagram
   AG->>MB: invoke.close_session(toolSessionId)
   MB->>MB: normalizeDownstreamMessage()
   MB->>SR: delete(toolSessionId)
-  MB-->>AG: tool_done
+  Note over MB,AG: no upstream message on close_session success
 
   AG->>MB: invoke.abort_session(toolSessionId)
   MB->>MB: normalizeDownstreamMessage()
@@ -134,7 +137,7 @@ sequenceDiagram
 - Output protocol
   - `status_query -> status_response`
   - `invoke.create_session -> session_created`
-  - `invoke.close_session -> tool_done`
+  - `invoke.close_session -> no upstream success envelope`
   - `invoke.abort_session -> tool_done` or `tool_error`
 - ID mapping
   - `welinkSessionId`
@@ -254,7 +257,8 @@ Current state transitions:
 | tool start/update | `handleRuntimeAgentEvent()` | `tool_event(message.part.updated type=tool status=running)` |
 | tool completed/error | `handleRuntimeAgentEvent()` | `tool_event(message.part.updated type=tool status=completed/error)` |
 | tool output text | dispatcher `deliver(kind=tool)` | `tool_event(message.part.updated type=tool state.output=...)` |
-| close/abort complete | `handleCloseSession()` / `handleAbortSession()` | `tool_done` |
+| close_session complete | `handleCloseSession()` | no upstream success envelope |
+| abort_session complete | `handleAbortSession()` | `tool_done` or `tool_error(reason=session_not_found)` |
 | runtime failure | `handleChat()` catch | `tool_event(session.error)` + `tool_error` |
 
 ## Known Limitations

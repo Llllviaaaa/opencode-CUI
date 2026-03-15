@@ -127,10 +127,15 @@ public class GatewayMessage {
     }
 
     public static GatewayMessage toolError(String toolSessionId, String error) {
+        return toolError(toolSessionId, error, null);
+    }
+
+    public static GatewayMessage toolError(String toolSessionId, String error, String reason) {
         return GatewayMessage.builder()
                 .type("tool_error")
                 .toolSessionId(toolSessionId)
                 .error(error)
+                .reason(reason)
                 .build();
     }
 

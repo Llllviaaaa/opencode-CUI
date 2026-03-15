@@ -1,8 +1,8 @@
 # Message Bridge OpenClaw 插件实施计划
 
-**Version:** 0.6
-**Date:** 2026-03-14  
-**Status:** 阶段二最小交付已完成，阶段一诊断能力已增强，当前重心回到阶段一稳定性与阶段三体验优化
+**Version:** 0.7
+**Date:** 2026-03-15  
+**Status:** 阶段二最小交付已完成；阶段一稳定性 P0 实现与测试已落地，当前重心是阶段一门禁验证与阶段三体验优化
 **Owner:** message-bridge maintainers  
 **Scope:** OpenClaw `--dev` 环境下的 `message-bridge` 插件
 
@@ -20,18 +20,18 @@
 本节只挂载执行任务与验收门禁，不重复专题正文。
 
 ### P0-FC-01 实现任务包
-- [ ] 统一 `runtime_reply` 与 `subagent_fallback` 的 timeout 口径（同一 `runTimeoutMs`）。
-- [ ] 固化失败阶段分型：`before_first_chunk` / `after_first_chunk`。
-- [ ] 固化错误分类字段：至少包含 `timeout` / `runtime_error`。
-- [ ] 增加最小重试边界：仅首块前 timeout 允许单次重试。
-- [ ] 重试必须复用同一业务请求标识（idempotency key），不得改变会话键与路由键。
-- [ ] 增加 `retryAttempt` 观测字段输出（首发 `0`、重试 `1`），并纳入门禁统计口径。
+- [x] 统一 `runtime_reply` 与 `subagent_fallback` 的 timeout 口径（同一 `runTimeoutMs`）。
+- [x] 固化失败阶段分型：`before_first_chunk` / `after_first_chunk`。
+- [x] 固化错误分类字段：至少包含 `timeout` / `runtime_error`。
+- [x] 增加最小重试边界：仅首块前 timeout 允许单次重试。
+- [x] 重试必须复用同一业务请求标识（idempotency key），不得改变会话键与路由键。
+- [x] 增加 `retryAttempt` 观测字段输出（首发 `0`、重试 `1`），并纳入门禁统计口径。
 
 ### P0-FC-02 测试任务包
-- [ ] 新会话首块成功率统计场景。
-- [ ] 首块前 timeout 注入与分类验证。
-- [ ] 首块后失败注入与分类验证。
-- [ ] `runtime_reply` / `subagent_fallback` 诊断字段一致性验证。
+- [x] 新会话首块成功率统计场景。
+- [x] 首块前 timeout 注入与分类验证。
+- [x] 首块后失败注入与分类验证。
+- [x] `runtime_reply` / `subagent_fallback` 诊断字段一致性验证。
 
 ### P0-FC-03 验收门禁
 - [ ] 首块成功率达标（阈值以需求专题定义为准）。
@@ -47,6 +47,61 @@
 2. 首块前 timeout 占比超阈值。
 3. 无法稳定区分 `before_first_chunk` 与 `after_first_chunk`。
 4. `runtime_reply` / `subagent_fallback` 输出口径不一致。
+
+## P0 阶段四 permission_reply 专题索引（2026-03-15）
+
+需求与方案专题：
+
+1. `./topics/mb-p0-permission-bridge-requirements.md`
+2. `./topics/mb-p0-permission-bridge-solution.md`
+
+需求追溯标识：
+
+- `FR-MB-OPENCLAW-P0-PERMISSION-BRIDGE`
+
+本节仅挂载阶段四 `permission_reply` 的需求口径与任务入口，不展开实现细节。
+
+### P0-PR-01 目标能力
+- `invoke.permission_reply` 保持 ai-gateway 现有入参形态：`toolSessionId` / `permissionId` / `response`。
+- `response` 与 OpenClaw `exec approvals` 决策语义一致映射：
+  - `once -> allow-once`
+  - `always -> allow-always`
+  - `reject -> deny`
+- 权限状态上行通过 `tool_event` 投影（`permission.asked` / `permission.updated`），不新增传输消息类型。
+- `question_reply` 本阶段继续 fail-closed，不纳入本任务包交付。
+
+### P0-PR-02 约束与错误口径
+- `permissionId` 采用 opaque passthrough，直接作为 OpenClaw `approvalId` 使用；不引入任何 ID 映射缓存。
+- 插件只维护最小状态：`toolSessionId`、`permissionId`、`status(pending/resolved/expired)`、`resolvedAt?`、`expiresAt?`，用于幂等/防重放/会话隔离。
+- 不存在/过期/已决议/解析失败均返回稳定 `tool_error`；端到端最小契约遵循 `error + welinkSessionId?/toolSessionId?`。
+- `errorCode/action` 不再作为公共 wire 字段；诊断信息统一进入 `error` 文本与插件日志。
+- 会话错配场景统一返回 `permission_session_mismatch`，不得产生跨会话副作用。
+- 重复提交同一 `permissionId` 必须幂等，不产生二次副作用，不污染 session 状态。
+
+### P0-PR-03 最小验收口径
+- 固定环境门禁窗口：同一目标环境、固定模型与固定网关配置下，连续至少 30 个有效 `permission_reply` 样本。
+- 有效样本下 `permission_reply` 决策提交成功率 `100%`（上述门禁窗口样本集）。
+- 三种 `response` 到目标决策映射一致率 `100%`。
+- 非法/过期/重复输入均结构化 `tool_error` 收敛，且状态机无回归。
+- 强制覆盖 4 个用例：同会话授权成功、重复提交幂等、过期提交、跨会话错配（结构化 `tool_error`）。
+- 30 样本门禁中至少包含 1 个错误场景样本（重复/过期/错配任一）。
+- 观测字段至少包含：`toolSessionId`、`permissionId`、`decision`、`resolveResult`、`reason`、`latencyMs`。
+
+## P0 参考专题索引：feishu-openclaw 能力需求清单（2026-03-16）
+
+参考专题：
+
+1. `./topics/mb-p0-feishu-openclaw-reference-requirements.md`
+
+需求追溯标识：
+
+- `FR-MB-OPENCLAW-P0-FEISHU-REFERENCE`
+
+本节作为 `message-bridge-openclaw` 的能力参考基线，明确：
+
+- 需求描述
+- 优先级（`P0/P1/P2`）
+- OpenClaw 插件接口一对一主依赖映射
 
 ## TL;DR
 
@@ -80,7 +135,7 @@
 
 - 新会话首块延迟与 timeout 风险仍需继续收敛
 - block streaming 仍然不是 token 级体验
-- `permission_reply` / `question_reply` 仍未实现
+- `permission_reply` / `question_reply` 业务能力仍未实现（但 fail-closed 结构已规范化）
 - `pairing/security/messaging/directory/outbound` 仍未评估为本插件职责
 
 本次刷新重点（v0.6）：
@@ -144,6 +199,9 @@
   - 已提供轻量 `onboarding`
   - 无效输入会阻断并重试
   - legacy `accounts` 不会再被视为配置成功
+  - `setup/onboarding` 仅写入 `name`、`gateway.url`、`auth.ak`、`auth.sk`
+  - `name` 只作为账号展示名，不参与注册协议
+  - `toolType=openclaw`、`deviceName`、`toolVersion`、`macAddress` 已收敛为运行时派生元数据
 - 账号生命周期
   - 已支持 `setAccountEnabled`
   - 已支持 `deleteAccount`
@@ -268,7 +326,7 @@
 | 阶段一 | 先让新会话稳定回复 | 进行中（v0.6 诊断增强已落地） | timeout 原因收敛、reply timeout 调整、duplicate_connection 抑制、skill-relay 检查脚本、最小回复回归验证 |
 | 阶段二 | 补齐插件产品化能力 | 已完成（最小交付） | `configSchema`、单账号 `setup/onboarding`、`probe/status/issues`、账号启停/删除 |
 | 阶段三 | 优化 block 级流式体验 | 未开始 | 首块延迟分析、chunk 策略优化、用户侧可感知流式 |
-| 阶段四 | 补齐 deferred actions | 未开始 | `permission_reply`、`question_reply` 协议实现或明确后置 |
+| 阶段四 | 补齐 deferred actions | 进行中（fail-closed 规范化已完成） | `permission_reply`、`question_reply` 协议实现或明确后置 |
 | 阶段五 | 评估完整 channel 能力边界 | 未开始 | `pairing/security/messaging/directory/outbound` 的职责判断 |
 | 阶段六 | 交付整理 | 进行中 | `dist/`、bundle 目录、验证审计文档、skill-relay 检查脚本、安装说明、验证手册 |
 
@@ -355,7 +413,7 @@
 
 任务：
 
-- 评估 `permission_reply`
+- 按 `FR-MB-OPENCLAW-P0-PERMISSION-BRIDGE` 落地 `permission_reply`（OpenClaw `exec approvals` 映射）
 - 评估 `question_reply`
 - 明确是否需要 OpenClaw core 能力配合
 

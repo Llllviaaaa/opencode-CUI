@@ -23,6 +23,7 @@ import type {
   MessageBridgeResolvedAccount,
   MessageBridgeStatusSnapshot,
 } from "./types.js";
+import { resolveRegisterMetadata, type RegisterMetadata } from "./runtime/RegisterMetadata.js";
 
 const HEARTBEAT_GRACE_MS = 5_000;
 
@@ -112,6 +113,7 @@ function isRuntimeHealthyForDuplicateConnection(
 }
 
 function createProbeConnection(account: MessageBridgeResolvedAccount): GatewayConnection {
+  const registerMetadata = resolveRegisterMetadata(silentLogger);
   return new DefaultGatewayConnection({
     url: account.gateway.url,
     reconnectBaseMs: account.gateway.reconnect.baseMs,
@@ -121,11 +123,11 @@ function createProbeConnection(account: MessageBridgeResolvedAccount): GatewayCo
     authPayloadProvider: () => new DefaultAkSkAuth(account.auth.ak, account.auth.sk).generateAuthPayload(),
     registerMessage: {
       type: "register",
-      deviceName: account.gateway.deviceName,
-      macAddress: account.gateway.macAddress || "unknown",
+      deviceName: registerMetadata.deviceName,
+      macAddress: registerMetadata.macAddress,
       os: os.platform(),
-      toolType: account.gateway.toolType,
-      toolVersion: account.gateway.toolVersion,
+      toolType: registerMetadata.toolType,
+      toolVersion: registerMetadata.toolVersion,
     },
     logger: silentLogger,
   });
@@ -230,9 +232,11 @@ export function buildMessageBridgeAccountSnapshot(params: {
   cfg: OpenClawConfig;
   runtime?: MessageBridgeStatusSnapshot | ChannelAccountSnapshot;
   probe?: unknown;
+  registerMetadata?: RegisterMetadata;
 }): MessageBridgeAccountSnapshot {
   const { account, cfg, probe } = params;
   const runtime = params.runtime as MessageBridgeStatusSnapshot | undefined;
+  const registerMetadata = params.registerMetadata ?? resolveRegisterMetadata(silentLogger);
   const missingConfigFields = getMissingRequiredConfigPaths(account, cfg);
   const legacyAccountsConfigured = hasLegacyAccountsConfig(cfg);
   const configured = missingConfigFields.length === 0 && !legacyAccountsConfigured;
@@ -250,9 +254,9 @@ export function buildMessageBridgeAccountSnapshot(params: {
     }),
     connected: runtime?.connected ?? false,
     gatewayUrl: account.gateway.url || null,
-    toolType: account.gateway.toolType,
-    toolVersion: account.gateway.toolVersion,
-    deviceName: account.gateway.deviceName,
+    toolType: registerMetadata.toolType,
+    toolVersion: registerMetadata.toolVersion,
+    deviceName: registerMetadata.deviceName,
     heartbeatIntervalMs: account.gateway.heartbeatIntervalMs,
     runTimeoutMs: account.runTimeoutMs,
     tokenSource: resolveTokenSource(account),

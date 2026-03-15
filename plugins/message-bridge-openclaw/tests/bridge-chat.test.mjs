@@ -101,9 +101,6 @@ function createBridge(runtimeOverride, options = {}) {
     enabled: true,
     gateway: {
       url: "ws://localhost:8081/ws/agent",
-      toolType: "OPENCLAW",
-      toolVersion: "0.1.0",
-      deviceName: "test",
       heartbeatIntervalMs: 30000,
       reconnect: {
         baseMs: 1000,
@@ -963,7 +960,7 @@ test("create_session returns session_created with bridged session id", async () 
   ]);
 });
 
-test("close_session deletes session and returns tool_done", async () => {
+test("close_session deletes session without returning tool_done", async () => {
   const deletedSessionKeys = [];
   const { bridge, connection } = createBridge({
     subagent: {
@@ -992,8 +989,7 @@ test("close_session deletes session and returns tool_done", async () => {
   });
 
   assert.deepEqual(deletedSessionKeys, ["bridge:default:tool_close_1"]);
-  assert.equal(connection.sent.at(-1).type, "tool_done");
-  assert.equal(connection.sent.at(-1).toolSessionId, "tool_close_1");
+  assert.equal(connection.sent.some((message) => message.type === "tool_done"), false);
 });
 
 test("abort_session deletes session and returns tool_done", async () => {
@@ -1044,9 +1040,10 @@ test("abort_session returns unknown_tool_session for missing session", async () 
   assert.equal(connection.sent.at(-1).type, "tool_error");
   assert.equal(connection.sent.at(-1).toolSessionId, "tool_abort_missing");
   assert.equal(connection.sent.at(-1).error, "unknown_tool_session");
+  assert.equal(connection.sent.at(-1).reason, "session_not_found");
 });
 
-test("unsupported permission_reply and question_reply fail closed with stable errorCode", async () => {
+test("unsupported permission_reply and question_reply fail closed with standard tool_error", async () => {
   const { bridge, connection } = createBridge();
   await bridge.start();
   await bridge.handleDownstreamMessage({
@@ -1061,8 +1058,6 @@ test("unsupported permission_reply and question_reply fail closed with stable er
   });
 
   assert.equal(connection.sent.at(-1).type, "tool_error");
-  assert.equal(connection.sent.at(-1).errorCode, "unsupported_in_openclaw_v1");
-  assert.equal(connection.sent.at(-1).action, "permission_reply");
   assert.match(connection.sent.at(-1).error, /unsupported_in_openclaw_v1:permission_reply/);
 
   await bridge.handleDownstreamMessage({
@@ -1076,8 +1071,6 @@ test("unsupported permission_reply and question_reply fail closed with stable er
   });
 
   assert.equal(connection.sent.at(-1).type, "tool_error");
-  assert.equal(connection.sent.at(-1).errorCode, "unsupported_in_openclaw_v1");
-  assert.equal(connection.sent.at(-1).action, "question_reply");
   assert.match(connection.sent.at(-1).error, /unsupported_in_openclaw_v1:question_reply/);
   assert.equal(connection.sent.some((message) => message.type === "tool_done"), false);
   assert.equal(connection.sent.some((message) => message.type === "session_created"), false);
@@ -1097,8 +1090,7 @@ test("invalid payload for permission_reply and question_reply returns structured
   });
 
   assert.equal(connection.sent.at(-1).type, "tool_error");
-  assert.equal(connection.sent.at(-1).errorCode, "missing_required_field");
-  assert.equal(connection.sent.at(-1).action, "permission_reply");
+  assert.match(connection.sent.at(-1).error, /permission_reply requires toolSessionId, permissionId, response/);
 
   await bridge.handleDownstreamMessage({
     type: "invoke",
@@ -1110,8 +1102,41 @@ test("invalid payload for permission_reply and question_reply returns structured
   });
 
   assert.equal(connection.sent.at(-1).type, "tool_error");
-  assert.equal(connection.sent.at(-1).errorCode, "missing_required_field");
-  assert.equal(connection.sent.at(-1).action, "question_reply");
+  assert.match(connection.sent.at(-1).error, /question_reply requires toolSessionId and answer/);
+  assert.equal(connection.sent.some((message) => "errorCode" in message), false);
+  assert.equal(connection.sent.some((message) => "action" in message), false);
   assert.equal(connection.sent.some((message) => message.type === "tool_done"), false);
   assert.equal(connection.sent.some((message) => message.type === "session_created"), false);
+});
+
+test("invalid payload for permission_reply and question_reply uses baseline validation rules", async () => {
+  const { bridge, connection } = createBridge();
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_invalid_perm_response",
+    action: "permission_reply",
+    payload: {
+      toolSessionId: "tool_invalid_perm_response",
+      permissionId: "perm_invalid",
+      response: "deny",
+    },
+  });
+
+  assert.equal(connection.sent.at(-1).type, "tool_error");
+  assert.match(connection.sent.at(-1).error, /response must be "once", "always", or "reject"/);
+
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_invalid_question_call",
+    action: "question_reply",
+    payload: {
+      toolSessionId: "tool_invalid_question_call",
+      answer: "ok",
+      toolCallId: "",
+    },
+  });
+
+  assert.equal(connection.sent.at(-1).type, "tool_error");
+  assert.match(connection.sent.at(-1).error, /toolCallId must be a non-empty string/);
 });

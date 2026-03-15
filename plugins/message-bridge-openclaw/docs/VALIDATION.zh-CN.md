@@ -183,7 +183,7 @@ openclaw --dev gateway run --allow-unconfigured --verbose
 预期结果：
 
 - 出现 agent 注册成功日志
-- 日志中能看到 `toolType=OPENCLAW`
+- 日志中能看到 `toolType=openclaw`
 - 能持续看到 heartbeat
 
 #### 步骤 3：验证 `status_query`
@@ -234,8 +234,9 @@ redis-cli publish agent:test-ak-openclaw-001 '{"type":"invoke","action":"close_s
 
 预期结果：
 
-- `ai-gateway.log` 中出现 `tool_done`
-- 响应里包含 `toolSessionId=session-stage1-001`
+- 插件侧会删除 `toolSessionId=session-stage1-001` 对应的本地 session
+- `close_session` 成功路径不应再上报 `tool_done`
+- 不应出现 `tool_error`
 - 后续同一 `toolSessionId` 不应再继续复用旧 session 状态
 
 #### 步骤 7：验证 unsupported action fail-closed
@@ -247,8 +248,6 @@ redis-cli publish agent:test-ak-openclaw-001 '{"type":"invoke","action":"permiss
 预期结果：
 
 - 返回 `tool_error`
-- `errorCode=unsupported_in_openclaw_v1`
-- `action=permission_reply`
 - `error` 中包含 `unsupported_in_openclaw_v1:permission_reply`
 - 不应返回 `tool_done`
 
@@ -261,8 +260,6 @@ redis-cli publish agent:test-ak-openclaw-001 '{"type":"invoke","action":"questio
 预期结果：
 
 - 返回 `tool_error`
-- `errorCode=unsupported_in_openclaw_v1`
-- `action=question_reply`
 - `error` 中包含 `unsupported_in_openclaw_v1:question_reply`
 - 不应返回 `tool_done`
 
@@ -302,6 +299,15 @@ node --test tests/config-status.test.mjs
 
 #### 步骤 1：验证非交互 `setup`
 
+当前 `setup` / `onboarding` 只支持配置：
+
+- `name`
+- `gateway.url`
+- `auth.ak`
+- `auth.sk`
+
+不支持配置 `gateway.toolType`、`gateway.toolVersion`、`gateway.deviceName`、`gateway.macAddress`。
+
 先备份当前配置，再执行：
 
 ```bash
@@ -328,6 +334,11 @@ openclaw --dev channels add --channel message-bridge --account secondary --url w
 - 配置文件不应新增 `secondary`
 
 #### 步骤 3：验证交互式 `onboarding` 会重试错误输入
+
+说明：
+
+- `name` 仅作为账号展示名，不参与注册协议
+- 注册时的 `toolType/deviceName/toolVersion/macAddress` 统一由运行时派生
 
 执行：
 

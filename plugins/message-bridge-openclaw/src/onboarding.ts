@@ -58,7 +58,6 @@ async function promptMessageBridgeSetup(params: {
     url: account.gateway.url,
     token: account.auth.ak ?? "",
     password: account.auth.sk ?? "",
-    deviceName: account.gateway.deviceName,
   };
 
   while (true) {
@@ -80,17 +79,11 @@ async function promptMessageBridgeSetup(params: {
       message: account.auth.sk ? "SK (留空保持当前值)" : "SK",
       initialValue: draft.password,
     });
-    const deviceName = await prompter.text({
-      message: "Device name",
-      initialValue: draft.deviceName,
-    });
-
     draft = {
       name,
       url,
       token: ak,
       password: sk,
-      deviceName,
     };
 
     const input = {
@@ -98,7 +91,6 @@ async function promptMessageBridgeSetup(params: {
       ...(url !== undefined ? { url } : {}),
       ...(ak !== undefined ? { token: ak } : {}),
       ...(sk !== undefined ? { password: sk } : {}),
-      ...(deviceName !== undefined ? { deviceName } : {}),
     };
     const validationError = validateMessageBridgeSetupInput({
       cfg,

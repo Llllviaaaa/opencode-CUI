@@ -20,9 +20,6 @@ export const DEFAULT_ACCOUNT_CONFIG: MessageBridgeAccountConfig = {
   enabled: true,
   gateway: {
     url: "ws://localhost:8081/ws/agent",
-    toolType: "OPENCLAW",
-    toolVersion: "0.1.0",
-    deviceName: "OpenClaw Gateway",
     heartbeatIntervalMs: 30_000,
     reconnect: {
       baseMs: 1_000,
@@ -39,7 +36,9 @@ export const DEFAULT_ACCOUNT_CONFIG: MessageBridgeAccountConfig = {
 };
 
 type GenericRecord = Record<string, unknown>;
-type MessageBridgeSetupInput = Pick<ChannelSetupInput, "deviceName" | "name" | "password" | "token" | "url" | "useEnv">;
+type MessageBridgeSetupInput = Pick<ChannelSetupInput, "name" | "password" | "token" | "url" | "useEnv">;
+
+const DEPRECATED_GATEWAY_FIELDS = new Set(["toolType", "toolVersion", "deviceName", "macAddress"]);
 
 function isRecord(value: unknown): value is GenericRecord {
   return value !== null && typeof value === "object";
@@ -68,8 +67,14 @@ function stripLegacyAccounts(section: GenericRecord | undefined): GenericRecord 
     return undefined;
   }
 
-  const { accounts: _accounts, ...rest } = section;
-  return rest;
+  const { accounts: _accounts, gateway, ...rest } = section;
+  const nextGateway = isRecord(gateway)
+    ? Object.fromEntries(Object.entries(gateway).filter(([key]) => !DEPRECATED_GATEWAY_FIELDS.has(key)))
+    : gateway;
+  return {
+    ...rest,
+    ...(isRecord(nextGateway) ? { gateway: nextGateway } : {}),
+  };
 }
 
 function getSectionField(section: GenericRecord | undefined, key: string): GenericRecord | undefined {
@@ -247,7 +252,6 @@ export function applyMessageBridgeSetupConfig(params: {
   const authSection = getSectionField(section, "auth");
   const nextName = params.input.name === undefined ? section?.name : trimOrUndefined(params.input.name);
   const nextGatewayUrl = trimOrUndefined(params.input.url);
-  const nextDeviceName = trimOrUndefined(params.input.deviceName);
   const nextAk = trimOrUndefined(params.input.token);
   const nextSk = trimOrUndefined(params.input.password);
 
@@ -264,7 +268,6 @@ export function applyMessageBridgeSetupConfig(params: {
         gateway: {
           ...gatewaySection,
           ...(nextGatewayUrl !== undefined ? { url: nextGatewayUrl } : {}),
-          ...(nextDeviceName !== undefined ? { deviceName: nextDeviceName } : {}),
         },
         auth: {
           ...authSection,

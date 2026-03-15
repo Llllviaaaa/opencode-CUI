@@ -57,7 +57,11 @@ Deferred in V1:
 - `permission_reply`
 - `question_reply`
 
-Deferred actions fail closed with `tool_error(unsupported_in_openclaw_v1)`.
+Deferred actions fail closed with standard `tool_error`:
+
+- `error=unsupported_in_openclaw_v1:<action>`
+- no `errorCode` / `action` wire extension fields
+- no `tool_done` fallback receipt
 
 ## Environment
 
@@ -145,10 +149,7 @@ Update the dev config file `~/.openclaw-dev/openclaw.json` with:
       "enabled": true,
       "blockStreaming": true,
       "gateway": {
-        "url": "ws://127.0.0.1:8081/ws/agent",
-        "toolType": "OPENCLAW",
-        "toolVersion": "0.1.0",
-        "deviceName": "OpenClaw Gateway"
+        "url": "ws://127.0.0.1:8081/ws/agent"
       },
       "auth": {
         "ak": "test-ak-openclaw-001",
@@ -164,6 +165,20 @@ Minimum required fields are:
 - `channels.message-bridge.gateway.url`
 - `channels.message-bridge.auth.ak`
 - `channels.message-bridge.auth.sk`
+
+Interactive `setup` / `onboarding` only writes:
+
+- `channels.message-bridge.name`
+- `channels.message-bridge.gateway.url`
+- `channels.message-bridge.auth.ak`
+- `channels.message-bridge.auth.sk`
+
+Register metadata is runtime-derived and not user-configurable:
+
+- `toolType=openclaw`
+- `deviceName=os.hostname()`
+- `toolVersion=plugin package version`
+- `macAddress=first usable local interface or ""`
 
 To enable progressive text delivery, also set:
 
@@ -242,7 +257,7 @@ Check the gateway log:
 Expected result:
 
 - registration for `test-ak-openclaw-001`
-- `toolType=OPENCLAW`
+- `toolType=openclaw`
 - periodic heartbeat logs
 
 ## Verify control path
@@ -280,6 +295,7 @@ Confirm the actual assistant output in the latest session file under:
 
 - `permission_reply` is not implemented
 - `question_reply` is not implemented
+- `close_session` success only clears local session state and does not emit `tool_done`
 - streaming is block-level, not token-level
 - published `openclaw plugins install` distribution flow is not yet validated for this package
 - plugin install must not include `node_modules/openclaw`

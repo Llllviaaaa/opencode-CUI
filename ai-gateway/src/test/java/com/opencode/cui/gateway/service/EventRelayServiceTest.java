@@ -1,5 +1,6 @@
 package com.opencode.cui.gateway.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import org.junit.jupiter.api.BeforeEach;
@@ -106,6 +107,30 @@ class EventRelayServiceTest {
                         && "skill-server".equals(m.getSource())
                         && m.getTraceId() != null
                         && "tool_event".equals(m.getType())));
+    }
+
+    @Test
+    @DisplayName("relayToSkillServer preserves standard tool_error reason and tool_done usage fields")
+    void relayToSkillServerPreservesReasonAndUsage() throws Exception {
+        when(skillRelayService.relayToSkill(any())).thenReturn(true);
+        when(redisMessageBroker.getAgentUser("ak_test_001")).thenReturn("user-1");
+        when(redisMessageBroker.getAgentSource("ak_test_001")).thenReturn("skill-server");
+
+        GatewayMessage toolError = GatewayMessage.toolError("sess-42", "unknown_tool_session", "session_not_found");
+        service.relayToSkillServer("ak_test_001", toolError);
+
+        verify(skillRelayService).relayToSkill(argThat(m -> "tool_error".equals(m.getType())
+                && "session_not_found".equals(m.getReason())
+                && "unknown_tool_session".equals(m.getError())));
+
+        JsonNode usage = objectMapper.readTree("{\"input_tokens\":100,\"output_tokens\":50}");
+        GatewayMessage toolDone = GatewayMessage.toolDone("sess-42", usage);
+        service.relayToSkillServer("ak_test_001", toolDone);
+
+        verify(skillRelayService).relayToSkill(argThat(m -> "tool_done".equals(m.getType())
+                && m.getUsage() != null
+                && m.getUsage().get("input_tokens").asInt() == 100
+                && m.getUsage().get("output_tokens").asInt() == 50));
     }
 
     @Test

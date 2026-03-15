@@ -25,3 +25,4 @@ export { messageBridgePlugin };
 export * from "./OpenClawGatewayBridge.js";
 export * from "./protocol/downstream.js";
 export * from "./config.js";
+export * from "./runtime/RegisterMetadata.js";

@@ -33,7 +33,7 @@
 | `status_query` | 通过 | `ai-gateway.log` 记录 `Received from Redis ... type=status_query` 和 `Recorded status_response ... opencodeOnline=true` | 手册 live 步骤可复现 |
 | `create_session` | 部分通过 | `ai-gateway.log` 记录 `type=session_created`，并带 `welinkSessionId=welink-stage1-session-001`、`toolSessionId=session-stage1-001` | 本地 agent 已处理；上游 skill relay 被 `source_not_allowed` 拦截 |
 | `chat` | 部分通过 | `ai-gateway.log` 记录 `tool_event`/`tool_done`；本地 session 文件产出精确回复 | 本地 OpenClaw 执行成功；上游 skill relay 被 `source_not_allowed` 拦截 |
-| `close_session` | 部分通过 | `ai-gateway.log` 记录 `tool_done`；`sessions.json` 中 `message-bridge:default:session-stage1-001` 已消失 | 本地会话清理成功；上游 skill relay 被 `source_not_allowed` 拦截 |
+| `close_session` | 部分通过 | `sessions.json` 中 `message-bridge:default:session-stage1-001` 已消失，且未出现 `tool_error` | 本地会话清理成功；`close_session` 成功路径不再发送 `tool_done` |
 | unsupported `permission_reply/question_reply` fail-closed | 部分通过 | `ai-gateway.log` 记录 `type=tool_error` | 本地 fail-closed 生效；上游 skill relay 被 `source_not_allowed` 拦截 |
 | 交互式 `onboarding` 重试/legacy skip | 仅自动化覆盖 | `tests/config-status.test.mjs` 通过 | 本轮未重复做完整手工 wizard 录屏式验证 |
 
@@ -59,7 +59,7 @@
 | `create_session -> session_created` | 自动化已覆盖，本轮补齐 | `tests/bridge-chat.test.mjs` |
 | `chat -> tool_event -> tool_done` | 自动化已覆盖 | `tests/bridge-chat.test.mjs` |
 | runtime reply / fallback / timeout / tool lifecycle / runTimeoutMs | 自动化已覆盖 | `tests/bridge-chat.test.mjs` |
-| `close_session` | 自动化已覆盖，本轮补齐 | `tests/bridge-chat.test.mjs` |
+| `close_session`（成功无 `tool_done`） | 自动化已覆盖，本轮补齐 | `tests/bridge-chat.test.mjs` |
 | `abort_session` 成功 / `unknown_tool_session` | 自动化已覆盖，本轮补齐 | `tests/bridge-chat.test.mjs` |
 | ready / inbound / outbound / heartbeat 运行态时间戳 | 自动化已覆盖 | `tests/bridge-chat.test.mjs` |
 | unsupported `permission_reply/question_reply` fail-closed | 自动化已覆盖 | `tests/bridge-chat.test.mjs` |

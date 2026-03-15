@@ -19,6 +19,7 @@ import {
   collectMessageBridgeStatusIssues,
   probeMessageBridgeAccount,
 } from "../dist/status.js";
+import { MESSAGE_BRIDGE_TOOL_TYPE, resolveRegisterMetadata } from "../dist/runtime/RegisterMetadata.js";
 
 function createConfig(overrides = {}) {
   return {
@@ -43,9 +44,6 @@ function createAccount(overrides = {}) {
     enabled: true,
     gateway: {
       url: "ws://localhost:8081/ws/agent",
-      toolType: "OPENCLAW",
-      toolVersion: "0.1.0",
-      deviceName: "test-device",
       heartbeatIntervalMs: 30_000,
       reconnect: {
         baseMs: 1_000,
@@ -182,6 +180,28 @@ test("message bridge config schema rejects legacy accounts config and exposes mi
   assert.match(resolveUnconfiguredReason(cfg), /accounts 已废弃/);
 });
 
+test("message bridge config schema rejects deprecated register metadata config fields", async () => {
+  const ajv = new Ajv({
+    allErrors: true,
+    strict: false,
+  });
+  const validate = ajv.compile(messageBridgePlugin.configSchema.schema);
+
+  const valid = validate({
+    gateway: {
+      url: "ws://localhost:8081/ws/agent",
+      toolType: "openclaw",
+      deviceName: "cfg-device",
+    },
+    auth: {
+      ak: "ak",
+      sk: "sk",
+    },
+  });
+
+  assert.equal(valid, false);
+});
+
 test("message bridge listAccountIds is fixed to default and rejects non-default account ids", async () => {
   const cfg = createConfig({
     accounts: {
@@ -299,7 +319,6 @@ test("single-account config still requires an explicit gateway url and setup wri
       url: "ws://localhost:8081/ws/agent",
       token: "ak",
       password: "sk",
-      deviceName: "cli-device",
     },
   });
   assert.equal(setupValidationError, null);
@@ -314,13 +333,11 @@ test("single-account config still requires an explicit gateway url and setup wri
       url: "ws://localhost:8081/ws/agent",
       token: "ak",
       password: "sk",
-      deviceName: "cli-device",
     },
   });
   assert.equal(nextCfg.channels["message-bridge"].name, "Primary bridge");
   assert.equal(nextCfg.channels["message-bridge"].enabled, true);
   assert.equal(nextCfg.channels["message-bridge"].gateway.url, "ws://localhost:8081/ws/agent");
-  assert.equal(nextCfg.channels["message-bridge"].gateway.deviceName, "cli-device");
   assert.equal(nextCfg.channels["message-bridge"].auth.ak, "ak");
   assert.equal(nextCfg.channels["message-bridge"].auth.sk, "sk");
 
@@ -351,6 +368,12 @@ test("single-account config still requires an explicit gateway url and setup wri
 
 test("buildMessageBridgeAccountSnapshot and buildChannelSummary expose operational fields", async () => {
   const account = createAccount();
+  const registerMetadata = {
+    deviceName: "runtime-device",
+    toolType: MESSAGE_BRIDGE_TOOL_TYPE,
+    toolVersion: "9.9.9",
+    macAddress: "",
+  };
   const snapshot = buildMessageBridgeAccountSnapshot({
     account,
     cfg: createConfig(),
@@ -373,12 +396,13 @@ test("buildMessageBridgeAccountSnapshot and buildChannelSummary expose operation
       state: "ready",
       latencyMs: 42,
     },
+    registerMetadata,
   });
 
   assert.equal(snapshot.gatewayUrl, "ws://localhost:8081/ws/agent");
-  assert.equal(snapshot.toolType, "OPENCLAW");
-  assert.equal(snapshot.toolVersion, "0.1.0");
-  assert.equal(snapshot.deviceName, "test-device");
+  assert.equal(snapshot.toolType, "openclaw");
+  assert.equal(snapshot.toolVersion, "9.9.9");
+  assert.equal(snapshot.deviceName, "runtime-device");
   assert.equal(snapshot.heartbeatIntervalMs, 30_000);
   assert.equal(snapshot.runTimeoutMs, 300_000);
   assert.equal(snapshot.tokenSource, "config");
@@ -538,12 +562,10 @@ test("message bridge onboarding retries invalid input until the default account 
     "http://localhost:8081/ws/agent",
     "",
     "",
-    "wizard-device",
     "Primary bridge",
     "ws://localhost:8081/ws/agent",
     "ak",
     "sk",
-    "wizard-device",
   ];
 
   const result = await messageBridgePlugin.onboarding.configure({
@@ -568,10 +590,61 @@ test("message bridge onboarding retries invalid input until the default account 
   assert.equal(result.accountId, "default");
   assert.equal(result.cfg.channels["message-bridge"].name, "Primary bridge");
   assert.equal(result.cfg.channels["message-bridge"].gateway.url, "ws://localhost:8081/ws/agent");
-  assert.equal(result.cfg.channels["message-bridge"].gateway.deviceName, "wizard-device");
   assert.equal(result.cfg.channels["message-bridge"].auth.ak, "ak");
   assert.equal(result.cfg.channels["message-bridge"].auth.sk, "sk");
   assert.equal(notes.some((entry) => /gateway.url/.test(entry.message) || /WebSocket URL/.test(entry.message)), true);
+});
+
+test("resolveRegisterMetadata uses runtime-derived values and fixed openclaw tool type", async () => {
+  const warnings = [];
+  const metadata = resolveRegisterMetadata(
+    {
+      info() {},
+      warn(message, meta) {
+        warnings.push({ message, meta });
+      },
+      error() {},
+    },
+    {
+      hostname: () => "openclaw-host",
+      networkInterfaces: () => ({
+        lo: [{ internal: true, mac: "00:00:00:00:00:00" }],
+        en0: [{ internal: false, mac: "AA-BB-CC-DD-EE-FF" }],
+      }),
+      toolVersion: "1.2.3",
+    },
+  );
+
+  assert.deepEqual(metadata, {
+    deviceName: "openclaw-host",
+    toolType: "openclaw",
+    toolVersion: "1.2.3",
+    macAddress: "aa:bb:cc:dd:ee:ff",
+  });
+  assert.deepEqual(warnings, []);
+});
+
+test("resolveRegisterMetadata falls back to empty macAddress when no usable interface exists", async () => {
+  const warnings = [];
+  const metadata = resolveRegisterMetadata(
+    {
+      info() {},
+      warn(message, meta) {
+        warnings.push({ message, meta });
+      },
+      error() {},
+    },
+    {
+      hostname: () => "openclaw-host",
+      networkInterfaces: () => ({
+        lo: [{ internal: true, mac: "00:00:00:00:00:00" }],
+      }),
+      toolVersion: "1.2.3",
+    },
+  );
+
+  assert.equal(metadata.macAddress, "");
+  assert.equal(warnings.some((entry) => entry.message === "runtime.mac_address.unavailable"), true);
 });
 
 test("message bridge onboarding skips legacy accounts config instead of reporting success", async () => {

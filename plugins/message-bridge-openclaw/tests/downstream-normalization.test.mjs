@@ -54,6 +54,22 @@ test("permission_reply invalid payload is rejected with action context", () => {
   assert.equal(result.error.action, "permission_reply");
 });
 
+test("permission_reply rejects unsupported response values", () => {
+  const result = normalizeDownstreamMessage({
+    type: "invoke",
+    action: "permission_reply",
+    payload: {
+      toolSessionId: "tool_1",
+      permissionId: "perm_1",
+      response: "deny",
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "invalid_payload");
+  assert.equal(result.error.action, "permission_reply");
+});
+
 test("question_reply invalid payload is rejected with action context", () => {
   const result = normalizeDownstreamMessage({
     type: "invoke",
@@ -65,5 +81,21 @@ test("question_reply invalid payload is rejected with action context", () => {
 
   assert.equal(result.ok, false);
   assert.equal(result.error.code, "missing_required_field");
+  assert.equal(result.error.action, "question_reply");
+});
+
+test("question_reply rejects blank toolCallId when provided", () => {
+  const result = normalizeDownstreamMessage({
+    type: "invoke",
+    action: "question_reply",
+    payload: {
+      toolSessionId: "tool_2",
+      answer: "ok",
+      toolCallId: "   ",
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "invalid_payload");
   assert.equal(result.error.action, "question_reply");
 });
