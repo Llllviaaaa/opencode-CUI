@@ -233,23 +233,40 @@ Important normalization and extraction failures are logged as:
 ## Build and Test
 
 ```bash
-bun install
-bun run typecheck
-bun run build
-bun run test
-bun run test:unit
-bun run test:integration
-bun run test:e2e
-bun run test:coverage
+pnpm install
+pnpm run typecheck
+pnpm run build
+pnpm test
+pnpm run test:unit
+pnpm run test:integration
+pnpm run test:e2e
+pnpm run test:coverage
 ```
+
+最低版本前置要求：
+
+- `node >= 24.0.0`
+- `pnpm >= 9.15.0`
+- `opencode` 命令可用（`verify:env` / `test:e2e:smoke` / `verify:opencode-load` 需要）
+
+一键命令对照：
+
+- 日常开发门禁：`pnpm run verify:core`
+- 发布验收：`pnpm run verify:release`
+- 发布演练（dry-run）：`pnpm run verify:release:dry`
+- 环境自检：`pnpm run verify:env`
+
+测试脚本的验证范围、适用场景与前置要求见：
+
+- [测试策略（脚本矩阵）](./docs/quality/test-strategy.md)
 
 协议回归推荐入口：
 
 ```bash
-bun run verify:protocol-smoke
+pnpm run test:integration && pnpm run test:e2e:smoke
 ```
 
-该命令会顺序执行：
+该组合命令会顺序执行：
 
 - `tests/integration`
 - `tests/e2e/connect-register.test.mjs`
@@ -261,9 +278,16 @@ bun run verify:protocol-smoke
 Distribution and load verification:
 
 ```bash
-bun test tests/integration/plugin-distribution.test.mjs
-bun run verify:opencode-load
+node --import tsx/esm --test tests/integration/plugin-distribution.test.mjs
+pnpm run verify:opencode-load
+pnpm run verify:release
 ```
+
+失败排查顺序建议：
+
+1. 先看 `logs/verify-env-*.json`（环境缺失、版本不匹配、端口冲突）
+2. 再看 `logs/e2e-smoke-*/summary.json`（协议场景失败分类）
+3. 最后看 `logs/opencode-load-verify-*/summary.json`（OpenCode 加载失败分类）
 
 Package installation is the primary path for OpenCode:
 
@@ -273,7 +297,7 @@ Package installation is the primary path for OpenCode:
 }
 ```
 
-Single-file copy into `.opencode/plugins/` remains available as a compatibility path after `bun run build`.
+Single-file copy into `.opencode/plugins/` remains available as a compatibility path after `pnpm run build`.
 
 ## Publishing
 

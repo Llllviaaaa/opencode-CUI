@@ -12,12 +12,15 @@ const logDir = path.join(pluginDir, 'logs', `opencode-load-verify-${runId}`);
 const opencodeLog = path.join(logDir, 'opencode.log');
 const gatewayLog = path.join(logDir, 'mock-gateway.log');
 const summaryLog = path.join(logDir, 'summary.log');
+const summaryJson = path.join(logDir, 'summary.json');
 const requestedGatewayPort = Number(process.env.MB_GATEWAY_PORT ?? '18081');
+const timeoutMs = Number(process.env.MB_LOAD_VERIFY_TIMEOUT_MS ?? '300000');
 
 let tmpHome = '';
 let tmpWorkspace = '';
 let gatewayProc;
 let opencodeProc;
+let resolvedGatewayUrl = '';
 const escapedPluginRef = pluginRef.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 async function resolvePort(preferredPort) {
@@ -34,7 +37,7 @@ function findAvailablePort(port) {
     server.unref();
     server.on('error', () => {
       if (port === 0) {
-        reject(new Error('Unable to find an available port'));
+        reject(createFailure('ENV_PORT_UNAVAILABLE', 'Unable to find an available port'));
         return;
       }
       resolve(findAvailablePort(0));
@@ -59,13 +62,79 @@ async function cleanup() {
   await rm(tmpWorkspace, { recursive: true, force: true }).catch(() => {});
 }
 
+function createFailure(failureCategory, message, failureCode = failureCategory) {
+  const error = new Error(message);
+  error.failureCategory = failureCategory;
+  error.failureCode = failureCode;
+  return error;
+}
+
+async function withTimeout(task, ms, label, category, timeoutCode) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      task(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(createFailure(category, `${label} timed out after ${ms}ms`, timeoutCode));
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function writeSummary(failureCategory = 'NONE', failureCode = 'NONE', failureMessage = '') {
+  await mkdir(logDir, { recursive: true });
+  const opencodeLogText = await readFile(opencodeLog, 'utf8').catch(() => '');
+  const summary = [
+    '=== verify-opencode-load summary ===',
+    `failure_category=${failureCategory}`,
+    `failure_code=${failureCode}`,
+    `failure_message=${failureMessage}`,
+    `plugin_ref=${pluginRef}`,
+    `workspace=${tmpWorkspace}`,
+    `log=${opencodeLog}`,
+    `gateway_log=${gatewayLog}`,
+    '',
+    '--- matching load lines ---',
+    ...opencodeLogText.split('\n').filter((line) => line.includes(pluginRef) || /runtime\.singleton\.(initialized|initialization_failed)/.test(line)),
+    '',
+    '--- runtime singleton lines ---',
+    ...opencodeLogText.split('\n').filter((line) => /service=message-bridge.*runtime\.singleton\.(initialized|initialization_failed)/.test(line)),
+  ].join('\n');
+  await writeFile(summaryLog, summary, 'utf8');
+  await writeFile(
+    summaryJson,
+    `${JSON.stringify({
+      failure_category: failureCategory,
+      failure_code: failureCode,
+      failure_message: failureMessage,
+      plugin_ref: pluginRef,
+      workspace: tmpWorkspace,
+      gateway_url: resolvedGatewayUrl,
+      opencode_log: opencodeLog,
+      gateway_log: gatewayLog,
+      summary_log: summaryLog,
+      generated_at: new Date().toISOString(),
+    }, null, 2)}\n`,
+    'utf8',
+  );
+}
+
 async function main() {
-  ensureCommand('node');
-  ensureCommand('opencode');
-  ensureCommand('bun');
+  for (const cmd of ['node', 'opencode']) {
+    try {
+      ensureCommand(cmd);
+    } catch {
+      throw createFailure('ENV_MISSING_CMD', `Missing required command: ${cmd}`);
+    }
+  }
 
   const gatewayPort = await resolvePort(requestedGatewayPort);
   const bridgeGatewayUrl = `ws://127.0.0.1:${gatewayPort}/ws/agent`;
+  resolvedGatewayUrl = bridgeGatewayUrl;
 
   await mkdir(logDir, { recursive: true });
   console.log('[1/7] Building plugin artifacts...');
@@ -81,37 +150,9 @@ async function main() {
   });
 
   console.log('[3/7] Starting mock gateway...');
-  const gatewayScript = `
-const host = '127.0.0.1';
-const port = ${JSON.stringify(Number(gatewayPort))};
-const server = Bun.serve({
-  hostname: host,
-  port,
-  fetch(req, wsServer) {
-    const u = new URL(req.url);
-    if (u.pathname === '/ws/agent' && wsServer.upgrade(req)) return;
-    return new Response('mock-gateway');
-  },
-  websocket: {
-    open() { console.log('[mock-gateway] ws open'); },
-    message(_ws, msg) {
-      try {
-        const text = typeof msg === 'string' ? msg : Buffer.from(msg).toString();
-        const parsed = JSON.parse(text);
-        console.log('[mock-gateway] ' + (parsed?.type || 'unknown'));
-      } catch {
-        console.log('[mock-gateway] raw');
-      }
-    },
-    close() { console.log('[mock-gateway] ws close'); }
-  }
-});
-console.log('[mock-gateway] listening on ' + host + ':' + port);
-await new Promise(() => {});
-`;
-  gatewayProc = spawnLoggedProcess('bun', ['-e', gatewayScript], gatewayLog);
+  gatewayProc = spawnLoggedProcess(process.execPath, ['./scripts/mock-gateway-server.mjs', String(gatewayPort)], gatewayLog);
   if (!(await waitForPattern(gatewayLog, /listening on/, 50))) {
-    throw new Error(`Mock gateway failed to start. Check ${gatewayLog}`);
+    throw createFailure('LOAD_VERIFICATION_FAILED', `Mock gateway failed to start. Check ${gatewayLog}`);
   }
 
   console.log('[4/7] Starting opencode run with package-root plugin...');
@@ -134,42 +175,44 @@ await new Promise(() => {});
 
   console.log('[5/7] Waiting for package-root load logs...');
   if (!(await waitForPattern(opencodeLog, new RegExp(`${escapedPluginRef}|runtime\\.singleton\\.(initialized|initialization_failed)`), 120))) {
-    throw new Error(`Plugin package-root loading log not found. Check ${opencodeLog}`);
+    throw createFailure('LOAD_VERIFICATION_FAILED', `Plugin package-root loading log not found. Check ${opencodeLog}`);
   }
 
   console.log('[6/7] Validating load result...');
   const initialized = await waitForPattern(opencodeLog, /service=message-bridge.*runtime\.singleton\.initialized/, 80);
   const failed = await waitForPattern(opencodeLog, new RegExp(`failed to load plugin.*${escapedPluginRef}|${escapedPluginRef}.*failed to load plugin`), 1);
   if (failed || !initialized) {
-    throw new Error(`Plugin initialization failed. Check ${opencodeLog}`);
+    throw createFailure('LOAD_VERIFICATION_FAILED', `Plugin initialization failed. Check ${opencodeLog}`);
   }
 
   opencodeProc.kill();
-  const opencodeLogText = await readFile(opencodeLog, 'utf8');
-  const summary = [
-    '=== verify-opencode-load summary ===',
-    `plugin_ref=${pluginRef}`,
-    `workspace=${tmpWorkspace}`,
-    `gateway_url=${bridgeGatewayUrl}`,
-    `log=${opencodeLog}`,
-    `gateway_log=${gatewayLog}`,
-    '',
-    '--- matching load lines ---',
-    ...opencodeLogText.split('\n').filter((line) => line.includes(pluginRef) || /runtime\.singleton\.(initialized|initialization_failed)/.test(line)),
-    '',
-    '--- runtime singleton lines ---',
-    ...opencodeLogText.split('\n').filter((line) => /service=message-bridge.*runtime\.singleton\.(initialized|initialization_failed)/.test(line)),
-  ].join('\n');
-  await writeFile(summaryLog, summary, 'utf8');
+  await writeSummary();
 
   console.log('[7/7] OpenCode package-load verification passed');
   console.log(`summary=${summaryLog}`);
+  console.log(`summary_json=${summaryJson}`);
   console.log(`logs=${logDir}`);
 }
 
-main()
-  .finally(cleanup)
-  .catch((err) => {
-    console.error(err instanceof Error ? err.message : String(err));
+withTimeout(
+  () => main(),
+  timeoutMs,
+  'verify-opencode-load',
+  'LOAD_VERIFICATION_FAILED',
+  'LOAD_TIMEOUT',
+)
+  .catch(async (err) => {
+    const failureCategory = err && typeof err === 'object' && 'failureCategory' in err
+      ? err.failureCategory
+      : 'LOAD_VERIFICATION_FAILED';
+    const failureCode = err && typeof err === 'object' && 'failureCode' in err
+      ? err.failureCode
+      : failureCategory;
+    const failureMessage = err instanceof Error ? err.message : String(err);
+    await writeSummary(failureCategory, failureCode, failureMessage).catch(() => {});
+    console.error(`failure_category=${failureCategory}`);
+    console.error(`failure_code=${failureCode}`);
+    console.error(failureMessage);
     process.exit(1);
-  });
+  })
+  .finally(cleanup);

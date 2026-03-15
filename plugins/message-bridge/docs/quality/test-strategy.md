@@ -43,13 +43,51 @@
 
 | 测试层级 | 推荐框架 | 说明 |
 |----------|----------|------|
-| Unit / Integration | `bun test` (Bun 内置) | 与当前插件仓库脚本一致，维护成本最低 |
-| E2E Smoke（协议链路） | `bun test` + Mock Gateway/SDK | 当前版本优先验证插件协议链路 |
+| Unit / Integration | `node --import tsx/esm --test` (Node 24 内置测试器) | 与当前 `package.json` 脚本一致，避免 TS/ESM 解析偏差 |
+| E2E Smoke（协议链路） | `node --import tsx/esm --test` + Mock Gateway/SDK | 当前版本优先验证插件协议链路 |
 | E2E（Web UI 场景，后续） | Playwright Test（可选） | 若扩展到浏览器 UI 自动化再引入 |
 
 **统一约束：**
-- 本文档示例默认以 `bun test` 风格表达；若示例使用 `describe/it` 仅作为结构化伪代码。
+- 本文档示例默认以 `node:test` 风格表达；若示例使用 `describe/it` 仅作为结构化伪代码。
 - 新增测试不得引入与主仓库脚本不一致的测试框架依赖（例如 Jest），除非另行评审通过。
+
+### 1.5 脚本矩阵（执行入口）
+
+| 脚本 | 验证范围 | 使用场景 | 前置要求 | 是否门禁 |
+|------|----------|----------|----------|----------|
+| `pnpm test` | `unit + integration` | 日常开发默认回归；PR 基线自检 | 安装依赖；Node 24+；`pnpm install` 完成 | 是（默认门禁） |
+| `pnpm run test:unit` | `tests/unit/*.test.mjs` | 快速验证协议解析、动作路由、错误映射等纯逻辑变更 | 同上 | 是 |
+| `pnpm run test:integration` | `tests/integration/*.test.mjs` | 验证模块协作、构建产物与 setup CLI 行为 | 同上 | 是 |
+| `pnpm run test:e2e` | `tests/e2e/*.test.mjs` 全量 | 发布前或环境回归，确认真实链路端到端行为 | 本机可用回环端口；允许子进程；已安装 `opencode` CLI | 否（环境敏感） |
+| `pnpm run test:e2e:smoke` | 3 个关键场景：`connect-register/chat-stream/permission-roundtrip` | 协议主链路最小闭环验证（推荐在协议变更后执行） | 同 `test:e2e` | 否（环境敏感） |
+| `pnpm run test:coverage` | `unit + integration` 覆盖率统计（默认不含 e2e） | 质量门槛检查（行覆盖率阻断） | 同 `pnpm test`；本地可写 `coverage/` 目录 | 是 |
+| `pnpm run smoke:e2e` | 启动 mock gateway + `opencode serve`，执行单场景真实栈 smoke（由 `MB_SCENARIO` 控制） | 本地快速复现协议链路问题、产生日志证据 | 安装 `opencode`、`curl`；端口可用；允许子进程 | 否（调试/诊断） |
+| `pnpm run debug:e2e` | 启动真实栈并产出调试汇总日志 | 专门用于排查 e2e 失败根因，不作为质量门禁 | 同 `smoke:e2e` | 否（调试工具） |
+| `pnpm run logs:fetch -- ...` | 读取/过滤 OpenCode 日志（非测试执行） | 线下问题定位、按 trace/session 回溯 | 可访问日志目录（默认 `$HOME/.local/share/opencode/log`） | 否（辅助工具） |
+| `pnpm run verify:core` | 串行执行 `typecheck + test + coverage + pack:check` | 日常开发/PR 的默认门禁 | 满足 `pnpm test` 前置要求 | 是（核心门禁） |
+| `pnpm run verify:env` | 环境自检（命令、版本、端口、关键 env）并输出 JSON summary | 发布前快速确认环境能力 | `node/pnpm/opencode/curl` 可执行 | 是（发布前置） |
+| `pnpm run verify:opencode-load` | 验证插件是否可被 OpenCode 从包根路径加载并完成初始化 | 发布前/升级 OpenCode 版本后，验证“可加载性” | 安装 `opencode`、`node`；端口可用；允许子进程 | 建议作为发布门禁 |
+| `pnpm run verify:release` | 串行执行 `verify:core + verify:env + test:e2e:smoke + verify:opencode-load` | 发布前一次性验收 | 满足上述所有脚本前置要求 | 是（发布门禁） |
+| `pnpm run verify:release:dry` | 与 `verify:release` 同链路，仅用于演练 | 发版前预演和环境巡检 | 同 `verify:release` | 否（演练） |
+
+**说明：**
+- 默认 CI/本地门禁建议：`pnpm run verify:core`。
+- `test:e2e`、`test:e2e:smoke`、`smoke:e2e`、`debug:e2e`、`verify:opencode-load` 都依赖环境能力，不建议并入默认 `pnpm test`。
+- `test:coverage` 当前会输出 `coverage_scope=unit+integration`，用于明确统计口径。
+- `verify:env` 对端口采用“可回退即通过”策略：目标端口占用但存在可用回退端口时仅告警；仅在无可用回退端口时失败（`ENV_PORT_UNAVAILABLE`）。
+
+### 1.6 发布前检查清单
+
+- [ ] 执行 `pnpm run verify:env`（确认环境能力）
+- [ ] 执行 `pnpm run verify:release`（完整发布门禁）
+- [ ] 若本次改动涉及协议消息结构、路由字段或事件映射，至少执行并通过 `pnpm run test:e2e:smoke`
+- [ ] 保留 `logs/` 目录中的 smoke/加载验证证据，便于回溯发布问题
+
+### 1.7 执行分层
+
+- 日常开发：`pnpm run verify:core`
+- 发版验收：`pnpm run verify:release`
+- 发版演练：`pnpm run verify:release:dry`
 
 ---
 
@@ -1322,7 +1360,7 @@ Release Build:
 ### 7.1 覆盖率要求
 
 > 统一口径：本节与 `solution-design.md` 质量门槛保持一致，作为 PR 阻塞标准。
-> 当前 Bun 覆盖报告在本环境存在 `BRF=0` 情况，故 `lines >= 80%` 为硬门禁，`branches >= 70%` 暂作为观测项（非阻塞）。
+> 覆盖率由 `c8` 生成（`node --test` + lcov），`lines >= 80%` 为硬门禁，`branches >= 70%` 暂作为观测项（非阻塞）。
 
 | 层级 | Lines Coverage | Branches Coverage | Functions Coverage |
 |------|----------------|-------------------|-------------------|
