@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, test, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
 
 import { DefaultGatewayConnection } from '../../src/connection/GatewayConnection.ts';
 
@@ -126,8 +127,8 @@ describe('DefaultGatewayConnection coverage', () => {
       abortSignal: controller.signal,
       registerMessage: registerMessage(),
     });
-    await expect(conn.connect()).rejects.toBeDefined();
-    expect(conn.getState()).toBe('DISCONNECTED');
+    await assert.rejects(conn.connect());
+    assert.strictEqual(conn.getState(), 'DISCONNECTED');
   });
 
   test('connect/disconnect lifecycle and send guard', async () => {
@@ -137,13 +138,13 @@ describe('DefaultGatewayConnection coverage', () => {
       registerMessage: registerMessage(),
     });
     await conn.connect();
-    expect(conn.getState()).toBe('READY');
-    expect(conn.isConnected()).toBe(true);
+    assert.strictEqual(conn.getState(), 'READY');
+    assert.strictEqual(conn.isConnected(), true);
 
-    expect(() => conn.send({ type: 'x', payload: 1 })).not.toThrow();
+    assert.doesNotThrow(() => conn.send({ type: 'x', payload: 1 }));
     conn.disconnect();
-    expect(conn.getState()).toBe('DISCONNECTED');
-    expect(() => conn.send({ type: 'x' })).toThrow();
+    assert.strictEqual(conn.getState(), 'DISCONNECTED');
+    assert.throws(() => conn.send({ type: 'x' }));
   });
 
   test('passes gateway auth via websocket subprotocol instead of query params', async () => {
@@ -161,13 +162,13 @@ describe('DefaultGatewayConnection coverage', () => {
     await conn.connect();
 
     const ws = ScriptedWebSocket.instances[0];
-    expect(ws.url).toBe('ws://localhost:8081/ws/agent');
-    expect(ws.protocols).toHaveLength(1);
-    expect(ws.protocols[0].startsWith('auth.')).toBe(true);
+    assert.strictEqual(ws.url, 'ws://localhost:8081/ws/agent');
+    assert.strictEqual(ws.protocols.length, 1);
+    assert.ok(ws.protocols[0].startsWith('auth.'));
 
     const encoded = ws.protocols[0].slice('auth.'.length);
     const decoded = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
-    expect(decoded).toEqual({
+    assert.deepStrictEqual(decoded, {
       ak: 'test-ak-001',
       ts: '1700000000',
       nonce: 'nonce-001',
@@ -191,18 +192,18 @@ describe('DefaultGatewayConnection coverage', () => {
     await conn.connect();
 
     const ws = ScriptedWebSocket.instances[0];
-    expect(conn.getState()).toBe('CONNECTED');
-    expect(ws.sent).toContainEqual(registerMessage());
-    expect(() => conn.send({ type: 'tool_event', payload: 1 })).toThrow();
+    assert.strictEqual(conn.getState(), 'CONNECTED');
+    assert.ok(ws.sent.some(e => JSON.stringify(e) === JSON.stringify(registerMessage())));
+    assert.throws(() => conn.send({ type: 'tool_event', payload: 1 }));
 
     ws.emitMessage(JSON.stringify({ type: 'invoke', action: 'chat', payload: { toolSessionId: 's-1', text: 'hi' } }));
-    expect(messages).toEqual([]);
+    assert.deepStrictEqual(messages, []);
 
     ws.emitMessage(JSON.stringify({ type: 'register_ok' }));
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(conn.getState()).toBe('READY');
-    expect(states).toEqual(['CONNECTING', 'CONNECTED', 'READY']);
+    assert.strictEqual(conn.getState(), 'READY');
+    assert.deepStrictEqual(states, ['CONNECTING', 'CONNECTED', 'READY']);
 
     conn.disconnect();
   });
@@ -224,13 +225,14 @@ describe('DefaultGatewayConnection coverage', () => {
     ws.emitMessage(JSON.stringify({ type: 'register_rejected', reason: 'device_conflict' }));
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(conn.getState()).toBe('DISCONNECTED');
-    expect(states).toEqual(['CONNECTING', 'CONNECTED', 'DISCONNECTED']);
-    expect(entries).toContainEqual({
+    assert.strictEqual(conn.getState(), 'DISCONNECTED');
+    assert.deepStrictEqual(states, ['CONNECTING', 'CONNECTED', 'DISCONNECTED']);
+    assert.ok(entries.some(e => JSON.stringify(e) === JSON.stringify({
       level: 'error',
       message: 'gateway.register.rejected',
       extra: { reason: 'device_conflict' },
-    });
+    })));
+    conn.disconnect();
   });
 
   test('rejects on invalid url and websocket error', async () => {
@@ -238,7 +240,7 @@ describe('DefaultGatewayConnection coverage', () => {
       url: 'not-a-valid-url',
       registerMessage: registerMessage(),
     });
-    await expect(badUrl.connect()).rejects.toBeDefined();
+    await assert.rejects(badUrl.connect());
 
     ScriptedWebSocket.scripts.push({ errorOnOpen: true });
     const errorConn = new DefaultGatewayConnection({
@@ -246,7 +248,9 @@ describe('DefaultGatewayConnection coverage', () => {
       registerMessage: registerMessage(),
     });
     errorConn.on('error', () => {});
-    await expect(errorConn.connect()).rejects.toBeDefined();
+    await assert.rejects(errorConn.connect());
+    errorConn.disconnect();
+    badUrl.disconnect();
   });
 
   test('logs websocket error details when the runtime provides them', async () => {
@@ -272,9 +276,9 @@ describe('DefaultGatewayConnection coverage', () => {
     });
     conn.on('error', () => {});
 
-    await expect(conn.connect()).rejects.toBeDefined();
+    await assert.rejects(conn.connect());
 
-    expect(errorLogs).toContainEqual({
+    assert.ok(errorLogs.some(e => JSON.stringify(e) === JSON.stringify({
       message: 'gateway.error',
       extra: {
         error: 'gateway_websocket_error',
@@ -284,7 +288,8 @@ describe('DefaultGatewayConnection coverage', () => {
         errorType: 'Error',
         rawType: 'Error',
       },
-    });
+    })));
+    conn.disconnect();
   });
 
   test('logs websocket event metadata when onerror receives an event object', async () => {
@@ -317,9 +322,9 @@ describe('DefaultGatewayConnection coverage', () => {
     });
     conn.on('error', () => {});
 
-    await expect(conn.connect()).rejects.toBeDefined();
+    await assert.rejects(conn.connect());
 
-    expect(errorLogs).toContainEqual({
+    assert.ok(errorLogs.some(e => JSON.stringify(e) === JSON.stringify({
       message: 'gateway.error',
       extra: {
         error: 'gateway_websocket_error',
@@ -330,7 +335,8 @@ describe('DefaultGatewayConnection coverage', () => {
         eventType: 'error',
         readyState: 0,
       },
-    });
+    })));
+    conn.disconnect();
   });
 
   test('reconnects after opened connection closes unexpectedly', async () => {
@@ -343,7 +349,7 @@ describe('DefaultGatewayConnection coverage', () => {
     });
     await conn.connect();
     await new Promise((r) => setTimeout(r, 30));
-    expect(ScriptedWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+    assert.ok(ScriptedWebSocket.instances.length >= 2);
     conn.disconnect();
   });
 
@@ -367,9 +373,9 @@ describe('DefaultGatewayConnection coverage', () => {
       await conn.connect();
       await new Promise((r) => setTimeout(r, 30));
 
-      expect(ScriptedWebSocket.instances.length).toBe(1);
-      expect(conn.getState()).toBe('DISCONNECTED');
-      expect(entries).toContainEqual({
+      assert.strictEqual(ScriptedWebSocket.instances.length, 1);
+      assert.strictEqual(conn.getState(), 'DISCONNECTED');
+      assert.ok(entries.some(e => JSON.stringify(e) === JSON.stringify({
         level: 'warn',
         message: 'gateway.close.rejected',
         extra: {
@@ -377,7 +383,8 @@ describe('DefaultGatewayConnection coverage', () => {
           reason: `rejected-${closeCode}`,
           rejected: true,
         },
-      });
+      })));
+      conn.disconnect();
     });
   }
 
@@ -394,8 +401,9 @@ describe('DefaultGatewayConnection coverage', () => {
     await conn.connect();
     controller.abort();
     await new Promise((r) => setTimeout(r, 20));
-    expect(ScriptedWebSocket.instances.length).toBe(1);
-    expect(conn.getState()).toBe('READY');
+    assert.strictEqual(ScriptedWebSocket.instances.length, 1);
+    assert.strictEqual(conn.getState(), 'READY');
+    conn.disconnect();
   });
 
   test('parses downstream messages and ignores non-json', async () => {
@@ -415,7 +423,7 @@ describe('DefaultGatewayConnection coverage', () => {
     ws.emitMessage('not-json');
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(messages).toEqual([{ x: 1 }, { y: 2 }, { z: 3 }, { k: 4 }]);
+    assert.deepStrictEqual(messages, [{ x: 1 }, { y: 2 }, { z: 3 }, { k: 4 }]);
     conn.disconnect();
   });
 
@@ -450,14 +458,14 @@ describe('DefaultGatewayConnection coverage', () => {
     const sendLog = entries.find(
       (entry) => entry.message === 'gateway.send' && entry.extra.traceId === 'bridge-1',
     );
-    expect(sendLog).toBeDefined();
-    expect(sendLog.extra.messageType).toBe('tool_event');
-    expect(sendLog.extra.payloadBytes).toBeGreaterThan(0);
-    expect(sendLog.extra.traceId).toBe('bridge-1');
-    expect('bridgeMessageId' in sendLog.extra).toBe(false);
-    expect(sendLog.extra.opencodeMessageId).toBe('op-msg-1');
-    expect(sendLog.extra.opencodePartId).toBe('part-1');
-    expect(sendLog.extra.eventType).toBe('message.part.updated');
+    assert.notStrictEqual(sendLog, undefined);
+    assert.strictEqual(sendLog.extra.messageType, 'tool_event');
+    assert.ok(sendLog.extra.payloadBytes > 0);
+    assert.strictEqual(sendLog.extra.traceId, 'bridge-1');
+    assert.strictEqual('bridgeMessageId' in sendLog.extra, false);
+    assert.strictEqual(sendLog.extra.opencodeMessageId, 'op-msg-1');
+    assert.strictEqual(sendLog.extra.opencodePartId, 'part-1');
+    assert.strictEqual(sendLog.extra.eventType, 'message.part.updated');
 
     conn.disconnect();
   });
@@ -486,10 +494,10 @@ describe('DefaultGatewayConnection coverage', () => {
     const receivedLog = [...entries].reverse().find(
       (entry) => entry.message === 'gateway.message.received' && entry.extra.messageType === 'invoke',
     );
-    expect(receivedLog).toBeDefined();
-    expect(receivedLog.extra.messageType).toBe('invoke');
-    expect(receivedLog.extra.gatewayMessageId).toBe('gw-1');
-    expect(receivedLog.extra.frameBytes).toBeGreaterThan(0);
+    assert.notStrictEqual(receivedLog, undefined);
+    assert.strictEqual(receivedLog.extra.messageType, 'invoke');
+    assert.strictEqual(receivedLog.extra.gatewayMessageId, 'gw-1');
+    assert.ok(receivedLog.extra.frameBytes > 0);
 
     conn.disconnect();
   });
@@ -522,12 +530,12 @@ describe('DefaultGatewayConnection coverage', () => {
     conn.disconnect();
 
     const closeLog = entries.find((entry) => entry.message === 'gateway.close');
-    expect(closeLog).toBeDefined();
-    expect(closeLog.extra.lastMessageDirection).toBe('sent');
-    expect(closeLog.extra.lastMessageType).toBe('tool_event');
-    expect(closeLog.extra.lastMessageId).toBe('bridge-last-1');
-    expect(closeLog.extra.lastPayloadBytes).toBeGreaterThan(0);
-    expect(closeLog.extra.lastEventType).toBe('message.updated');
-    expect(closeLog.extra.lastOpencodeMessageId).toBe('op-msg-last-1');
+    assert.notStrictEqual(closeLog, undefined);
+    assert.strictEqual(closeLog.extra.lastMessageDirection, 'sent');
+    assert.strictEqual(closeLog.extra.lastMessageType, 'tool_event');
+    assert.strictEqual(closeLog.extra.lastMessageId, 'bridge-last-1');
+    assert.ok(closeLog.extra.lastPayloadBytes > 0);
+    assert.strictEqual(closeLog.extra.lastEventType, 'message.updated');
+    assert.strictEqual(closeLog.extra.lastOpencodeMessageId, 'op-msg-last-1');
   });
 });

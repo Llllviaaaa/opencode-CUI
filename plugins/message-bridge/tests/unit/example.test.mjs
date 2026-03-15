@@ -1,4 +1,5 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 
 import { ChatAction } from '../../src/action/ChatAction.ts';
 import { CreateSessionAction } from '../../src/action/CreateSessionAction.ts';
@@ -32,20 +33,20 @@ describe('fast-fail mapping', () => {
   for (const action of actions) {
     test(`${action.name}: DISCONNECTED -> GATEWAY_UNREACHABLE`, async () => {
       const result = await action.execute(payloadFor(action.name), context('DISCONNECTED'));
-      expect(result.success).toBe(false);
-      expect(result.errorCode).toBe('GATEWAY_UNREACHABLE');
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(result.errorCode, 'GATEWAY_UNREACHABLE');
     });
 
     test(`${action.name}: CONNECTING -> GATEWAY_UNREACHABLE`, async () => {
       const result = await action.execute(payloadFor(action.name), context('CONNECTING'));
-      expect(result.success).toBe(false);
-      expect(result.errorCode).toBe('GATEWAY_UNREACHABLE');
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(result.errorCode, 'GATEWAY_UNREACHABLE');
     });
 
     test(`${action.name}: CONNECTED -> AGENT_NOT_READY`, async () => {
       const result = await action.execute(payloadFor(action.name), context('CONNECTED'));
-      expect(result.success).toBe(false);
-      expect(result.errorCode).toBe('AGENT_NOT_READY');
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(result.errorCode, 'AGENT_NOT_READY');
     });
   }
 });

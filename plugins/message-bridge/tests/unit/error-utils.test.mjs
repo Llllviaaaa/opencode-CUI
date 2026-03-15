@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 
 import {
   getErrorDetails,
@@ -12,42 +13,39 @@ describe('error utils', () => {
   test('extracts details from Error instances', () => {
     const error = Object.assign(new Error('boom'), { code: 'ECONNREFUSED' });
 
-    expect(getErrorMessage(error)).toBe('boom');
-    expect(getErrorDetails(error)).toMatchObject({
-      message: 'boom',
-      name: 'Error',
-      code: 'ECONNREFUSED',
-    });
-    expect(getErrorDetailsForLog(error)).toMatchObject({
-      errorDetail: 'boom',
-      errorName: 'Error',
-      sourceErrorCode: 'ECONNREFUSED',
-    });
+    assert.strictEqual(getErrorMessage(error), 'boom');
+    const details = getErrorDetails(error);
+    assert.strictEqual(details.message, 'boom');
+    assert.strictEqual(details.name, 'Error');
+    assert.strictEqual(details.code, 'ECONNREFUSED');
+
+    const logDetails = getErrorDetailsForLog(error);
+    assert.strictEqual(logDetails.errorDetail, 'boom');
+    assert.strictEqual(logDetails.errorName, 'Error');
+    assert.strictEqual(logDetails.sourceErrorCode, 'ECONNREFUSED');
   });
 
   test('extracts details from strings and plain objects', () => {
-    expect(getErrorMessage('plain failure')).toBe('plain failure');
-    expect(getErrorDetailsForLog('plain failure')).toMatchObject({
-      errorDetail: 'plain failure',
-      rawType: 'string',
-    });
+    assert.strictEqual(getErrorMessage('plain failure'), 'plain failure');
+    const logDetails = getErrorDetailsForLog('plain failure');
+    assert.strictEqual(logDetails.errorDetail, 'plain failure');
+    assert.strictEqual(logDetails.rawType, 'string');
 
-    expect(getErrorDetails({ message: 'boom', code: 'E1' })).toMatchObject({
-      message: 'boom',
-      code: 'E1',
-    });
-    expect(getErrorDetails({ error: { message: 'nested boom', code: 'E2' } })).toMatchObject({
-      message: 'nested boom',
-      code: 'E2',
-    });
+    const d1 = getErrorDetails({ message: 'boom', code: 'E1' });
+    assert.strictEqual(d1.message, 'boom');
+    assert.strictEqual(d1.code, 'E1');
+
+    const d2 = getErrorDetails({ error: { message: 'nested boom', code: 'E2' } });
+    assert.strictEqual(d2.message, 'nested boom');
+    assert.strictEqual(d2.code, 'E2');
   });
 
   test('handles circular values without throwing', () => {
     const circular = {};
     circular.self = circular;
 
-    expect(() => safeStringify(circular)).not.toThrow();
-    expect(getErrorMessage(circular)).toContain('[Circular]');
+    assert.doesNotThrow(() => safeStringify(circular));
+    assert.ok(getErrorMessage(circular).includes('[Circular]'));
   });
 
   test('safeExecute uses unified error message mapping by default', async () => {
@@ -60,7 +58,7 @@ describe('error utils', () => {
       }),
     );
 
-    expect(result).toEqual({
+    assert.deepStrictEqual(result, {
       success: false,
       error: 'nested failure',
     });

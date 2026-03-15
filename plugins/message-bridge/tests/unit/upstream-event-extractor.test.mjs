@@ -1,12 +1,16 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   extractUpstreamEvent,
   UPSTREAM_EVENT_EXTRACTORS,
 } from '../../src/event/UpstreamEventExtractor.ts';
 import { SUPPORTED_UPSTREAM_EVENT_TYPES } from '../../src/event/SupportedUpstreamEvents.ts';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function createLogger() {
   const entries = [];
@@ -28,25 +32,25 @@ function createLogger() {
 }
 
 function loadFixture(name) {
-  const path = join(import.meta.dir, '..', 'fixtures', 'opencode-events', name);
+  const path = join(__dirname, '..', 'fixtures', 'opencode-events', name);
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
 describe('upstream event extractor', () => {
   test('registry covers every supported upstream event type', () => {
-    expect(Object.keys(UPSTREAM_EVENT_EXTRACTORS).sort()).toEqual([...SUPPORTED_UPSTREAM_EVENT_TYPES].sort());
+    assert.deepStrictEqual(Object.keys(UPSTREAM_EVENT_EXTRACTORS).sort(), [...SUPPORTED_UPSTREAM_EVENT_TYPES].sort());
   });
 
   test('extracts message.updated common and extra fields from properties.info', () => {
     const { logger } = createLogger();
     const result = extractUpstreamEvent(loadFixture('message.updated.user.json'), logger);
 
-    expect(result.ok).toBe(true);
-    expect(result.value.common).toEqual({
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(result.value.common, {
       eventType: 'message.updated',
       toolSessionId: 'ses_32c9fea15ffe2Rnv8tITmfmGmQ',
     });
-    expect(result.value.extra).toEqual({
+    assert.deepStrictEqual(result.value.extra, {
       kind: 'message.updated',
       messageId: 'msg_cd3603508001ioF1UNVajFbFmX',
       role: 'user',
@@ -57,9 +61,9 @@ describe('upstream event extractor', () => {
     const { logger } = createLogger();
     const result = extractUpstreamEvent(loadFixture('message.part.updated.text.json'), logger);
 
-    expect(result.ok).toBe(true);
-    expect(result.value.common.toolSessionId).toBe('ses_32c9fea15ffe2Rnv8tITmfmGmQ');
-    expect(result.value.extra).toEqual({
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.value.common.toolSessionId, 'ses_32c9fea15ffe2Rnv8tITmfmGmQ');
+    assert.deepStrictEqual(result.value.extra, {
       kind: 'message.part.updated',
       messageId: 'msg_cd3603508001ioF1UNVajFbFmX',
       partId: 'prt_cd3603509001EkSaJkPGfvcJSC',
@@ -70,9 +74,9 @@ describe('upstream event extractor', () => {
     const { logger } = createLogger();
     const result = extractUpstreamEvent(loadFixture('message.part.delta.json'), logger);
 
-    expect(result.ok).toBe(true);
-    expect(result.value.common.toolSessionId).toBe('ses_fixture_delta');
-    expect(result.value.extra).toEqual({
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.value.common.toolSessionId, 'ses_fixture_delta');
+    assert.deepStrictEqual(result.value.extra, {
       kind: 'message.part.delta',
       messageId: 'msg_fixture_delta',
       partId: 'prt_fixture_delta',
@@ -83,8 +87,8 @@ describe('upstream event extractor', () => {
     const { logger } = createLogger();
     const result = extractUpstreamEvent(loadFixture('session.status.busy.json'), logger);
 
-    expect(result.ok).toBe(true);
-    expect(result.value.extra).toEqual({
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(result.value.extra, {
       kind: 'session.status',
       status: 'busy',
     });
@@ -94,24 +98,24 @@ describe('upstream event extractor', () => {
     const { logger } = createLogger();
     const result = extractUpstreamEvent(loadFixture('permission.asked.json'), logger);
 
-    expect(result.ok).toBe(true);
-    expect(result.value.common).toEqual({
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(result.value.common, {
       eventType: 'permission.asked',
       toolSessionId: 'ses_permission_1',
     });
-    expect(result.value.extra).toBeUndefined();
+    assert.strictEqual(result.value.extra, undefined);
   });
 
   test('extracts question.asked session field from fixture', () => {
     const { logger } = createLogger();
     const result = extractUpstreamEvent(loadFixture('question.asked.json'), logger);
 
-    expect(result.ok).toBe(true);
-    expect(result.value.common).toEqual({
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(result.value.common, {
       eventType: 'question.asked',
       toolSessionId: 'ses_question_1',
     });
-    expect(result.value.extra).toBeUndefined();
+    assert.strictEqual(result.value.extra, undefined);
   });
 
   test('rejects unsupported events and records a unified extraction log', () => {
@@ -124,12 +128,12 @@ describe('upstream event extractor', () => {
       logger,
     );
 
-    expect(result.ok).toBe(false);
-    expect(result.error.code).toBe('unsupported_event');
-    expect(entries).toHaveLength(1);
-    expect(entries[0].message).toBe('event.extraction_failed');
-    expect(entries[0].extra.eventType).toBe('session.created');
-    expect(entries[0].extra.errorCode).toBe('unsupported_event');
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.code, 'unsupported_event');
+    assert.strictEqual(entries.length, 1);
+    assert.strictEqual(entries[0].message, 'event.extraction_failed');
+    assert.strictEqual(entries[0].extra.eventType, 'session.created');
+    assert.strictEqual(entries[0].extra.errorCode, 'unsupported_event');
   });
 
   test('rejects missing required fields and records a unified extraction log', () => {
@@ -147,10 +151,10 @@ describe('upstream event extractor', () => {
       logger,
     );
 
-    expect(result.ok).toBe(false);
-    expect(result.error.code).toBe('missing_required_field');
-    expect(entries).toHaveLength(1);
-    expect(entries[0].message).toBe('event.extraction_failed');
-    expect(entries[0].extra.field).toBe('properties.info.sessionID');
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.code, 'missing_required_field');
+    assert.strictEqual(entries.length, 1);
+    assert.strictEqual(entries[0].message, 'event.extraction_failed');
+    assert.strictEqual(entries[0].extra.field, 'properties.info.sessionID');
   });
 });
