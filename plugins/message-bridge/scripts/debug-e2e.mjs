@@ -72,7 +72,6 @@ process.on('SIGTERM', async () => {
 });
 
 async function main() {
-  ensureCommand('bun');
   ensureCommand('curl');
   ensureCommand('opencode');
   ensureCommand('node');
@@ -94,42 +93,7 @@ async function main() {
   });
 
   console.log(`[1/6] Starting mock gateway on port ${gatewayPort}...`);
-  const gatewayScript = `
-const host = '127.0.0.1';
-const port = ${JSON.stringify(Number(gatewayPort))};
-const server = Bun.serve({
-  hostname: host,
-  port,
-  fetch(req, wsServer) {
-    const u = new URL(req.url);
-    if (u.pathname === '/ws/agent' && wsServer.upgrade(req)) return;
-    return new Response('mock-gateway');
-  },
-  websocket: {
-    open() { console.log('[mock-gateway] ws open'); },
-    message(ws, msg) {
-      try {
-        const text = typeof msg === 'string' ? msg : Buffer.from(msg).toString();
-        const parsed = JSON.parse(text);
-        const type = parsed?.type || 'unknown';
-        console.log('[mock-gateway] ' + type);
-        if (type === 'register') {
-          ws.send(JSON.stringify({ type: 'register_ok' }));
-          setTimeout(() => {
-            ws.send(JSON.stringify({ type: 'status_query' }));
-          }, 50);
-        }
-      } catch {
-        console.log('[mock-gateway] raw');
-      }
-    },
-    close() { console.log('[mock-gateway] ws close'); }
-  }
-});
-console.log('[mock-gateway] listening on ' + host + ':' + port);
-await new Promise(() => {});
-`;
-  gatewayProc = spawnLoggedProcess('bun', ['-e', gatewayScript], gatewayLog);
+  gatewayProc = spawnLoggedProcess(process.execPath, ['./scripts/mock-gateway-server.mjs', String(gatewayPort)], gatewayLog);
   if (!(await waitForPattern(gatewayLog, /listening on/, 30))) {
     throw new Error(`Mock gateway failed to start. Check ${gatewayLog}`);
   }

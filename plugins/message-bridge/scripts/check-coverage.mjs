@@ -11,17 +11,54 @@ if (existsSync(coverageDir)) {
   rmSync(coverageDir, { recursive: true, force: true });
 }
 
-const run = spawnSync('bun', ['test', '--coverage', '--coverage-reporter=lcov'], {
-  cwd,
-  encoding: 'utf8',
-  stdio: 'pipe',
-});
+const c8 = join(cwd, 'node_modules', 'c8', 'bin', 'c8.js');
+function runCoveragePass(testGlobs, clean) {
+  const args = [
+    c8,
+    '--reporter=none',
+    `--clean=${clean ? 'true' : 'false'}`,
+    process.execPath,
+    '--import',
+    'tsx/esm',
+    '--test-isolation=none',
+    '--test',
+    '--test-force-exit',
+    ...testGlobs,
+  ];
+  const result = spawnSync(process.execPath, args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: 'pipe',
+  });
 
-process.stdout.write(run.stdout || '');
-process.stderr.write(run.stderr || '');
+  process.stdout.write(result.stdout || '');
+  process.stderr.write(result.stderr || '');
 
-if (run.status !== 0) {
-  process.exit(run.status ?? 1);
+  return result.status ?? 1;
+}
+
+const unitStatus = runCoveragePass(['tests/unit/*.test.mjs'], true);
+if (unitStatus !== 0) {
+  process.exit(unitStatus);
+}
+
+const integrationStatus = runCoveragePass(['tests/integration/*.test.mjs'], false);
+if (integrationStatus !== 0) {
+  process.exit(integrationStatus);
+}
+
+const report = spawnSync(
+  process.execPath,
+  [c8, 'report', '--reporter=lcov', '--reporter=text'],
+  { cwd, encoding: 'utf8', stdio: 'pipe' },
+);
+
+process.stdout.write(report.stdout || '');
+process.stderr.write(report.stderr || '');
+console.log('coverage_scope=unit+integration');
+
+if ((report.status ?? 1) !== 0) {
+  process.exit(report.status ?? 1);
 }
 
 if (!existsSync(lcovPath)) {
