@@ -1,1 +1,1 @@
-export * from './downstream-messages';
+export * from './downstream-messages.js';

@@ -1,4 +1,5 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 
 import { DefaultActionRouter } from '../../src/action/ActionRouter.ts';
 import { DefaultActionRegistry } from '../../src/action/ActionRegistry.ts';
@@ -15,16 +16,16 @@ describe('DefaultActionRouter coverage', () => {
   test('returns error when registry missing', async () => {
     const router = new DefaultActionRouter();
     const result = await router.route('chat', {}, context);
-    expect(result.success).toBe(false);
-    expect(result.errorCode).toBe('SDK_UNREACHABLE');
+    assert.strictEqual(result.success, false);
+    assert.strictEqual(result.errorCode, 'SDK_UNREACHABLE');
   });
 
   test('returns unsupported action when action not found', async () => {
     const router = new DefaultActionRouter();
     router.setRegistry(new DefaultActionRegistry());
     const result = await router.route('not_exists', {}, context);
-    expect(result.success).toBe(false);
-    expect(result.errorCode).toBe('UNSUPPORTED_ACTION');
+    assert.strictEqual(result.success, false);
+    assert.strictEqual(result.errorCode, 'UNSUPPORTED_ACTION');
   });
 
   test('executes registered action with typed payload routing', async () => {
@@ -37,18 +38,18 @@ describe('DefaultActionRouter coverage', () => {
     router.setRegistry(registry);
 
     const ok = await router.route('x', { p: 1 }, context);
-    expect(ok.success).toBe(true);
-    expect(ok.data.id).toBe('agent-1');
+    assert.strictEqual(ok.success, true);
+    assert.strictEqual(ok.data.id, 'agent-1');
   });
 });
 
 describe('createSdkAdapter coverage', () => {
   test('reports missing capabilities in fixed order', () => {
-    expect(getMissingSdkCapabilities({
+    assert.deepStrictEqual(getMissingSdkCapabilities({
       session: {
         create: async () => ({}),
       },
-    })).toEqual([
+    }), [
       'session.prompt',
       'session.abort',
       'session.delete',
@@ -59,8 +60,8 @@ describe('createSdkAdapter coverage', () => {
   });
 
   test('returns null for invalid or incomplete clients', () => {
-    expect(createSdkAdapter(null)).toBeNull();
-    expect(createSdkAdapter({ session: {} })).toBeNull();
+    assert.strictEqual(createSdkAdapter(null), null);
+    assert.strictEqual(createSdkAdapter({ session: {} }), null);
   });
 
   test('creates adapted sdk methods and forwards calls', async () => {
@@ -115,13 +116,13 @@ describe('createSdkAdapter coverage', () => {
     const r6 = await adapted._client.get({ url: '/question' });
     const r7 = await adapted._client.post({ url: '/question/reply' });
 
-    expect(calls).toEqual({ create: 1, abort: 1, delete: 1, prompt: 1, permission: 1, get: 1, post: 1 });
-    expect(r1.data.body.metadata.a).toBe(1);
-    expect(r2.data.path.id).toBe('s1');
-    expect(r3.data.path.id).toBe('s1');
-    expect(r4.data.body.parts[0].text).toBe('hi');
-    expect(r5.data.path.permissionID).toBe('p1');
-    expect(r6.data.url).toBe('/question');
-    expect(r7.data.url).toBe('/question/reply');
+    assert.deepStrictEqual(calls, { create: 1, abort: 1, delete: 1, prompt: 1, permission: 1, get: 1, post: 1 });
+    assert.strictEqual(r1.data.body.metadata.a, 1);
+    assert.strictEqual(r2.data.path.id, 's1');
+    assert.strictEqual(r3.data.path.id, 's1');
+    assert.strictEqual(r4.data.body.parts[0].text, 'hi');
+    assert.strictEqual(r5.data.path.permissionID, 'p1');
+    assert.strictEqual(r6.data.url, '/question');
+    assert.strictEqual(r7.data.url, '/question/reply');
   });
 });

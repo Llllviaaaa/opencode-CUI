@@ -1,4 +1,5 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import os, { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -124,10 +125,10 @@ describe('runtime protocol strictness', () => {
       },
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].welinkSessionId).toBe('42');
-    expect('code' in sent[0]).toBe(false);
+    assert.strictEqual((sent).length, 1);
+    assert.strictEqual(sent[0].type, 'tool_error');
+    assert.strictEqual(sent[0].welinkSessionId, '42');
+    assert.strictEqual('code' in sent[0], false);
   });
 
   test('chat session-not-found failure adds tool_error reason for auto-rebuild', async () => {
@@ -153,8 +154,8 @@ describe('runtime protocol strictness', () => {
       payload: { toolSessionId: 'tool-rebuild', text: 'hello' },
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toEqual({
+    assert.strictEqual((sent).length, 1);
+    assert.deepStrictEqual(sent[0], {
       type: 'tool_error',
       welinkSessionId: 's-rebuild',
       toolSessionId: 'tool-rebuild',
@@ -187,15 +188,15 @@ describe('runtime protocol strictness', () => {
       payload: { toolSessionId: 'tool-100', text: 'hello' },
     });
 
-    expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toEqual({
+    assert.strictEqual((prompts).length, 1);
+    assert.deepStrictEqual(prompts[0], {
       path: { id: 'tool-100' },
       body: { parts: [{ type: 'text', text: 'hello' }] },
     });
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_done');
-    expect(sent[0].toolSessionId).toBe('tool-100');
-    expect(sent[0].welinkSessionId).toBe('100');
+    assert.strictEqual((sent).length, 1);
+    assert.strictEqual(sent[0].type, 'tool_done');
+    assert.strictEqual(sent[0].toolSessionId, 'tool-100');
+    assert.strictEqual(sent[0].welinkSessionId, '100');
   });
 
   test('rejects permission_reply payloads with unsupported response values', async () => {
@@ -214,9 +215,9 @@ describe('runtime protocol strictness', () => {
       payload: { toolSessionId: 'tool-42', permissionId: 'perm-1', response: 'allow' },
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].welinkSessionId).toBe('perm-42');
+    assert.strictEqual((sent).length, 1);
+    assert.strictEqual(sent[0].type, 'tool_error');
+    assert.strictEqual(sent[0].welinkSessionId, 'perm-42');
   });
 
   test('accepts question_reply invoke shape and routes answer via question API', async () => {
@@ -259,8 +260,8 @@ describe('runtime protocol strictness', () => {
       payload: { toolSessionId: 'tool-42', toolCallId: 'call-42', answer: 'Vite' },
     });
 
-    expect(getCalls).toEqual([{ url: '/question' }]);
-    expect(postCalls).toEqual([
+    assert.deepStrictEqual(getCalls, [{ url: '/question' }]);
+    assert.deepStrictEqual(postCalls, [
       {
         url: '/question/{requestID}/reply',
         path: { requestID: 'question-request-42' },
@@ -268,7 +269,7 @@ describe('runtime protocol strictness', () => {
         headers: { 'Content-Type': 'application/json' },
       },
     ]);
-    expect(sent).toHaveLength(0);
+    assert.strictEqual((sent).length, 0);
   });
 
   test('accepts question_reply payloads missing toolCallId', async () => {
@@ -306,8 +307,8 @@ describe('runtime protocol strictness', () => {
       payload: { toolSessionId: 'tool-43', answer: 'Vite' },
     });
 
-    expect(postCalls).toHaveLength(1);
-    expect(sent).toHaveLength(0);
+    assert.strictEqual((postCalls).length, 1);
+    assert.strictEqual((sent).length, 0);
   });
 
   test('does not emit tool_done on permission_reply success', async () => {
@@ -335,13 +336,13 @@ describe('runtime protocol strictness', () => {
       payload: { toolSessionId: 'tool-perm-1', permissionId: 'perm-a', response: 'once' },
     });
 
-    expect(permissionCalls).toEqual([
+    assert.deepStrictEqual(permissionCalls, [
       {
         path: { id: 'tool-perm-1', permissionID: 'perm-a' },
         body: { response: 'once' },
       },
     ]);
-    expect(sent).toHaveLength(0);
+    assert.strictEqual((sent).length, 0);
   });
 
   test('rejects question_reply when toolCallId is omitted and pending request is not unique', async () => {
@@ -373,9 +374,9 @@ describe('runtime protocol strictness', () => {
       payload: { toolSessionId: 'tool-43', answer: 'Vite' },
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].error).toContain('unique pending question');
+    assert.strictEqual((sent).length, 1);
+    assert.strictEqual(sent[0].type, 'tool_error');
+    assert.ok((sent[0].error).includes('unique pending question'));
   });
 
   test('rejects question_reply when no pending request matches', async () => {
@@ -410,9 +411,9 @@ describe('runtime protocol strictness', () => {
       payload: { toolSessionId: 'tool-46', toolCallId: 'call-46', answer: 'Vite' },
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].welinkSessionId).toBe('q-46');
+    assert.strictEqual((sent).length, 1);
+    assert.strictEqual(sent[0].type, 'tool_error');
+    assert.strictEqual(sent[0].welinkSessionId, 'q-46');
   });
 
   test('rejects question_reply payloads missing toolSessionId', async () => {
@@ -435,9 +436,9 @@ describe('runtime protocol strictness', () => {
       payload: { toolCallId: 'call-44', answer: 'Vite' },
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].welinkSessionId).toBe('q-44');
+    assert.strictEqual((sent).length, 1);
+    assert.strictEqual(sent[0].type, 'tool_error');
+    assert.strictEqual(sent[0].welinkSessionId, 'q-44');
   });
 
   test('rejects question_reply payloads missing answer', async () => {
@@ -460,9 +461,9 @@ describe('runtime protocol strictness', () => {
       payload: { toolSessionId: 'tool-45', toolCallId: 'call-45' },
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].welinkSessionId).toBe('q-45');
+    assert.strictEqual((sent).length, 1);
+    assert.strictEqual(sent[0].type, 'tool_error');
+    assert.strictEqual(sent[0].welinkSessionId, 'q-45');
   });
 
   test('responds to standalone status_query with envelope-free status_response', async () => {
@@ -478,9 +479,9 @@ describe('runtime protocol strictness', () => {
       type: 'status_query',
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('status_response');
-    expect(sent[0]).toEqual({
+    assert.strictEqual((sent).length, 1);
+    assert.strictEqual(sent[0].type, 'status_response');
+    assert.deepStrictEqual(sent[0], {
       type: 'status_response',
       opencodeOnline: true,
     });
@@ -509,13 +510,11 @@ describe('runtime protocol strictness', () => {
       payload: {},
     });
 
-    expect(createCalls).toHaveLength(0);
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toEqual({
-      type: 'tool_error',
-      welinkSessionId: undefined,
-      error: 'welinkSessionId is required',
-    });
+    assert.strictEqual((createCalls).length, 0);
+    assert.strictEqual((sent).length, 1);
+    assert.strictEqual(sent[0].type, 'tool_error');
+    assert.strictEqual(sent[0].welinkSessionId, undefined);
+    assert.strictEqual(sent[0].error, 'welinkSessionId is required');
   });
 
   test('rejects blank create_session welinkSessionId', async () => {
@@ -542,13 +541,11 @@ describe('runtime protocol strictness', () => {
       payload: {},
     });
 
-    expect(createCalls).toHaveLength(0);
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toEqual({
-      type: 'tool_error',
-      welinkSessionId: '   ',
-      error: 'welinkSessionId is required',
-    });
+    assert.strictEqual((createCalls).length, 0);
+    assert.strictEqual((sent).length, 1);
+    assert.strictEqual(sent[0].type, 'tool_error');
+    assert.strictEqual(sent[0].welinkSessionId, '   ');
+    assert.strictEqual(sent[0].error, 'welinkSessionId is required');
   });
 
   test('create_session missing welinkSessionId does not call SDK and does not emit warning-only success', async () => {
@@ -580,12 +577,10 @@ describe('runtime protocol strictness', () => {
     await new Promise((r) => setTimeout(r, 10));
 
     const warningLog = appLogs.find((entry) => entry.message === 'runtime.create_session.missing_welink_session_id');
-    expect(warningLog).toBeUndefined();
-    expect(sent[0]).toEqual({
-      type: 'tool_error',
-      welinkSessionId: undefined,
-      error: 'welinkSessionId is required',
-    });
+    assert.strictEqual(warningLog, undefined);
+    assert.strictEqual(sent[0].type, 'tool_error');
+    assert.strictEqual(sent[0].welinkSessionId, undefined);
+    assert.strictEqual(sent[0].error, 'welinkSessionId is required');
   });
 
   test('rejects invoke status_query compatibility variant', async () => {
@@ -604,9 +599,9 @@ describe('runtime protocol strictness', () => {
       payload: {},
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_error');
-    expect(sent[0].welinkSessionId).toBe('status-compat');
+    assert.strictEqual((sent).length, 1);
+    assert.strictEqual(sent[0].type, 'tool_error');
+    assert.strictEqual(sent[0].welinkSessionId, 'status-compat');
   });
 
   test('applies config.debug to runtime fallback logging after config load', async () => {
@@ -655,8 +650,8 @@ describe('runtime protocol strictness', () => {
 
       await runtime.start();
 
-      expect(runtime.getStarted()).toBe(true);
-      expect(debugCalls.some((args) => args.includes('runtime.start.disabled_by_config'))).toBe(true);
+      assert.strictEqual(runtime.getStarted(), true);
+      assert.ok(debugCalls.some((args) => args.includes('runtime.start.disabled_by_config')));
     } finally {
       console.debug = originalDebug;
       await rm(workspace, { recursive: true, force: true });
@@ -701,27 +696,27 @@ describe('runtime protocol strictness', () => {
     const forwardingLog = appLogs.find((entry) => entry.message === 'event.forwarding');
     const forwardedLog = appLogs.find((entry) => entry.message === 'event.forwarded');
 
-    expect(receivedLog.extra.traceId).toBe('op-msg-1');
-    expect(receivedLog.extra.runtimeTraceId).toBeDefined();
-    expect(receivedLog.extra.opencodeMessageId).toBe('op-msg-1');
-    expect(receivedLog.extra.opencodePartId).toBe('part-1');
-    expect(receivedLog.extra.toolSessionId).toBe('tool-1');
-    expect(receivedLog.extra.partType).toBe('text');
-    expect(receivedLog.extra.deltaBytes).toBe(Buffer.byteLength('你好，bridge', 'utf8'));
+    assert.strictEqual(receivedLog.extra.traceId, 'op-msg-1');
+    assert.notStrictEqual(receivedLog.extra.runtimeTraceId, undefined);
+    assert.strictEqual(receivedLog.extra.opencodeMessageId, 'op-msg-1');
+    assert.strictEqual(receivedLog.extra.opencodePartId, 'part-1');
+    assert.strictEqual(receivedLog.extra.toolSessionId, 'tool-1');
+    assert.strictEqual(receivedLog.extra.partType, 'text');
+    assert.strictEqual(receivedLog.extra.deltaBytes, Buffer.byteLength('你好，bridge', 'utf8'));
 
-    expect(forwardingLog.extra.toolSessionId).toBe('tool-1');
-    expect(forwardingLog.extra.traceId).toBeDefined();
-    expect('bridgeMessageId' in forwardingLog.extra).toBe(false);
-    expect(forwardingLog.extra.opencodeMessageId).toBe('op-msg-1');
-    expect(forwardingLog.extra.opencodePartId).toBe('part-1');
-    expect(forwardedLog.extra.traceId).toBe(forwardingLog.extra.traceId);
-    expect('bridgeMessageId' in forwardedLog.extra).toBe(false);
+    assert.strictEqual(forwardingLog.extra.toolSessionId, 'tool-1');
+    assert.notStrictEqual(forwardingLog.extra.traceId, undefined);
+    assert.strictEqual('bridgeMessageId' in forwardingLog.extra, false);
+    assert.strictEqual(forwardingLog.extra.opencodeMessageId, 'op-msg-1');
+    assert.strictEqual(forwardingLog.extra.opencodePartId, 'part-1');
+    assert.strictEqual(forwardedLog.extra.traceId, forwardingLog.extra.traceId);
+    assert.strictEqual('bridgeMessageId' in forwardedLog.extra, false);
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].context.traceId).toBe(forwardingLog.extra.traceId);
-    expect(sent[0].context.gatewayMessageId).toBe(forwardingLog.extra.traceId);
-    expect(sent[0].context.opencodeMessageId).toBe('op-msg-1');
-    expect(sent[0].context.opencodePartId).toBe('part-1');
+    assert.strictEqual((sent).length, 1);
+    assert.strictEqual(sent[0].context.traceId, forwardingLog.extra.traceId);
+    assert.strictEqual(sent[0].context.gatewayMessageId, forwardingLog.extra.traceId);
+    assert.strictEqual(sent[0].context.opencodeMessageId, 'op-msg-1');
+    assert.strictEqual(sent[0].context.opencodePartId, 'part-1');
   });
 
   test('forwards session.idle as tool_event and emits fallback tool_done', async () => {
@@ -741,11 +736,11 @@ describe('runtime protocol strictness', () => {
       },
     });
 
-    expect(sent).toHaveLength(2);
-    expect(sent[0].message.type).toBe('tool_event');
-    expect(sent[0].message.toolSessionId).toBe('tool-idle-1');
-    expect(sent[1].message.type).toBe('tool_done');
-    expect(sent[1].message.toolSessionId).toBe('tool-idle-1');
+    assert.strictEqual((sent).length, 2);
+    assert.strictEqual(sent[0].message.type, 'tool_event');
+    assert.strictEqual(sent[0].message.toolSessionId, 'tool-idle-1');
+    assert.strictEqual(sent[1].message.type, 'tool_done');
+    assert.strictEqual(sent[1].message.toolSessionId, 'tool-idle-1');
   });
 
   test('does not emit duplicate tool_done when session.idle follows chat success', async () => {
@@ -778,8 +773,8 @@ describe('runtime protocol strictness', () => {
       },
     });
 
-    expect(sent.filter((entry) => entry.message.type === 'tool_done')).toHaveLength(1);
-    expect(sent.filter((entry) => entry.message.type === 'tool_event')).toHaveLength(1);
+    assert.strictEqual((sent.filter((entry) => entry.message.type === 'tool_done')).length, 1);
+    assert.strictEqual((sent.filter((entry) => entry.message.type === 'tool_event')).length, 1);
   });
 
   test('defers session.idle tool_done while chat prompt is still pending', async () => {
@@ -819,13 +814,13 @@ describe('runtime protocol strictness', () => {
       },
     });
 
-    expect(sent.filter((entry) => entry.message.type === 'tool_done')).toHaveLength(0);
-    expect(sent.filter((entry) => entry.message.type === 'tool_event')).toHaveLength(1);
+    assert.strictEqual((sent.filter((entry) => entry.message.type === 'tool_done')).length, 0);
+    assert.strictEqual((sent.filter((entry) => entry.message.type === 'tool_event')).length, 1);
 
     resolvePrompt({ data: { ok: true } });
     await invokeTask;
 
-    expect(sent.filter((entry) => entry.message.type === 'tool_done')).toHaveLength(1);
+    assert.strictEqual((sent.filter((entry) => entry.message.type === 'tool_done')).length, 1);
   });
 
   test('does not emit tool_done for close_session success', async () => {
@@ -853,8 +848,8 @@ describe('runtime protocol strictness', () => {
       payload: { toolSessionId: 'tool-close-1' },
     });
 
-    expect(deleteCalls).toEqual([{ path: { id: 'tool-close-1' } }]);
-    expect(sent).toHaveLength(0);
+    assert.deepStrictEqual(deleteCalls, [{ path: { id: 'tool-close-1' } }]);
+    assert.strictEqual((sent).length, 0);
   });
 
   test('runtime.start sends register with runtime-derived metadata', async () => {
@@ -945,14 +940,12 @@ describe('runtime protocol strictness', () => {
       await new Promise((r) => setTimeout(r, 10));
 
       const ws = RegisterCaptureWebSocket.instances[0];
-      expect(ws.sent[0]).toEqual({
-        type: 'register',
-        deviceName: hostname(),
-        macAddress: '11:22:33:44:55:66',
-        os: expect.any(String),
-        toolType: 'opencode',
-        toolVersion: '9.9.9',
-      });
+      assert.strictEqual(ws.sent[0].type, 'register');
+      assert.strictEqual(ws.sent[0].deviceName, hostname());
+      assert.strictEqual(ws.sent[0].macAddress, '11:22:33:44:55:66');
+      assert.strictEqual(typeof ws.sent[0].os, 'string');
+      assert.strictEqual(ws.sent[0].toolType, 'opencode');
+      assert.strictEqual(ws.sent[0].toolVersion, '9.9.9');
 
       runtime.stop();
     } finally {
@@ -1048,7 +1041,7 @@ describe('runtime protocol strictness', () => {
       await new Promise((r) => setTimeout(r, 10));
 
       const ws = RegisterCaptureWebSocket.instances[0];
-      expect(ws.sent[0].macAddress).toBe('');
+      assert.strictEqual(ws.sent[0].macAddress, '');
 
       runtime.stop();
     } finally {
@@ -1087,20 +1080,20 @@ describe('runtime protocol strictness', () => {
         }),
       });
 
-      await expect(runtime.start()).rejects.toEqual({
+      await assert.rejects(runtime.start(), (err) => { assert.deepStrictEqual(err, {
         code: 'SDK_CLIENT_CAPABILITIES_MISSING',
         message: 'OpenCode client is missing required action capabilities',
         details: {
           missingCapabilities: ['session.delete'],
         },
-      });
+      }); return true; });
       await new Promise((r) => setTimeout(r, 10));
 
-      expect(RegisterCaptureWebSocket.instances).toHaveLength(0);
+      assert.strictEqual((RegisterCaptureWebSocket.instances).length, 0);
       const failureLog = appLogs.find((entry) => entry.message === 'runtime.start.failed_capabilities');
-      expect(failureLog.extra.errorCode).toBe('SDK_CLIENT_CAPABILITIES_MISSING');
-      expect(failureLog.extra.errorMessage).toBe('OpenCode client is missing required action capabilities');
-      expect(failureLog.extra.missingCapabilities).toEqual(['session.delete']);
+      assert.strictEqual(failureLog.extra.errorCode, 'SDK_CLIENT_CAPABILITIES_MISSING');
+      assert.strictEqual(failureLog.extra.errorMessage, 'OpenCode client is missing required action capabilities');
+      assert.deepStrictEqual(failureLog.extra.missingCapabilities, ['session.delete']);
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;
@@ -1142,10 +1135,10 @@ describe('runtime protocol strictness', () => {
       await runtime.start();
       await new Promise((r) => setTimeout(r, 10));
 
-      expect(RegisterCaptureWebSocket.instances).toHaveLength(1);
+      assert.strictEqual((RegisterCaptureWebSocket.instances).length, 1);
       const ws = RegisterCaptureWebSocket.instances[0];
-      expect(ws.sent[0].toolVersion).toBe('9.9.9');
-      expect(appLogs.find((entry) => entry.message === 'runtime.start.failed_health')).toBeUndefined();
+      assert.strictEqual(ws.sent[0].toolVersion, '9.9.9');
+      assert.strictEqual(appLogs.find((entry) => entry.message === 'runtime.start.failed_health'), undefined);
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;
@@ -1192,20 +1185,20 @@ describe('runtime protocol strictness', () => {
         }),
       });
 
-      await expect(runtime.start()).rejects.toEqual({
+      await assert.rejects(runtime.start(), (err) => { assert.deepStrictEqual(err, {
         code: 'GLOBAL_HEALTH_VERSION_MISSING',
         message: 'OpenCode global.health returned without version',
         details: {
           responseShape: 'object:healthy',
         },
-      });
+      }); return true; });
       await new Promise((r) => setTimeout(r, 10));
 
-      expect(RegisterCaptureWebSocket.instances).toHaveLength(0);
+      assert.strictEqual((RegisterCaptureWebSocket.instances).length, 0);
       const failureLog = appLogs.find((entry) => entry.message === 'runtime.start.failed_health_version');
-      expect(failureLog.extra.errorCode).toBe('GLOBAL_HEALTH_VERSION_MISSING');
-      expect(failureLog.extra.errorMessage).toBe('OpenCode global.health returned without version');
-      expect(failureLog.extra.responseShape).toBe('object:healthy');
+      assert.strictEqual(failureLog.extra.errorCode, 'GLOBAL_HEALTH_VERSION_MISSING');
+      assert.strictEqual(failureLog.extra.errorMessage, 'OpenCode global.health returned without version');
+      assert.strictEqual(failureLog.extra.responseShape, 'object:healthy');
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;
@@ -1263,18 +1256,18 @@ describe('runtime protocol strictness', () => {
         }),
       });
 
-      await expect(runtime.start()).rejects.toEqual({
+      await assert.rejects(runtime.start(), (err) => { assert.deepStrictEqual(err, {
         code: 'GLOBAL_HEALTH_FAILED',
         message: 'OpenCode global.health check failed during startup',
         details: { cause: 'global unavailable' },
-      });
+      }); return true; });
       await new Promise((r) => setTimeout(r, 10));
 
-      expect(RegisterCaptureWebSocket.instances).toHaveLength(0);
+      assert.strictEqual((RegisterCaptureWebSocket.instances).length, 0);
       const failureLog = appLogs.find((entry) => entry.message === 'runtime.start.failed_health');
-      expect(failureLog.extra.errorCode).toBe('GLOBAL_HEALTH_FAILED');
-      expect(failureLog.extra.errorMessage).toBe('OpenCode global.health check failed during startup');
-      expect(failureLog.extra.cause).toBe('global unavailable');
+      assert.strictEqual(failureLog.extra.errorCode, 'GLOBAL_HEALTH_FAILED');
+      assert.strictEqual(failureLog.extra.errorMessage, 'OpenCode global.health check failed during startup');
+      assert.strictEqual(failureLog.extra.cause, 'global unavailable');
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;
@@ -1324,13 +1317,13 @@ describe('runtime protocol strictness', () => {
     const actionStarted = appLogs.find((entry) => entry.message === 'action.chat.started');
     const runtimeInvokeCompleted = appLogs.find((entry) => entry.message === 'runtime.invoke.completed');
 
-    expect(runtimeInvokeReceived.extra.traceId).toBe('gw-msg-1');
-    expect(routerReceived.extra.traceId).toBe('gw-msg-1');
-    expect(actionStarted.extra.traceId).toBe('gw-msg-1');
-    expect(runtimeInvokeCompleted.extra.traceId).toBe('gw-msg-1');
+    assert.strictEqual(runtimeInvokeReceived.extra.traceId, 'gw-msg-1');
+    assert.strictEqual(routerReceived.extra.traceId, 'gw-msg-1');
+    assert.strictEqual(actionStarted.extra.traceId, 'gw-msg-1');
+    assert.strictEqual(runtimeInvokeCompleted.extra.traceId, 'gw-msg-1');
 
-    expect(runtimeInvokeReceived.extra.gatewayMessageId).toBe('gw-msg-1');
-    expect(runtimeInvokeReceived.extra.toolSessionId).toBe('tool-42');
-    expect(runtimeInvokeCompleted.extra.runtimeTraceId).toBe(runtimeInvokeReceived.extra.runtimeTraceId);
+    assert.strictEqual(runtimeInvokeReceived.extra.gatewayMessageId, 'gw-msg-1');
+    assert.strictEqual(runtimeInvokeReceived.extra.toolSessionId, 'tool-42');
+    assert.strictEqual(runtimeInvokeCompleted.extra.runtimeTraceId, runtimeInvokeReceived.extra.runtimeTraceId);
   });
 });

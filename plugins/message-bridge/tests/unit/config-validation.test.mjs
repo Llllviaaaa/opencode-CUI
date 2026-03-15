@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -72,7 +73,7 @@ describe('config validation for sdk.baseUrl compatibility', () => {
       },
     });
 
-    expect(errors).toEqual([]);
+    assert.deepStrictEqual(errors, []);
   });
 
   test('validateConfig allows sdk.baseUrl', () => {
@@ -101,7 +102,7 @@ describe('config validation for sdk.baseUrl compatibility', () => {
       },
     });
 
-    expect(errors).toEqual([]);
+    assert.deepStrictEqual(errors, []);
   });
 
   test('loadConfig keeps sdk.baseUrl when project config contains it', async () => {
@@ -141,8 +142,8 @@ describe('config validation for sdk.baseUrl compatibility', () => {
 
     try {
       const config = await loadConfig(workspace);
-      expect(config.sdk.timeoutMs).toBe(10000);
-      expect(config.sdk.baseUrl).toBe('http://localhost:54321');
+      assert.strictEqual(config.sdk.timeoutMs, 10000);
+      assert.strictEqual(config.sdk.baseUrl, 'http://localhost:54321');
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
@@ -200,21 +201,21 @@ describe('config validation for sdk.baseUrl compatibility', () => {
 
     try {
       const config = await loadConfig(workspace, logger);
-      expect(config.enabled).toBe(true);
+      assert.strictEqual(config.enabled, true);
       await new Promise((r) => setTimeout(r, 10));
 
       const messages = calls.map((entry) => entry.body.message);
-      expect(messages).toContain('config.resolve.started');
-      expect(messages).toContain('config.source.loaded');
-      expect(messages).toContain('config.resolve.completed');
-      expect(messages).toContain('config.validation.passed');
+      assert.ok(messages.includes('config.resolve.started'));
+      assert.ok(messages.includes('config.source.loaded'));
+      assert.ok(messages.includes('config.resolve.completed'));
+      assert.ok(messages.includes('config.validation.passed'));
 
       const completed = calls.find((entry) => entry.body.message === 'config.resolve.completed');
-      expect(completed.body.extra.component).toBe('config');
-      expect(completed.body.extra.sources).toContain('default');
-      expect(completed.body.extra.sources).toContain(
+      assert.strictEqual(completed.body.extra.component, 'config');
+      assert.ok(completed.body.extra.sources.includes('default'));
+      assert.ok(completed.body.extra.sources.includes(
         `project:${join(workspace, '.opencode', 'message-bridge.jsonc')}`,
-      );
+      ));
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
@@ -273,12 +274,12 @@ describe('config validation for sdk.baseUrl compatibility', () => {
 
     try {
       const config = await loadConfig(workspace, logger);
-      expect(config.sdk.baseUrl).toBe('http://localhost:54321');
+      assert.strictEqual(config.sdk.baseUrl, 'http://localhost:54321');
       await new Promise((r) => setTimeout(r, 10));
 
       const failure = calls.find((entry) => entry.body.message === 'config.validation.failed');
-      expect(failure).toBeUndefined();
-      expect(calls.some((entry) => entry.body.message === 'config.validation.passed')).toBe(true);
+      assert.strictEqual(failure, undefined);
+      assert.ok(calls.some((entry) => entry.body.message === 'config.validation.passed'));
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
@@ -308,8 +309,8 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
 
     try {
       const config = await loadConfig(workspace);
-      expect(config.auth.ak).toBe('project-json-ak');
-      expect(config.auth.sk).toBe('project-json-sk');
+      assert.strictEqual(config.auth.ak, 'project-json-ak');
+      assert.strictEqual(config.auth.sk, 'project-json-sk');
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
@@ -337,8 +338,8 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
 
     try {
       const config = await loadConfig(workspace);
-      expect(config.auth.ak).toBe('user-json-ak');
-      expect(config.auth.sk).toBe('user-json-sk');
+      assert.strictEqual(config.auth.ak, 'user-json-ak');
+      assert.strictEqual(config.auth.sk, 'user-json-sk');
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
@@ -378,8 +379,8 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
 
     try {
       const config = await loadConfig(workspace);
-      expect(config.auth.ak).toBe('project-jsonc-ak');
-      expect(config.auth.sk).toBe('project-jsonc-sk');
+      assert.strictEqual(config.auth.ak, 'project-jsonc-ak');
+      assert.strictEqual(config.auth.sk, 'project-jsonc-sk');
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
@@ -409,8 +410,8 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
 
     try {
       const config = await loadConfig(nested);
-      expect(config.auth.ak).toBe('parent-json-ak');
-      expect(config.auth.sk).toBe('parent-json-sk');
+      assert.strictEqual(config.auth.ak, 'parent-json-ak');
+      assert.strictEqual(config.auth.sk, 'parent-json-sk');
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
@@ -449,10 +450,10 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
       await new Promise((r) => setTimeout(r, 10));
 
       const completed = calls.find((entry) => entry.body.message === 'config.resolve.completed');
-      expect(completed).toBeDefined();
-      expect(completed.body.extra.sources).toContain(
+      assert.notStrictEqual(completed, undefined);
+      assert.ok(completed.body.extra.sources.includes(
         `project:${join(workspace, '.opencode', 'message-bridge.json')}`,
-      );
+      ));
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
@@ -477,7 +478,10 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
     );
 
     try {
-      await expect(loadConfig(workspace)).rejects.toBeInstanceOf(ConfigValidationAggregateError);
+      await assert.rejects(
+        loadConfig(workspace),
+        (err) => err instanceof ConfigValidationAggregateError,
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
@@ -509,7 +513,7 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
 
     try {
       const config = await loadConfig(workspace);
-      expect(config.gateway.channel).toBe('opencode');
+      assert.strictEqual(config.gateway.channel, 'opencode');
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
@@ -532,12 +536,153 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
 
     try {
       const config = await loadConfig(workspace);
-      expect(config.gateway.channel).toBe('miniapp');
+      assert.strictEqual(config.gateway.channel, 'miniapp');
     } finally {
       if (originalChannel === undefined) {
         delete process.env.BRIDGE_GATEWAY_CHANNEL;
       } else {
         process.env.BRIDGE_GATEWAY_CHANNEL = originalChannel;
+      }
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('loads auth from BRIDGE_AUTH_AK and BRIDGE_AUTH_SK', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-json-env-auth-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    const originalAuthAk = process.env.BRIDGE_AUTH_AK;
+    const originalAuthSk = process.env.BRIDGE_AUTH_SK;
+    process.env.HOME = fakeHome;
+    process.env.BRIDGE_AUTH_AK = 'env-auth-ak';
+    process.env.BRIDGE_AUTH_SK = 'env-auth-sk';
+
+    await mkdir(join(workspace, '.opencode'), { recursive: true });
+    await writeFile(
+      join(workspace, '.opencode', 'message-bridge.json'),
+      JSON.stringify(createValidConfig({
+        auth: {
+          ak: '',
+          sk: '',
+        },
+      })),
+      'utf8',
+    );
+
+    try {
+      const config = await loadConfig(workspace);
+      assert.strictEqual(config.auth.ak, 'env-auth-ak');
+      assert.strictEqual(config.auth.sk, 'env-auth-sk');
+    } finally {
+      if (originalAuthAk === undefined) {
+        delete process.env.BRIDGE_AUTH_AK;
+      } else {
+        process.env.BRIDGE_AUTH_AK = originalAuthAk;
+      }
+      if (originalAuthSk === undefined) {
+        delete process.env.BRIDGE_AUTH_SK;
+      } else {
+        process.env.BRIDGE_AUTH_SK = originalAuthSk;
+      }
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('ignores BRIDGE_AK and BRIDGE_SK aliases', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-json-env-auth-alias-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    const originalBridgeAk = process.env.BRIDGE_AK;
+    const originalBridgeSk = process.env.BRIDGE_SK;
+    process.env.HOME = fakeHome;
+    process.env.BRIDGE_AK = 'alias-ak';
+    process.env.BRIDGE_SK = 'alias-sk';
+
+    await mkdir(join(workspace, '.opencode'), { recursive: true });
+    await writeFile(
+      join(workspace, '.opencode', 'message-bridge.json'),
+      JSON.stringify(createValidConfig({
+        auth: {
+          ak: '',
+          sk: '',
+        },
+      })),
+      'utf8',
+    );
+
+    try {
+      await assert.rejects(
+        loadConfig(workspace),
+        (err) =>
+          err instanceof ConfigValidationAggregateError &&
+          err.errors.some((e) => e.path === 'auth.ak' && e.code === 'MISSING_REQUIRED') &&
+          err.errors.some((e) => e.path === 'auth.sk' && e.code === 'MISSING_REQUIRED'),
+      );
+    } finally {
+      if (originalBridgeAk === undefined) {
+        delete process.env.BRIDGE_AK;
+      } else {
+        process.env.BRIDGE_AK = originalBridgeAk;
+      }
+      if (originalBridgeSk === undefined) {
+        delete process.env.BRIDGE_SK;
+      } else {
+        process.env.BRIDGE_SK = originalBridgeSk;
+      }
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('prefers BRIDGE_AUTH_AK and BRIDGE_AUTH_SK over removed aliases', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-json-env-auth-priority-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    const originalAuthAk = process.env.BRIDGE_AUTH_AK;
+    const originalAuthSk = process.env.BRIDGE_AUTH_SK;
+    const originalBridgeAk = process.env.BRIDGE_AK;
+    const originalBridgeSk = process.env.BRIDGE_SK;
+    process.env.HOME = fakeHome;
+    process.env.BRIDGE_AUTH_AK = 'primary-ak';
+    process.env.BRIDGE_AUTH_SK = 'primary-sk';
+    process.env.BRIDGE_AK = 'alias-ak';
+    process.env.BRIDGE_SK = 'alias-sk';
+
+    await mkdir(join(workspace, '.opencode'), { recursive: true });
+    await writeFile(
+      join(workspace, '.opencode', 'message-bridge.json'),
+      JSON.stringify(createValidConfig({
+        auth: {
+          ak: '',
+          sk: '',
+        },
+      })),
+      'utf8',
+    );
+
+    try {
+      const config = await loadConfig(workspace);
+      assert.strictEqual(config.auth.ak, 'primary-ak');
+      assert.strictEqual(config.auth.sk, 'primary-sk');
+    } finally {
+      if (originalAuthAk === undefined) {
+        delete process.env.BRIDGE_AUTH_AK;
+      } else {
+        process.env.BRIDGE_AUTH_AK = originalAuthAk;
+      }
+      if (originalAuthSk === undefined) {
+        delete process.env.BRIDGE_AUTH_SK;
+      } else {
+        process.env.BRIDGE_AUTH_SK = originalAuthSk;
+      }
+      if (originalBridgeAk === undefined) {
+        delete process.env.BRIDGE_AK;
+      } else {
+        process.env.BRIDGE_AK = originalBridgeAk;
+      }
+      if (originalBridgeSk === undefined) {
+        delete process.env.BRIDGE_SK;
+      } else {
+        process.env.BRIDGE_SK = originalBridgeSk;
       }
       await rm(workspace, { recursive: true, force: true });
       await rm(fakeHome, { recursive: true, force: true });
@@ -560,7 +705,7 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
 
     try {
       const config = await loadConfig(workspace);
-      expect(config.gateway.channel).toBe('opencode');
+      assert.strictEqual(config.gateway.channel, 'opencode');
     } finally {
       if (originalToolType === undefined) {
         delete process.env.BRIDGE_GATEWAY_TOOL_TYPE;
@@ -592,9 +737,9 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
 
     try {
       const config = await loadConfig(workspace);
-      expect('deviceName' in config.gateway).toBe(false);
-      expect('macAddress' in config.gateway).toBe(false);
-      expect('toolVersion' in config.gateway).toBe(false);
+      assert.strictEqual('deviceName' in config.gateway, false);
+      assert.strictEqual('macAddress' in config.gateway, false);
+      assert.strictEqual('toolVersion' in config.gateway, false);
     } finally {
       if (originalDeviceName === undefined) {
         delete process.env.BRIDGE_GATEWAY_DEVICE_NAME;

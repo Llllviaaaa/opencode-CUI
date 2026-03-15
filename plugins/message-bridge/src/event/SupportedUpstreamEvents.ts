@@ -1,1 +1,1 @@
-export * from '../protocol/upstream/SupportedUpstreamEvents';
+export * from '../protocol/upstream/SupportedUpstreamEvents.js';

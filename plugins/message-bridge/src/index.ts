@@ -1,5 +1,5 @@
-import { getOrCreateRuntime } from './runtime/singleton';
-import type { Plugin } from './runtime/types';
+import { getOrCreateRuntime } from './runtime/singleton.js';
+import type { Plugin } from './runtime/types.js';
 
 export const MessageBridgePlugin: Plugin = async (input) => {
   const runtime = await getOrCreateRuntime(input);

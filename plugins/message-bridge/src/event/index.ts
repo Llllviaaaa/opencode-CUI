@@ -1,3 +1,3 @@
-export { EventFilter } from './EventFilter';
-export * from './SupportedUpstreamEvents';
-export * from './UpstreamEventExtractor';
+export { EventFilter } from './EventFilter.js';
+export * from './SupportedUpstreamEvents.js';
+export * from './UpstreamEventExtractor.js';

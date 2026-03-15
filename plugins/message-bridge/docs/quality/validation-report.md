@@ -62,11 +62,21 @@ Validated upstream default allowlist:
 Validated successfully:
 
 ```bash
-bun run typecheck
-bun run test:unit
-bun test tests/integration/plugin-distribution.test.mjs
-bun run verify:opencode-load
+pnpm run verify:core
+pnpm run verify:env
+node --import tsx/esm --test tests/integration/plugin-distribution.test.mjs
+pnpm run verify:opencode-load
+pnpm run verify:release
+pnpm run verify:release:dry
 ```
+
+Execution semantics:
+
+- Default quality gate: `verify:core`
+- Release gate: `verify:release` (includes `verify:env` + `test:e2e:smoke` + `verify:opencode-load`)
+- Release rehearsal: `verify:release:dry` (same chain, no publish action)
+- Environment-dependent checks: `test:e2e`, `test:e2e:smoke`, `smoke:e2e`, `debug:e2e`, `verify:opencode-load`
+- Coverage scope: `unit+integration` (the coverage script prints `coverage_scope=unit+integration`)
 
 ## 5. Compatibility Conclusions
 

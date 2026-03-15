@@ -1,4 +1,5 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -69,7 +70,7 @@ describe('protocol permission-roundtrip', () => {
     const permissionAskedEvent = await loadFixture('permission.asked.json');
     await runtime.handleEvent(permissionAskedEvent);
 
-    expect(sent).toEqual([
+    assert.deepStrictEqual(sent, [
       {
         type: 'tool_event',
         toolSessionId: 'ses_permission_1',
@@ -88,13 +89,13 @@ describe('protocol permission-roundtrip', () => {
       },
     });
 
-    expect(permissionCalls).toEqual([
+    assert.deepStrictEqual(permissionCalls, [
       {
         path: { id: 'ses_permission_1', permissionID: 'perm_fixture_1' },
         body: { response: 'always' },
       },
     ]);
-    expect(sent).toHaveLength(1);
+    assert.strictEqual(sent.length, 1);
   });
 
   test('returns tool_error when permission_reply uses an unsupported response enum', async () => {
@@ -119,12 +120,13 @@ describe('protocol permission-roundtrip', () => {
       },
     });
 
-    expect(sent).toEqual([
+    assert.deepStrictEqual(sent, [
       {
         type: 'tool_error',
         welinkSessionId: 'wl-perm-invalid',
         toolSessionId: 'ses_permission_1',
         error: 'Invalid invoke payload shape',
+        reason: undefined,
       },
     ]);
   });

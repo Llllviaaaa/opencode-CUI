@@ -1,4 +1,5 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -51,20 +52,20 @@ describe('setup cli', () => {
         input: 'ak-test\nsk-test\ny\n',
       });
 
-      expect(result.status).toBe(0);
+      assert.strictEqual(result.status, 0);
 
       const configRoot = join(home, '.config', 'opencode');
       const bridge = await readFile(join(configRoot, 'message-bridge.jsonc'), 'utf8');
       const opencode = await readFile(join(configRoot, 'opencode.jsonc'), 'utf8');
       const npmrc = await readFile(join(home, '.npmrc'), 'utf8');
 
-      expect(bridge).toContain('"ak": "ak-test"');
-      expect(bridge).toContain('"sk": "sk-test"');
-      expect(opencode).toContain('"plugin": ["@opencode-cui/message-bridge"]');
-      expect(npmrc).toContain('@opencode-cui:registry=');
-      expect(result.stdout).toContain('- AK: ak-test');
-      expect(result.stdout).toContain('- SK: sk-test');
-      expect(result.stdout).toContain('下次启动 OpenCode 时会自动安装并加载 npm 插件。');
+      assert.ok(bridge.includes('"ak": "ak-test"'));
+      assert.ok(bridge.includes('"sk": "sk-test"'));
+      assert.ok(opencode.includes('"plugin": ["@opencode-cui/message-bridge"]'));
+      assert.ok(npmrc.includes('@opencode-cui:registry='));
+      assert.ok(result.stdout.includes('- AK: ak-test'));
+      assert.ok(result.stdout.includes('- SK: sk-test'));
+      assert.ok(result.stdout.includes('下次启动 OpenCode 时会自动安装并加载 npm 插件。'));
     });
   });
 
@@ -89,15 +90,15 @@ describe('setup cli', () => {
         input: 'old-ak\nnew-sk\ny\n',
       });
 
-      expect(result.status).toBe(0);
+      assert.strictEqual(result.status, 0);
 
       const bridge = await readFile(join(configRoot, 'message-bridge.jsonc'), 'utf8');
       const opencode = await readFile(join(configRoot, 'opencode.jsonc'), 'utf8');
 
-      expect(bridge).toContain('"url": "wss://gateway.example.com/ws/agent"');
-      expect(bridge).toContain('"ak": "old-ak"');
-      expect(bridge).toContain('"sk": "new-sk"');
-      expect(opencode.match(/@opencode-cui\/message-bridge/g)?.length).toBe(1);
+      assert.ok(bridge.includes('"url": "wss://gateway.example.com/ws/agent"'));
+      assert.ok(bridge.includes('"ak": "old-ak"'));
+      assert.ok(bridge.includes('"sk": "new-sk"'));
+      assert.strictEqual(opencode.match(/@opencode-cui\/message-bridge/g)?.length, 1);
     });
   });
 
@@ -117,11 +118,11 @@ describe('setup cli', () => {
         input: 'only-ak\nadded-sk\ny\n',
       });
 
-      expect(result.status).toBe(0);
+      assert.strictEqual(result.status, 0);
 
       const bridge = await readFile(join(configRoot, 'message-bridge.jsonc'), 'utf8');
-      expect(bridge).toContain('"ak": "only-ak",');
-      expect(bridge).toContain('"sk": "added-sk"');
+      assert.ok(bridge.includes('"ak": "only-ak",'));
+      assert.ok(bridge.includes('"sk": "added-sk"'));
     });
   });
 
@@ -137,8 +138,8 @@ describe('setup cli', () => {
         input: 'ak-test\nsk-test\ny\n',
       });
 
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain('无法安全解析现有 bridge 配置');
+      assert.notStrictEqual(result.status, 0);
+      assert.ok(result.stderr.includes('无法安全解析现有 bridge 配置'));
     });
   });
 
@@ -151,16 +152,16 @@ describe('setup cli', () => {
         input: 'ak-project\nsk-project\ny\n',
       });
 
-      expect(result.status).toBe(0);
+      assert.strictEqual(result.status, 0);
 
       const bridge = await readFile(join(project, '.opencode', 'message-bridge.jsonc'), 'utf8');
       const opencode = await readFile(join(project, 'opencode.jsonc'), 'utf8');
       const npmrc = await readFile(join(project, '.npmrc'), 'utf8');
 
-      expect(bridge).toContain('"ak": "ak-project"');
-      expect(bridge).toContain('"sk": "sk-project"');
-      expect(opencode).toContain('"plugin": ["@opencode-cui/message-bridge"]');
-      expect(npmrc).toContain('@opencode-cui:registry=');
+      assert.ok(bridge.includes('"ak": "ak-project"'));
+      assert.ok(bridge.includes('"sk": "sk-project"'));
+      assert.ok(opencode.includes('"plugin": ["@opencode-cui/message-bridge"]'));
+      assert.ok(npmrc.includes('@opencode-cui:registry='));
     });
   });
 
@@ -172,17 +173,18 @@ describe('setup cli', () => {
         input: 'ak-cancel\nsk-cancel\nn\n',
       });
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain('已取消，未写入任何文件。');
+      assert.strictEqual(result.status, 0);
+      assert.ok(result.stdout.includes('已取消，未写入任何文件。'));
 
       const configRoot = join(home, '.config', 'opencode');
-      expect(
+      assert.deepStrictEqual(
         await Promise.all([
           readFile(join(configRoot, 'message-bridge.jsonc'), 'utf8').then(() => true).catch(() => false),
           readFile(join(configRoot, 'opencode.jsonc'), 'utf8').then(() => true).catch(() => false),
           readFile(join(home, '.npmrc'), 'utf8').then(() => true).catch(() => false),
         ]),
-      ).toEqual([false, false, false]);
+        [false, false, false],
+      );
     });
   });
 
@@ -194,17 +196,20 @@ describe('setup cli', () => {
         input: "ak-stdin\nsk-stdin\ny\n",
       });
 
-      expect(result.status).toBe(0);
+      assert.strictEqual(result.status, 0);
 
       const configRoot = join(home, '.config', 'opencode');
       const bridge = await readFile(join(configRoot, 'message-bridge.jsonc'), 'utf8');
       const opencode = await readFile(join(configRoot, 'opencode.jsonc'), 'utf8');
       const npmrc = await readFile(join(home, '.npmrc'), 'utf8');
 
-      expect(bridge).toContain('"ak": "ak-stdin"');
-      expect(bridge).toContain('"sk": "sk-stdin"');
-      expect(opencode).toContain('"plugin": ["@opencode-cui/message-bridge"]');
-      expect(npmrc).toContain('@opencode-cui:registry=');
+      assert.ok(bridge.includes('"ak": "ak-stdin"'));
+      assert.ok(bridge.includes('"sk": "sk-stdin"'));
+      assert.ok(opencode.includes('"plugin": ["@opencode-cui/message-bridge"]'));
+      assert.ok(npmrc.includes('@opencode-cui:registry='));
+      assert.ok(result.stdout.includes('请输入 AK（必填）'));
+      assert.ok(result.stdout.includes('请输入 SK（必填）'));
+      assert.ok(result.stdout.includes('确认写入以上配置 [y/N]'));
     });
   });
 
@@ -216,18 +221,18 @@ describe('setup cli', () => {
         input: '\nak-required\n\nsk-required\ny\n',
       });
 
-      expect(result.status).toBe(0);
-      expect(result.stderr).toContain('AK 不能为空，请重新输入');
-      expect(result.stderr).toContain('SK 不能为空，请重新输入');
+      assert.strictEqual(result.status, 0);
+      assert.ok(result.stderr.includes('AK 不能为空，请重新输入'));
+      assert.ok(result.stderr.includes('SK 不能为空，请重新输入'));
 
       const configRoot = join(home, '.config', 'opencode');
       const bridge = await readFile(join(configRoot, 'message-bridge.jsonc'), 'utf8');
-      expect(bridge).toContain('"ak": "ak-required"');
-      expect(bridge).toContain('"sk": "sk-required"');
+      assert.ok(bridge.includes('"ak": "ak-required"'));
+      assert.ok(bridge.includes('"sk": "sk-required"'));
     });
   });
 
-  test('uses windows-style global paths when platform is win32', async () => {
+  test('uses windows-style global config path when platform is win32', async () => {
     await withTempDirs(async ({ home, project }) => {
       const appData = join(home, 'AppData', 'Roaming');
       await mkdir(appData, { recursive: true });
@@ -242,16 +247,16 @@ describe('setup cli', () => {
         input: 'ak-win\nsk-win\ny\n',
       });
 
-      expect(result.status).toBe(0);
+      assert.strictEqual(result.status, 0);
 
-      const configRoot = join(appData, 'opencode');
+      const configRoot = join(home, '.config', 'opencode');
       const bridge = await readFile(join(configRoot, 'message-bridge.jsonc'), 'utf8');
       const opencode = await readFile(join(configRoot, 'opencode.jsonc'), 'utf8');
       const npmrc = await readFile(join(home, '.npmrc'), 'utf8');
 
-      expect(bridge).toContain('"ak": "ak-win"');
-      expect(opencode).toContain('"plugin": ["@opencode-cui/message-bridge"]');
-      expect(npmrc).toContain('@opencode-cui:registry=');
+      assert.ok(bridge.includes('"ak": "ak-win"'));
+      assert.ok(opencode.includes('"plugin": ["@opencode-cui/message-bridge"]'));
+      assert.ok(npmrc.includes('@opencode-cui:registry='));
     });
   });
 
@@ -268,13 +273,14 @@ describe('setup cli', () => {
         input: 'ak-custom\nsk-custom\ny\n',
       });
 
-      expect(result.status).toBe(0);
+      assert.strictEqual(result.status, 0);
 
       const npmrc = await readFile(customNpmrc, 'utf8');
-      expect(npmrc).toContain('@opencode-cui:registry=');
-      expect(
+      assert.ok(npmrc.includes('@opencode-cui:registry='));
+      assert.strictEqual(
         await readFile(join(home, '.npmrc'), 'utf8').then(() => true).catch(() => false),
-      ).toBe(false);
+        false,
+      );
     });
   });
 });

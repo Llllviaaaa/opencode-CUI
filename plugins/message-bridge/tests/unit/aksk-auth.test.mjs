@@ -1,5 +1,6 @@
 import { createHmac } from 'crypto';
-import { describe, expect, test } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 
 import { DefaultAkSkAuth } from '../../src/connection/AkSkAuth.ts';
 
@@ -12,19 +13,19 @@ describe('DefaultAkSkAuth', () => {
     const payload = auth.generateAuthPayload();
     const { ts, nonce, sign } = payload;
 
-    expect(payload.ak).toBe(ak);
-    expect(ts).toBeDefined();
-    expect(nonce).toBeDefined();
-    expect(sign).toBeDefined();
+    assert.strictEqual(payload.ak, ak);
+    assert.notStrictEqual(ts, undefined);
+    assert.notStrictEqual(nonce, undefined);
+    assert.notStrictEqual(sign, undefined);
 
     // Gateway expects Unix timestamp in seconds.
-    expect(ts).toMatch(/^\d{10}$/);
+    assert.match(ts, /^\d{10}$/);
 
     const expectedSign = createHmac('sha256', sk)
       .update(`${ak}${ts}${nonce}`)
       .digest('base64');
 
-    expect(sign).toBe(expectedSign);
+    assert.strictEqual(sign, expectedSign);
   });
 
   test('auth payload can be encoded as base64url websocket subprotocol content', () => {
@@ -37,11 +38,11 @@ describe('DefaultAkSkAuth', () => {
       .replace(/\//g, '_')
       .replace(/=+$/g, '');
 
-    expect(encoded).not.toContain('+');
-    expect(encoded).not.toContain('/');
-    expect(encoded).not.toContain('=');
+    assert.ok(!encoded.includes('+'));
+    assert.ok(!encoded.includes('/'));
+    assert.ok(!encoded.includes('='));
 
     const decoded = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
-    expect(decoded).toEqual(payload);
+    assert.deepStrictEqual(decoded, payload);
   });
 });

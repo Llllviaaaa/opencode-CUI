@@ -21,7 +21,7 @@ const options = {
 };
 
 function usage() {
-  console.log(`Usage: bun run logs:fetch -- [options]
+  console.log(`Usage: pnpm run logs:fetch -- [options]
 
 Options:
   --log-dir DIR

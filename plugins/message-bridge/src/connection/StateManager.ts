@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { AGENT_ID_PREFIX, ConnectionState } from '../types';
+import { AGENT_ID_PREFIX, ConnectionState } from '../types/index.js';
 
 export interface StateManager {
   isReady(): boolean;

@@ -1,5 +1,5 @@
-import { DEFAULT_EVENT_ALLOWLIST } from '../contracts/upstream-events';
-import type { BridgeConfig } from '../types';
+import { DEFAULT_EVENT_ALLOWLIST } from '../contracts/upstream-events.js';
+import type { BridgeConfig } from '../types/index.js';
 
 export const DEFAULT_BRIDGE_CONFIG = {
   enabled: true,

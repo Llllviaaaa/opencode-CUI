@@ -3,7 +3,7 @@ import {
   INVOKE_ACTIONS,
   type DownstreamMessageType as SupportedDownstreamMessageType,
   type InvokeAction,
-} from '../../contracts/downstream-messages';
+} from '../../contracts/downstream-messages.js';
 
 export const SUPPORTED_DOWNSTREAM_MESSAGE_TYPES = DOWNSTREAM_MESSAGE_TYPES;
 

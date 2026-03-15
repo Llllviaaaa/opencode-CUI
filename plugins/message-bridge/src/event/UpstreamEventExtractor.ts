@@ -1,2 +1,2 @@
-export * from '../protocol/upstream/UpstreamEventTypes';
-export * from '../protocol/upstream/UpstreamEventExtractor';
+export * from '../protocol/upstream/UpstreamEventTypes.js';
+export * from '../protocol/upstream/UpstreamEventExtractor.js';

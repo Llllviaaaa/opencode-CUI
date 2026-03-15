@@ -1,0 +1,68 @@
+# In monorepo setups, place this file at repository root: .github/workflows/release-verification.yml
+name: release-verification
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "plugins/message-bridge/**"
+  push:
+    branches:
+      - main
+    paths:
+      - "plugins/message-bridge/**"
+
+jobs:
+  release-verification:
+    name: Release Verification
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/message-bridge
+    timeout-minutes: 45
+    env:
+      OPENCODE_VERSION: "1.2.24"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: plugins/message-bridge/pnpm-lock.yaml
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install OpenCode CLI
+        run: |
+          curl -fsSL https://opencode.ai/install | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          opencode upgrade "$OPENCODE_VERSION"
+          opencode --version
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Release verification gate
+        run: pnpm run verify:release
+
+      - name: Upload verification artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: message-bridge-release-verification
+          path: |
+            plugins/message-bridge/logs/verify-env-*.json
+            plugins/message-bridge/logs/e2e-*
+            plugins/message-bridge/logs/opencode-load-verify-*
+            plugins/message-bridge/coverage/lcov.info
+            plugins/message-bridge/coverage/tmp
+          if-no-files-found: warn

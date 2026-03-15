@@ -1,4 +1,5 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 
 import { ChatAction } from '../../src/action/ChatAction.ts';
 import { CreateSessionAction } from '../../src/action/CreateSessionAction.ts';
@@ -36,8 +37,8 @@ describe('ChatAction coverage', () => {
       postSessionIdPermissionsPermissionId: async () => ({}),
     };
     const result = await action.execute({ toolSessionId: 's-1', text: 'hi' }, readyContext(client));
-    expect(result.success).toBe(true);
-    expect(calls[0]).toEqual({
+    assert.strictEqual(result.success, true);
+    assert.deepStrictEqual(calls[0], {
       path: { id: 's-1' },
       body: { parts: [{ type: 'text', text: 'hi' }] },
     });
@@ -54,9 +55,9 @@ describe('ChatAction coverage', () => {
       postSessionIdPermissionsPermissionId: async () => ({}),
     };
     const result = await action.execute({ toolSessionId: 's-1', text: 'hi' }, readyContext(client));
-    expect(result.success).toBe(false);
-    expect(result.errorCode).toBe('SDK_UNREACHABLE');
-    expect(result.errorMessage).toContain('boom');
+    assert.strictEqual(result.success, false);
+    assert.strictEqual(result.errorCode, 'SDK_UNREACHABLE');
+    assert.ok(result.errorMessage.includes('boom'));
   });
 
   test('execute handles promise rejection and sync throw', async () => {
@@ -72,9 +73,9 @@ describe('ChatAction coverage', () => {
       postSessionIdPermissionsPermissionId: async () => ({}),
     };
     const rejectResult = await action.execute({ toolSessionId: 's-1', text: 'hi' }, readyContext(rejectClient));
-    expect(rejectResult.success).toBe(false);
-    expect(rejectResult.errorCode).toBe('SDK_UNREACHABLE');
-    expect(rejectResult.errorMessage).toContain('Failed to send message');
+    assert.strictEqual(rejectResult.success, false);
+    assert.strictEqual(rejectResult.errorCode, 'SDK_UNREACHABLE');
+    assert.ok(rejectResult.errorMessage.includes('Failed to send message'));
 
     const throwClient = {
       session: {
@@ -87,15 +88,15 @@ describe('ChatAction coverage', () => {
       postSessionIdPermissionsPermissionId: async () => ({}),
     };
     const throwResult = await action.execute({ toolSessionId: 's-1', text: 'hi' }, readyContext(throwClient));
-    expect(throwResult.success).toBe(false);
-    expect(throwResult.errorCode).toBe('SDK_TIMEOUT');
+    assert.strictEqual(throwResult.success, false);
+    assert.strictEqual(throwResult.errorCode, 'SDK_TIMEOUT');
   });
 
   test('errorMapper variants', () => {
     const action = new ChatAction();
-    expect(action.errorMapper(new Error('connection refused'))).toBe('SDK_UNREACHABLE');
-    expect(action.errorMapper(new Error('session not found'))).toBe('INVALID_PAYLOAD');
-    expect(action.errorMapper('timeout')).toBe('SDK_TIMEOUT');
+    assert.strictEqual(action.errorMapper(new Error('connection refused')), 'SDK_UNREACHABLE');
+    assert.strictEqual(action.errorMapper(new Error('session not found')), 'INVALID_PAYLOAD');
+    assert.strictEqual(action.errorMapper('timeout'), 'SDK_TIMEOUT');
   });
 });
 
@@ -115,9 +116,9 @@ describe('CreateSessionAction coverage', () => {
       postSessionIdPermissionsPermissionId: async () => ({}),
     };
     const result = await action.execute({ metadata: { source: 'x' } }, readyContext(client));
-    expect(result.success).toBe(true);
-    expect(result.data.sessionId).toBe('new-1');
-    expect(calls[0]).toEqual({ body: { metadata: { source: 'x' } } });
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.data.sessionId, 'new-1');
+    assert.deepStrictEqual(calls[0], { body: { metadata: { source: 'x' } } });
   });
 
   test('execute handles sdk failures', async () => {
@@ -131,8 +132,8 @@ describe('CreateSessionAction coverage', () => {
       postSessionIdPermissionsPermissionId: async () => ({}),
     };
     const failed = await action.execute({}, readyContext(client));
-    expect(failed.success).toBe(false);
-    expect(failed.errorMessage).toContain('blocked');
+    assert.strictEqual(failed.success, false);
+    assert.ok(failed.errorMessage.includes('blocked'));
   });
 });
 
@@ -153,9 +154,9 @@ describe('CloseSessionAction coverage', () => {
       postSessionIdPermissionsPermissionId: async () => ({}),
     };
     const ok = await action.execute({ toolSessionId: 's1' }, readyContext(okClient));
-    expect(ok.success).toBe(true);
-    expect(ok.data.closed).toBe(true);
-    expect(calls[0]).toEqual({ path: { id: 's1' } });
+    assert.strictEqual(ok.success, true);
+    assert.strictEqual(ok.data.closed, true);
+    assert.deepStrictEqual(calls[0], { path: { id: 's1' } });
   });
 });
 
@@ -180,8 +181,8 @@ describe('PermissionReplyAction coverage', () => {
       readyContext(client),
     );
 
-    expect(allow.success).toBe(true);
-    expect(calls[0]).toEqual({
+    assert.strictEqual(allow.success, true);
+    assert.deepStrictEqual(calls[0], {
       path: { id: 's-tool', permissionID: 'p1' },
       body: { response: 'once' },
     });
@@ -201,13 +202,13 @@ describe('StatusQueryAction coverage', () => {
         },
       },
     }));
-    expect(ready.success).toBe(true);
-    expect(ready.data.opencodeOnline).toBe(true);
+    assert.strictEqual(ready.success, true);
+    assert.strictEqual(ready.data.opencodeOnline, true);
 
     const readyViaRawFallback = await action.execute({}, readyContext({
       _client: {
         get: async (options) => {
-          expect(options).toEqual({ url: '/global/health' });
+          assert.deepStrictEqual(options, { url: '/global/health' });
           return { data: { healthy: true, version: '9.9.9' } };
         },
       },
@@ -215,22 +216,22 @@ describe('StatusQueryAction coverage', () => {
       hostClient: toHostClientLike({
         _client: {
           get: async (options) => {
-            expect(options).toEqual({ url: '/global/health' });
+            assert.deepStrictEqual(options, { url: '/global/health' });
             return { data: { healthy: true, version: '9.9.9' } };
           },
         },
       }),
     }));
-    expect(readyViaRawFallback.success).toBe(true);
-    expect(readyViaRawFallback.data.opencodeOnline).toBe(true);
+    assert.strictEqual(readyViaRawFallback.success, true);
+    assert.strictEqual(readyViaRawFallback.data.opencodeOnline, true);
 
     const downViaHealthFalse = await action.execute({}, readyContext({
       global: {
         health: async () => ({ healthy: false, version: '9.9.9' }),
       },
     }));
-    expect(downViaHealthFalse.success).toBe(true);
-    expect(downViaHealthFalse.data.opencodeOnline).toBe(false);
+    assert.strictEqual(downViaHealthFalse.success, true);
+    assert.strictEqual(downViaHealthFalse.data.opencodeOnline, false);
 
     const downViaRawError = await action.execute({}, readyContext({
       _client: {
@@ -243,8 +244,8 @@ describe('StatusQueryAction coverage', () => {
         },
       }),
     }));
-    expect(downViaRawError.success).toBe(true);
-    expect(downViaRawError.data.opencodeOnline).toBe(false);
+    assert.strictEqual(downViaRawError.success, true);
+    assert.strictEqual(downViaRawError.data.opencodeOnline, false);
 
     const down = await action.execute(
       {},
@@ -265,8 +266,8 @@ describe('StatusQueryAction coverage', () => {
         }),
       }),
     );
-    expect(down.success).toBe(true);
-    expect(down.data.opencodeOnline).toBe(false);
+    assert.strictEqual(down.success, true);
+    assert.strictEqual(down.data.opencodeOnline, false);
   });
 });
 
@@ -287,9 +288,9 @@ describe('AbortSessionAction coverage', () => {
     };
 
     const result = await action.execute({ toolSessionId: 'abort-1' }, readyContext(client));
-    expect(result.success).toBe(true);
-    expect(result.data).toEqual({ sessionId: 'abort-1', aborted: true });
-    expect(calls[0]).toEqual({ path: { id: 'abort-1' } });
+    assert.strictEqual(result.success, true);
+    assert.deepStrictEqual(result.data, { sessionId: 'abort-1', aborted: true });
+    assert.deepStrictEqual(calls[0], { path: { id: 'abort-1' } });
   });
 });
 
@@ -330,10 +331,10 @@ describe('QuestionReplyAction coverage', () => {
       readyContext(client),
     );
 
-    expect(result.success).toBe(true);
-    expect(result.data).toEqual({ requestId: 'req-1', replied: true });
-    expect(getCalls[0]).toEqual({ url: '/question' });
-    expect(postCalls[0]).toEqual({
+    assert.strictEqual(result.success, true);
+    assert.deepStrictEqual(result.data, { requestId: 'req-1', replied: true });
+    assert.deepStrictEqual(getCalls[0], { url: '/question' });
+    assert.deepStrictEqual(postCalls[0], {
       url: '/question/{requestID}/reply',
       path: { requestID: 'req-1' },
       body: { answers: [['ship it']] },

@@ -8,8 +8,8 @@ import {
   hasError,
   safeExecute,
   stateToErrorCode,
-} from '../types';
-import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
+} from '../types/index.js';
+import { getErrorDetailsForLog, getErrorMessage } from '../utils/error.js';
 
 export class AbortSessionAction implements Action<'abort_session', AbortSessionPayload, AbortSessionResultData> {
   name: 'abort_session' = 'abort_session';

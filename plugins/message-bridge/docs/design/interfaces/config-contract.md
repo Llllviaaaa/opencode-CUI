@@ -132,8 +132,6 @@
 | `BRIDGE_GATEWAY_PING_INTERVAL_MS` | `gateway.ping.intervalMs` | 当前仅配置层存在，未见运行时消费 |
 | `BRIDGE_AUTH_AK` | `auth.ak` | 支持 `${VAR_NAME}` 替换 |
 | `BRIDGE_AUTH_SK` | `auth.sk` | 支持 `${VAR_NAME}` 替换 |
-| `BRIDGE_AK` | `auth.ak` | 兼容别名；仅在 `BRIDGE_AUTH_AK` 缺失时生效 |
-| `BRIDGE_SK` | `auth.sk` | 兼容别名；仅在 `BRIDGE_AUTH_SK` 缺失时生效 |
 | `BRIDGE_SDK_TIMEOUT_MS` | `sdk.timeoutMs` | 使用 `parseInt(..., 10)` 解析 |
 | `BRIDGE_EVENTS_ALLOWLIST` | `events.allowlist` | 以逗号分隔并逐项 `trim()` |
 
@@ -155,7 +153,7 @@ BRIDGE_EVENTS_ALLOWLIST=message.updated,session.status
 
 当前实现包含以下兼容或清理规则：
 
-- `BRIDGE_AK` / `BRIDGE_SK` 仍兼容旧环境变量命名
+- `BRIDGE_AK` / `BRIDGE_SK` 不再支持
 - `BRIDGE_EVENT_HEARTBEAT_INTERVAL_MS` 仍兼容旧心跳变量命名
 - `BRIDGE_GATEWAY_TOOL_TYPE` 已移除，当前实现会忽略它
 - `BRIDGE_GATEWAY_DEVICE_NAME`

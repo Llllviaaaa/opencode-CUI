@@ -1,1 +1,1 @@
-export * from './upstream-events';
+export * from './upstream-events.js';

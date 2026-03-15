@@ -107,7 +107,7 @@
 - [x] 将 `connect-register` 场景提升为真实栈 E2E smoke
 - [x] 将 `chat-stream` 场景提升为真实栈 E2E smoke
 - [x] 将 `permission-roundtrip` 场景提升为真实栈 E2E smoke
-- [x] 提供统一回归入口 `bun run verify:protocol-smoke`
+- [x] 提供统一回归入口 `pnpm run test:integration && pnpm run test:e2e:smoke`
 
 ## 5. 用例拆分
 

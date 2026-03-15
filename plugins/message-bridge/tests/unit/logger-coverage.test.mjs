@@ -1,4 +1,5 @@
-import { describe, test, expect, spyOn, beforeEach, afterEach } from 'bun:test';
+import { describe, test, beforeEach, afterEach, mock } from 'node:test';
+import assert from 'node:assert/strict';
 import { AppLogger } from '../../src/runtime/AppLogger.ts';
 
 describe('AppLogger coverage', () => {
@@ -30,15 +31,15 @@ describe('AppLogger coverage', () => {
     logger.info('runtime.start.completed', { sessionId: 's-1', token: 'secret' });
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(calls.length).toBe(1);
-    expect(calls[0].body.service).toBe('message-bridge');
-    expect(calls[0].body.level).toBe('info');
-    expect(calls[0].body.message).toBe('runtime.start.completed');
-    expect(calls[0].body.extra.sessionId).toBe('s-1');
-    expect(calls[0].body.extra.token).toBe('***');
-    expect(typeof calls[0].body.extra.traceId).toBe('string');
-    expect(typeof calls[0].body.extra.runtimeTraceId).toBe('string');
-    expect(calls[0].body.extra.traceId).toBe(calls[0].body.extra.runtimeTraceId);
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0].body.service, 'message-bridge');
+    assert.strictEqual(calls[0].body.level, 'info');
+    assert.strictEqual(calls[0].body.message, 'runtime.start.completed');
+    assert.strictEqual(calls[0].body.extra.sessionId, 's-1');
+    assert.strictEqual(calls[0].body.extra.token, '***');
+    assert.strictEqual(typeof calls[0].body.extra.traceId, 'string');
+    assert.strictEqual(typeof calls[0].body.extra.runtimeTraceId, 'string');
+    assert.strictEqual(calls[0].body.extra.traceId, calls[0].body.extra.runtimeTraceId);
   });
 
   test('preserves nested objects and arrays with redaction when debug mode is disabled', async () => {
@@ -58,12 +59,12 @@ describe('AppLogger coverage', () => {
     });
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(calls.length).toBe(1);
-    expect(calls[0].body.extra.nested).toEqual({
+    assert.strictEqual(calls.length, 1);
+    assert.deepStrictEqual(calls[0].body.extra.nested, {
       foo: 'bar',
       token: '***',
     });
-    expect(calls[0].body.extra.items).toEqual(['a', 'b']);
+    assert.deepStrictEqual(calls[0].body.extra.items, ['a', 'b']);
   });
 
   test('debug mode keeps the same full redacted payload shape', async () => {
@@ -85,15 +86,15 @@ describe('AppLogger coverage', () => {
     });
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(calls.length).toBe(1);
-    expect(calls[0].body.extra.token).toBe('***');
-    expect(calls[0].body.extra.nested).toEqual({ authorization: '***' });
-    expect(calls[0].body.extra.items).toEqual(['x', 'y']);
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0].body.extra.token, '***');
+    assert.deepStrictEqual(calls[0].body.extra.nested, { authorization: '***' });
+    assert.deepStrictEqual(calls[0].body.extra.items, ['x', 'y']);
   });
 
   test('swallows app.log errors and falls back to console.debug in debug mode', async () => {
     process.env.BRIDGE_DEBUG = 'true';
-    const debugSpy = spyOn(console, 'debug').mockImplementation(() => {});
+    const debugMock = mock.method(console, 'debug', () => {});
     const logger = new AppLogger({
       app: {
         log: async () => {
@@ -102,16 +103,16 @@ describe('AppLogger coverage', () => {
       },
     });
 
-    expect(() => logger.error('runtime.tool_error.sending', { code: 'SDK_UNREACHABLE' })).not.toThrow();
+    assert.doesNotThrow(() => logger.error('runtime.tool_error.sending', { code: 'SDK_UNREACHABLE' }));
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(debugSpy).toHaveBeenCalled();
-    debugSpy.mockRestore();
+    assert.ok(debugMock.mock.calls.length > 0);
+    debugMock.mock.restore();
   });
 
   test('swallows sync app.log throws and does not block caller', async () => {
     process.env.BRIDGE_DEBUG = 'true';
-    const debugSpy = spyOn(console, 'debug').mockImplementation(() => {});
+    const debugMock = mock.method(console, 'debug', () => {});
     const logger = new AppLogger({
       app: {
         log: () => {
@@ -120,10 +121,10 @@ describe('AppLogger coverage', () => {
       },
     });
 
-    expect(() => logger.info('runtime.start.requested', { foo: 'bar' })).not.toThrow();
+    assert.doesNotThrow(() => logger.info('runtime.start.requested', { foo: 'bar' }));
     await new Promise((r) => setTimeout(r, 10));
-    expect(debugSpy).toHaveBeenCalled();
-    debugSpy.mockRestore();
+    assert.ok(debugMock.mock.calls.length > 0);
+    debugMock.mock.restore();
   });
 
   test('child logger can override traceId while preserving runtimeTraceId', async () => {
@@ -140,10 +141,10 @@ describe('AppLogger coverage', () => {
     logger.child({ traceId: 'msg-1', bridgeMessageId: 'bridge-1' }).info('event.forwarding');
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0].body.extra.traceId).toBe('msg-1');
-    expect(calls[0].body.extra.bridgeMessageId).toBe('bridge-1');
-    expect(calls[0].body.extra.runtimeTraceId).toBe(logger.getTraceId());
-    expect(calls[0].body.extra.runtimeTraceId).not.toBe('msg-1');
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0].body.extra.traceId, 'msg-1');
+    assert.strictEqual(calls[0].body.extra.bridgeMessageId, 'bridge-1');
+    assert.strictEqual(calls[0].body.extra.runtimeTraceId, logger.getTraceId());
+    assert.notStrictEqual(calls[0].body.extra.runtimeTraceId, 'msg-1');
   });
 });

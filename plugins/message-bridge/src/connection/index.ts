@@ -3,13 +3,13 @@ export interface ConnectionManager {
   disconnect(): Promise<void>;
 }
 
-export { AkSkAuth, DefaultAkSkAuth } from './AkSkAuth';
+export { AkSkAuth, DefaultAkSkAuth } from './AkSkAuth.js';
 
-export { StateManager, DefaultStateManager } from './StateManager';
+export { StateManager, DefaultStateManager } from './StateManager.js';
 
 export {
   GatewayConnection,
   DefaultGatewayConnection,
   GatewayConnectionOptions,
   GatewayConnectionEvents,
-} from './GatewayConnection';
+} from './GatewayConnection.js';

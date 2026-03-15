@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 
 import { normalizeDownstreamMessage } from '../../src/protocol/downstream/DownstreamMessageNormalizer.ts';
 
@@ -31,8 +32,8 @@ describe('downstream message normalizer', () => {
       logger,
     );
 
-    expect(result.ok).toBe(true);
-    expect(result.value).toEqual({
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(result.value, {
       type: 'status_query',
     });
   });
@@ -52,8 +53,8 @@ describe('downstream message normalizer', () => {
       logger,
     );
 
-    expect(result.ok).toBe(true);
-    expect(result.value).toEqual({
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(result.value, {
       type: 'invoke',
       action: 'chat',
       welinkSessionId: 'skill-1',
@@ -80,8 +81,8 @@ describe('downstream message normalizer', () => {
       logger,
     );
 
-    expect(result.ok).toBe(true);
-    expect(result.value).toEqual({
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(result.value, {
       type: 'invoke',
       action: 'permission_reply',
       welinkSessionId: 'skill-2',
@@ -107,12 +108,12 @@ describe('downstream message normalizer', () => {
       logger,
     );
 
-    expect(result.ok).toBe(false);
-    expect(result.error.code).toBe('missing_required_field');
-    expect(result.error.messageType).toBe('invoke');
-    expect(result.error.welinkSessionId).toBe('42');
-    expect(entries).toHaveLength(1);
-    expect(entries[0].message).toBe('downstream.normalization_failed');
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.code, 'missing_required_field');
+    assert.strictEqual(result.error.messageType, 'invoke');
+    assert.strictEqual(result.error.welinkSessionId, '42');
+    assert.strictEqual(entries.length, 1);
+    assert.strictEqual(entries[0].message, 'downstream.normalization_failed');
   });
 
   test('rejects unsupported invoke action and logs normalization failure', () => {
@@ -127,11 +128,11 @@ describe('downstream message normalizer', () => {
       logger,
     );
 
-    expect(result.ok).toBe(false);
-    expect(result.error.code).toBe('unsupported_action');
-    expect(result.error.action).toBe('delete_session');
-    expect(entries).toHaveLength(1);
-    expect(entries[0].message).toBe('downstream.normalization_failed');
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.code, 'unsupported_action');
+    assert.strictEqual(result.error.action, 'delete_session');
+    assert.strictEqual(entries.length, 1);
+    assert.strictEqual(entries[0].message, 'downstream.normalization_failed');
   });
 
   test('rejects invalid permission reply response', () => {
@@ -150,9 +151,9 @@ describe('downstream message normalizer', () => {
       logger,
     );
 
-    expect(result.ok).toBe(false);
-    expect(result.error.code).toBe('invalid_field_type');
-    expect(result.error.field).toBe('payload.response');
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.code, 'invalid_field_type');
+    assert.strictEqual(result.error.field, 'payload.response');
   });
 
   test('rejects invoke/status_query compatibility shape', () => {
@@ -167,9 +168,9 @@ describe('downstream message normalizer', () => {
       logger,
     );
 
-    expect(result.ok).toBe(false);
-    expect(result.error.code).toBe('unsupported_action');
-    expect(result.error.action).toBe('status_query');
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.code, 'unsupported_action');
+    assert.strictEqual(result.error.action, 'status_query');
   });
 
   test('rejects create_session without welinkSessionId', () => {
@@ -183,10 +184,10 @@ describe('downstream message normalizer', () => {
       logger,
     );
 
-    expect(result.ok).toBe(false);
-    expect(result.error.code).toBe('missing_required_field');
-    expect(result.error.action).toBe('create_session');
-    expect(result.error.field).toBe('welinkSessionId');
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.code, 'missing_required_field');
+    assert.strictEqual(result.error.action, 'create_session');
+    assert.strictEqual(result.error.field, 'welinkSessionId');
   });
 
   test('rejects blank create_session welinkSessionId', () => {
@@ -201,11 +202,11 @@ describe('downstream message normalizer', () => {
       logger,
     );
 
-    expect(result.ok).toBe(false);
-    expect(result.error.code).toBe('missing_required_field');
-    expect(result.error.action).toBe('create_session');
-    expect(result.error.field).toBe('welinkSessionId');
-    expect(result.error.welinkSessionId).toBe('   ');
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.code, 'missing_required_field');
+    assert.strictEqual(result.error.action, 'create_session');
+    assert.strictEqual(result.error.field, 'welinkSessionId');
+    assert.strictEqual(result.error.welinkSessionId, '   ');
   });
 
   test('normalizes invoke/abort_session payload', () => {
@@ -221,8 +222,8 @@ describe('downstream message normalizer', () => {
       logger,
     );
 
-    expect(result.ok).toBe(true);
-    expect(result.value).toEqual({
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(result.value, {
       type: 'invoke',
       action: 'abort_session',
       payload: {
@@ -247,8 +248,8 @@ describe('downstream message normalizer', () => {
       logger,
     );
 
-    expect(result.ok).toBe(true);
-    expect(result.value).toEqual({
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(result.value, {
       type: 'invoke',
       action: 'question_reply',
       payload: {

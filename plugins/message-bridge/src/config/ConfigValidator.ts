@@ -1,5 +1,5 @@
-import { SUPPORTED_UPSTREAM_EVENT_TYPES } from '../contracts/upstream-events';
-import type { BridgeConfig } from '../types';
+import { SUPPORTED_UPSTREAM_EVENT_TYPES } from '../contracts/upstream-events.js';
+import type { BridgeConfig } from '../types/index.js';
 
 export interface ConfigValidationError {
   path: string;

@@ -9,7 +9,7 @@ import type {
   PermissionReplyPayload,
   QuestionReplyPayload,
   StatusQueryMessage,
-} from '../../contracts/downstream-messages';
+} from '../../contracts/downstream-messages.js';
 
 export type DownstreamNormalizationStage = 'message' | 'payload';
 export type DownstreamNormalizationErrorCode =

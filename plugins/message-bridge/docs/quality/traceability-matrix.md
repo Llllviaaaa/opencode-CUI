@@ -44,10 +44,22 @@
 
 | Verification goal | Evidence |
 |---|---|
-| Type safety for contracts and protocol | `bun run typecheck` |
-| Unit coverage for protocol/runtime/action | `bun run test:unit` |
+| Type safety / unit+integration / coverage / pack check | `pnpm run verify:core` |
+| Environment prerequisites and ports validation | `pnpm run verify:env` |
+| Unit coverage for protocol/runtime/action | `pnpm run test:unit` |
+| Coverage threshold gate (unit+integration) | `pnpm run test:coverage` |
 | Distribution artifact validation | `tests/integration/plugin-distribution.test.mjs` |
-| Plugin load verification | `bun run verify:opencode-load` |
+| Plugin load verification | `pnpm run verify:opencode-load` |
+| Release verification chain | `pnpm run verify:release` |
+| Release rehearsal chain | `pnpm run verify:release:dry` |
+
+Gate classification:
+
+- Mandatory by default: `verify:core`
+- Release gate: `verify:release`
+- Environment preflight: `verify:env`
+- Environment-dependent optional gates: `test:e2e`, `test:e2e:smoke`, `verify:opencode-load`
+- Diagnostic-only tools: `smoke:e2e`, `debug:e2e`, `logs:fetch`
 
 ## 5. Current Conclusions
 

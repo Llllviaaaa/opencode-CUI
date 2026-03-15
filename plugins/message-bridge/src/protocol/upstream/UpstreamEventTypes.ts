@@ -1,4 +1,4 @@
-import type { MessageRole, SupportedUpstreamEvent, SupportedUpstreamEventType } from '../../contracts/upstream-events';
+import type { MessageRole, SupportedUpstreamEvent, SupportedUpstreamEventType } from '../../contracts/upstream-events.js';
 
 export type ExtractionStage = 'common' | 'extra';
 export type ExtractionErrorCode = 'unsupported_event' | 'missing_required_field' | 'invalid_field_type';

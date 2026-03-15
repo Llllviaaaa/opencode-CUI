@@ -1,4 +1,4 @@
-import type { HostClientLike, OpencodeClient, OpencodeHealthResult } from '../types';
+import type { HostClientLike, OpencodeClient, OpencodeHealthResult } from '../types/index.js';
 
 export const REQUIRED_SDK_CAPABILITIES = [
   'session.create',

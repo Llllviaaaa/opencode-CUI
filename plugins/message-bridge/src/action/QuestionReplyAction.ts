@@ -6,8 +6,8 @@ import {
   ActionContext,
   ErrorCode,
   stateToErrorCode,
-} from '../types';
-import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
+} from '../types/index.js';
+import { getErrorDetailsForLog, getErrorMessage } from '../utils/error.js';
 
 export class QuestionReplyAction implements Action<'question_reply', QuestionReplyPayload, QuestionReplyResultData> {
   name: 'question_reply' = 'question_reply';

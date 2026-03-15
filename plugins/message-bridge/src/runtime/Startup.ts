@@ -1,6 +1,6 @@
-import type { HostClientLike, OpencodeHealthResult, OpencodeClient } from '../types';
-import { getErrorMessage } from '../utils/error';
-import type { SdkClientCapability } from './SdkAdapter';
+import type { HostClientLike, OpencodeHealthResult, OpencodeClient } from '../types/index.js';
+import { getErrorMessage } from '../utils/error.js';
+import type { SdkClientCapability } from './SdkAdapter.js';
 
 export type StartupCapability = SdkClientCapability | 'global.health';
 

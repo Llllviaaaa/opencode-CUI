@@ -1,12 +1,12 @@
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { promises } from 'fs';
-import type { BridgeConfig } from '../types';
-import type { BridgeLogger } from '../runtime/AppLogger';
-import { DEFAULT_EVENT_ALLOWLIST } from '../contracts/upstream-events';
-import { getErrorDetailsForLog, getErrorMessage } from '../utils/error';
-import { JsoncParser } from './JsoncParser';
-import { DEFAULT_BRIDGE_CONFIG } from './default-config';
+import type { BridgeConfig } from '../types/index.js';
+import type { BridgeLogger } from '../runtime/AppLogger.js';
+import { DEFAULT_EVENT_ALLOWLIST } from '../contracts/upstream-events.js';
+import { getErrorDetailsForLog, getErrorMessage } from '../utils/error.js';
+import { JsoncParser } from './JsoncParser.js';
+import { DEFAULT_BRIDGE_CONFIG } from './default-config.js';
 
 const CONFIG_FILE_NAMES = ['message-bridge.jsonc', 'message-bridge.json'] as const;
 
@@ -171,11 +171,11 @@ export class ConfigResolver {
     }
 
     const auth: Record<string, unknown> = {};
-    if (process.env.BRIDGE_AUTH_AK || process.env.BRIDGE_AK) {
-      auth.ak = this.substituteEnvVars(process.env.BRIDGE_AUTH_AK ?? process.env.BRIDGE_AK ?? '');
+    if (process.env.BRIDGE_AUTH_AK) {
+      auth.ak = this.substituteEnvVars(process.env.BRIDGE_AUTH_AK);
     }
-    if (process.env.BRIDGE_AUTH_SK || process.env.BRIDGE_SK) {
-      auth.sk = this.substituteEnvVars(process.env.BRIDGE_AUTH_SK ?? process.env.BRIDGE_SK ?? '');
+    if (process.env.BRIDGE_AUTH_SK) {
+      auth.sk = this.substituteEnvVars(process.env.BRIDGE_AUTH_SK);
     }
     if (Object.keys(auth).length > 0) {
       envConfig.auth = auth as unknown as BridgeConfig['auth'];

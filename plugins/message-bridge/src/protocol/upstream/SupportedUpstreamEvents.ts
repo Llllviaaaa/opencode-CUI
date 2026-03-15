@@ -1,1 +1,1 @@
-export * from '../../contracts/upstream-events';
+export * from '../../contracts/upstream-events.js';

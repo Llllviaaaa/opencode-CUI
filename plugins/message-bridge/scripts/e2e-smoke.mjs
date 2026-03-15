@@ -33,7 +33,9 @@ const logDir = path.join(pluginDir, 'logs', `e2e-smoke-${scenario}-${runId}`);
 const opencodeLog = path.join(logDir, 'opencode.log');
 const gatewayLog = path.join(logDir, 'mock-gateway.log');
 const summaryLog = path.join(logDir, 'summary.log');
+const summaryJson = path.join(logDir, 'summary.json');
 const buildLockDir = path.join(pluginDir, '.tmp', 'e2e-build.lock');
+const timeoutMs = Number(env.MB_E2E_TIMEOUT_MS ?? '300000');
 
 let tmpHome = '';
 let gatewayProc;
@@ -53,7 +55,7 @@ function findAvailablePort(port) {
     server.unref();
     server.on('error', () => {
       if (port === 0) {
-        reject(new Error('Unable to find an available port'));
+        reject(createFailure('ENV_PORT_UNAVAILABLE', 'Unable to find an available port'));
         return;
       }
       resolve(findAvailablePort(0));
@@ -86,75 +88,31 @@ process.on('SIGTERM', async () => {
   process.exit(143);
 });
 
-function gatewayScript(port) {
-  return `
-const host = '127.0.0.1';
-const port = ${JSON.stringify(Number(port))};
-const eventCounts = new Map();
-const scenario = ${JSON.stringify(scenario)};
-function printEvent(type, parsed) {
-  if (type === 'tool_event' && parsed?.event?.type) {
-    console.log('[mock-gateway] tool_event:' + parsed.event.type);
-    eventCounts.set(parsed.event.type, (eventCounts.get(parsed.event.type) ?? 0) + 1);
-    if (scenario === 'permission-roundtrip' && parsed.event.type === 'permission.asked') {
-      const payload = parsed.event?.properties || {};
-      const toolSessionId = payload.sessionID;
-      const permissionId = payload.id;
-      if (toolSessionId && permissionId) {
-        wsRef?.send(JSON.stringify({
-          type: 'invoke',
-          welinkSessionId: 'wl-permission-smoke',
-          action: 'permission_reply',
-          payload: {
-            toolSessionId,
-            permissionId,
-            response: 'once'
-          }
-        }));
-        console.log('[mock-gateway] invoke:permission_reply');
-      }
-    }
-    return;
-  }
-  console.log('[mock-gateway] ' + type);
-}
-let wsRef = null;
-const server = Bun.serve({
-  hostname: host,
-  port,
-  fetch(req, wsServer) {
-    const u = new URL(req.url);
-    if (u.pathname === '/ws/agent' && wsServer.upgrade(req)) return;
-    return new Response('mock-gateway');
-  },
-  websocket: {
-    open(ws) { wsRef = ws; console.log('[mock-gateway] ws open'); },
-    message(ws, msg) {
-      try {
-        const text = typeof msg === 'string' ? msg : Buffer.from(msg).toString();
-        const parsed = JSON.parse(text);
-        const type = parsed?.type || 'unknown';
-        printEvent(type, parsed);
-        if (type === 'register') {
-          ws.send(JSON.stringify({ type: 'register_ok' }));
-          setTimeout(() => {
-            ws.send(JSON.stringify({ type: 'status_query' }));
-          }, 50);
-        }
-      } catch {
-        console.log('[mock-gateway] raw');
-      }
-    },
-    close() { wsRef = null; console.log('[mock-gateway] ws close'); }
-  }
-});
-console.log('[mock-gateway] listening on ' + host + ':' + port);
-await new Promise(() => {});
-`;
-}
-
 async function sleep(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createFailure(failureCategory, message, failureCode = failureCategory) {
+  const error = new Error(message);
+  error.failureCategory = failureCategory;
+  error.failureCode = failureCode;
+  return error;
+}
+
+async function withTimeout(task, ms, label, category, timeoutCode) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      task(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(createFailure(category, `${label} timed out after ${ms}ms`, timeoutCode));
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function withBuildLock(task) {
@@ -180,10 +138,13 @@ async function withBuildLock(task) {
 }
 
 async function startStack() {
-  ensureCommand('bun');
-  ensureCommand('curl');
-  ensureCommand('opencode');
-  ensureCommand('node');
+  for (const cmd of ['curl', 'opencode', 'node']) {
+    try {
+      ensureCommand(cmd);
+    } catch {
+      throw createFailure('ENV_MISSING_CMD', `Missing required command: ${cmd}`);
+    }
+  }
 
   const opencodePort = await resolvePort(requestedOpencodePort);
   const gatewayPort = await resolvePort(requestedGatewayPort);
@@ -204,9 +165,9 @@ async function startStack() {
   });
 
   console.log(`[1/5] Starting mock gateway on port ${gatewayPort}...`);
-  gatewayProc = spawnLoggedProcess('bun', ['-e', gatewayScript(gatewayPort)], gatewayLog);
+  gatewayProc = spawnLoggedProcess(process.execPath, ['./scripts/mock-gateway-server.mjs', String(gatewayPort), scenario], gatewayLog);
   if (!(await waitForPattern(gatewayLog, /listening on/, 30))) {
-    throw new Error(`Mock gateway failed to start. Check ${gatewayLog}`);
+    throw createFailure('E2E_SCENARIO_FAILED', `Mock gateway failed to start. Check ${gatewayLog}`);
   }
 
   console.log(`[2/5] Starting opencode serve on ${opencodeHost}:${opencodePort}...`);
@@ -228,7 +189,7 @@ async function startStack() {
     },
   );
   if (!(await waitForPattern(opencodeLog, /opencode server listening/, 60))) {
-    throw new Error(`OpenCode failed to start. Check ${opencodeLog}`);
+    throw createFailure('E2E_SCENARIO_FAILED', `OpenCode failed to start. Check ${opencodeLog}`);
   }
 
   return { opencodePort };
@@ -251,7 +212,7 @@ async function triggerChatFlow(opencodePort) {
   );
   const sessionId = JSON.parse(sessionJson).id;
   if (!sessionId) {
-    throw new Error(`Failed to parse session id from response: ${sessionJson}`);
+    throw createFailure('E2E_SCENARIO_FAILED', `Failed to parse session id from response: ${sessionJson}`);
   }
 
   await run(
@@ -307,11 +268,14 @@ function assertScenario(scenarioName, opencodeLogText, gatewayLogText) {
   throw new Error(`Unsupported scenario: ${scenarioName}`);
 }
 
-async function collectEvidence() {
+async function collectEvidence(failureCategory = 'NONE', failureCode = 'NONE', failureMessage = '') {
   const opencodeLogText = await readFile(opencodeLog, 'utf8').catch(() => '');
   const gatewayLogText = await readFile(gatewayLog, 'utf8').catch(() => '');
   const summary = [
     `=== scenario: ${scenario} ===`,
+    `failure_category=${failureCategory}`,
+    `failure_code=${failureCode}`,
+    `failure_message=${failureMessage}`,
     '',
     '=== message-bridge logs (opencode) ===',
     ...opencodeLogText.split('\n').filter((line) => line.includes('service=message-bridge')),
@@ -321,14 +285,40 @@ async function collectEvidence() {
   ].join('\n');
   await mkdir(path.dirname(summaryLog), { recursive: true });
   await writeFile(summaryLog, summary, 'utf8');
+  await writeFile(
+    summaryJson,
+    `${JSON.stringify({
+      scenario,
+      failure_category: failureCategory,
+      failure_code: failureCode,
+      failure_message: failureMessage,
+      opencode_log: opencodeLog,
+      gateway_log: gatewayLog,
+      summary_log: summaryLog,
+      generated_at: new Date().toISOString(),
+    }, null, 2)}\n`,
+    'utf8',
+  );
   return { opencodeLogText, gatewayLogText };
 }
 
 async function main() {
-  const { opencodePort } = await startStack();
+  const { opencodePort } = await withTimeout(
+    () => startStack(),
+    timeoutMs,
+    'startStack',
+    'E2E_SCENARIO_FAILED',
+    'E2E_TIMEOUT',
+  );
   let sessionId = null;
 
-  const result = await triggerChatFlow(opencodePort);
+  const result = await withTimeout(
+    () => triggerChatFlow(opencodePort),
+    timeoutMs,
+    'triggerChatFlow',
+    'E2E_SCENARIO_FAILED',
+    'E2E_TIMEOUT',
+  );
   sessionId = result.sessionId;
   console.log('[3/5] Waiting for protocol activity...');
   await sleep(scenario === 'chat-stream' ? 2000 : scenario === 'permission-roundtrip' ? 8000 : 1200);
@@ -343,13 +333,29 @@ async function main() {
   console.log(`session_id=${sessionId ?? ''}`);
   console.log(`logs=${logDir}`);
   if (!pass) {
-    throw new Error(`Check ${summaryLog}`);
+    throw createFailure('E2E_SCENARIO_FAILED', `Check ${summaryLog}`);
   }
 }
 
-main()
-  .finally(cleanup)
-  .catch((err) => {
-    console.error(err instanceof Error ? err.message : String(err));
+withTimeout(
+  () => main(),
+  timeoutMs,
+  'e2e-smoke',
+  'E2E_SCENARIO_FAILED',
+  'E2E_TIMEOUT',
+)
+  .catch(async (err) => {
+    const failureCategory = err && typeof err === 'object' && 'failureCategory' in err
+      ? err.failureCategory
+      : 'E2E_SCENARIO_FAILED';
+    const failureCode = err && typeof err === 'object' && 'failureCode' in err
+      ? err.failureCode
+      : failureCategory;
+    const failureMessage = err instanceof Error ? err.message : String(err);
+    await collectEvidence(failureCategory, failureCode, failureMessage).catch(() => {});
+    console.error(`failure_category=${failureCategory}`);
+    console.error(`failure_code=${failureCode}`);
+    console.error(failureMessage);
     process.exit(1);
-  });
+  })
+  .finally(cleanup);

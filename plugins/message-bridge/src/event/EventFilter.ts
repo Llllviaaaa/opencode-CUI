@@ -1,4 +1,4 @@
-import { DEFAULT_EVENT_ALLOWLIST } from '../contracts/upstream-events';
+import { DEFAULT_EVENT_ALLOWLIST } from '../contracts/upstream-events.js';
 
 export class EventFilter {
   private readonly exactPatterns: Set<string> = new Set();

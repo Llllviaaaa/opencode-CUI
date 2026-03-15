@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 
 import { EventFilter } from '../../src/event/EventFilter.ts';
 
@@ -6,8 +7,8 @@ describe('EventFilter defaults', () => {
   test('default allowlist keeps exact supported events and rejects unsupported variants', () => {
     const filter = new EventFilter();
 
-    expect(filter.isAllowed('question.asked')).toBe(true);
-    expect(filter.isAllowed('question.updated')).toBe(false);
-    expect(filter.isAllowed('requestion.created')).toBe(false);
+    assert.strictEqual(filter.isAllowed('question.asked'), true);
+    assert.strictEqual(filter.isAllowed('question.updated'), false);
+    assert.strictEqual(filter.isAllowed('requestion.created'), false);
   });
 });

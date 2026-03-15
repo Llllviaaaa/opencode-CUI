@@ -1,4 +1,5 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 
 import { BridgeRuntime } from '../../src/runtime/BridgeRuntime.ts';
 import { EventFilter } from '../../src/event/EventFilter.ts';
@@ -26,9 +27,9 @@ describe('event uplink via hook boundary', () => {
     await runtime.handleEvent({ type: 'session.created' });
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(sent).toHaveLength(0);
+    assert.strictEqual(sent.length, 0);
     const warnEntry = logs.find((item) => item?.body?.message === 'event.extraction_failed');
-    expect(!!warnEntry).toBe(true);
+    assert.ok(!!warnEntry);
   });
 
   test('allowed event sends tool_event', async () => {
@@ -50,12 +51,12 @@ describe('event uplink via hook boundary', () => {
       },
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].type).toBe('tool_event');
-    expect(sent[0].toolSessionId).toBe('tool-1');
-    expect(sent[0].event.type).toBe('message.updated');
-    expect('sessionId' in sent[0]).toBe(false);
-    expect('envelope' in sent[0]).toBe(false);
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].type, 'tool_event');
+    assert.strictEqual(sent[0].toolSessionId, 'tool-1');
+    assert.strictEqual(sent[0].event.type, 'message.updated');
+    assert.strictEqual('sessionId' in sent[0], false);
+    assert.strictEqual('envelope' in sent[0], false);
   });
 
   test('missing required upstream field fails closed', async () => {
@@ -86,8 +87,8 @@ describe('event uplink via hook boundary', () => {
       },
     });
 
-    expect(sent).toHaveLength(0);
+    assert.strictEqual(sent.length, 0);
     const warnEntry = logs.find((item) => item?.body?.message === 'event.extraction_failed');
-    expect(!!warnEntry).toBe(true);
+    assert.ok(!!warnEntry);
   });
 });
