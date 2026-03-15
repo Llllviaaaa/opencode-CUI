@@ -28,6 +28,8 @@ export interface ToolErrorMessage {
   type: "tool_error";
   welinkSessionId?: string;
   toolSessionId?: string;
+  errorCode?: string;
+  action?: string;
   error: string;
 }
 

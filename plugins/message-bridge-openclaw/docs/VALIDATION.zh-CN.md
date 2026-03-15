@@ -247,7 +247,23 @@ redis-cli publish agent:test-ak-openclaw-001 '{"type":"invoke","action":"permiss
 预期结果：
 
 - 返回 `tool_error`
-- `error` 中包含 `unsupported_in_openclaw_v1`
+- `errorCode=unsupported_in_openclaw_v1`
+- `action=permission_reply`
+- `error` 中包含 `unsupported_in_openclaw_v1:permission_reply`
+- 不应返回 `tool_done`
+
+继续验证 `question_reply`：
+
+```bash
+redis-cli publish agent:test-ak-openclaw-001 '{"type":"invoke","action":"question_reply","welinkSessionId":"welink-stage1-unsupported-002","payload":{"toolSessionId":"tool-stage1-unsupported-001","answer":"ok"}}'
+```
+
+预期结果：
+
+- 返回 `tool_error`
+- `errorCode=unsupported_in_openclaw_v1`
+- `action=question_reply`
+- `error` 中包含 `unsupported_in_openclaw_v1:question_reply`
 - 不应返回 `tool_done`
 
 ### 4.3 阶段一通过标准

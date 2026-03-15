@@ -62,7 +62,17 @@ Deferred in V1:
 - `permission_reply`
 - `question_reply`
 
-Deferred actions fail closed with `tool_error(unsupported_in_openclaw_v1)`.
+Deferred actions fail closed with stable shape:
+
+- `type=tool_error`
+- `errorCode=unsupported_in_openclaw_v1`
+- `action=permission_reply|question_reply`
+- `error=unsupported_in_openclaw_v1:<action>`
+
+Upgrade path:
+
+- current phase keeps both actions unsupported by design
+- implementation target and rollout gate are tracked in `docs/implementation-plan.md` (phase four)
 
 ## Environment
 
@@ -285,6 +295,7 @@ Confirm the actual assistant output in the latest session file under:
 
 - `permission_reply` is not implemented
 - `question_reply` is not implemented
+- both actions return fail-closed `tool_error` with stable `errorCode/action`
 - streaming is block-level, not token-level
 - published `openclaw plugins install` distribution flow is not yet validated for this package
 - plugin install must not include `node_modules/openclaw`

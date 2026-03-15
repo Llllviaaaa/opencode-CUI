@@ -407,6 +407,8 @@ export class OpenClawGatewayBridge {
     if (!normalized.ok) {
       this.sendToolError({
         type: "tool_error",
+        errorCode: normalized.error.code,
+        action: normalized.error.action,
         error: normalized.error.message,
       });
       return;
@@ -878,6 +880,8 @@ export class OpenClawGatewayBridge {
       type: "tool_error",
       toolSessionId,
       welinkSessionId,
+      errorCode: "unsupported_in_openclaw_v1",
+      action,
       error: `unsupported_in_openclaw_v1:${action}`,
     });
   }

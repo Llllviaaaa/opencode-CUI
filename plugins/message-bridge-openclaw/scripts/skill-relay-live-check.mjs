@@ -216,6 +216,39 @@ function assertCondition(condition, message) {
   }
 }
 
+async function assertUnsupportedAction({
+  ws,
+  queue,
+  timeoutMs,
+  source,
+  ak,
+  userId,
+  welinkSessionId,
+  toolSessionId,
+  action,
+  payload,
+}) {
+  sendJson(ws, {
+    type: "invoke",
+    source,
+    ak,
+    userId,
+    welinkSessionId,
+    action,
+    payload,
+  });
+  const unsupported = await queue.waitFor(
+    (message) => message?.type === "tool_error" && message?.toolSessionId === toolSessionId,
+    timeoutMs,
+  );
+  assertCondition(unsupported?.errorCode === "unsupported_in_openclaw_v1", `${action} errorCode 不符合预期：${JSON.stringify(unsupported)}`);
+  assertCondition(unsupported?.action === action, `${action} action 字段不符合预期：${JSON.stringify(unsupported)}`);
+  assertCondition(
+    typeof unsupported?.error === "string" && unsupported.error.includes(`unsupported_in_openclaw_v1:${action}`),
+    `${action} fail-closed 未命中预期：${JSON.stringify(unsupported)}`,
+  );
+}
+
 async function main() {
   const rawArgs = parseArgs(process.argv.slice(2));
   if (rawArgs.help === "true") {
@@ -330,12 +363,15 @@ async function main() {
     assertCondition(closeDone?.type === "tool_done", "close_session 未返回 tool_done");
 
     if (!skipUnsupported) {
-      sendJson(ws, {
-        type: "invoke",
+      await assertUnsupportedAction({
+        ws,
+        queue,
+        timeoutMs,
         source,
         ak,
         userId,
-        welinkSessionId: `${welinkSessionId}-unsupported`,
+        welinkSessionId: `${welinkSessionId}-unsupported-permission`,
+        toolSessionId,
         action: "permission_reply",
         payload: {
           toolSessionId,
@@ -343,14 +379,21 @@ async function main() {
           response: "once",
         },
       });
-      const unsupported = await queue.waitFor(
-        (message) => message?.type === "tool_error" && message?.toolSessionId === toolSessionId,
+      await assertUnsupportedAction({
+        ws,
+        queue,
         timeoutMs,
-      );
-      assertCondition(
-        typeof unsupported?.error === "string" && unsupported.error.includes("unsupported_in_openclaw_v1"),
-        `unsupported fail-closed 未命中预期：${JSON.stringify(unsupported)}`,
-      );
+        source,
+        ak,
+        userId,
+        welinkSessionId: `${welinkSessionId}-unsupported-question`,
+        toolSessionId,
+        action: "question_reply",
+        payload: {
+          toolSessionId,
+          answer: "ok",
+        },
+      });
     }
 
     logLine("skill relay live 校验通过", {
@@ -358,7 +401,8 @@ async function main() {
       createSession: "ok",
       chat: "ok",
       closeSession: "ok",
-      unsupported: skipUnsupported ? "skipped" : "ok",
+      unsupportedPermissionReply: skipUnsupported ? "skipped" : "ok",
+      unsupportedQuestionReply: skipUnsupported ? "skipped" : "ok",
     });
   } finally {
     try {
