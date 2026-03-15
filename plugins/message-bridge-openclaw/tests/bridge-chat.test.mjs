@@ -652,6 +652,7 @@ test("chat invoke fallback uses runTimeoutMs for waitForRun and logs completion 
 });
 
 test("chat invoke emits session error and tool_error when dispatcher times out before first chunk", async () => {
+  let attempts = 0;
   const runtime = {
     channel: {
       routing: {
@@ -673,6 +674,7 @@ test("chat invoke emits session error and tool_error when dispatcher times out b
           return ctx;
         },
         async dispatchReplyWithBufferedBlockDispatcher() {
+          attempts += 1;
           throw new Error("LLM request timed out.");
         },
       },
@@ -693,13 +695,205 @@ test("chat invoke emits session error and tool_error when dispatcher times out b
 
   const messageTypes = connection.sent.map((message) => message.type);
   assert.deepEqual(messageTypes, ["tool_event", "tool_event", "tool_error"]);
+  assert.equal(attempts, 2);
   assert.equal(connection.sent[1].event.type, "session.error");
   assert.equal(connection.sent.some((message) => message.type === "tool_done"), false);
+  const startedLogs = logs.info.filter((entry) => entry.message === "bridge.chat.started");
+  const startedLog = startedLogs[0];
   const failedLog = logs.warn.find((entry) => entry.message === "bridge.chat.failed");
+  assert.equal(startedLogs.length, 2);
+  assert.equal(startedLog?.meta.retryAttempt, 0);
+  assert.equal(startedLogs[1]?.meta.retryAttempt, 1);
   assert.equal(failedLog?.meta.failureStage, "before_first_chunk");
   assert.equal(failedLog?.meta.errorCategory, "timeout");
+  assert.equal(failedLog?.meta.retryAttempt, 1);
   assert.equal(failedLog?.meta.timedOut, true);
   assert.equal(failedLog?.meta.firstChunkLatencyMs, null);
+});
+
+test("chat fallback failed wait keeps wait diagnostics in failed log", async () => {
+  const runtime = {
+    subagent: {
+      async run() {
+        return { runId: "run_fallback_failed_wait" };
+      },
+      async waitForRun() {
+        return { status: "failed", error: "request timed out" };
+      },
+      async getSessionMessages() {
+        return { messages: [] };
+      },
+      async deleteSession() {},
+    },
+    channel: {},
+  };
+
+  const { bridge, logs, connection } = createBridge(runtime);
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_fallback_failed_wait",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_fallback_failed_wait",
+      text: "hello",
+    },
+  });
+
+  assert.equal(connection.sent.at(-1)?.type, "tool_error");
+  const failedLog = logs.warn.find((entry) => entry.message === "bridge.chat.failed");
+  assert.equal(failedLog?.meta.executionPath, "subagent_fallback");
+  assert.equal(failedLog?.meta.waitStatus, "failed");
+  assert.equal(failedLog?.meta.waitError, "request timed out");
+});
+
+test("chat invoke does not retry when timeout happens after first chunk", async () => {
+  let attempts = 0;
+  const runtime = {
+    channel: {
+      routing: {
+        resolveAgentRoute() {
+          return {
+            accountId: "default",
+            agentId: "agent_after_first_chunk_timeout",
+          };
+        },
+      },
+      reply: {
+        resolveEnvelopeFormatOptions() {
+          return {};
+        },
+        formatAgentEnvelope({ body }) {
+          return body;
+        },
+        finalizeInboundContext(ctx) {
+          return ctx;
+        },
+        async dispatchReplyWithBufferedBlockDispatcher({ dispatcherOptions }) {
+          attempts += 1;
+          await dispatcherOptions.deliver({ text: "hello " }, { kind: "block" });
+          throw new Error("LLM request timed out.");
+        },
+      },
+    },
+  };
+
+  const { bridge, logs } = createBridge(runtime);
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_after_chunk_timeout",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_after_chunk_timeout",
+      text: "hello",
+    },
+  });
+
+  assert.equal(attempts, 1);
+  const failedLog = logs.warn.find((entry) => entry.message === "bridge.chat.failed");
+  assert.equal(failedLog?.meta.failureStage, "after_first_chunk");
+  assert.equal(failedLog?.meta.errorCategory, "timeout");
+  assert.equal(failedLog?.meta.retryAttempt, 0);
+});
+
+test("chat invoke does not retry for non-timeout failures", async () => {
+  let attempts = 0;
+  const runtime = {
+    channel: {
+      routing: {
+        resolveAgentRoute() {
+          return {
+            accountId: "default",
+            agentId: "agent_runtime_error_no_retry",
+          };
+        },
+      },
+      reply: {
+        resolveEnvelopeFormatOptions() {
+          return {};
+        },
+        formatAgentEnvelope({ body }) {
+          return body;
+        },
+        finalizeInboundContext(ctx) {
+          return ctx;
+        },
+        async dispatchReplyWithBufferedBlockDispatcher() {
+          attempts += 1;
+          throw new Error("agent execution failed");
+        },
+      },
+    },
+  };
+
+  const { bridge, logs } = createBridge(runtime);
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_runtime_error_no_retry",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_runtime_error_no_retry",
+      text: "hello",
+    },
+  });
+
+  assert.equal(attempts, 1);
+  const failedLog = logs.warn.find((entry) => entry.message === "bridge.chat.failed");
+  assert.equal(failedLog?.meta.errorCategory, "runtime_error");
+  assert.equal(failedLog?.meta.retryAttempt, 0);
+});
+
+test("chat fallback retry reuses idempotency key and records retryAttempt", async () => {
+  const idempotencyKeys = [];
+  let waitAttempt = 0;
+  const runtime = {
+    subagent: {
+      async run({ idempotencyKey }) {
+        idempotencyKeys.push(idempotencyKey);
+        return { runId: `run_fallback_retry_${idempotencyKeys.length}` };
+      },
+      async waitForRun() {
+        waitAttempt += 1;
+        if (waitAttempt === 1) {
+          return { status: "failed", error: "request timed out" };
+        }
+        return { status: "ok" };
+      },
+      async getSessionMessages() {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: "hello from fallback retry",
+            },
+          ],
+        };
+      },
+      async deleteSession() {},
+    },
+    channel: {},
+  };
+
+  const { bridge, logs } = createBridge(runtime);
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_fallback_retry",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_fallback_retry",
+      text: "hello",
+    },
+  });
+
+  assert.equal(idempotencyKeys.length, 2);
+  assert.equal(idempotencyKeys[0], idempotencyKeys[1]);
+  const completedLog = logs.info.find(
+    (entry) => entry.message === "bridge.chat.completed" && entry.meta.executionPath === "subagent_fallback",
+  );
+  assert.equal(completedLog?.meta.retryAttempt, 1);
 });
 
 test("bridge status tracks ready, inbound, outbound and heartbeat timestamps", async () => {

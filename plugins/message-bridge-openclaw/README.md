@@ -24,6 +24,11 @@ Protocol conversion sequences:
 
 - `docs/protocol-sequence.md`
 
+P0 首块稳定性专题（需求 + 方案）:
+
+- `docs/topics/mb-p0-first-chunk-stability.md`
+- `docs/topics/mb-p0-first-chunk-stability-solution.md`
+
 ## 安装方式
 
 当前仓库已验证的安装方式都属于本地扩展安装：

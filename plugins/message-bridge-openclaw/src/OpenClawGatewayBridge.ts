@@ -161,6 +161,7 @@ interface ToolAgentEvent {
 }
 
 type ChatExecutionPath = "runtime_reply" | "subagent_fallback";
+type RetryAttempt = 0 | 1;
 
 interface SelectedModelState {
   provider: string | null;
@@ -449,6 +450,7 @@ export class OpenClawGatewayBridge {
     const assistantStream = createAssistantStreamState(record.sessionKey);
     const toolStates = new Map<string, ToolPartState>();
     const startedAt = Date.now();
+    const chatRequestId = randomUUID();
     const configuredTimeoutMs = this.options.account.runTimeoutMs;
     const selectedModel = createSelectedModelState();
     const executionPath: ChatExecutionPath =
@@ -475,147 +477,210 @@ export class OpenClawGatewayBridge {
       startedAt,
       configuredTimeoutMs,
       executionPath,
+      chatRequestId,
+      retryAttempt: 0,
     });
+    let retryAttempt: RetryAttempt = 0;
+    let lastErrorMessage: string | null = null;
+    let lastErrorExtra: Record<string, unknown> | undefined;
 
-    if (!this.runtime.channel?.routing?.resolveAgentRoute || !this.runtime.channel?.reply) {
-      await this.handleChatWithSubagentFallback(record, message.payload.text, startedAt, selectedModel);
-      return;
-    }
-
-    const route = this.runtime.channel.routing.resolveAgentRoute({
-      cfg: this.options.config,
-      channel: "message-bridge",
-      accountId: this.options.account.accountId,
-      peer: {
-        kind: "direct",
-        id: record.welinkSessionId || record.toolSessionId,
-      },
-    });
-    const envelopeOptions = this.runtime.channel.reply.resolveEnvelopeFormatOptions(this.options.config);
-    const body = this.runtime.channel.reply.formatAgentEnvelope({
-      channel: "message-bridge",
-      from: `ai-gateway:${record.welinkSessionId || record.toolSessionId}`,
-      timestamp: new Date(),
-      previousTimestamp: undefined,
-      envelope: envelopeOptions,
-      body: message.payload.text,
-    });
-    const ctxPayload = this.runtime.channel.reply.finalizeInboundContext({
-      Body: body,
-      BodyForAgent: message.payload.text,
-      RawBody: message.payload.text,
-      CommandBody: message.payload.text,
-      From: `message-bridge:${record.welinkSessionId || record.toolSessionId}`,
-      To: `message-bridge:${record.toolSessionId}`,
-      SessionKey: record.sessionKey,
-      AccountId: route.accountId,
-      ChatType: "direct",
-      ConversationLabel: `ai-gateway:${record.welinkSessionId || record.toolSessionId}`,
-      SenderName: "ai-gateway",
-      SenderId: record.welinkSessionId || record.toolSessionId,
-      Provider: "message-bridge",
-      Surface: "message-bridge",
-      Timestamp: new Date().toISOString(),
-      OriginatingChannel: "message-bridge",
-      OriginatingTo: `message-bridge:${record.toolSessionId}`,
-      CommandAuthorized: false,
-    });
-    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-      cfg: this.options.config,
-      agentId: route.agentId,
-      channel: "message-bridge",
-      accountId: this.options.account.accountId,
-    });
-    const handleModelSelected = (selection: { provider: string; model: string; thinkLevel: string | undefined }) => {
-      selectedModel.provider = selection.provider;
-      selectedModel.model = selection.model;
-      selectedModel.thinkLevel = selection.thinkLevel ?? null;
-      this.options.logger.info("bridge.chat.model_selected", {
-        toolSessionId: record.toolSessionId,
-        sessionKey: record.sessionKey,
-        configuredTimeoutMs,
-        runTimeoutMs: configuredTimeoutMs,
-        executionPath: "runtime_reply",
-        provider: selection.provider,
-        model: selection.model,
-        thinkLevel: selection.thinkLevel ?? null,
-      });
-      onModelSelected?.(selection);
-    };
-    const deliver = async (rawPayload: unknown, info: { kind: "tool" | "block" | "final" }) => {
-      const payload =
-        isRecord(rawPayload) ? normalizeOutboundReplyPayload(rawPayload) : normalizeOutboundReplyPayload({});
-
-      if (info.kind === "tool") {
-        const activeSession = this.activeToolSessions.get(record.sessionKey);
-        const toolCallId = activeSession?.pendingToolResultTarget;
-        if (!toolCallId) {
+    while (true) {
+      if (!this.runtime.channel?.routing?.resolveAgentRoute || !this.runtime.channel?.reply) {
+        const fallbackResult = await this.handleChatWithSubagentFallback(
+          record,
+          message.payload.text,
+          startedAt,
+          selectedModel,
+          chatRequestId,
+          retryAttempt,
+        );
+        if (fallbackResult.ok) {
           return;
         }
-
-        const toolState = activeSession.toolStates.get(toolCallId);
-        if (!toolState) {
-          return;
+        lastErrorMessage = fallbackResult.errorMessage;
+        lastErrorExtra = fallbackResult.extra;
+        if (retryAttempt === 0 && this.shouldRetryBeforeFirstChunkTimeout(lastErrorMessage, assistantStream)) {
+          retryAttempt = 1;
+          this.logChatStarted({
+            toolSessionId: record.toolSessionId,
+            welinkSessionId: record.welinkSessionId,
+            sessionKey: record.sessionKey,
+            textLength: message.payload.text.length,
+            startedAt,
+            configuredTimeoutMs,
+            executionPath,
+            chatRequestId,
+            retryAttempt,
+          });
+          continue;
         }
-
-        const output = typeof payload.text === "string" ? payload.text.trim() : "";
-        if (output.length === 0) {
-          return;
-        }
-
-        toolState.output = output;
-        this.emitToolPartUpdate(record.toolSessionId, toolState);
-        return;
+        break;
       }
 
-      if (typeof payload.text === "string" && payload.text.length > 0) {
-        const now = Date.now();
-        assistantStream.chunkCount += 1;
-        if (assistantStream.firstChunkAt === null) {
-          assistantStream.firstChunkAt = now;
-          this.options.logger.info("bridge.chat.first_chunk", {
-            toolSessionId: record.toolSessionId,
-            sessionKey: record.sessionKey,
-            latencyMs: now - startedAt,
-            chunkLength: payload.text.length,
-          });
-        } else {
-          this.options.logger.info("bridge.chat.chunk", {
-            toolSessionId: record.toolSessionId,
-            sessionKey: record.sessionKey,
-            chunkIndex: assistantStream.chunkCount,
-            chunkLength: payload.text.length,
-            sinceStartMs: now - startedAt,
-            sinceFirstChunkMs: now - assistantStream.firstChunkAt,
-          });
-        }
-        this.sendAssistantStreamChunk(record.toolSessionId, assistantStream, payload.text);
-      }
-    };
-
-    try {
-      await this.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-        ctx: ctxPayload,
+      const route = this.runtime.channel.routing.resolveAgentRoute({
         cfg: this.options.config,
-        dispatcherOptions: {
-          ...prefixOptions,
-          deliver,
-          onError: (error) => {
-            throw error;
-          },
-        },
-        replyOptions: {
-          onAgentRunStart: (runId) => {
-            this.trackSessionRunId(record.sessionKey, runId);
-          },
-          onModelSelected: handleModelSelected,
-          timeoutOverrideSeconds: Math.ceil(configuredTimeoutMs / 1000),
+        channel: "message-bridge",
+        accountId: this.options.account.accountId,
+        peer: {
+          kind: "direct",
+          id: record.welinkSessionId || record.toolSessionId,
         },
       });
-    } catch (error) {
-      this.clearActiveToolSession(record.sessionKey);
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logChatFailed({
+      const envelopeOptions = this.runtime.channel.reply.resolveEnvelopeFormatOptions(this.options.config);
+      const body = this.runtime.channel.reply.formatAgentEnvelope({
+        channel: "message-bridge",
+        from: `ai-gateway:${record.welinkSessionId || record.toolSessionId}`,
+        timestamp: new Date(),
+        previousTimestamp: undefined,
+        envelope: envelopeOptions,
+        body: message.payload.text,
+      });
+      const ctxPayload = this.runtime.channel.reply.finalizeInboundContext({
+        Body: body,
+        BodyForAgent: message.payload.text,
+        RawBody: message.payload.text,
+        CommandBody: message.payload.text,
+        From: `message-bridge:${record.welinkSessionId || record.toolSessionId}`,
+        To: `message-bridge:${record.toolSessionId}`,
+        SessionKey: record.sessionKey,
+        AccountId: route.accountId,
+        ChatType: "direct",
+        ConversationLabel: `ai-gateway:${record.welinkSessionId || record.toolSessionId}`,
+        SenderName: "ai-gateway",
+        SenderId: record.welinkSessionId || record.toolSessionId,
+        Provider: "message-bridge",
+        Surface: "message-bridge",
+        Timestamp: new Date().toISOString(),
+        OriginatingChannel: "message-bridge",
+        OriginatingTo: `message-bridge:${record.toolSessionId}`,
+        CommandAuthorized: false,
+      });
+      const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+        cfg: this.options.config,
+        agentId: route.agentId,
+        channel: "message-bridge",
+        accountId: this.options.account.accountId,
+      });
+      const handleModelSelected = (selection: { provider: string; model: string; thinkLevel: string | undefined }) => {
+        selectedModel.provider = selection.provider;
+        selectedModel.model = selection.model;
+        selectedModel.thinkLevel = selection.thinkLevel ?? null;
+        this.options.logger.info("bridge.chat.model_selected", {
+          toolSessionId: record.toolSessionId,
+          sessionKey: record.sessionKey,
+          configuredTimeoutMs,
+          runTimeoutMs: configuredTimeoutMs,
+          executionPath: "runtime_reply",
+          chatRequestId,
+          retryAttempt,
+          provider: selection.provider,
+          model: selection.model,
+          thinkLevel: selection.thinkLevel ?? null,
+        });
+        onModelSelected?.(selection);
+      };
+      const deliver = async (rawPayload: unknown, info: { kind: "tool" | "block" | "final" }) => {
+        const payload =
+          isRecord(rawPayload) ? normalizeOutboundReplyPayload(rawPayload) : normalizeOutboundReplyPayload({});
+
+        if (info.kind === "tool") {
+          const activeSession = this.activeToolSessions.get(record.sessionKey);
+          const toolCallId = activeSession?.pendingToolResultTarget;
+          if (!toolCallId) {
+            return;
+          }
+
+          const toolState = activeSession.toolStates.get(toolCallId);
+          if (!toolState) {
+            return;
+          }
+
+          const output = typeof payload.text === "string" ? payload.text.trim() : "";
+          if (output.length === 0) {
+            return;
+          }
+
+          toolState.output = output;
+          this.emitToolPartUpdate(record.toolSessionId, toolState);
+          return;
+        }
+
+        if (typeof payload.text === "string" && payload.text.length > 0) {
+          const now = Date.now();
+          assistantStream.chunkCount += 1;
+          if (assistantStream.firstChunkAt === null) {
+            assistantStream.firstChunkAt = now;
+            this.options.logger.info("bridge.chat.first_chunk", {
+              toolSessionId: record.toolSessionId,
+              sessionKey: record.sessionKey,
+              chatRequestId,
+              retryAttempt,
+              latencyMs: now - startedAt,
+              chunkLength: payload.text.length,
+            });
+          } else {
+            this.options.logger.info("bridge.chat.chunk", {
+              toolSessionId: record.toolSessionId,
+              sessionKey: record.sessionKey,
+              chatRequestId,
+              retryAttempt,
+              chunkIndex: assistantStream.chunkCount,
+              chunkLength: payload.text.length,
+              sinceStartMs: now - startedAt,
+              sinceFirstChunkMs: now - assistantStream.firstChunkAt,
+            });
+          }
+          this.sendAssistantStreamChunk(record.toolSessionId, assistantStream, payload.text);
+        }
+      };
+
+      try {
+        await this.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+          ctx: ctxPayload,
+          cfg: this.options.config,
+          dispatcherOptions: {
+            ...prefixOptions,
+            deliver,
+            onError: (error) => {
+              throw error;
+            },
+          },
+          replyOptions: {
+            onAgentRunStart: (runId) => {
+              this.trackSessionRunId(record.sessionKey, runId);
+            },
+            onModelSelected: handleModelSelected,
+            timeoutOverrideSeconds: Math.ceil(configuredTimeoutMs / 1000),
+          },
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (retryAttempt === 0 && this.shouldRetryBeforeFirstChunkTimeout(errorMessage, assistantStream)) {
+          retryAttempt = 1;
+          this.logChatStarted({
+            toolSessionId: record.toolSessionId,
+            welinkSessionId: record.welinkSessionId,
+            sessionKey: record.sessionKey,
+            textLength: message.payload.text.length,
+            startedAt,
+            configuredTimeoutMs,
+            executionPath,
+            chatRequestId,
+            retryAttempt,
+          });
+          continue;
+        }
+        lastErrorMessage = errorMessage;
+        lastErrorExtra = undefined;
+        break;
+      }
+      const finalText = assistantStream.accumulatedText || "(empty response)";
+      this.sendAssistantFinalResponse(
+        record.toolSessionId,
+        assistantStream,
+        finalText,
+      );
+      this.logChatCompleted({
         toolSessionId: record.toolSessionId,
         sessionKey: record.sessionKey,
         configuredTimeoutMs,
@@ -623,49 +688,50 @@ export class OpenClawGatewayBridge {
         assistantStream,
         selectedModel,
         executionPath: "runtime_reply",
-        error: errorMessage,
+        chatRequestId,
+        retryAttempt,
+        responseLength: finalText.length,
       });
       this.sendToolEvent({
         type: "tool_event",
         toolSessionId: record.toolSessionId,
-        event: buildSessionErrorEvent(record.sessionKey, errorMessage),
+        event: buildIdleEvent(record.sessionKey),
       });
-      this.sendToolError({
-        type: "tool_error",
+      this.sendToolDone({
+        type: "tool_done",
         toolSessionId: record.toolSessionId,
         welinkSessionId: record.welinkSessionId,
-        error: errorMessage,
       });
+      this.clearActiveToolSession(record.sessionKey);
       return;
     }
 
-    const finalText = assistantStream.accumulatedText || "(empty response)";
-    this.sendAssistantFinalResponse(
-      record.toolSessionId,
-      assistantStream,
-      finalText,
-    );
-    this.logChatCompleted({
+    this.clearActiveToolSession(record.sessionKey);
+    const finalErrorMessage = lastErrorMessage ?? "chat_failed_without_error";
+    this.logChatFailed({
       toolSessionId: record.toolSessionId,
       sessionKey: record.sessionKey,
       configuredTimeoutMs,
       startedAt,
       assistantStream,
       selectedModel,
-      executionPath: "runtime_reply",
-      responseLength: finalText.length,
+      executionPath,
+      chatRequestId,
+      retryAttempt,
+      error: finalErrorMessage,
+      extra: lastErrorExtra,
     });
     this.sendToolEvent({
       type: "tool_event",
       toolSessionId: record.toolSessionId,
-      event: buildIdleEvent(record.sessionKey),
+      event: buildSessionErrorEvent(record.sessionKey, finalErrorMessage),
     });
-    this.sendToolDone({
-      type: "tool_done",
+    this.sendToolError({
+      type: "tool_error",
       toolSessionId: record.toolSessionId,
       welinkSessionId: record.welinkSessionId,
+      error: finalErrorMessage,
     });
-    this.clearActiveToolSession(record.sessionKey);
   }
 
   private async handleChatWithSubagentFallback(
@@ -673,35 +739,15 @@ export class OpenClawGatewayBridge {
     text: string,
     startedAt: number,
     selectedModel: SelectedModelState,
-  ): Promise<void> {
+    chatRequestId: string,
+    retryAttempt: RetryAttempt,
+  ): Promise<{ ok: true } | { ok: false; errorMessage: string; extra?: Record<string, unknown> }> {
     const assistantStream = createAssistantStreamState(record.sessionKey);
     const configuredTimeoutMs = this.options.account.runTimeoutMs;
     const subagent = this.getSubagentRuntime();
     if (!subagent) {
       const errorMessage = "openclaw_runtime_missing_reply_executor";
-      this.clearActiveToolSession(record.sessionKey);
-      this.logChatFailed({
-        toolSessionId: record.toolSessionId,
-        sessionKey: record.sessionKey,
-        configuredTimeoutMs,
-        startedAt,
-        assistantStream,
-        selectedModel,
-        executionPath: "subagent_fallback",
-        error: errorMessage,
-      });
-      this.sendToolEvent({
-        type: "tool_event",
-        toolSessionId: record.toolSessionId,
-        event: buildSessionErrorEvent(record.sessionKey, errorMessage),
-      });
-      this.sendToolError({
-        type: "tool_error",
-        toolSessionId: record.toolSessionId,
-        welinkSessionId: record.welinkSessionId,
-        error: errorMessage,
-      });
-      return;
+      return { ok: false, errorMessage };
     }
 
     try {
@@ -709,7 +755,7 @@ export class OpenClawGatewayBridge {
         sessionKey: record.sessionKey,
         message: text,
         deliver: false,
-        idempotencyKey: `${record.toolSessionId}:${text}`,
+        idempotencyKey: `chat:${record.toolSessionId}:${chatRequestId}`,
       });
 
       const wait = await subagent.waitForRun({
@@ -719,33 +765,14 @@ export class OpenClawGatewayBridge {
 
       if (wait.status !== "ok") {
         const errorMessage = wait.error || `subagent_${wait.status}`;
-        this.clearActiveToolSession(record.sessionKey);
-        this.logChatFailed({
-          toolSessionId: record.toolSessionId,
-          sessionKey: record.sessionKey,
-          configuredTimeoutMs,
-          startedAt,
-          assistantStream,
-          selectedModel,
-          executionPath: "subagent_fallback",
-          error: errorMessage,
+        return {
+          ok: false,
+          errorMessage,
           extra: {
             waitStatus: wait.status,
             waitError: wait.error ?? null,
           },
-        });
-        this.sendToolEvent({
-          type: "tool_event",
-          toolSessionId: record.toolSessionId,
-          event: buildSessionErrorEvent(record.sessionKey, errorMessage),
-        });
-        this.sendToolError({
-          type: "tool_error",
-          toolSessionId: record.toolSessionId,
-          welinkSessionId: record.welinkSessionId,
-          error: errorMessage,
-        });
-        return;
+        };
       }
 
       const session = await subagent.getSessionMessages({
@@ -762,6 +789,8 @@ export class OpenClawGatewayBridge {
         assistantStream,
         selectedModel,
         executionPath: "subagent_fallback",
+        chatRequestId,
+        retryAttempt,
         responseLength: assistantText.length,
         extra: {
           waitStatus: wait.status,
@@ -779,31 +808,17 @@ export class OpenClawGatewayBridge {
         welinkSessionId: record.welinkSessionId,
       });
       this.clearActiveToolSession(record.sessionKey);
+      return { ok: true };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.clearActiveToolSession(record.sessionKey);
-      this.logChatFailed({
-        toolSessionId: record.toolSessionId,
-        sessionKey: record.sessionKey,
-        configuredTimeoutMs,
-        startedAt,
-        assistantStream,
-        selectedModel,
-        executionPath: "subagent_fallback",
-        error: errorMessage,
-      });
-      this.sendToolEvent({
-        type: "tool_event",
-        toolSessionId: record.toolSessionId,
-        event: buildSessionErrorEvent(record.sessionKey, errorMessage),
-      });
-      this.sendToolError({
-        type: "tool_error",
-        toolSessionId: record.toolSessionId,
-        welinkSessionId: record.welinkSessionId,
-        error: errorMessage,
-      });
+      return { ok: false, errorMessage };
     }
+  }
+
+  private shouldRetryBeforeFirstChunkTimeout(errorMessage: string, assistantStream: AssistantStreamState): boolean {
+    const lowered = errorMessage.toLowerCase();
+    const isTimeout = lowered.includes("timed out") || lowered.includes("timeout");
+    return assistantStream.firstChunkAt === null && isTimeout;
   }
 
   private handleCreateSession(message: Extract<InvokeMessage, { action: "create_session" }>): void {
@@ -1055,6 +1070,8 @@ export class OpenClawGatewayBridge {
     startedAt: number;
     configuredTimeoutMs: number;
     executionPath: ChatExecutionPath;
+    chatRequestId: string;
+    retryAttempt: RetryAttempt;
   }): void {
     this.options.logger.info("bridge.chat.started", {
       toolSessionId: params.toolSessionId,
@@ -1065,6 +1082,8 @@ export class OpenClawGatewayBridge {
       configuredTimeoutMs: params.configuredTimeoutMs,
       runTimeoutMs: params.configuredTimeoutMs,
       executionPath: params.executionPath,
+      chatRequestId: params.chatRequestId,
+      retryAttempt: params.retryAttempt,
     });
   }
 
@@ -1076,6 +1095,8 @@ export class OpenClawGatewayBridge {
     assistantStream: AssistantStreamState;
     selectedModel: SelectedModelState;
     executionPath: ChatExecutionPath;
+    chatRequestId: string;
+    retryAttempt: RetryAttempt;
     responseLength: number;
     extra?: Record<string, unknown>;
   }): void {
@@ -1094,6 +1115,8 @@ export class OpenClawGatewayBridge {
     assistantStream: AssistantStreamState;
     selectedModel: SelectedModelState;
     executionPath: ChatExecutionPath;
+    chatRequestId: string;
+    retryAttempt: RetryAttempt;
     error: string;
     extra?: Record<string, unknown>;
   }): void {
@@ -1117,6 +1140,8 @@ export class OpenClawGatewayBridge {
     assistantStream: AssistantStreamState;
     selectedModel: SelectedModelState;
     executionPath: ChatExecutionPath;
+    chatRequestId: string;
+    retryAttempt: RetryAttempt;
   }): Record<string, unknown> {
     return {
       toolSessionId: params.toolSessionId,
@@ -1124,6 +1149,8 @@ export class OpenClawGatewayBridge {
       configuredTimeoutMs: params.configuredTimeoutMs,
       runTimeoutMs: params.configuredTimeoutMs,
       executionPath: params.executionPath,
+      chatRequestId: params.chatRequestId,
+      retryAttempt: params.retryAttempt,
       provider: params.selectedModel.provider,
       model: params.selectedModel.model,
       thinkLevel: params.selectedModel.thinkLevel,

@@ -6,6 +6,48 @@
 **Owner:** message-bridge maintainers  
 **Scope:** OpenClaw `--dev` 环境下的 `message-bridge` 插件
 
+## P0 首块稳定性专题索引（2026-03-15）
+
+需求与方案专题：
+
+1. `./topics/mb-p0-first-chunk-stability.md`
+2. `./topics/mb-p0-first-chunk-stability-solution.md`
+
+需求追溯标识：
+
+- `FR-MB-OPENCLAW-P0-FIRST-CHUNK`
+
+本节只挂载执行任务与验收门禁，不重复专题正文。
+
+### P0-FC-01 实现任务包
+- [ ] 统一 `runtime_reply` 与 `subagent_fallback` 的 timeout 口径（同一 `runTimeoutMs`）。
+- [ ] 固化失败阶段分型：`before_first_chunk` / `after_first_chunk`。
+- [ ] 固化错误分类字段：至少包含 `timeout` / `runtime_error`。
+- [ ] 增加最小重试边界：仅首块前 timeout 允许单次重试。
+- [ ] 重试必须复用同一业务请求标识（idempotency key），不得改变会话键与路由键。
+- [ ] 增加 `retryAttempt` 观测字段输出（首发 `0`、重试 `1`），并纳入门禁统计口径。
+
+### P0-FC-02 测试任务包
+- [ ] 新会话首块成功率统计场景。
+- [ ] 首块前 timeout 注入与分类验证。
+- [ ] 首块后失败注入与分类验证。
+- [ ] `runtime_reply` / `subagent_fallback` 诊断字段一致性验证。
+
+### P0-FC-03 验收门禁
+- [ ] 首块成功率达标（阈值以需求专题定义为准）。
+- [ ] 首块前 timeout 占比达标（阈值以需求专题定义为准）。
+- [ ] 失败样本阶段分型覆盖率 100%。
+- [ ] 两路径关键诊断字段一致率 100%。
+- [ ] 发布前在目标环境执行同模型、同网关配置的连续 30 个新会话样本门禁检查。
+
+### P0-FC-04 上线阻塞条件
+出现任一条件即阻塞上线：
+
+1. 首块成功率未达标。
+2. 首块前 timeout 占比超阈值。
+3. 无法稳定区分 `before_first_chunk` 与 `after_first_chunk`。
+4. `runtime_reply` / `subagent_fallback` 输出口径不一致。
+
 ## TL;DR
 
 当前插件已经完成一个可运行的 OpenClaw `message-bridge` V1 适配器，并且阶段二的最小产品化交付已经落地。
