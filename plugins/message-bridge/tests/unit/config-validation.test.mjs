@@ -548,6 +548,147 @@ describe('config suffix lookup support (.jsonc + .json)', () => {
     }
   });
 
+  test('loads auth from BRIDGE_AUTH_AK and BRIDGE_AUTH_SK', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-json-env-auth-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    const originalAuthAk = process.env.BRIDGE_AUTH_AK;
+    const originalAuthSk = process.env.BRIDGE_AUTH_SK;
+    process.env.HOME = fakeHome;
+    process.env.BRIDGE_AUTH_AK = 'env-auth-ak';
+    process.env.BRIDGE_AUTH_SK = 'env-auth-sk';
+
+    await mkdir(join(workspace, '.opencode'), { recursive: true });
+    await writeFile(
+      join(workspace, '.opencode', 'message-bridge.json'),
+      JSON.stringify(createValidConfig({
+        auth: {
+          ak: '',
+          sk: '',
+        },
+      })),
+      'utf8',
+    );
+
+    try {
+      const config = await loadConfig(workspace);
+      assert.strictEqual(config.auth.ak, 'env-auth-ak');
+      assert.strictEqual(config.auth.sk, 'env-auth-sk');
+    } finally {
+      if (originalAuthAk === undefined) {
+        delete process.env.BRIDGE_AUTH_AK;
+      } else {
+        process.env.BRIDGE_AUTH_AK = originalAuthAk;
+      }
+      if (originalAuthSk === undefined) {
+        delete process.env.BRIDGE_AUTH_SK;
+      } else {
+        process.env.BRIDGE_AUTH_SK = originalAuthSk;
+      }
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('ignores BRIDGE_AK and BRIDGE_SK aliases', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-json-env-auth-alias-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    const originalBridgeAk = process.env.BRIDGE_AK;
+    const originalBridgeSk = process.env.BRIDGE_SK;
+    process.env.HOME = fakeHome;
+    process.env.BRIDGE_AK = 'alias-ak';
+    process.env.BRIDGE_SK = 'alias-sk';
+
+    await mkdir(join(workspace, '.opencode'), { recursive: true });
+    await writeFile(
+      join(workspace, '.opencode', 'message-bridge.json'),
+      JSON.stringify(createValidConfig({
+        auth: {
+          ak: '',
+          sk: '',
+        },
+      })),
+      'utf8',
+    );
+
+    try {
+      await assert.rejects(
+        loadConfig(workspace),
+        (err) =>
+          err instanceof ConfigValidationAggregateError &&
+          err.errors.some((e) => e.path === 'auth.ak' && e.code === 'MISSING_REQUIRED') &&
+          err.errors.some((e) => e.path === 'auth.sk' && e.code === 'MISSING_REQUIRED'),
+      );
+    } finally {
+      if (originalBridgeAk === undefined) {
+        delete process.env.BRIDGE_AK;
+      } else {
+        process.env.BRIDGE_AK = originalBridgeAk;
+      }
+      if (originalBridgeSk === undefined) {
+        delete process.env.BRIDGE_SK;
+      } else {
+        process.env.BRIDGE_SK = originalBridgeSk;
+      }
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('prefers BRIDGE_AUTH_AK and BRIDGE_AUTH_SK over removed aliases', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'mb-json-env-auth-priority-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));
+    const originalAuthAk = process.env.BRIDGE_AUTH_AK;
+    const originalAuthSk = process.env.BRIDGE_AUTH_SK;
+    const originalBridgeAk = process.env.BRIDGE_AK;
+    const originalBridgeSk = process.env.BRIDGE_SK;
+    process.env.HOME = fakeHome;
+    process.env.BRIDGE_AUTH_AK = 'primary-ak';
+    process.env.BRIDGE_AUTH_SK = 'primary-sk';
+    process.env.BRIDGE_AK = 'alias-ak';
+    process.env.BRIDGE_SK = 'alias-sk';
+
+    await mkdir(join(workspace, '.opencode'), { recursive: true });
+    await writeFile(
+      join(workspace, '.opencode', 'message-bridge.json'),
+      JSON.stringify(createValidConfig({
+        auth: {
+          ak: '',
+          sk: '',
+        },
+      })),
+      'utf8',
+    );
+
+    try {
+      const config = await loadConfig(workspace);
+      assert.strictEqual(config.auth.ak, 'primary-ak');
+      assert.strictEqual(config.auth.sk, 'primary-sk');
+    } finally {
+      if (originalAuthAk === undefined) {
+        delete process.env.BRIDGE_AUTH_AK;
+      } else {
+        process.env.BRIDGE_AUTH_AK = originalAuthAk;
+      }
+      if (originalAuthSk === undefined) {
+        delete process.env.BRIDGE_AUTH_SK;
+      } else {
+        process.env.BRIDGE_AUTH_SK = originalAuthSk;
+      }
+      if (originalBridgeAk === undefined) {
+        delete process.env.BRIDGE_AK;
+      } else {
+        process.env.BRIDGE_AK = originalBridgeAk;
+      }
+      if (originalBridgeSk === undefined) {
+        delete process.env.BRIDGE_SK;
+      } else {
+        process.env.BRIDGE_SK = originalBridgeSk;
+      }
+      await rm(workspace, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
   test('ignores removed BRIDGE_GATEWAY_TOOL_TYPE override', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'mb-json-env-tooltype-'));
     const fakeHome = await mkdtemp(join(tmpdir(), 'mb-home-'));

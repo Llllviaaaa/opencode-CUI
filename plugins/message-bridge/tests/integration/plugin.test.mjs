@@ -129,16 +129,12 @@ describe('plugin contract', () => {
     const originalGatewayUrl = process.env.BRIDGE_GATEWAY_URL;
     const originalBridgeAuthAk = process.env.BRIDGE_AUTH_AK;
     const originalBridgeAuthSk = process.env.BRIDGE_AUTH_SK;
-    const originalBridgeAk = process.env.BRIDGE_AK;
-    const originalBridgeSk = process.env.BRIDGE_SK;
     const fakeHome = await mkdtemp(join(tmpdir(), 'mb-it-home-'));
     const fakeWorkspace = await mkdtemp(join(tmpdir(), 'mb-it-workspace-'));
     process.env.HOME = fakeHome;
     process.env.BRIDGE_ENABLED = 'true';
     delete process.env.BRIDGE_AUTH_AK;
     delete process.env.BRIDGE_AUTH_SK;
-    delete process.env.BRIDGE_AK;
-    delete process.env.BRIDGE_SK;
     process.env.BRIDGE_GATEWAY_URL = 'not-a-valid-url';
 
     try {
@@ -169,16 +165,6 @@ describe('plugin contract', () => {
         delete process.env.BRIDGE_AUTH_SK;
       } else {
         process.env.BRIDGE_AUTH_SK = originalBridgeAuthSk;
-      }
-      if (originalBridgeAk === undefined) {
-        delete process.env.BRIDGE_AK;
-      } else {
-        process.env.BRIDGE_AK = originalBridgeAk;
-      }
-      if (originalBridgeSk === undefined) {
-        delete process.env.BRIDGE_SK;
-      } else {
-        process.env.BRIDGE_SK = originalBridgeSk;
       }
       if (originalGatewayUrl === undefined) {
         delete process.env.BRIDGE_GATEWAY_URL;
