@@ -1,6 +1,0 @@
-graph LR
-    A["Skill WS"] -->|"invoke"| B["SkillWebSocketHandler"]
-    B -->|"仅 type=invoke"| C["SkillRelayService.handleInvokeFromSkill"]
-    C -->|"1. 验证 source/ak/userId"| D["校验"]
-    D -->|"2. Redis Pub/Sub"| E["EventRelayService"]
-    E -->|"3. withoutRoutingContext"| F["Plugin WS"]

@@ -1,7 +1,0 @@
-graph LR
-    A["Plugin WS"] -->|"tool_event/tool_done/tool_error"| B["AgentWebSocketHandler"]
-    B --> C["EventRelayService.relayToSkillServer"]
-    C -->|"1. 注入 ak/userId/source/traceId"| D["GatewayMessage 丰富"]
-    D -->|"2. 路由"| E["SkillRelayService.relayToSkill"]
-    E -->|"本地链路"| F["Skill WS Session"]
-    E -->|"Redis Pub/Sub"| G["远程 Gateway 实例"]
