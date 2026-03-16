@@ -74,6 +74,13 @@ interface DownstreamLogFields {
   gatewayMessageId?: string;
 }
 
+interface UpstreamSendContext {
+  gatewayMessageId?: string;
+  action?: string;
+  welinkSessionId?: string;
+  toolSessionId?: string;
+}
+
 function extractDownstreamLogFields(raw: unknown): DownstreamLogFields {
   if (!isRecord(raw)) {
     return {};
@@ -489,6 +496,11 @@ export class OpenClawGatewayBridge {
         welinkSessionId: fields.welinkSessionId,
         toolSessionId: fields.toolSessionId,
         error: normalized.error.message,
+      }, {
+        gatewayMessageId: fields.gatewayMessageId,
+        action: fields.action,
+        welinkSessionId: fields.welinkSessionId,
+        toolSessionId: fields.toolSessionId,
       });
       return;
     }
@@ -499,7 +511,10 @@ export class OpenClawGatewayBridge {
         type: "status_response",
         opencodeOnline: this.running,
       };
-      this.connection.send(message);
+      this.connection.send(message, {
+        gatewayMessageId: fields.gatewayMessageId,
+        action: "status_query",
+      });
       this.options.logger.info("runtime.status_query.responded", {
         ...fields,
         latencyMs: Date.now() - startedAt,
@@ -513,7 +528,13 @@ export class OpenClawGatewayBridge {
       welinkSessionId: normalized.value.welinkSessionId,
       toolSessionId: getInvokeToolSessionId(normalized.value),
     });
-    const invokeResult = await this.handleInvoke(normalized.value);
+    const invokeContext: UpstreamSendContext = {
+      gatewayMessageId: fields.gatewayMessageId,
+      action: normalized.value.action,
+      welinkSessionId: normalized.value.welinkSessionId,
+      toolSessionId: getInvokeToolSessionId(normalized.value),
+    };
+    const invokeResult = await this.handleInvoke(normalized.value, invokeContext);
     if (invokeResult.success) {
       this.options.logger.info("runtime.invoke.completed", {
         ...fields,
@@ -534,32 +555,38 @@ export class OpenClawGatewayBridge {
     });
   }
 
-  private async handleInvoke(message: InvokeMessage): Promise<{ success: boolean; reason?: string }> {
+  private async handleInvoke(
+    message: InvokeMessage,
+    context: UpstreamSendContext,
+  ): Promise<{ success: boolean; reason?: string }> {
     switch (message.action) {
       case "chat":
-        if (await this.handleChat(message)) {
+        if (await this.handleChat(message, context)) {
           return { success: true };
         }
         return { success: false, reason: "chat_failed" };
       case "create_session":
-        this.handleCreateSession(message);
+        this.handleCreateSession(message, context);
         return { success: true };
       case "close_session":
-        await this.handleCloseSession(message);
+        await this.handleCloseSession(message, context);
         return { success: true };
       case "abort_session":
-        if (await this.handleAbortSession(message)) {
+        if (await this.handleAbortSession(message, context)) {
           return { success: true };
         }
         return { success: false, reason: "abort_session_failed" };
       case "permission_reply":
       case "question_reply":
-        this.sendUnsupported(message.action, message.payload.toolSessionId, message.welinkSessionId);
+        this.sendUnsupported(message.action, message.payload.toolSessionId, message.welinkSessionId, context);
         return { success: false, reason: `unsupported_action:${message.action}` };
     }
   }
 
-  private async handleChat(message: Extract<InvokeMessage, { action: "chat" }>): Promise<boolean> {
+  private async handleChat(
+    message: Extract<InvokeMessage, { action: "chat" }>,
+    context: UpstreamSendContext,
+  ): Promise<boolean> {
     const record = this.sessionRegistry.ensure(message.payload.toolSessionId, message.welinkSessionId);
     const assistantStream = createAssistantStreamState(record.sessionKey);
     const toolStates = new Map<string, ToolPartState>();
@@ -582,7 +609,7 @@ export class OpenClawGatewayBridge {
       type: "tool_event",
       toolSessionId: record.toolSessionId,
       event: buildBusyEvent(record.sessionKey),
-    });
+    }, context);
     this.logChatStarted({
       toolSessionId: record.toolSessionId,
       welinkSessionId: record.welinkSessionId,
@@ -608,6 +635,7 @@ export class OpenClawGatewayBridge {
           selectedModel,
           chatRequestId,
           retryAttempt,
+          context,
         );
         if (fallbackResult.ok) {
           return true;
@@ -717,7 +745,7 @@ export class OpenClawGatewayBridge {
           }
 
           toolState.output = output;
-          this.emitToolPartUpdate(record.toolSessionId, toolState);
+          this.emitToolPartUpdate(record.toolSessionId, toolState, context);
           return;
         }
 
@@ -748,7 +776,7 @@ export class OpenClawGatewayBridge {
               deltaText: payload.text,
             });
           }
-          this.sendAssistantStreamChunk(record.toolSessionId, assistantStream, payload.text);
+          this.sendAssistantStreamChunk(record.toolSessionId, assistantStream, payload.text, context);
         }
       };
 
@@ -798,6 +826,7 @@ export class OpenClawGatewayBridge {
         record.toolSessionId,
         assistantStream,
         finalText,
+        context,
       );
       this.logChatCompleted({
         toolSessionId: record.toolSessionId,
@@ -816,12 +845,12 @@ export class OpenClawGatewayBridge {
         type: "tool_event",
         toolSessionId: record.toolSessionId,
         event: buildIdleEvent(record.sessionKey),
-      });
+      }, context);
       this.sendToolDone({
         type: "tool_done",
         toolSessionId: record.toolSessionId,
         welinkSessionId: record.welinkSessionId,
-      });
+      }, context);
       this.clearActiveToolSession(record.sessionKey);
       return true;
     }
@@ -845,13 +874,13 @@ export class OpenClawGatewayBridge {
       type: "tool_event",
       toolSessionId: record.toolSessionId,
       event: buildSessionErrorEvent(record.sessionKey, finalErrorMessage),
-    });
+    }, context);
     this.sendToolError({
       type: "tool_error",
       toolSessionId: record.toolSessionId,
       welinkSessionId: record.welinkSessionId,
       error: finalErrorMessage,
-    });
+    }, context);
     return false;
   }
 
@@ -862,6 +891,7 @@ export class OpenClawGatewayBridge {
     selectedModel: SelectedModelState,
     chatRequestId: string,
     retryAttempt: RetryAttempt,
+    context: UpstreamSendContext,
   ): Promise<{ ok: true } | { ok: false; errorMessage: string; extra?: Record<string, unknown> }> {
     const assistantStream = createAssistantStreamState(record.sessionKey);
     const configuredTimeoutMs = this.options.account.runTimeoutMs;
@@ -901,7 +931,7 @@ export class OpenClawGatewayBridge {
         limit: 50,
       });
       const assistantText = extractAssistantText(session.messages) || "(empty response)";
-      this.sendAssistantFinalResponse(record.toolSessionId, assistantStream, assistantText);
+      this.sendAssistantFinalResponse(record.toolSessionId, assistantStream, assistantText, context);
       this.logChatCompleted({
         toolSessionId: record.toolSessionId,
         sessionKey: record.sessionKey,
@@ -923,12 +953,12 @@ export class OpenClawGatewayBridge {
         type: "tool_event",
         toolSessionId: record.toolSessionId,
         event: buildIdleEvent(record.sessionKey),
-      });
+      }, context);
       this.sendToolDone({
         type: "tool_done",
         toolSessionId: record.toolSessionId,
         welinkSessionId: record.welinkSessionId,
-      });
+      }, context);
       this.clearActiveToolSession(record.sessionKey);
       return { ok: true };
     } catch (error) {
@@ -943,7 +973,10 @@ export class OpenClawGatewayBridge {
     return assistantStream.firstChunkAt === null && isTimeout;
   }
 
-  private handleCreateSession(message: Extract<InvokeMessage, { action: "create_session" }>): void {
+  private handleCreateSession(
+    message: Extract<InvokeMessage, { action: "create_session" }>,
+    context: UpstreamSendContext,
+  ): void {
     const record = this.sessionRegistry.create(message.welinkSessionId, message.payload.sessionId);
     const response: SessionCreatedMessage = {
       type: "session_created",
@@ -953,10 +986,17 @@ export class OpenClawGatewayBridge {
         sessionId: record.sessionKey,
       },
     };
-    this.connection.send(response);
+    this.connection.send(response, {
+      ...context,
+      toolSessionId: record.toolSessionId,
+      welinkSessionId: message.welinkSessionId,
+    });
   }
 
-  private async handleCloseSession(message: Extract<InvokeMessage, { action: "close_session" }>): Promise<void> {
+  private async handleCloseSession(
+    message: Extract<InvokeMessage, { action: "close_session" }>,
+    _context: UpstreamSendContext,
+  ): Promise<void> {
     const record = this.sessionRegistry.delete(message.payload.toolSessionId);
     if (record) {
       this.clearActiveToolSession(record.sessionKey);
@@ -966,7 +1006,10 @@ export class OpenClawGatewayBridge {
     }
   }
 
-  private async handleAbortSession(message: Extract<InvokeMessage, { action: "abort_session" }>): Promise<boolean> {
+  private async handleAbortSession(
+    message: Extract<InvokeMessage, { action: "abort_session" }>,
+    context: UpstreamSendContext,
+  ): Promise<boolean> {
     const record = this.sessionRegistry.get(message.payload.toolSessionId);
     if (!record) {
       this.sendToolError({
@@ -975,7 +1018,7 @@ export class OpenClawGatewayBridge {
         welinkSessionId: message.welinkSessionId,
         error: "unknown_tool_session",
         reason: TOOL_ERROR_REASON.SESSION_NOT_FOUND,
-      });
+      }, context);
       return false;
     }
 
@@ -988,55 +1031,95 @@ export class OpenClawGatewayBridge {
       type: "tool_done",
       toolSessionId: message.payload.toolSessionId,
       welinkSessionId: message.welinkSessionId,
-    });
+    }, context);
     return true;
   }
 
-  private sendUnsupported(action: string, toolSessionId?: string, welinkSessionId?: string): void {
+  private sendUnsupported(
+    action: string,
+    toolSessionId: string | undefined,
+    welinkSessionId: string | undefined,
+    context: UpstreamSendContext,
+  ): void {
     this.sendToolError({
       type: "tool_error",
       toolSessionId,
       welinkSessionId,
       error: `unsupported_in_openclaw_v1:${action}`,
-    });
+    }, context);
   }
 
-  private sendToolEvent(message: ToolEventMessage): void {
+  private buildSendContext(message: { toolSessionId?: string; welinkSessionId?: string }, context?: UpstreamSendContext): UpstreamSendContext {
+    return {
+      gatewayMessageId: context?.gatewayMessageId,
+      action: context?.action,
+      welinkSessionId: context?.welinkSessionId ?? message.welinkSessionId,
+      toolSessionId: context?.toolSessionId ?? message.toolSessionId,
+    };
+  }
+
+  private buildChatEventContext(toolSessionId: string): UpstreamSendContext {
+    const record = this.sessionRegistry.get(toolSessionId);
+    return {
+      action: "chat",
+      toolSessionId,
+      welinkSessionId: record?.welinkSessionId,
+    };
+  }
+
+  private sendToolEvent(message: ToolEventMessage, context?: UpstreamSendContext): void {
+    const sendContext = this.buildSendContext(message, context);
     logDebug(this.options.logger, "runtime.tool_event.sending", {
-      toolSessionId: message.toolSessionId,
+      gatewayMessageId: sendContext.gatewayMessageId,
+      action: sendContext.action,
+      welinkSessionId: sendContext.welinkSessionId,
+      toolSessionId: sendContext.toolSessionId,
       eventType: isRecord(message.event) ? asString(message.event.type) : undefined,
     });
-    this.connection.send(message);
+    this.connection.send(message, {
+      ...sendContext,
+      eventType: isRecord(message.event) ? asString(message.event.type) : undefined,
+    });
   }
 
-  private sendToolDone(message: ToolDoneMessage): void {
+  private sendToolDone(message: ToolDoneMessage, context?: UpstreamSendContext): void {
+    const sendContext = this.buildSendContext(message, context);
     this.options.logger.info("runtime.tool_done.sending", {
-      toolSessionId: message.toolSessionId,
-      welinkSessionId: message.welinkSessionId,
+      gatewayMessageId: sendContext.gatewayMessageId,
+      action: sendContext.action,
+      welinkSessionId: sendContext.welinkSessionId,
+      toolSessionId: sendContext.toolSessionId,
     });
     try {
-      this.connection.send(message);
+      this.connection.send(message, sendContext);
     } catch {
       this.options.logger.warn("runtime.tool_done.skipped_no_connection", {
-        toolSessionId: message.toolSessionId,
-        welinkSessionId: message.welinkSessionId,
+        gatewayMessageId: sendContext.gatewayMessageId,
+        action: sendContext.action,
+        welinkSessionId: sendContext.welinkSessionId,
+        toolSessionId: sendContext.toolSessionId,
       });
     }
   }
 
-  private sendToolError(message: ToolErrorMessage): void {
+  private sendToolError(message: ToolErrorMessage, context?: UpstreamSendContext): void {
+    const sendContext = this.buildSendContext(message, context);
     this.options.logger.error("runtime.tool_error.sending", {
-      toolSessionId: message.toolSessionId,
-      welinkSessionId: message.welinkSessionId,
+      gatewayMessageId: sendContext.gatewayMessageId,
+      action: sendContext.action,
+      welinkSessionId: sendContext.welinkSessionId,
+      toolSessionId: sendContext.toolSessionId,
       error: message.error,
       reason: message.reason,
     });
     try {
-      this.connection.send(message);
+      this.connection.send(message, sendContext);
     } catch {
       this.options.logger.warn("runtime.tool_error.skipped_no_connection", {
-        toolSessionId: message.toolSessionId,
-        welinkSessionId: message.welinkSessionId,
+        gatewayMessageId: sendContext.gatewayMessageId,
+        action: sendContext.action,
+        welinkSessionId: sendContext.welinkSessionId,
+        toolSessionId: sendContext.toolSessionId,
       });
     }
   }
@@ -1045,16 +1128,17 @@ export class OpenClawGatewayBridge {
     toolSessionId: string,
     state: AssistantStreamState,
     chunk: string,
+    context: UpstreamSendContext,
   ): void {
     state.accumulatedText += chunk;
 
     if (state.accumulatedText === chunk) {
-      this.ensureAssistantMessageStarted(toolSessionId, state);
+      this.ensureAssistantMessageStarted(toolSessionId, state, context);
       this.sendToolEvent({
         type: "tool_event",
         toolSessionId,
         event: buildAssistantPartUpdated(state.sessionKey, state.messageId, state.partId, chunk, chunk),
-      });
+      }, context);
       return;
     }
 
@@ -1062,10 +1146,14 @@ export class OpenClawGatewayBridge {
       type: "tool_event",
       toolSessionId,
       event: buildAssistantPartDelta(state.sessionKey, state.messageId, state.partId, chunk),
-    });
+    }, context);
   }
 
-  private ensureAssistantMessageStarted(toolSessionId: string, state: AssistantStreamState): void {
+  private ensureAssistantMessageStarted(
+    toolSessionId: string,
+    state: AssistantStreamState,
+    context: UpstreamSendContext,
+  ): void {
     if (state.seeded) {
       return;
     }
@@ -1074,7 +1162,7 @@ export class OpenClawGatewayBridge {
       type: "tool_event",
       toolSessionId,
       event: buildAssistantMessageUpdated(state.sessionKey, state.messageId),
-    });
+    }, context);
     state.seeded = true;
   }
 
@@ -1082,6 +1170,7 @@ export class OpenClawGatewayBridge {
     toolSessionId: string,
     state: AssistantStreamState,
     text: string,
+    context: UpstreamSendContext,
   ): void {
     if (state.seeded) {
       if (state.accumulatedText.length === 0) {
@@ -1089,7 +1178,7 @@ export class OpenClawGatewayBridge {
           type: "tool_event",
           toolSessionId,
           event: buildAssistantPartUpdated(state.sessionKey, state.messageId, state.partId, text),
-        });
+        }, context);
         return;
       }
       this.sendToolEvent({
@@ -1101,7 +1190,7 @@ export class OpenClawGatewayBridge {
           state.partId,
           state.accumulatedText || text,
         ),
-      });
+      }, context);
       return;
     }
 
@@ -1109,21 +1198,21 @@ export class OpenClawGatewayBridge {
       type: "tool_event",
       toolSessionId,
       event: buildAssistantMessageUpdated(state.sessionKey, state.messageId),
-    });
+    }, context);
     this.sendToolEvent({
       type: "tool_event",
       toolSessionId,
       event: buildAssistantPartUpdated(state.sessionKey, state.messageId, state.partId, text),
-    });
+    }, context);
     state.seeded = true;
   }
 
-  private emitToolPartUpdate(toolSessionId: string, toolState: ToolPartState): void {
+  private emitToolPartUpdate(toolSessionId: string, toolState: ToolPartState, context: UpstreamSendContext): void {
     this.sendToolEvent({
       type: "tool_event",
       toolSessionId,
       event: buildToolPartUpdated(toolState),
-    });
+    }, context);
   }
 
   private trackSessionRunId(sessionKey: string, runId: string): void {
@@ -1175,7 +1264,8 @@ export class OpenClawGatewayBridge {
         ? evt.data.toolCallId
         : `tool_${randomUUID()}`;
 
-    this.ensureAssistantMessageStarted(activeSession.toolSessionId, activeSession.assistantStream);
+    const context = this.buildChatEventContext(activeSession.toolSessionId);
+    this.ensureAssistantMessageStarted(activeSession.toolSessionId, activeSession.assistantStream, context);
 
     let toolState = activeSession.toolStates.get(toolCallId);
     if (!toolState) {
@@ -1196,7 +1286,7 @@ export class OpenClawGatewayBridge {
 
     if (phase === "start" || phase === "update") {
       toolState.status = "running";
-      this.emitToolPartUpdate(activeSession.toolSessionId, toolState);
+      this.emitToolPartUpdate(activeSession.toolSessionId, toolState, context);
       return;
     }
 
@@ -1205,7 +1295,7 @@ export class OpenClawGatewayBridge {
       toolState.status = isError ? "error" : "completed";
       toolState.error = isError ? `tool_${toolName}_failed` : undefined;
       activeSession.pendingToolResultTarget = toolCallId;
-      this.emitToolPartUpdate(activeSession.toolSessionId, toolState);
+      this.emitToolPartUpdate(activeSession.toolSessionId, toolState, context);
     }
   }
 

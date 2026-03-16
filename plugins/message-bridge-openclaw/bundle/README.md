@@ -11,6 +11,12 @@ message contract.
 Chinese usage guide:
 
 - `docs/USAGE.zh-CN.md`
+- `docs/LOGGING-MATRIX.zh-CN.md`（日志事件矩阵）
+- `docs/CONFIGURATION.zh-CN.md`（配置字段、配置位置、优先级）
+
+Configuration reference:
+
+- `docs/CONFIGURATION.md`
 
 Validation manual:
 

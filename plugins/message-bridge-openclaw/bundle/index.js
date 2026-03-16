@@ -295,11 +295,63 @@ var DefaultAkSkAuth = class {
 
 // src/connection/GatewayConnection.ts
 import { EventEmitter } from "node:events";
+function asNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : void 0;
+}
+function asBoolean(value) {
+  return typeof value === "boolean" ? value : void 0;
+}
+function asString(value) {
+  return typeof value === "string" ? value : void 0;
+}
+function logDebug(logger, message, meta) {
+  if (logger.debug) {
+    logger.debug(message, meta);
+    return;
+  }
+  logger.info(message, meta);
+}
 function isRecord2(value) {
   return value !== null && typeof value === "object";
 }
 function isGatewayControlMessage(value) {
   return isRecord2(value) && (value.type === "register_ok" || value.type === "register_rejected");
+}
+function extractGatewayMessageId(value) {
+  if (!isRecord2(value)) {
+    return void 0;
+  }
+  return typeof value.messageId === "string" ? value.messageId : void 0;
+}
+function extractMessageAction(value) {
+  if (!isRecord2(value)) {
+    return void 0;
+  }
+  return typeof value.action === "string" ? value.action : void 0;
+}
+function extractWelinkSessionId(value) {
+  if (!isRecord2(value)) {
+    return void 0;
+  }
+  return typeof value.welinkSessionId === "string" ? value.welinkSessionId : void 0;
+}
+function extractToolSessionId(value) {
+  if (!isRecord2(value)) {
+    return void 0;
+  }
+  if (typeof value.toolSessionId === "string") {
+    return value.toolSessionId;
+  }
+  if (!isRecord2(value.payload)) {
+    return void 0;
+  }
+  return typeof value.payload.toolSessionId === "string" ? value.payload.toolSessionId : void 0;
+}
+function extractEventType(value) {
+  if (!isRecord2(value) || !isRecord2(value.event)) {
+    return void 0;
+  }
+  return typeof value.event.type === "string" ? value.event.type : void 0;
 }
 function encodeBase64Url(value) {
   return Buffer.from(value, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
@@ -327,6 +379,7 @@ var DefaultGatewayConnection = class extends EventEmitter {
   async connect() {
     this.manuallyDisconnected = false;
     this.setState("CONNECTING");
+    this.options.logger.info("gateway.connect.started", { url: this.options.url });
     return new Promise((resolve, reject) => {
       const authPayload = this.options.authPayloadProvider?.();
       const protocols = authPayload ? [buildAuthSubprotocol(authPayload)] : void 0;
@@ -335,6 +388,7 @@ var DefaultGatewayConnection = class extends EventEmitter {
       ws.onopen = () => {
         this.options.logger.info("gateway.open", { url: this.options.url });
         this.setState("CONNECTED");
+        this.options.logger.info("gateway.register.sent");
         this.send(this.options.registerMessage);
         resolve();
       };
@@ -347,12 +401,26 @@ var DefaultGatewayConnection = class extends EventEmitter {
         try {
           parsed = JSON.parse(data);
         } catch {
+          logDebug(this.options.logger, "gateway.message.ignored_non_json", {
+            payloadLength: data.length,
+            frameBytes: Buffer.byteLength(data, "utf8")
+          });
           return;
         }
+        logDebug(this.options.logger, "gateway.message.received", {
+          messageType: isRecord2(parsed) && typeof parsed.type === "string" ? parsed.type : void 0,
+          frameBytes: Buffer.byteLength(data, "utf8"),
+          gatewayMessageId: extractGatewayMessageId(parsed),
+          action: extractMessageAction(parsed),
+          welinkSessionId: extractWelinkSessionId(parsed),
+          toolSessionId: extractToolSessionId(parsed)
+        });
         this.emit("inbound", parsed);
         if (isGatewayControlMessage(parsed)) {
           if (parsed.type === "register_ok") {
+            this.options.logger.info("gateway.register.accepted");
             this.setState("READY");
+            this.options.logger.info("gateway.ready");
             this.startHeartbeat();
             return;
           }
@@ -362,6 +430,12 @@ var DefaultGatewayConnection = class extends EventEmitter {
           reject(error);
           return;
         }
+        if (this.state !== "READY") {
+          logDebug(this.options.logger, "gateway.message.received_not_ready", {
+            messageType: isRecord2(parsed) && typeof parsed.type === "string" ? parsed.type : void 0,
+            state: this.state
+          });
+        }
         this.emit("message", parsed);
       };
       ws.onerror = () => {
@@ -369,11 +443,22 @@ var DefaultGatewayConnection = class extends EventEmitter {
         this.options.logger.error("gateway.error");
         this.emit("error", error);
       };
-      ws.onclose = () => {
+      ws.onclose = (event) => {
+        const close = event;
+        const stateBeforeClose = this.state;
+        const reconnectPlanned = !this.manuallyDisconnected;
+        this.options.logger.warn("gateway.close", {
+          code: asNumber(close.code),
+          reason: asString(close.reason) ?? "",
+          wasClean: asBoolean(close.wasClean),
+          stateBeforeClose,
+          manuallyDisconnected: this.manuallyDisconnected,
+          reconnectPlanned
+        });
         this.stopHeartbeat();
         this.ws = null;
         this.setState("DISCONNECTED");
-        if (!this.manuallyDisconnected) {
+        if (reconnectPlanned) {
           this.scheduleReconnect();
         }
       };
@@ -390,11 +475,21 @@ var DefaultGatewayConnection = class extends EventEmitter {
     this.ws = null;
     this.setState("DISCONNECTED");
   }
-  send(message) {
+  send(message, logContext) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("gateway_not_connected");
     }
-    this.ws.send(JSON.stringify(message));
+    const serialized = JSON.stringify(message);
+    logDebug(this.options.logger, "gateway.send", {
+      messageType: isRecord2(message) && typeof message.type === "string" ? message.type : void 0,
+      payloadBytes: Buffer.byteLength(serialized, "utf8"),
+      gatewayMessageId: logContext?.gatewayMessageId ?? extractGatewayMessageId(message),
+      action: logContext?.action ?? extractMessageAction(message),
+      welinkSessionId: logContext?.welinkSessionId ?? extractWelinkSessionId(message),
+      toolSessionId: logContext?.toolSessionId ?? extractToolSessionId(message),
+      eventType: logContext?.eventType ?? extractEventType(message)
+    });
+    this.ws.send(serialized);
     this.emit("outbound", message);
     if (isRecord2(message) && message.type === "heartbeat") {
       this.emit("heartbeat", message);
@@ -431,8 +526,15 @@ var DefaultGatewayConnection = class extends EventEmitter {
       this.options.reconnectMaxMs
     ) : this.options.reconnectBaseMs;
     this.reconnectAttempts += 1;
+    this.options.logger.info("gateway.reconnect.scheduled", {
+      reconnectAttempts: this.reconnectAttempts,
+      delayMs: delay
+    });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      this.options.logger.info("gateway.reconnect.attempt", {
+        reconnectAttempts: this.reconnectAttempts
+      });
       this.connect().catch((error) => {
         this.options.logger.warn("gateway.reconnect.failed", {
           error: error instanceof Error ? error.message : String(error)
@@ -472,7 +574,7 @@ var INVOKE_ACTIONS = [
 function isRecord3(value) {
   return value !== null && typeof value === "object";
 }
-function asString(value) {
+function asString2(value) {
   return typeof value === "string" && value.trim() ? value : void 0;
 }
 function hasKey(record, key) {
@@ -481,84 +583,231 @@ function hasKey(record, key) {
 function ok(value) {
   return { ok: true, value };
 }
-function fail(message, code, messageType, action) {
-  return { ok: false, error: { code, message, messageType, action } };
+function fail(params) {
+  return {
+    ok: false,
+    error: {
+      code: params.code,
+      message: params.message,
+      stage: params.stage,
+      field: params.field,
+      messageType: params.messageType,
+      action: params.action,
+      welinkSessionId: params.welinkSessionId
+    }
+  };
+}
+function logDebug2(logger, message, meta) {
+  if (!logger) {
+    return;
+  }
+  if (logger.debug) {
+    logger.debug(message, meta);
+    return;
+  }
+  logger.info(message, meta);
+}
+function buildMessagePreview(raw) {
+  if (!isRecord3(raw)) {
+    return { kind: typeof raw };
+  }
+  return {
+    type: typeof raw.type === "string" ? raw.type : void 0,
+    keys: Object.keys(raw).slice(0, 8)
+  };
+}
+function extractToolSessionId2(payload) {
+  return isRecord3(payload) ? asString2(payload.toolSessionId) : void 0;
+}
+function logDownstreamNormalizationFailure(logger, raw, error) {
+  if (!logger) {
+    return;
+  }
+  logger.warn("downstream.normalization_failed", {
+    stage: error.stage,
+    errorCode: error.code,
+    field: error.field,
+    message: error.message,
+    messageType: error.messageType,
+    action: error.action,
+    welinkSessionId: error.welinkSessionId,
+    messagePreview: buildMessagePreview(raw)
+  });
 }
 function normalizeChatPayload(payload) {
   if (!isRecord3(payload)) {
-    return fail("payload must be an object", "invalid_payload", "invoke", "chat");
+    return fail({
+      message: "payload must be an object",
+      code: "invalid_payload",
+      stage: "payload",
+      field: "payload",
+      messageType: "invoke",
+      action: "chat"
+    });
   }
-  const toolSessionId = asString(payload.toolSessionId);
-  const text = asString(payload.text);
+  const toolSessionId = asString2(payload.toolSessionId);
+  const text = asString2(payload.text);
   if (!toolSessionId || !text) {
-    return fail("chat requires toolSessionId and text", "missing_required_field", "invoke", "chat");
+    return fail({
+      message: "chat requires toolSessionId and text",
+      code: "missing_required_field",
+      stage: "payload",
+      field: !toolSessionId ? "payload.toolSessionId" : "payload.text",
+      messageType: "invoke",
+      action: "chat"
+    });
   }
   return ok({ toolSessionId, text });
 }
 function normalizeCreateSessionPayload(payload) {
   if (!isRecord3(payload)) {
-    return fail("payload must be an object", "invalid_payload", "invoke", "create_session");
+    return fail({
+      message: "payload must be an object",
+      code: "invalid_payload",
+      stage: "payload",
+      field: "payload",
+      messageType: "invoke",
+      action: "create_session"
+    });
   }
   return ok({
-    sessionId: asString(payload.sessionId),
+    sessionId: asString2(payload.sessionId),
     metadata: isRecord3(payload.metadata) ? payload.metadata : void 0
   });
 }
 function normalizeCloseSessionPayload(payload) {
   if (!isRecord3(payload)) {
-    return fail("payload must be an object", "invalid_payload", "invoke", "close_session");
+    return fail({
+      message: "payload must be an object",
+      code: "invalid_payload",
+      stage: "payload",
+      field: "payload",
+      messageType: "invoke",
+      action: "close_session"
+    });
   }
-  const toolSessionId = asString(payload.toolSessionId);
+  const toolSessionId = asString2(payload.toolSessionId);
   if (!toolSessionId) {
-    return fail("close_session requires toolSessionId", "missing_required_field", "invoke", "close_session");
+    return fail({
+      message: "close_session requires toolSessionId",
+      code: "missing_required_field",
+      stage: "payload",
+      field: "payload.toolSessionId",
+      messageType: "invoke",
+      action: "close_session"
+    });
   }
   return ok({ toolSessionId });
 }
 function normalizeAbortSessionPayload(payload) {
   if (!isRecord3(payload)) {
-    return fail("payload must be an object", "invalid_payload", "invoke", "abort_session");
+    return fail({
+      message: "payload must be an object",
+      code: "invalid_payload",
+      stage: "payload",
+      field: "payload",
+      messageType: "invoke",
+      action: "abort_session"
+    });
   }
-  const toolSessionId = asString(payload.toolSessionId);
+  const toolSessionId = asString2(payload.toolSessionId);
   if (!toolSessionId) {
-    return fail("abort_session requires toolSessionId", "missing_required_field", "invoke", "abort_session");
+    return fail({
+      message: "abort_session requires toolSessionId",
+      code: "missing_required_field",
+      stage: "payload",
+      field: "payload.toolSessionId",
+      messageType: "invoke",
+      action: "abort_session"
+    });
   }
   return ok({ toolSessionId });
 }
 function normalizePermissionReplyPayload(payload) {
   if (!isRecord3(payload)) {
-    return fail("payload must be an object", "invalid_payload", "invoke", "permission_reply");
+    return fail({
+      message: "payload must be an object",
+      code: "invalid_payload",
+      stage: "payload",
+      field: "payload",
+      messageType: "invoke",
+      action: "permission_reply"
+    });
   }
-  const toolSessionId = asString(payload.toolSessionId);
-  const permissionId = asString(payload.permissionId);
+  const toolSessionId = asString2(payload.toolSessionId);
+  const permissionId = asString2(payload.permissionId);
   if (!toolSessionId || !permissionId || !hasKey(payload, "response")) {
-    return fail("permission_reply requires toolSessionId, permissionId, response", "missing_required_field", "invoke", "permission_reply");
+    return fail({
+      message: "permission_reply requires toolSessionId, permissionId, response",
+      code: "missing_required_field",
+      stage: "payload",
+      field: !toolSessionId ? "payload.toolSessionId" : !permissionId ? "payload.permissionId" : "payload.response",
+      messageType: "invoke",
+      action: "permission_reply"
+    });
   }
   const response = payload.response;
   if (response !== "once" && response !== "always" && response !== "reject") {
-    return fail('permission_reply response must be "once", "always", or "reject"', "invalid_payload", "invoke", "permission_reply");
+    return fail({
+      message: 'permission_reply response must be "once", "always", or "reject"',
+      code: "invalid_payload",
+      stage: "payload",
+      field: "payload.response",
+      messageType: "invoke",
+      action: "permission_reply"
+    });
   }
   return ok({ toolSessionId, permissionId, response });
 }
 function normalizeQuestionReplyPayload(payload) {
   if (!isRecord3(payload)) {
-    return fail("payload must be an object", "invalid_payload", "invoke", "question_reply");
+    return fail({
+      message: "payload must be an object",
+      code: "invalid_payload",
+      stage: "payload",
+      field: "payload",
+      messageType: "invoke",
+      action: "question_reply"
+    });
   }
-  const toolSessionId = asString(payload.toolSessionId);
-  const answer = asString(payload.answer);
+  const toolSessionId = asString2(payload.toolSessionId);
+  const answer = asString2(payload.answer);
   if (!toolSessionId || !answer) {
-    return fail("question_reply requires toolSessionId and answer", "missing_required_field", "invoke", "question_reply");
+    return fail({
+      message: "question_reply requires toolSessionId and answer",
+      code: "missing_required_field",
+      stage: "payload",
+      field: !toolSessionId ? "payload.toolSessionId" : "payload.answer",
+      messageType: "invoke",
+      action: "question_reply"
+    });
   }
-  if (hasKey(payload, "toolCallId") && !asString(payload.toolCallId)) {
-    return fail("question_reply toolCallId must be a non-empty string when provided", "invalid_payload", "invoke", "question_reply");
+  if (hasKey(payload, "toolCallId") && !asString2(payload.toolCallId)) {
+    return fail({
+      message: "question_reply toolCallId must be a non-empty string when provided",
+      code: "invalid_payload",
+      stage: "payload",
+      field: "payload.toolCallId",
+      messageType: "invoke",
+      action: "question_reply"
+    });
   }
-  return ok({ toolSessionId, answer, toolCallId: asString(payload.toolCallId) });
+  return ok({ toolSessionId, answer, toolCallId: asString2(payload.toolCallId) });
 }
 function normalizeInvoke(message) {
-  const action = asString(message.action);
+  const action = asString2(message.action);
+  const welinkSessionId = asString2(message.welinkSessionId);
   if (!action || !INVOKE_ACTIONS.includes(action)) {
-    return fail(`unsupported action: ${String(message.action)}`, "unsupported_action", "invoke", action);
+    return fail({
+      message: `unsupported action: ${String(message.action)}`,
+      code: "unsupported_action",
+      stage: "payload",
+      field: "action",
+      messageType: "invoke",
+      action,
+      welinkSessionId
+    });
   }
-  const welinkSessionId = asString(message.welinkSessionId);
   const base = {
     type: "invoke",
     welinkSessionId,
@@ -571,7 +820,15 @@ function normalizeInvoke(message) {
     }
     case "create_session": {
       if (!welinkSessionId) {
-        return fail("create_session requires welinkSessionId", "missing_required_field", "invoke", "create_session");
+        return fail({
+          message: "create_session requires welinkSessionId",
+          code: "missing_required_field",
+          stage: "payload",
+          field: "welinkSessionId",
+          messageType: "invoke",
+          action: "create_session",
+          welinkSessionId
+        });
       }
       const payload = normalizeCreateSessionPayload(message.payload);
       return payload.ok ? ok({
@@ -598,20 +855,63 @@ function normalizeInvoke(message) {
       return payload.ok ? ok({ ...base, action, payload: payload.value }) : payload;
     }
   }
-  return fail(`unsupported action: ${action}`, "unsupported_action", "invoke", action);
+  return fail({
+    message: `unsupported action: ${action}`,
+    code: "unsupported_action",
+    stage: "payload",
+    field: "action",
+    messageType: "invoke",
+    action,
+    welinkSessionId
+  });
 }
-function normalizeDownstreamMessage(message) {
-  if (!isRecord3(message) || !asString(message.type)) {
-    return fail("message type is required", "missing_required_field");
+function normalizeDownstreamMessage(message, logger) {
+  if (!isRecord3(message) || !asString2(message.type)) {
+    const result2 = fail({
+      message: "message type is required",
+      code: "missing_required_field",
+      stage: "message",
+      field: "type"
+    });
+    if (!result2.ok) {
+      logDownstreamNormalizationFailure(logger, message, result2.error);
+    }
+    return result2;
   }
   const messageType = message.type;
   if (!DOWNSTREAM_MESSAGE_TYPES.includes(messageType)) {
-    return fail(`unsupported message type: ${messageType}`, "unsupported_message", messageType);
+    const result2 = fail({
+      message: `unsupported message type: ${messageType}`,
+      code: "unsupported_message",
+      stage: "message",
+      field: "type",
+      messageType
+    });
+    if (!result2.ok) {
+      logDownstreamNormalizationFailure(logger, message, result2.error);
+    }
+    return result2;
   }
   if (messageType === "status_query") {
+    logDebug2(logger, "downstream.normalization_succeeded", { messageType: "status_query" });
     return ok({ type: "status_query" });
   }
-  return normalizeInvoke(message);
+  const result = normalizeInvoke(message);
+  if (!result.ok) {
+    const enrichedError = {
+      ...result.error,
+      welinkSessionId: result.error.welinkSessionId ?? asString2(message.welinkSessionId)
+    };
+    logDownstreamNormalizationFailure(logger, message, enrichedError);
+    return { ok: false, error: enrichedError };
+  }
+  logDebug2(logger, "downstream.normalization_succeeded", {
+    messageType: result.value.type,
+    action: result.value.action,
+    welinkSessionId: result.value.welinkSessionId,
+    toolSessionId: extractToolSessionId2(result.value.payload)
+  });
+  return result;
 }
 
 // src/runtime/RegisterMetadata.ts
@@ -731,6 +1031,35 @@ var SessionRegistry = class {
 // src/OpenClawGatewayBridge.ts
 function isRecord4(value) {
   return value !== null && typeof value === "object";
+}
+function asString3(value) {
+  return typeof value === "string" && value.trim() ? value : void 0;
+}
+function logDebug3(logger, message, meta) {
+  if (logger.debug) {
+    logger.debug(message, meta);
+    return;
+  }
+  logger.info(message, meta);
+}
+function extractDownstreamLogFields(raw) {
+  if (!isRecord4(raw)) {
+    return {};
+  }
+  const payload = isRecord4(raw.payload) ? raw.payload : void 0;
+  return {
+    messageType: asString3(raw.type),
+    action: asString3(raw.action),
+    welinkSessionId: asString3(raw.welinkSessionId),
+    toolSessionId: asString3(payload?.toolSessionId),
+    gatewayMessageId: asString3(raw.messageId)
+  };
+}
+function getInvokeToolSessionId(message) {
+  if ("toolSessionId" in message.payload) {
+    return message.payload.toolSessionId;
+  }
+  return void 0;
 }
 function extractAssistantText(messages) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -925,6 +1254,7 @@ var OpenClawGatewayBridge = class {
     };
     this.connection.on("stateChange", (state) => {
       const now = Date.now();
+      this.options.logger.info("gateway.state.changed", { state });
       this.status.connected = state === "CONNECTED" || state === "READY";
       if (state === "READY") {
         this.status.lastReadyAt = now;
@@ -965,7 +1295,13 @@ var OpenClawGatewayBridge = class {
   status;
   unsubscribeAgentEvents = null;
   async start() {
+    this.options.logger.info("runtime.start.requested", {
+      accountId: this.options.account.accountId
+    });
     if (this.running) {
+      this.options.logger.info("runtime.start.skipped_already_started", {
+        accountId: this.options.account.accountId
+      });
       return;
     }
     this.running = true;
@@ -978,12 +1314,21 @@ var OpenClawGatewayBridge = class {
       });
     }
     await this.connection.connect();
+    this.options.logger.info("runtime.start.completed", {
+      accountId: this.options.account.accountId
+    });
   }
   getSubagentRuntime() {
     return this.runtime.subagent ?? null;
   }
   async stop() {
+    this.options.logger.info("runtime.stop.requested", {
+      accountId: this.options.account.accountId
+    });
     if (!this.running) {
+      this.options.logger.info("runtime.stop.skipped_not_running", {
+        accountId: this.options.account.accountId
+      });
       return;
     }
     this.running = false;
@@ -996,47 +1341,113 @@ var OpenClawGatewayBridge = class {
     this.status.connected = false;
     this.status.lastStopAt = Date.now();
     this.options.setStatus({ ...this.status });
+    this.options.logger.info("runtime.stop.completed", {
+      accountId: this.options.account.accountId
+    });
   }
   async handleDownstreamMessage(raw) {
-    const normalized = normalizeDownstreamMessage(raw);
+    if (!this.connection.isConnected()) {
+      this.options.logger.warn("runtime.downstream_ignored_no_connection");
+      return;
+    }
+    const startedAt = Date.now();
+    const fields = extractDownstreamLogFields(raw);
+    logDebug3(this.options.logger, "runtime.downstream.received", fields);
+    const normalized = normalizeDownstreamMessage(raw, this.options.logger);
     if (!normalized.ok) {
+      this.options.logger.warn("runtime.downstream_ignored_non_protocol", {
+        ...fields,
+        errorCode: normalized.error.code,
+        stage: normalized.error.stage,
+        field: normalized.error.field,
+        errorMessage: normalized.error.message
+      });
       this.sendToolError({
         type: "tool_error",
+        welinkSessionId: fields.welinkSessionId,
+        toolSessionId: fields.toolSessionId,
         error: normalized.error.message
+      }, {
+        gatewayMessageId: fields.gatewayMessageId,
+        action: fields.action,
+        welinkSessionId: fields.welinkSessionId,
+        toolSessionId: fields.toolSessionId
       });
       return;
     }
     if (normalized.value.type === "status_query") {
+      this.options.logger.info("runtime.status_query.received", fields);
       const message = {
         type: "status_response",
         opencodeOnline: this.running
       };
-      this.connection.send(message);
+      this.connection.send(message, {
+        gatewayMessageId: fields.gatewayMessageId,
+        action: "status_query"
+      });
+      this.options.logger.info("runtime.status_query.responded", {
+        ...fields,
+        latencyMs: Date.now() - startedAt
+      });
       return;
     }
-    await this.handleInvoke(normalized.value);
+    this.options.logger.info("runtime.invoke.received", {
+      ...fields,
+      action: normalized.value.action,
+      welinkSessionId: normalized.value.welinkSessionId,
+      toolSessionId: getInvokeToolSessionId(normalized.value)
+    });
+    const invokeContext = {
+      gatewayMessageId: fields.gatewayMessageId,
+      action: normalized.value.action,
+      welinkSessionId: normalized.value.welinkSessionId,
+      toolSessionId: getInvokeToolSessionId(normalized.value)
+    };
+    const invokeResult = await this.handleInvoke(normalized.value, invokeContext);
+    if (invokeResult.success) {
+      this.options.logger.info("runtime.invoke.completed", {
+        ...fields,
+        action: normalized.value.action,
+        welinkSessionId: normalized.value.welinkSessionId,
+        toolSessionId: getInvokeToolSessionId(normalized.value),
+        latencyMs: Date.now() - startedAt
+      });
+      return;
+    }
+    this.options.logger.warn("runtime.invoke.failed", {
+      ...fields,
+      action: normalized.value.action,
+      welinkSessionId: normalized.value.welinkSessionId,
+      toolSessionId: getInvokeToolSessionId(normalized.value),
+      latencyMs: Date.now() - startedAt,
+      reason: invokeResult.reason
+    });
   }
-  async handleInvoke(message) {
+  async handleInvoke(message, context) {
     switch (message.action) {
       case "chat":
-        await this.handleChat(message);
-        return;
+        if (await this.handleChat(message, context)) {
+          return { success: true };
+        }
+        return { success: false, reason: "chat_failed" };
       case "create_session":
-        this.handleCreateSession(message);
-        return;
+        this.handleCreateSession(message, context);
+        return { success: true };
       case "close_session":
-        await this.handleCloseSession(message);
-        return;
+        await this.handleCloseSession(message, context);
+        return { success: true };
       case "abort_session":
-        await this.handleAbortSession(message);
-        return;
+        if (await this.handleAbortSession(message, context)) {
+          return { success: true };
+        }
+        return { success: false, reason: "abort_session_failed" };
       case "permission_reply":
       case "question_reply":
-        this.sendUnsupported(message.action, message.payload.toolSessionId, message.welinkSessionId);
-        return;
+        this.sendUnsupported(message.action, message.payload.toolSessionId, message.welinkSessionId, context);
+        return { success: false, reason: `unsupported_action:${message.action}` };
     }
   }
-  async handleChat(message) {
+  async handleChat(message, context) {
     const record = this.sessionRegistry.ensure(message.payload.toolSessionId, message.welinkSessionId);
     const assistantStream = createAssistantStreamState(record.sessionKey);
     const toolStates = /* @__PURE__ */ new Map();
@@ -1056,11 +1467,12 @@ var OpenClawGatewayBridge = class {
       type: "tool_event",
       toolSessionId: record.toolSessionId,
       event: buildBusyEvent(record.sessionKey)
-    });
+    }, context);
     this.logChatStarted({
       toolSessionId: record.toolSessionId,
       welinkSessionId: record.welinkSessionId,
       sessionKey: record.sessionKey,
+      chatText: message.payload.text,
       textLength: message.payload.text.length,
       startedAt,
       configuredTimeoutMs,
@@ -1079,10 +1491,11 @@ var OpenClawGatewayBridge = class {
           startedAt,
           selectedModel,
           chatRequestId,
-          retryAttempt
+          retryAttempt,
+          context
         );
         if (fallbackResult.ok) {
-          return;
+          return true;
         }
         lastErrorMessage = fallbackResult.errorMessage;
         lastErrorExtra = fallbackResult.extra;
@@ -1092,6 +1505,7 @@ var OpenClawGatewayBridge = class {
             toolSessionId: record.toolSessionId,
             welinkSessionId: record.welinkSessionId,
             sessionKey: record.sessionKey,
+            chatText: message.payload.text,
             textLength: message.payload.text.length,
             startedAt,
             configuredTimeoutMs,
@@ -1182,7 +1596,7 @@ var OpenClawGatewayBridge = class {
             return;
           }
           toolState.output = output;
-          this.emitToolPartUpdate(record.toolSessionId, toolState);
+          this.emitToolPartUpdate(record.toolSessionId, toolState, context);
           return;
         }
         if (typeof payload.text === "string" && payload.text.length > 0) {
@@ -1196,7 +1610,8 @@ var OpenClawGatewayBridge = class {
               chatRequestId,
               retryAttempt,
               latencyMs: now - startedAt,
-              chunkLength: payload.text.length
+              chunkLength: payload.text.length,
+              deltaText: payload.text
             });
           } else {
             this.options.logger.info("bridge.chat.chunk", {
@@ -1207,10 +1622,11 @@ var OpenClawGatewayBridge = class {
               chunkIndex: assistantStream.chunkCount,
               chunkLength: payload.text.length,
               sinceStartMs: now - startedAt,
-              sinceFirstChunkMs: now - assistantStream.firstChunkAt
+              sinceFirstChunkMs: now - assistantStream.firstChunkAt,
+              deltaText: payload.text
             });
           }
-          this.sendAssistantStreamChunk(record.toolSessionId, assistantStream, payload.text);
+          this.sendAssistantStreamChunk(record.toolSessionId, assistantStream, payload.text, context);
         }
       };
       try {
@@ -1240,6 +1656,7 @@ var OpenClawGatewayBridge = class {
             toolSessionId: record.toolSessionId,
             welinkSessionId: record.welinkSessionId,
             sessionKey: record.sessionKey,
+            chatText: message.payload.text,
             textLength: message.payload.text.length,
             startedAt,
             configuredTimeoutMs,
@@ -1257,7 +1674,8 @@ var OpenClawGatewayBridge = class {
       this.sendAssistantFinalResponse(
         record.toolSessionId,
         assistantStream,
-        finalText
+        finalText,
+        context
       );
       this.logChatCompleted({
         toolSessionId: record.toolSessionId,
@@ -1269,20 +1687,21 @@ var OpenClawGatewayBridge = class {
         executionPath: "runtime_reply",
         chatRequestId,
         retryAttempt,
-        responseLength: finalText.length
+        responseLength: finalText.length,
+        finalText
       });
       this.sendToolEvent({
         type: "tool_event",
         toolSessionId: record.toolSessionId,
         event: buildIdleEvent(record.sessionKey)
-      });
+      }, context);
       this.sendToolDone({
         type: "tool_done",
         toolSessionId: record.toolSessionId,
         welinkSessionId: record.welinkSessionId
-      });
+      }, context);
       this.clearActiveToolSession(record.sessionKey);
-      return;
+      return true;
     }
     this.clearActiveToolSession(record.sessionKey);
     const finalErrorMessage = lastErrorMessage ?? "chat_failed_without_error";
@@ -1303,15 +1722,16 @@ var OpenClawGatewayBridge = class {
       type: "tool_event",
       toolSessionId: record.toolSessionId,
       event: buildSessionErrorEvent(record.sessionKey, finalErrorMessage)
-    });
+    }, context);
     this.sendToolError({
       type: "tool_error",
       toolSessionId: record.toolSessionId,
       welinkSessionId: record.welinkSessionId,
       error: finalErrorMessage
-    });
+    }, context);
+    return false;
   }
-  async handleChatWithSubagentFallback(record, text, startedAt, selectedModel, chatRequestId, retryAttempt) {
+  async handleChatWithSubagentFallback(record, text, startedAt, selectedModel, chatRequestId, retryAttempt, context) {
     const assistantStream = createAssistantStreamState(record.sessionKey);
     const configuredTimeoutMs = this.options.account.runTimeoutMs;
     const subagent = this.getSubagentRuntime();
@@ -1346,7 +1766,7 @@ var OpenClawGatewayBridge = class {
         limit: 50
       });
       const assistantText = extractAssistantText(session.messages) || "(empty response)";
-      this.sendAssistantFinalResponse(record.toolSessionId, assistantStream, assistantText);
+      this.sendAssistantFinalResponse(record.toolSessionId, assistantStream, assistantText, context);
       this.logChatCompleted({
         toolSessionId: record.toolSessionId,
         sessionKey: record.sessionKey,
@@ -1358,6 +1778,7 @@ var OpenClawGatewayBridge = class {
         chatRequestId,
         retryAttempt,
         responseLength: assistantText.length,
+        finalText: assistantText,
         extra: {
           waitStatus: wait.status,
           waitError: wait.error ?? null
@@ -1367,12 +1788,12 @@ var OpenClawGatewayBridge = class {
         type: "tool_event",
         toolSessionId: record.toolSessionId,
         event: buildIdleEvent(record.sessionKey)
-      });
+      }, context);
       this.sendToolDone({
         type: "tool_done",
         toolSessionId: record.toolSessionId,
         welinkSessionId: record.welinkSessionId
-      });
+      }, context);
       this.clearActiveToolSession(record.sessionKey);
       return { ok: true };
     } catch (error) {
@@ -1385,7 +1806,7 @@ var OpenClawGatewayBridge = class {
     const isTimeout = lowered.includes("timed out") || lowered.includes("timeout");
     return assistantStream.firstChunkAt === null && isTimeout;
   }
-  handleCreateSession(message) {
+  handleCreateSession(message, context) {
     const record = this.sessionRegistry.create(message.welinkSessionId, message.payload.sessionId);
     const response = {
       type: "session_created",
@@ -1395,9 +1816,13 @@ var OpenClawGatewayBridge = class {
         sessionId: record.sessionKey
       }
     };
-    this.connection.send(response);
+    this.connection.send(response, {
+      ...context,
+      toolSessionId: record.toolSessionId,
+      welinkSessionId: message.welinkSessionId
+    });
   }
-  async handleCloseSession(message) {
+  async handleCloseSession(message, _context) {
     const record = this.sessionRegistry.delete(message.payload.toolSessionId);
     if (record) {
       this.clearActiveToolSession(record.sessionKey);
@@ -1406,7 +1831,7 @@ var OpenClawGatewayBridge = class {
       });
     }
   }
-  async handleAbortSession(message) {
+  async handleAbortSession(message, context) {
     const record = this.sessionRegistry.get(message.payload.toolSessionId);
     if (!record) {
       this.sendToolError({
@@ -1415,8 +1840,8 @@ var OpenClawGatewayBridge = class {
         welinkSessionId: message.welinkSessionId,
         error: "unknown_tool_session",
         reason: TOOL_ERROR_REASON.SESSION_NOT_FOUND
-      });
-      return;
+      }, context);
+      return false;
     }
     this.clearActiveToolSession(record.sessionKey);
     await this.getSubagentRuntime()?.deleteSession({
@@ -1427,43 +1852,105 @@ var OpenClawGatewayBridge = class {
       type: "tool_done",
       toolSessionId: message.payload.toolSessionId,
       welinkSessionId: message.welinkSessionId
-    });
+    }, context);
+    return true;
   }
-  sendUnsupported(action, toolSessionId, welinkSessionId) {
+  sendUnsupported(action, toolSessionId, welinkSessionId, context) {
     this.sendToolError({
       type: "tool_error",
       toolSessionId,
       welinkSessionId,
       error: `unsupported_in_openclaw_v1:${action}`
+    }, context);
+  }
+  buildSendContext(message, context) {
+    return {
+      gatewayMessageId: context?.gatewayMessageId,
+      action: context?.action,
+      welinkSessionId: context?.welinkSessionId ?? message.welinkSessionId,
+      toolSessionId: context?.toolSessionId ?? message.toolSessionId
+    };
+  }
+  buildChatEventContext(toolSessionId) {
+    const record = this.sessionRegistry.get(toolSessionId);
+    return {
+      action: "chat",
+      toolSessionId,
+      welinkSessionId: record?.welinkSessionId
+    };
+  }
+  sendToolEvent(message, context) {
+    const sendContext = this.buildSendContext(message, context);
+    logDebug3(this.options.logger, "runtime.tool_event.sending", {
+      gatewayMessageId: sendContext.gatewayMessageId,
+      action: sendContext.action,
+      welinkSessionId: sendContext.welinkSessionId,
+      toolSessionId: sendContext.toolSessionId,
+      eventType: isRecord4(message.event) ? asString3(message.event.type) : void 0
+    });
+    this.connection.send(message, {
+      ...sendContext,
+      eventType: isRecord4(message.event) ? asString3(message.event.type) : void 0
     });
   }
-  sendToolEvent(message) {
-    this.connection.send(message);
+  sendToolDone(message, context) {
+    const sendContext = this.buildSendContext(message, context);
+    this.options.logger.info("runtime.tool_done.sending", {
+      gatewayMessageId: sendContext.gatewayMessageId,
+      action: sendContext.action,
+      welinkSessionId: sendContext.welinkSessionId,
+      toolSessionId: sendContext.toolSessionId
+    });
+    try {
+      this.connection.send(message, sendContext);
+    } catch {
+      this.options.logger.warn("runtime.tool_done.skipped_no_connection", {
+        gatewayMessageId: sendContext.gatewayMessageId,
+        action: sendContext.action,
+        welinkSessionId: sendContext.welinkSessionId,
+        toolSessionId: sendContext.toolSessionId
+      });
+    }
   }
-  sendToolDone(message) {
-    this.connection.send(message);
+  sendToolError(message, context) {
+    const sendContext = this.buildSendContext(message, context);
+    this.options.logger.error("runtime.tool_error.sending", {
+      gatewayMessageId: sendContext.gatewayMessageId,
+      action: sendContext.action,
+      welinkSessionId: sendContext.welinkSessionId,
+      toolSessionId: sendContext.toolSessionId,
+      error: message.error,
+      reason: message.reason
+    });
+    try {
+      this.connection.send(message, sendContext);
+    } catch {
+      this.options.logger.warn("runtime.tool_error.skipped_no_connection", {
+        gatewayMessageId: sendContext.gatewayMessageId,
+        action: sendContext.action,
+        welinkSessionId: sendContext.welinkSessionId,
+        toolSessionId: sendContext.toolSessionId
+      });
+    }
   }
-  sendToolError(message) {
-    this.connection.send(message);
-  }
-  sendAssistantStreamChunk(toolSessionId, state, chunk) {
+  sendAssistantStreamChunk(toolSessionId, state, chunk, context) {
     state.accumulatedText += chunk;
     if (state.accumulatedText === chunk) {
-      this.ensureAssistantMessageStarted(toolSessionId, state);
+      this.ensureAssistantMessageStarted(toolSessionId, state, context);
       this.sendToolEvent({
         type: "tool_event",
         toolSessionId,
         event: buildAssistantPartUpdated(state.sessionKey, state.messageId, state.partId, chunk, chunk)
-      });
+      }, context);
       return;
     }
     this.sendToolEvent({
       type: "tool_event",
       toolSessionId,
       event: buildAssistantPartDelta(state.sessionKey, state.messageId, state.partId, chunk)
-    });
+    }, context);
   }
-  ensureAssistantMessageStarted(toolSessionId, state) {
+  ensureAssistantMessageStarted(toolSessionId, state, context) {
     if (state.seeded) {
       return;
     }
@@ -1471,17 +1958,17 @@ var OpenClawGatewayBridge = class {
       type: "tool_event",
       toolSessionId,
       event: buildAssistantMessageUpdated(state.sessionKey, state.messageId)
-    });
+    }, context);
     state.seeded = true;
   }
-  sendAssistantFinalResponse(toolSessionId, state, text) {
+  sendAssistantFinalResponse(toolSessionId, state, text, context) {
     if (state.seeded) {
       if (state.accumulatedText.length === 0) {
         this.sendToolEvent({
           type: "tool_event",
           toolSessionId,
           event: buildAssistantPartUpdated(state.sessionKey, state.messageId, state.partId, text)
-        });
+        }, context);
         return;
       }
       this.sendToolEvent({
@@ -1493,27 +1980,27 @@ var OpenClawGatewayBridge = class {
           state.partId,
           state.accumulatedText || text
         )
-      });
+      }, context);
       return;
     }
     this.sendToolEvent({
       type: "tool_event",
       toolSessionId,
       event: buildAssistantMessageUpdated(state.sessionKey, state.messageId)
-    });
+    }, context);
     this.sendToolEvent({
       type: "tool_event",
       toolSessionId,
       event: buildAssistantPartUpdated(state.sessionKey, state.messageId, state.partId, text)
-    });
+    }, context);
     state.seeded = true;
   }
-  emitToolPartUpdate(toolSessionId, toolState) {
+  emitToolPartUpdate(toolSessionId, toolState, context) {
     this.sendToolEvent({
       type: "tool_event",
       toolSessionId,
       event: buildToolPartUpdated(toolState)
-    });
+    }, context);
   }
   trackSessionRunId(sessionKey, runId) {
     if (!runId) {
@@ -1550,7 +2037,8 @@ var OpenClawGatewayBridge = class {
     const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
     const toolName = typeof evt.data.name === "string" && evt.data.name.length > 0 ? evt.data.name : "tool";
     const toolCallId = typeof evt.data.toolCallId === "string" && evt.data.toolCallId.length > 0 ? evt.data.toolCallId : `tool_${randomUUID3()}`;
-    this.ensureAssistantMessageStarted(activeSession.toolSessionId, activeSession.assistantStream);
+    const context = this.buildChatEventContext(activeSession.toolSessionId);
+    this.ensureAssistantMessageStarted(activeSession.toolSessionId, activeSession.assistantStream, context);
     let toolState = activeSession.toolStates.get(toolCallId);
     if (!toolState) {
       const nextToolState = {
@@ -1568,7 +2056,7 @@ var OpenClawGatewayBridge = class {
     toolState.title = extractToolResultTitle(evt.data.meta, toolName) ?? toolState.title;
     if (phase === "start" || phase === "update") {
       toolState.status = "running";
-      this.emitToolPartUpdate(activeSession.toolSessionId, toolState);
+      this.emitToolPartUpdate(activeSession.toolSessionId, toolState, context);
       return;
     }
     if (phase === "result") {
@@ -1576,7 +2064,7 @@ var OpenClawGatewayBridge = class {
       toolState.status = isError ? "error" : "completed";
       toolState.error = isError ? `tool_${toolName}_failed` : void 0;
       activeSession.pendingToolResultTarget = toolCallId;
-      this.emitToolPartUpdate(activeSession.toolSessionId, toolState);
+      this.emitToolPartUpdate(activeSession.toolSessionId, toolState, context);
     }
   }
   logChatStarted(params) {
@@ -1584,6 +2072,7 @@ var OpenClawGatewayBridge = class {
       toolSessionId: params.toolSessionId,
       welinkSessionId: params.welinkSessionId,
       sessionKey: params.sessionKey,
+      chatText: params.chatText,
       textLength: params.textLength,
       startedAt: params.startedAt,
       configuredTimeoutMs: params.configuredTimeoutMs,
@@ -1597,6 +2086,7 @@ var OpenClawGatewayBridge = class {
     this.options.logger.info("bridge.chat.completed", {
       ...this.buildChatDiagnostics(params),
       responseLength: params.responseLength,
+      finalText: params.finalText,
       ...params.extra ?? {}
     });
   }

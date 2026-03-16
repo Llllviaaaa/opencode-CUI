@@ -17,10 +17,18 @@ export interface GatewayConnectionEvents {
 export interface GatewayConnection {
   connect(): Promise<void>;
   disconnect(): void;
-  send(message: unknown): void;
+  send(message: unknown, logContext?: GatewaySendLogContext): void;
   getState(): ConnectionState;
   isConnected(): boolean;
   on<E extends keyof GatewayConnectionEvents>(event: E, listener: GatewayConnectionEvents[E]): this;
+}
+
+export interface GatewaySendLogContext {
+  gatewayMessageId?: string;
+  action?: string;
+  welinkSessionId?: string;
+  toolSessionId?: string;
+  eventType?: string;
 }
 
 export interface GatewayConnectionOptions {
@@ -39,6 +47,24 @@ interface GatewayControlMessage {
   reason?: string;
 }
 
+type GatewayCloseEventLike = Partial<CloseEvent> & {
+  code?: unknown;
+  reason?: unknown;
+  wasClean?: unknown;
+};
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 function logDebug(logger: BridgeLogger, message: string, meta?: Record<string, unknown>): void {
   if (logger.debug) {
     logger.debug(message, meta);
@@ -53,6 +79,47 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isGatewayControlMessage(value: unknown): value is GatewayControlMessage {
   return isRecord(value) && (value.type === "register_ok" || value.type === "register_rejected");
+}
+
+function extractGatewayMessageId(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return typeof value.messageId === "string" ? value.messageId : undefined;
+}
+
+function extractMessageAction(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return typeof value.action === "string" ? value.action : undefined;
+}
+
+function extractWelinkSessionId(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return typeof value.welinkSessionId === "string" ? value.welinkSessionId : undefined;
+}
+
+function extractToolSessionId(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (typeof value.toolSessionId === "string") {
+    return value.toolSessionId;
+  }
+  if (!isRecord(value.payload)) {
+    return undefined;
+  }
+  return typeof value.payload.toolSessionId === "string" ? value.payload.toolSessionId : undefined;
+}
+
+function extractEventType(value: unknown): string | undefined {
+  if (!isRecord(value) || !isRecord(value.event)) {
+    return undefined;
+  }
+  return typeof value.event.type === "string" ? value.event.type : undefined;
 }
 
 function encodeBase64Url(value: string): string {
@@ -126,6 +193,10 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
         logDebug(this.options.logger, "gateway.message.received", {
           messageType: isRecord(parsed) && typeof parsed.type === "string" ? parsed.type : undefined,
           frameBytes: Buffer.byteLength(data, "utf8"),
+          gatewayMessageId: extractGatewayMessageId(parsed),
+          action: extractMessageAction(parsed),
+          welinkSessionId: extractWelinkSessionId(parsed),
+          toolSessionId: extractToolSessionId(parsed),
         });
 
         this.emit("inbound", parsed);
@@ -162,11 +233,22 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
         this.emit("error", error);
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
+        const close = event as GatewayCloseEventLike;
+        const stateBeforeClose = this.state;
+        const reconnectPlanned = !this.manuallyDisconnected;
+        this.options.logger.warn("gateway.close", {
+          code: asNumber(close.code),
+          reason: asString(close.reason) ?? "",
+          wasClean: asBoolean(close.wasClean),
+          stateBeforeClose,
+          manuallyDisconnected: this.manuallyDisconnected,
+          reconnectPlanned,
+        });
         this.stopHeartbeat();
         this.ws = null;
         this.setState("DISCONNECTED");
-        if (!this.manuallyDisconnected) {
+        if (reconnectPlanned) {
           this.scheduleReconnect();
         }
       };
@@ -185,7 +267,7 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
     this.setState("DISCONNECTED");
   }
 
-  send(message: unknown): void {
+  send(message: unknown, logContext?: GatewaySendLogContext): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("gateway_not_connected");
     }
@@ -193,6 +275,11 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
     logDebug(this.options.logger, "gateway.send", {
       messageType: isRecord(message) && typeof message.type === "string" ? message.type : undefined,
       payloadBytes: Buffer.byteLength(serialized, "utf8"),
+      gatewayMessageId: logContext?.gatewayMessageId ?? extractGatewayMessageId(message),
+      action: logContext?.action ?? extractMessageAction(message),
+      welinkSessionId: logContext?.welinkSessionId ?? extractWelinkSessionId(message),
+      toolSessionId: logContext?.toolSessionId ?? extractToolSessionId(message),
+      eventType: logContext?.eventType ?? extractEventType(message),
     });
     this.ws.send(serialized);
     this.emit("outbound", message);

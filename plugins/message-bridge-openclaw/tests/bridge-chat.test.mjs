@@ -195,6 +195,7 @@ test("downstream and transport chain logs are emitted for chat and invalid paylo
 
   await bridge.handleDownstreamMessage({
     type: "invoke",
+    messageId: "gw_msg_chat_1",
     welinkSessionId: "wl_logs_1",
     action: "chat",
     payload: {
@@ -205,6 +206,7 @@ test("downstream and transport chain logs are emitted for chat and invalid paylo
 
   await bridge.handleDownstreamMessage({
     type: "invoke",
+    messageId: "gw_msg_chat_2",
     welinkSessionId: "wl_logs_2",
     action: "chat",
     payload: {
@@ -218,8 +220,15 @@ test("downstream and transport chain logs are emitted for chat and invalid paylo
   assert.equal(logs.debug.some((entry) => entry.message === "runtime.tool_event.sending"), true);
   assert.equal(logs.info.some((entry) => entry.message === "runtime.tool_done.sending"), true);
   assert.equal(logs.warn.some((entry) => entry.message === "runtime.downstream_ignored_non_protocol"), true);
+  const toolEventLog = logs.debug.find((entry) => entry.message === "runtime.tool_event.sending");
+  assert.equal(toolEventLog?.meta.gatewayMessageId, "gw_msg_chat_1");
+  assert.equal(toolEventLog?.meta.action, "chat");
+  assert.equal(toolEventLog?.meta.welinkSessionId, "wl_logs_1");
+  assert.equal(toolEventLog?.meta.toolSessionId, "tool_logs_1");
   const toolErrorLog = logs.error.find((entry) => entry.message === "runtime.tool_error.sending");
   assert.equal(Boolean(toolErrorLog), true);
+  assert.equal(toolErrorLog?.meta.gatewayMessageId, "gw_msg_chat_2");
+  assert.equal(toolErrorLog?.meta.action, "chat");
   assert.equal(toolErrorLog?.meta.welinkSessionId, "wl_logs_2");
   assert.equal(toolErrorLog?.meta.toolSessionId, "tool_logs_2");
 });

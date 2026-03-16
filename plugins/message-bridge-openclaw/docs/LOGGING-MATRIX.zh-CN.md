@@ -19,16 +19,17 @@
 | 重连计划 | `gateway.reconnect.scheduled` | info | `reconnectAttempts`,`delayMs` | 已安排下一次重连 |
 | 重连执行 | `gateway.reconnect.attempt` | info | `reconnectAttempts` | 开始执行重连 |
 | 重连失败 | `gateway.reconnect.failed` | warn | `error` | 单次重连失败 |
+| 连接关闭 | `gateway.close` | warn | `code`,`reason`,`wasClean`,`stateBeforeClose`,`manuallyDisconnected`,`reconnectPlanned` | WebSocket close 原因与是否计划重连 |
 
 ## 2. 网关收发与下行归一化
 
 | 阶段 | 事件名 | 级别 | 关键字段 | 说明 |
 | --- | --- | --- | --- | --- |
-| 收到帧 | `gateway.message.received` | debug/info* | `messageType`,`frameBytes` | 收到并解析 JSON 帧 |
+| 收到帧 | `gateway.message.received` | debug/info* | `messageType`,`frameBytes`,`gatewayMessageId`,`action`,`welinkSessionId`,`toolSessionId` | 收到并解析 JSON 帧 |
 | 非 JSON 帧 | `gateway.message.ignored_non_json` | debug/info* | `payloadLength`,`frameBytes` | 非 JSON 帧被忽略 |
 | 未 READY 消息 | `gateway.message.received_not_ready` | debug/info* | `messageType`,`state` | READY 前收到业务消息（观测告警，不会直接丢弃） |
-| 发送帧 | `gateway.send` | debug/info* | `messageType`,`payloadBytes` | 向网关发送报文 |
-| runtime 收到下行 | `runtime.downstream.received` | debug/info* | `messageType`,`action`,`welinkSessionId`,`toolSessionId` | runtime 下行入口 |
+| 发送帧 | `gateway.send` | debug/info* | `messageType`,`payloadBytes`,`gatewayMessageId`,`eventType`,`action`,`welinkSessionId`,`toolSessionId` | 向网关发送报文 |
+| runtime 收到下行 | `runtime.downstream.received` | debug/info* | `messageType`,`gatewayMessageId`,`action`,`welinkSessionId`,`toolSessionId` | runtime 下行入口 |
 | 无连接丢弃 | `runtime.downstream_ignored_no_connection` | warn | - | runtime 收到消息但连接不可用 |
 | 归一化失败 | `downstream.normalization_failed` | warn | `stage`,`errorCode`,`field`,`messageType`,`action`,`welinkSessionId`,`messagePreview` | 协议校验失败 |
 | 非协议下行 | `runtime.downstream_ignored_non_protocol` | warn | `errorCode`,`stage`,`field`,`errorMessage` | runtime 丢弃非法消息 |
@@ -40,20 +41,20 @@
 
 | 阶段 | 事件名 | 级别 | 关键字段 | 说明 |
 | --- | --- | --- | --- | --- |
-| status_query 收到 | `runtime.status_query.received` | info | `messageType` | 收到状态查询 |
-| status_query 回应 | `runtime.status_query.responded` | info | `latencyMs` | 已回传 `status_response` |
-| invoke 收到 | `runtime.invoke.received` | info | `action`,`welinkSessionId`,`toolSessionId` | invoke 分发入口 |
-| invoke 完成 | `runtime.invoke.completed` | info | `action`,`welinkSessionId`,`toolSessionId`,`latencyMs` | invoke 执行完成 |
+| status_query 收到 | `runtime.status_query.received` | info | `messageType`,`gatewayMessageId` | 收到状态查询 |
+| status_query 回应 | `runtime.status_query.responded` | info | `gatewayMessageId`,`latencyMs` | 已回传 `status_response` |
+| invoke 收到 | `runtime.invoke.received` | info | `gatewayMessageId`,`action`,`welinkSessionId`,`toolSessionId` | invoke 分发入口 |
+| invoke 完成 | `runtime.invoke.completed` | info | `gatewayMessageId`,`action`,`welinkSessionId`,`toolSessionId`,`latencyMs` | invoke 执行完成 |
 
 ## 4. 上行发送（tool_event/tool_done/tool_error）
 
 | 阶段 | 事件名 | 级别 | 关键字段 | 说明 |
 | --- | --- | --- | --- | --- |
-| 发送 tool_event | `runtime.tool_event.sending` | debug/info* | `toolSessionId`,`eventType` | 发送 `tool_event` 前 |
-| 发送 tool_done | `runtime.tool_done.sending` | info | `toolSessionId`,`welinkSessionId` | 发送 `tool_done` 前 |
-| tool_done 跳过 | `runtime.tool_done.skipped_no_connection` | warn | `toolSessionId`,`welinkSessionId` | 无连接，`tool_done` 未实际发出 |
-| 发送 tool_error | `runtime.tool_error.sending` | error | `toolSessionId`,`welinkSessionId`,`error`,`reason` | 发送 `tool_error` 前 |
-| tool_error 跳过 | `runtime.tool_error.skipped_no_connection` | warn | `toolSessionId`,`welinkSessionId` | 无连接，`tool_error` 未实际发出 |
+| 发送 tool_event | `runtime.tool_event.sending` | debug/info* | `gatewayMessageId`,`action`,`welinkSessionId`,`toolSessionId`,`eventType` | 发送 `tool_event` 前 |
+| 发送 tool_done | `runtime.tool_done.sending` | info | `gatewayMessageId`,`action`,`welinkSessionId`,`toolSessionId` | 发送 `tool_done` 前 |
+| tool_done 跳过 | `runtime.tool_done.skipped_no_connection` | warn | `gatewayMessageId`,`action`,`welinkSessionId`,`toolSessionId` | 无连接，`tool_done` 未实际发出 |
+| 发送 tool_error | `runtime.tool_error.sending` | error | `gatewayMessageId`,`action`,`welinkSessionId`,`toolSessionId`,`error`,`reason` | 发送 `tool_error` 前 |
+| tool_error 跳过 | `runtime.tool_error.skipped_no_connection` | warn | `gatewayMessageId`,`action`,`welinkSessionId`,`toolSessionId` | 无连接，`tool_error` 未实际发出 |
 
 ## 5. Chat 业务链路（明文）
 
@@ -116,7 +117,7 @@ rg -n "downstream.normalization_failed|runtime.downstream_ignored_non_protocol|r
 ### 8.2 连接不稳定 / 断连重连
 
 ```bash
-rg -n "gateway.state.changed|gateway.connect.started|gateway.register.sent|gateway.register.accepted|gateway.ready|gateway.reconnect.scheduled|gateway.reconnect.attempt|gateway.reconnect.failed|gateway.error" \
+rg -n "gateway.state.changed|gateway.connect.started|gateway.register.sent|gateway.register.accepted|gateway.ready|gateway.close|gateway.reconnect.scheduled|gateway.reconnect.attempt|gateway.reconnect.failed|gateway.error" \
   /Users/zy/Code/opencode/opencode-CUI/logs/local-stack/ai-gateway.log
 ```
 
