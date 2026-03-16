@@ -395,6 +395,42 @@ openclaw gateway run --allow-unconfigured --verbose
 
 - `/Users/zy/Code/opencode/opencode-CUI/logs/local-stack/ai-gateway.log`
 
+OpenClaw 自身文件日志（插件日志也在其中）默认路径：
+
+- macOS/Linux：`/tmp/openclaw/openclaw-YYYY-MM-DD.log`
+- Windows：`%TEMP%\\openclaw\\openclaw-YYYY-MM-DD.log`
+
+常用查看命令与输出说明：
+
+```bash
+# 1) 实时看 OpenClaw 文件日志（推荐，跨平台）
+openclaw logs --follow
+```
+
+- 会打印结构化日志行（pretty/compact），能看到 `gateway.*`、`runtime.*`、`bridge.chat.*` 事件名。
+
+```bash
+# 2) 机器可读 JSON 输出
+openclaw logs --follow --json
+```
+
+- 会打印 JSON 行对象，常见 `type`：`meta` / `log` / `notice` / `raw`。
+- `type=log` 时可看到 `level/subsystem/message/...meta字段`。
+
+```bash
+# 3) 直接跟踪 ai-gateway 日志（本地联调）
+tail -f /Users/zy/Code/opencode/opencode-CUI/logs/local-stack/ai-gateway.log
+```
+
+- 会打印 ai-gateway 收发与转发日志，适合看 Redis 下行与上行 `tool_event/tool_done/tool_error` 记录。
+
+Windows（PowerShell）等价命令：
+
+```powershell
+Get-Content "$env:TEMP\\openclaw\\openclaw-$(Get-Date -Format yyyy-MM-dd).log" -Wait
+Get-Content "C:\\path\\to\\opencode-CUI\\logs\\local-stack\\ai-gateway.log" -Wait
+```
+
 ### 9.2 校验状态查询
 
 ```bash

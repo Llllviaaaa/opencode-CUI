@@ -89,7 +89,14 @@
 
 ## 8. 常用检索命令（按问题类型）
 
-以下命令默认针对本地栈日志：
+### 8.0 日志文件位置与查看方式
+
+OpenClaw 文件日志默认路径（插件日志也在其中）：
+
+- macOS/Linux：`/tmp/openclaw/openclaw-YYYY-MM-DD.log`
+- Windows：`%TEMP%\\openclaw\\openclaw-YYYY-MM-DD.log`
+
+本地联调 `ai-gateway` 日志路径：
 
 - `/Users/zy/Code/opencode/opencode-CUI/logs/local-stack/ai-gateway.log`
 
@@ -97,6 +104,19 @@
 
 ```bash
 tail -f /Users/zy/Code/opencode/opencode-CUI/logs/local-stack/ai-gateway.log
+```
+
+命令输出说明：
+
+- `openclaw logs --follow`：打印 OpenClaw 结构化日志行（可见 `gateway.* / runtime.* / bridge.chat.*` 事件名）。
+- `openclaw logs --follow --json`：打印 JSON 行，常见 `type=meta/log/notice/raw`；`type=log` 时包含事件字段。
+- `tail -f ai-gateway.log`：打印 ai-gateway 侧收发日志，便于对照 Redis 下行与上行消息。
+
+Windows（PowerShell）可用：
+
+```powershell
+Get-Content "$env:TEMP\\openclaw\\openclaw-$(Get-Date -Format yyyy-MM-dd).log" -Wait
+Get-Content "C:\\path\\to\\opencode-CUI\\logs\\local-stack\\ai-gateway.log" -Wait
 ```
 
 ### 8.1 协议校验失败（常见“返回为空”）
