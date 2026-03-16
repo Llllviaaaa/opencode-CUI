@@ -27,13 +27,18 @@ class FakeWebSocket {
     this.onclose?.({ code: 1000, reason: "manual close", wasClean: true });
   }
 
-  emitOpen() {
+  emitOpen(payload = { source: "fake-open-event" }) {
     this.readyState = FakeWebSocket.OPEN;
-    this.onopen?.();
+    this.onopen?.(payload);
   }
 
   emitMessage(payload) {
-    this.onmessage?.({ data: JSON.stringify(payload) });
+    const data = typeof payload === "string" ? payload : JSON.stringify(payload);
+    this.onmessage?.({ data });
+  }
+
+  emitError(payload = { type: "error", reason: "fake-error-event" }) {
+    this.onerror?.(payload);
   }
 
   emitClose(payload) {
@@ -42,13 +47,14 @@ class FakeWebSocket {
   }
 }
 
-function createConnection(logs) {
+function createConnection(logs, options = {}) {
   const conn = new DefaultGatewayConnection({
     url: "ws://localhost:8081/ws/agent",
     reconnectBaseMs: 1,
     reconnectMaxMs: 4,
     reconnectExponential: true,
     heartbeatIntervalMs: 30000,
+    debug: options.debug ?? false,
     registerMessage: {
       type: "register",
       deviceName: "dev",
@@ -76,7 +82,7 @@ test("gateway.close logs reconnectPlanned=false on manual disconnect", async (t)
   const originalWebSocket = globalThis.WebSocket;
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
-  const logs = { info: [], warn: [], error: [] };
+  const logs = { debug: [], info: [], warn: [], error: [] };
   try {
     FakeWebSocket.instances = [];
     globalThis.WebSocket = FakeWebSocket;
@@ -112,7 +118,7 @@ test("gateway.close logs reconnectPlanned=true on unexpected close", async (t) =
   const originalWebSocket = globalThis.WebSocket;
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
-  const logs = { info: [], warn: [], error: [] };
+  const logs = { debug: [], info: [], warn: [], error: [] };
   try {
     FakeWebSocket.instances = [];
     globalThis.WebSocket = FakeWebSocket;
@@ -149,7 +155,7 @@ test("gateway send/receive logs include message correlation fields", async (t) =
   const originalWebSocket = globalThis.WebSocket;
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
-  const logs = { info: [], warn: [], error: [] };
+  const logs = { debug: [], info: [], warn: [], error: [] };
   let conn = null;
   try {
     FakeWebSocket.instances = [];
@@ -220,4 +226,76 @@ test("gateway send/receive logs include message correlation fields", async (t) =
     globalThis.clearTimeout = originalClearTimeout;
   }
   t.diagnostic("gateway send/receive correlation logging validated");
+});
+
+test("raw packet logs are disabled when debug=false", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  const logs = { debug: [], info: [], warn: [], error: [] };
+  let conn = null;
+  try {
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket;
+    conn = createConnection(logs, { debug: false });
+    conn.on("error", () => {});
+
+    const connecting = conn.connect();
+    const ws = FakeWebSocket.instances[0];
+    ws.emitOpen();
+    await connecting;
+    ws.emitMessage({ type: "register_ok" });
+    await Promise.resolve();
+    conn.send({ type: "heartbeat", timestamp: "2026-03-16T00:00:00.000Z" });
+    ws.emitError();
+
+    assert.equal(logs.info.some((entry) => entry.message.startsWith("「onOpen」===>")), false);
+    assert.equal(logs.info.some((entry) => entry.message.startsWith("「onMessage」===>")), false);
+    assert.equal(logs.info.some((entry) => entry.message.startsWith("「onError」===>")), false);
+    assert.equal(logs.info.some((entry) => entry.message.startsWith("「sendMessage」===>")), false);
+  } finally {
+    conn?.disconnect();
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
+
+test("raw packet logs are readable and formatted when debug=true", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  const logs = { debug: [], info: [], warn: [], error: [] };
+  let conn = null;
+  try {
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket;
+    conn = createConnection(logs, { debug: true });
+    conn.on("error", () => {});
+
+    const connecting = conn.connect();
+    const ws = FakeWebSocket.instances[0];
+    ws.emitOpen({ type: "open_event", from: "fake" });
+    await connecting;
+    ws.emitMessage({ type: "register_ok" });
+    await Promise.resolve();
+    ws.emitMessage('{"type":"invoke","messageId":"gw_msg_debug_1","payload":{"text":"hello"}}');
+    conn.send({ type: "heartbeat", timestamp: "2026-03-16T00:00:00.000Z" });
+    ws.emitError({ type: "error_event", reason: "upstream" });
+
+    const openLog = logs.info.find((entry) => entry.message.startsWith("「onOpen」===>"));
+    const onMessageLogs = logs.info.filter((entry) => entry.message.startsWith("「onMessage」===>"));
+    const sendLog = logs.info.find(
+      (entry) =>
+        entry.message.startsWith("「sendMessage」===>") &&
+        entry.message.includes('"type":"heartbeat"'),
+    );
+    const errorLog = logs.info.find((entry) => entry.message.startsWith("「onError」===>"));
+
+    assert.equal(Boolean(openLog), true);
+    assert.equal(openLog.message, '「onOpen」===>「{"type":"open_event","from":"fake"}」');
+    assert.equal(onMessageLogs.length > 0, true);
+    assert.equal(onMessageLogs.every((entry) => !entry.message.includes("[object Object]")), true);
+    assert.equal(Boolean(sendLog), true);
+    assert.equal(sendLog.message, '「sendMessage」===>「{"type":"heartbeat","timestamp":"2026-03-16T00:00:00.000Z"}」');
+    assert.equal(Boolean(errorLog), true);
+    assert.equal(errorLog.message, '「onError」===>「{"type":"error_event","reason":"upstream"}」');
+  } finally {
+    conn?.disconnect();
+    globalThis.WebSocket = originalWebSocket;
+  }
 });

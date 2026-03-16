@@ -42,6 +42,7 @@ function createAccount(overrides = {}) {
   return {
     accountId: "default",
     enabled: true,
+    debug: false,
     gateway: {
       url: "ws://localhost:8081/ws/agent",
       heartbeatIntervalMs: 30_000,
@@ -122,6 +123,7 @@ test("message bridge config schema accepts single-account config", async () => {
   const validate = ajv.compile(messageBridgePlugin.configSchema.schema);
 
   const valid = validate({
+    debug: true,
     gateway: {
       url: "ws://localhost:8081/ws/agent",
     },
@@ -132,6 +134,27 @@ test("message bridge config schema accepts single-account config", async () => {
   });
 
   assert.equal(valid, true);
+});
+
+test("message bridge config schema rejects non-boolean debug", async () => {
+  const ajv = new Ajv({
+    allErrors: true,
+    strict: false,
+  });
+  const validate = ajv.compile(messageBridgePlugin.configSchema.schema);
+
+  const valid = validate({
+    debug: "true",
+    gateway: {
+      url: "ws://localhost:8081/ws/agent",
+    },
+    auth: {
+      ak: "ak",
+      sk: "sk",
+    },
+  });
+
+  assert.equal(valid, false);
 });
 
 test("message bridge config schema rejects legacy accounts config and exposes migration hint", async () => {
@@ -345,6 +368,18 @@ test("single-account config still requires an explicit gateway url and setup wri
 
   const configuredAccount = resolveAccount(nextCfg);
   assert.equal(isAccountConfigured(configuredAccount, nextCfg), true);
+  assert.equal(configuredAccount.debug, false);
+
+  const debugCfg = {
+    channels: {
+      "message-bridge": {
+        ...nextCfg.channels["message-bridge"],
+        debug: true,
+      },
+    },
+  };
+  const debugAccount = resolveAccount(debugCfg);
+  assert.equal(debugAccount.debug, true);
 
   const disabledCfg = setMessageBridgeAccountEnabled({
     cfg: nextCfg,
@@ -385,6 +420,24 @@ test("single-account config still requires an explicit gateway url and setup wri
     Object.prototype.hasOwnProperty.call(nextViaSetupApi.channels["message-bridge"], "gatewayUrl"),
     false,
   );
+  assert.equal(nextViaSetupApi.channels["message-bridge"].debug, undefined);
+
+  const nextViaSetupApiWithExistingDebug = messageBridgePlugin.setup.applyAccountConfig({
+    cfg: {
+      channels: {
+        "message-bridge": {
+          debug: true,
+        },
+      },
+    },
+    accountId: "default",
+    input: {
+      url: "wss://gateway.example.com/ws/agent",
+      token: "setup-ak",
+      password: "setup-sk",
+    },
+  });
+  assert.equal(nextViaSetupApiWithExistingDebug.channels["message-bridge"].debug, true);
 
   const deletedCfg = deleteMessageBridgeAccount({
     cfg: renamedCfg,

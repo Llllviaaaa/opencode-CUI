@@ -38,6 +38,7 @@ const messageBridgeConfigSchema: ChannelConfigSchema = {
     additionalProperties: false,
     properties: {
       enabled: { type: "boolean" },
+      debug: { type: "boolean" },
       name: { type: "string", minLength: 1 },
       gateway: {
         type: "object",

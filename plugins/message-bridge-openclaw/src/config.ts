@@ -18,6 +18,7 @@ const NON_DEFAULT_ACCOUNT_ERROR_PREFIX = "message_bridge_single_account_only";
 
 export const DEFAULT_ACCOUNT_CONFIG: MessageBridgeAccountConfig = {
   enabled: true,
+  debug: false,
   gateway: {
     url: "ws://localhost:8081/ws/agent",
     heartbeatIntervalMs: 30_000,

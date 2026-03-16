@@ -358,6 +358,7 @@ export class OpenClawGatewayBridge {
         reconnectMaxMs: options.account.gateway.reconnect.maxMs,
         reconnectExponential: options.account.gateway.reconnect.exponential,
         heartbeatIntervalMs: options.account.gateway.heartbeatIntervalMs,
+        debug: options.account.debug,
         authPayloadProvider: () =>
           new DefaultAkSkAuth(options.account.auth.ak, options.account.auth.sk).generateAuthPayload(),
         registerMessage: {

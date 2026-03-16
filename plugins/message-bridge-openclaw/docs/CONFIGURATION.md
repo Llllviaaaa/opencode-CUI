@@ -9,6 +9,7 @@ values are resolved.
 The plugin reads channel config under `channels.message-bridge`:
 
 - `enabled` (`boolean`, optional, default `true`)
+- `debug` (`boolean`, optional, default `false`; enables raw WebSocket frame logging)
 - `name` (`string`, optional)
 - `gateway.url` (`string`, required, must start with `ws://` or `wss://`)
 - `gateway.heartbeatIntervalMs` (`integer`, optional, default `30000`)
@@ -51,4 +52,3 @@ Notes:
   See OpenClaw env docs:
   - `plugins/openclaw/docs/help/environment.md`
   - `plugins/openclaw/docs/zh-CN/help/environment.md`
-

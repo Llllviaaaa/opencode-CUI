@@ -120,6 +120,7 @@ function createProbeConnection(account: MessageBridgeResolvedAccount): GatewayCo
     reconnectMaxMs: account.gateway.reconnect.maxMs,
     reconnectExponential: account.gateway.reconnect.exponential,
     heartbeatIntervalMs: account.gateway.heartbeatIntervalMs,
+    debug: account.debug,
     authPayloadProvider: () => new DefaultAkSkAuth(account.auth.ak, account.auth.sk).generateAuthPayload(),
     registerMessage: {
       type: "register",

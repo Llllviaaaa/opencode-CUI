@@ -7,6 +7,7 @@
 插件读取 `channels.message-bridge` 下的配置：
 
 - `enabled`（`boolean`，可选，默认 `true`）
+- `debug`（`boolean`，可选，默认 `false`；开启后打印 WebSocket 原始报文日志）
 - `name`（`string`，可选）
 - `gateway.url`（`string`，必填，必须以 `ws://` 或 `wss://` 开头）
 - `gateway.heartbeatIntervalMs`（`integer`，可选，默认 `30000`）
@@ -50,4 +51,3 @@
   详见 OpenClaw 环境变量文档：
   - `plugins/openclaw/docs/help/environment.md`
   - `plugins/openclaw/docs/zh-CN/help/environment.md`
-
