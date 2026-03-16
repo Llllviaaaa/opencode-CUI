@@ -10,6 +10,7 @@
 相关文档：
 
 - 安装与联调：`docs/USAGE.zh-CN.md`
+- 配置字段与优先级：`docs/CONFIGURATION.zh-CN.md`
 - 实施计划：`docs/implementation-plan.md`
 - 协议时序：`docs/protocol-sequence.md`
 - 本轮验证与覆盖审计：`docs/VALIDATION-AUDIT.zh-CN.md`

@@ -340,6 +340,8 @@ test("single-account config still requires an explicit gateway url and setup wri
   assert.equal(nextCfg.channels["message-bridge"].gateway.url, "ws://localhost:8081/ws/agent");
   assert.equal(nextCfg.channels["message-bridge"].auth.ak, "ak");
   assert.equal(nextCfg.channels["message-bridge"].auth.sk, "sk");
+  assert.equal(Object.prototype.hasOwnProperty.call(nextCfg.channels["message-bridge"], "GatewayUrl"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(nextCfg.channels["message-bridge"], "gatewayUrl"), false);
 
   const configuredAccount = resolveAccount(nextCfg);
   assert.equal(isAccountConfigured(configuredAccount, nextCfg), true);
@@ -359,11 +361,55 @@ test("single-account config still requires an explicit gateway url and setup wri
   assert.equal(renamedCfg.channels["message-bridge"].name, "Renamed bridge");
   assert.equal(renamedCfg.channels["message-bridge"].enabled, false);
 
+  const nextViaSetupApi = messageBridgePlugin.setup.applyAccountConfig({
+    cfg: {
+      channels: {},
+    },
+    accountId: "default",
+    input: {
+      name: "Setup bridge",
+      url: "wss://gateway.example.com/ws/agent",
+      token: "setup-ak",
+      password: "setup-sk",
+    },
+  });
+  assert.equal(nextViaSetupApi.channels["message-bridge"].name, "Setup bridge");
+  assert.equal(nextViaSetupApi.channels["message-bridge"].gateway.url, "wss://gateway.example.com/ws/agent");
+  assert.equal(nextViaSetupApi.channels["message-bridge"].auth.ak, "setup-ak");
+  assert.equal(nextViaSetupApi.channels["message-bridge"].auth.sk, "setup-sk");
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(nextViaSetupApi.channels["message-bridge"], "GatewayUrl"),
+    false,
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(nextViaSetupApi.channels["message-bridge"], "gatewayUrl"),
+    false,
+  );
+
   const deletedCfg = deleteMessageBridgeAccount({
     cfg: renamedCfg,
     accountId: "default",
   });
   assert.equal(deletedCfg.channels?.["message-bridge"], undefined);
+});
+
+test("non-standard GatewayUrl fields are ignored (no compatibility aliasing)", async () => {
+  const cfgWithWrongKey = {
+    channels: {
+      "message-bridge": {
+        GatewayUrl: "ws://127.0.0.1:8081/ws/agent",
+        auth: {
+          ak: "ak",
+          sk: "sk",
+        },
+      },
+    },
+  };
+
+  const account = resolveAccount(cfgWithWrongKey);
+  assert.equal(account.gateway.url, "ws://localhost:8081/ws/agent");
+  assert.equal(isAccountConfigured(account, cfgWithWrongKey), false);
+  assert.match(resolveUnconfiguredReason(cfgWithWrongKey), /gateway.url/);
 });
 
 test("buildMessageBridgeAccountSnapshot and buildChannelSummary expose operational fields", async () => {

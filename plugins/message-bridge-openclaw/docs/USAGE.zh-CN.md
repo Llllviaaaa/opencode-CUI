@@ -6,6 +6,7 @@
 
 - `docs/VALIDATION.zh-CN.md`
 - `docs/LOGGING-MATRIX.zh-CN.md`
+- `docs/CONFIGURATION.zh-CN.md`
 
 当前插件目录：
 
