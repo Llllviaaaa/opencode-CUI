@@ -11,6 +11,7 @@ message contract.
 Chinese usage guide:
 
 - `docs/USAGE.zh-CN.md`
+- `docs/LOGGING-MATRIX.zh-CN.md`（日志事件矩阵）
 
 Validation manual:
 

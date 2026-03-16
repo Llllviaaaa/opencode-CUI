@@ -99,3 +99,34 @@ test("question_reply rejects blank toolCallId when provided", () => {
   assert.equal(result.error.code, "invalid_payload");
   assert.equal(result.error.action, "question_reply");
 });
+
+test("logs downstream.normalization_failed with stage and field", () => {
+  const warns = [];
+  const result = normalizeDownstreamMessage(
+    {
+      type: "invoke",
+      welinkSessionId: "wl_log_1",
+      action: "chat",
+      payload: {
+        toolSessionId: "tool_log_1",
+      },
+    },
+    {
+      info() {},
+      warn(message, meta) {
+        warns.push({ message, meta });
+      },
+      error() {},
+    },
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(warns.length, 1);
+  assert.equal(warns[0].message, "downstream.normalization_failed");
+  assert.equal(warns[0].meta.stage, "payload");
+  assert.equal(warns[0].meta.field, "payload.text");
+  assert.equal(warns[0].meta.errorCode, "missing_required_field");
+  assert.equal(warns[0].meta.messageType, "invoke");
+  assert.equal(warns[0].meta.action, "chat");
+  assert.equal(warns[0].meta.welinkSessionId, "wl_log_1");
+});

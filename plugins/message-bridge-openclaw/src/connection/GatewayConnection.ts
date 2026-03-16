@@ -39,6 +39,14 @@ interface GatewayControlMessage {
   reason?: string;
 }
 
+function logDebug(logger: BridgeLogger, message: string, meta?: Record<string, unknown>): void {
+  if (logger.debug) {
+    logger.debug(message, meta);
+    return;
+  }
+  logger.info(message, meta);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
@@ -82,6 +90,7 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
   async connect(): Promise<void> {
     this.manuallyDisconnected = false;
     this.setState("CONNECTING");
+    this.options.logger.info("gateway.connect.started", { url: this.options.url });
 
     return new Promise((resolve, reject) => {
       const authPayload = this.options.authPayloadProvider?.();
@@ -92,6 +101,7 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
       ws.onopen = () => {
         this.options.logger.info("gateway.open", { url: this.options.url });
         this.setState("CONNECTED");
+        this.options.logger.info("gateway.register.sent");
         this.send(this.options.registerMessage);
         resolve();
       };
@@ -106,14 +116,25 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
         try {
           parsed = JSON.parse(data);
         } catch {
+          logDebug(this.options.logger, "gateway.message.ignored_non_json", {
+            payloadLength: data.length,
+            frameBytes: Buffer.byteLength(data, "utf8"),
+          });
           return;
         }
+
+        logDebug(this.options.logger, "gateway.message.received", {
+          messageType: isRecord(parsed) && typeof parsed.type === "string" ? parsed.type : undefined,
+          frameBytes: Buffer.byteLength(data, "utf8"),
+        });
 
         this.emit("inbound", parsed);
 
         if (isGatewayControlMessage(parsed)) {
           if (parsed.type === "register_ok") {
+            this.options.logger.info("gateway.register.accepted");
             this.setState("READY");
+            this.options.logger.info("gateway.ready");
             this.startHeartbeat();
             return;
           }
@@ -123,6 +144,13 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
           this.emit("error", error);
           reject(error);
           return;
+        }
+
+        if (this.state !== "READY") {
+          logDebug(this.options.logger, "gateway.message.received_not_ready", {
+            messageType: isRecord(parsed) && typeof parsed.type === "string" ? parsed.type : undefined,
+            state: this.state,
+          });
         }
 
         this.emit("message", parsed);
@@ -161,7 +189,12 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("gateway_not_connected");
     }
-    this.ws.send(JSON.stringify(message));
+    const serialized = JSON.stringify(message);
+    logDebug(this.options.logger, "gateway.send", {
+      messageType: isRecord(message) && typeof message.type === "string" ? message.type : undefined,
+      payloadBytes: Buffer.byteLength(serialized, "utf8"),
+    });
+    this.ws.send(serialized);
     this.emit("outbound", message);
     if (isRecord(message) && message.type === "heartbeat") {
       this.emit("heartbeat", message);
@@ -206,8 +239,15 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
       : this.options.reconnectBaseMs;
 
     this.reconnectAttempts += 1;
+    this.options.logger.info("gateway.reconnect.scheduled", {
+      reconnectAttempts: this.reconnectAttempts,
+      delayMs: delay,
+    });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      this.options.logger.info("gateway.reconnect.attempt", {
+        reconnectAttempts: this.reconnectAttempts,
+      });
       this.connect().catch((error) => {
         this.options.logger.warn("gateway.reconnect.failed", {
           error: error instanceof Error ? error.message : String(error),

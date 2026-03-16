@@ -5,6 +5,7 @@
 如果你要按阶段执行验收，而不是只做一次联调，请同时参考：
 
 - `docs/VALIDATION.zh-CN.md`
+- `docs/LOGGING-MATRIX.zh-CN.md`
 
 当前插件目录：
 

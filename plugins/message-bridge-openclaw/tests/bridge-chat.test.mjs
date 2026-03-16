@@ -50,6 +50,7 @@ function createBridge(runtimeOverride, options = {}) {
   let agentEventListener = null;
   const statusSnapshots = [];
   const logs = {
+    debug: [],
     info: [],
     warn: [],
     error: [],
@@ -130,6 +131,9 @@ function createBridge(runtimeOverride, options = {}) {
   const bridge = new OpenClawGatewayBridge({
     account,
     logger: {
+      debug(message, meta) {
+        logs.debug.push({ message, meta });
+      },
       info(message, meta) {
         logs.info.push({ message, meta });
       },
@@ -183,6 +187,41 @@ test("chat invoke produces tool_event and tool_done", async () => {
   assert.deepEqual(types, ["tool_event", "tool_event", "tool_event", "tool_event", "tool_done"]);
   assert.equal(connection.sent[1].event.type, "message.updated");
   assert.equal(connection.sent[2].event.type, "message.part.updated");
+});
+
+test("downstream and transport chain logs are emitted for chat and invalid payload", async () => {
+  const { bridge, logs } = createBridge();
+  await bridge.start();
+
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_logs_1",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_logs_1",
+      text: "hello logs",
+    },
+  });
+
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_logs_2",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_logs_2",
+    },
+  });
+
+  assert.equal(logs.debug.some((entry) => entry.message === "runtime.downstream.received"), true);
+  assert.equal(logs.info.some((entry) => entry.message === "runtime.invoke.received"), true);
+  assert.equal(logs.info.some((entry) => entry.message === "runtime.invoke.completed"), true);
+  assert.equal(logs.debug.some((entry) => entry.message === "runtime.tool_event.sending"), true);
+  assert.equal(logs.info.some((entry) => entry.message === "runtime.tool_done.sending"), true);
+  assert.equal(logs.warn.some((entry) => entry.message === "runtime.downstream_ignored_non_protocol"), true);
+  const toolErrorLog = logs.error.find((entry) => entry.message === "runtime.tool_error.sending");
+  assert.equal(Boolean(toolErrorLog), true);
+  assert.equal(toolErrorLog?.meta.welinkSessionId, "wl_logs_2");
+  assert.equal(toolErrorLog?.meta.toolSessionId, "tool_logs_2");
 });
 
 test("chat invoke streams delta events through OpenClaw reply dispatcher", async () => {
@@ -919,6 +958,16 @@ test("bridge status tracks ready, inbound, outbound and heartbeat timestamps", a
   const heartbeatStatus = getLatestStatus();
   assert.equal(typeof heartbeatStatus?.lastHeartbeatAt, "number");
   assert.equal(typeof heartbeatStatus?.lastOutboundAt, "number");
+});
+
+test("logs websocket state changes on start and stop", async () => {
+  const { bridge, logs } = createBridge();
+  await bridge.start();
+  await bridge.stop();
+
+  const stateLogs = logs.info.filter((entry) => entry.message === "gateway.state.changed");
+  assert.equal(stateLogs.some((entry) => entry.meta?.state === "READY"), true);
+  assert.equal(stateLogs.some((entry) => entry.meta?.state === "DISCONNECTED"), true);
 });
 
 test("status_query returns status_response", async () => {
