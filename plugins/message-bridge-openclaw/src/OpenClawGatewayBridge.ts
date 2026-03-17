@@ -50,26 +50,6 @@ type SubagentRuntime = PluginRuntime & {
   };
 };
 
-type HostSessionRuntime = PluginRuntime & {
-  channel?: PluginRuntime["channel"] & {
-    session?: PluginRuntime["channel"]["session"] & {
-      createSession?: (params?: { sessionId?: string; agentId?: string }) => Promise<{ sessionId: string }>;
-      deleteSession?: (params: {
-        sessionId?: string;
-        sessionKey?: string;
-        agentId?: string;
-        deleteTranscript?: boolean;
-      }) => Promise<void>;
-      abortSession?: (params: {
-        sessionId?: string;
-        sessionKey?: string;
-        agentId?: string;
-        deleteTranscript?: boolean;
-      }) => Promise<void>;
-    };
-  };
-};
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
@@ -532,7 +512,7 @@ export class OpenClawGatewayBridge {
       this.options.logger.info("runtime.status_query.received", fields as Record<string, unknown>);
       const message: StatusResponseMessage = {
         type: "status_response",
-        opencodeOnline: this.running,
+        opencodeOnline: this.running && this.connection.isConnected(),
       };
       this.connection.send(message, {
         gatewayMessageId: fields.gatewayMessageId,
@@ -1019,44 +999,7 @@ export class OpenClawGatewayBridge {
     return assistantStream.firstChunkAt === null && isTimeout;
   }
 
-  private async createHostSession(requestedSessionId?: string): Promise<{ sessionId: string }> {
-    const sessionRuntime = (this.runtime as HostSessionRuntime).channel?.session;
-    if (!sessionRuntime?.createSession) {
-      throw new Error("openclaw_runtime_missing_session_creator");
-    }
-
-    const created = await sessionRuntime.createSession({ sessionId: requestedSessionId });
-    const sessionId = created.sessionId?.trim();
-    if (!sessionId) {
-      throw new Error("create_session returned without sessionId");
-    }
-
-    return { sessionId };
-  }
-
-  private async deleteHostSession(
-    record: { toolSessionId: string; sessionKey: string },
-    mode: "close" | "abort",
-  ): Promise<void> {
-    const sessionRuntime = (this.runtime as HostSessionRuntime).channel?.session;
-    if (mode === "abort" && sessionRuntime?.abortSession) {
-      await sessionRuntime.abortSession({
-        sessionId: record.toolSessionId,
-        sessionKey: record.sessionKey,
-        deleteTranscript: true,
-      });
-      return;
-    }
-
-    if (sessionRuntime?.deleteSession) {
-      await sessionRuntime.deleteSession({
-        sessionId: record.toolSessionId,
-        sessionKey: record.sessionKey,
-        deleteTranscript: true,
-      });
-      return;
-    }
-
+  private async deleteHostSession(record: { sessionKey: string }): Promise<void> {
     const subagent = this.getSubagentRuntime();
     if (subagent?.deleteSession) {
       await subagent.deleteSession({
@@ -1072,33 +1015,23 @@ export class OpenClawGatewayBridge {
     message: Extract<InvokeMessage, { action: "create_session" }>,
     context: UpstreamSendContext,
   ): Promise<boolean> {
-    try {
-      const created = await this.createHostSession(message.payload.sessionId);
-      const record = this.sessionRegistry.ensure(created.sessionId, message.welinkSessionId);
-      const response: SessionCreatedMessage = {
-        type: "session_created",
-        welinkSessionId: message.welinkSessionId,
-        toolSessionId: record.toolSessionId,
-        session: {
-          sessionId: created.sessionId,
-        },
-      };
-      this.connection.send(response, {
-        ...context,
-        toolSessionId: record.toolSessionId,
-        welinkSessionId: message.welinkSessionId,
-      });
-      return true;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.sendToolError({
-        type: "tool_error",
-        toolSessionId: message.payload.sessionId,
-        welinkSessionId: message.welinkSessionId,
-        error: errorMessage,
-      }, context);
-      return false;
-    }
+    const requestedSessionId = message.payload.sessionId?.trim();
+    const toolSessionId = requestedSessionId && requestedSessionId.length > 0 ? requestedSessionId : randomUUID();
+    const record = this.sessionRegistry.ensure(toolSessionId, message.welinkSessionId);
+    const response: SessionCreatedMessage = {
+      type: "session_created",
+      welinkSessionId: message.welinkSessionId,
+      toolSessionId: record.toolSessionId,
+      session: {
+        sessionId: record.toolSessionId,
+      },
+    };
+    this.connection.send(response, {
+      ...context,
+      toolSessionId: record.toolSessionId,
+      welinkSessionId: message.welinkSessionId,
+    });
+    return true;
   }
 
   private async handleCloseSession(
@@ -1119,7 +1052,7 @@ export class OpenClawGatewayBridge {
 
     this.markSessionTerminated(record);
     try {
-      await this.deleteHostSession(record, "close");
+      await this.deleteHostSession(record);
       this.clearActiveToolSession(record.sessionKey);
       this.sessionRegistry.delete(message.payload.toolSessionId);
       return true;
@@ -1154,9 +1087,7 @@ export class OpenClawGatewayBridge {
 
     this.markSessionTerminated(record);
     try {
-      await this.deleteHostSession(record, "abort");
       this.clearActiveToolSession(record.sessionKey);
-      this.sessionRegistry.delete(message.payload.toolSessionId);
       this.sendToolDone({
         type: "tool_done",
         toolSessionId: message.payload.toolSessionId,
