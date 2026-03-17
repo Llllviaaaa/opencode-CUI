@@ -2,6 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { OpenClawGatewayBridge } from "../dist/OpenClawGatewayBridge.js";
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 class FakeConnection {
   constructor() {
     this.handlers = new Map();
@@ -80,7 +84,15 @@ function createBridge(runtimeOverride, options = {}) {
       },
       async deleteSession() {},
     },
-    channel: {},
+    channel: {
+      session: {
+        async createSession({ sessionId } = {}) {
+          return { sessionId: sessionId ?? "host_session_generated_1" };
+        },
+        async deleteSession() {},
+        async abortSession() {},
+      },
+    },
   };
   const runtime = {
     ...runtimeBase,
@@ -187,6 +199,85 @@ test("chat invoke produces tool_event and tool_done", async () => {
   assert.deepEqual(types, ["tool_event", "tool_event", "tool_event", "tool_event", "tool_done"]);
   assert.equal(connection.sent[1].event.type, "message.updated");
   assert.equal(connection.sent[2].event.type, "message.part.updated");
+});
+
+test("chat without welinkSessionId does not backfill from session registry", async () => {
+  const { bridge, connection, logs } = createBridge();
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_seed_strict_1",
+    action: "create_session",
+    payload: {
+      sessionId: "tool_strict_1",
+    },
+  });
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_strict_1",
+      text: "hello strict",
+    },
+  });
+
+  const toolDone = connection.sent.findLast(
+    (message) => message.type === "tool_done" && message.toolSessionId === "tool_strict_1",
+  );
+  assert.equal(toolDone?.welinkSessionId, undefined);
+  const toolEvents = connection.sent.filter(
+    (message) => message.type === "tool_event" && message.toolSessionId === "tool_strict_1",
+  );
+  assert.equal(toolEvents.length > 0, true);
+  assert.equal(toolEvents.every((message) => !("welinkSessionId" in message)), true);
+  const chatToolEventLog = logs.debug.findLast(
+    (entry) =>
+      entry.message === "runtime.tool_event.sending" &&
+      entry.meta?.toolSessionId === "tool_strict_1" &&
+      entry.meta?.action === "chat",
+  );
+  assert.equal(chatToolEventLog?.meta?.welinkSessionId, undefined);
+});
+
+test("chat error without welinkSessionId does not backfill from session registry", async () => {
+  const { bridge, connection, logs } = createBridge({
+    channel: {
+      session: {
+        async createSession({ sessionId } = {}) {
+          return { sessionId: sessionId ?? "tool_strict_err_1" };
+        },
+      },
+    },
+  });
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_seed_strict_err_1",
+    action: "create_session",
+    payload: {
+      sessionId: "tool_strict_err_1",
+    },
+  });
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_strict_err_1",
+      text: "trigger error",
+    },
+  });
+
+  const toolError = connection.sent.findLast(
+    (message) => message.type === "tool_error" && message.toolSessionId === "tool_strict_err_1",
+  );
+  assert.equal(toolError?.welinkSessionId, undefined);
+  const toolErrorLog = logs.error.findLast(
+    (entry) =>
+      entry.message === "runtime.tool_error.sending" &&
+      entry.meta?.toolSessionId === "tool_strict_err_1" &&
+      entry.meta?.action === "chat",
+  );
+  assert.equal(toolErrorLog?.meta?.welinkSessionId, undefined);
 });
 
 test("downstream and transport chain logs are emitted for chat and invalid payload", async () => {
@@ -1012,21 +1103,28 @@ test("create_session returns session_created with bridged session id", async () 
       welinkSessionId: "wl_create_1",
       toolSessionId: "tool_create_1",
       session: {
-        sessionId: "bridge:default:tool_create_1",
+        sessionId: "tool_create_1",
       },
     },
   ]);
 });
 
 test("close_session deletes session without returning tool_done", async () => {
-  const deletedSessionKeys = [];
+  const deletedSessions = [];
   const { bridge, connection } = createBridge({
     subagent: {
-      async deleteSession({ sessionKey }) {
-        deletedSessionKeys.push(sessionKey);
+      async deleteSession() {},
+    },
+    channel: {
+      session: {
+        async createSession({ sessionId } = {}) {
+          return { sessionId: sessionId ?? "host_session_generated_close" };
+        },
+        async deleteSession({ sessionId, sessionKey }) {
+          deletedSessions.push({ sessionId, sessionKey });
+        },
       },
     },
-    channel: {},
   });
   await bridge.start();
   await bridge.handleDownstreamMessage({
@@ -1046,19 +1144,50 @@ test("close_session deletes session without returning tool_done", async () => {
     },
   });
 
-  assert.deepEqual(deletedSessionKeys, ["bridge:default:tool_close_1"]);
+  assert.deepEqual(deletedSessions, [{
+    sessionId: "tool_close_1",
+    sessionKey: "bridge:default:tool_close_1",
+  }]);
   assert.equal(connection.sent.some((message) => message.type === "tool_done"), false);
 });
 
+test("close_session returns unknown_tool_session for missing session", async () => {
+  const { bridge, connection } = createBridge();
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_close_missing",
+    action: "close_session",
+    payload: {
+      toolSessionId: "tool_close_missing",
+    },
+  });
+
+  assert.equal(connection.sent.at(-1).type, "tool_error");
+  assert.equal(connection.sent.at(-1).toolSessionId, "tool_close_missing");
+  assert.equal(connection.sent.at(-1).error, "unknown_tool_session");
+  assert.equal(connection.sent.at(-1).reason, "session_not_found");
+});
+
 test("abort_session deletes session and returns tool_done", async () => {
-  const deletedSessionKeys = [];
+  const deletedSessions = [];
   const { bridge, connection } = createBridge({
     subagent: {
-      async deleteSession({ sessionKey }) {
-        deletedSessionKeys.push(sessionKey);
+      async deleteSession() {},
+    },
+    channel: {
+      session: {
+        async createSession({ sessionId } = {}) {
+          return { sessionId: sessionId ?? "host_session_generated_abort" };
+        },
+        async abortSession({ sessionId, sessionKey }) {
+          deletedSessions.push({ sessionId, sessionKey });
+        },
+        async deleteSession() {
+          throw new Error("deleteSession should not be used when abortSession exists");
+        },
       },
     },
-    channel: {},
   });
   await bridge.start();
   await bridge.handleDownstreamMessage({
@@ -1078,9 +1207,175 @@ test("abort_session deletes session and returns tool_done", async () => {
     },
   });
 
-  assert.deepEqual(deletedSessionKeys, ["bridge:default:tool_abort_1"]);
+  assert.deepEqual(deletedSessions, [{
+    sessionId: "tool_abort_1",
+    sessionKey: "bridge:default:tool_abort_1",
+  }]);
   assert.equal(connection.sent.at(-1).type, "tool_done");
   assert.equal(connection.sent.at(-1).toolSessionId, "tool_abort_1");
+});
+
+test("abort_session falls back to host deleteSession when abortSession is unavailable", async () => {
+  const deletedSessions = [];
+  const { bridge, connection } = createBridge({
+    subagent: {
+      async deleteSession() {},
+    },
+    channel: {
+      session: {
+        async createSession({ sessionId } = {}) {
+          return { sessionId: sessionId ?? "host_session_generated_abort_delete" };
+        },
+        async deleteSession({ sessionId, sessionKey }) {
+          deletedSessions.push({ sessionId, sessionKey });
+        },
+      },
+    },
+  });
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_abort_delete_1",
+    action: "create_session",
+    payload: {
+      sessionId: "tool_abort_delete_1",
+    },
+  });
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_abort_delete_1",
+    action: "abort_session",
+    payload: {
+      toolSessionId: "tool_abort_delete_1",
+    },
+  });
+
+  assert.deepEqual(deletedSessions, [{
+    sessionId: "tool_abort_delete_1",
+    sessionKey: "bridge:default:tool_abort_delete_1",
+  }]);
+  assert.equal(connection.sent.at(-1).type, "tool_done");
+  assert.equal(connection.sent.at(-1).toolSessionId, "tool_abort_delete_1");
+});
+
+test("create_session returns tool_error when runtime session creator is missing", async () => {
+  const { bridge, connection } = createBridge({
+    subagent: {
+      async run() {
+        return { runId: "run_1" };
+      },
+      async waitForRun() {
+        return { status: "ok" };
+      },
+      async getSessionMessages() {
+        return { messages: [] };
+      },
+      async deleteSession() {},
+    },
+    channel: {},
+  });
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_create_missing",
+    action: "create_session",
+    payload: {
+      sessionId: "tool_create_missing",
+    },
+  });
+
+  assert.deepEqual(connection.sent, [
+    {
+      type: "tool_error",
+      toolSessionId: "tool_create_missing",
+      welinkSessionId: "wl_create_missing",
+      error: "openclaw_runtime_missing_session_creator",
+    },
+  ]);
+});
+
+test("create_session returns tool_error when host session creator returns empty sessionId", async () => {
+  const { bridge, connection } = createBridge({
+    subagent: {
+      async run() {
+        return { runId: "run_1" };
+      },
+      async waitForRun() {
+        return { status: "ok" };
+      },
+      async getSessionMessages() {
+        return { messages: [] };
+      },
+      async deleteSession() {},
+    },
+    channel: {
+      session: {
+        async createSession() {
+          return { sessionId: "" };
+        },
+      },
+    },
+  });
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_create_empty",
+    action: "create_session",
+    payload: {
+      sessionId: "tool_create_empty",
+    },
+  });
+
+  assert.deepEqual(connection.sent, [
+    {
+      type: "tool_error",
+      toolSessionId: "tool_create_empty",
+      welinkSessionId: "wl_create_empty",
+      error: "create_session returned without sessionId",
+    },
+  ]);
+});
+
+test("create_session uses host generated session id when payload sessionId is absent", async () => {
+  const { bridge, connection } = createBridge({
+    subagent: {
+      async run() {
+        return { runId: "run_1" };
+      },
+      async waitForRun() {
+        return { status: "ok" };
+      },
+      async getSessionMessages() {
+        return { messages: [] };
+      },
+      async deleteSession() {},
+    },
+    channel: {
+      session: {
+        async createSession() {
+          return { sessionId: "host_generated_session_1" };
+        },
+      },
+    },
+  });
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_create_generated",
+    action: "create_session",
+    payload: {},
+  });
+
+  assert.deepEqual(connection.sent, [
+    {
+      type: "session_created",
+      welinkSessionId: "wl_create_generated",
+      toolSessionId: "host_generated_session_1",
+      session: {
+        sessionId: "host_generated_session_1",
+      },
+    },
+  ]);
 });
 
 test("abort_session returns unknown_tool_session for missing session", async () => {
@@ -1099,6 +1394,126 @@ test("abort_session returns unknown_tool_session for missing session", async () 
   assert.equal(connection.sent.at(-1).toolSessionId, "tool_abort_missing");
   assert.equal(connection.sent.at(-1).error, "unknown_tool_session");
   assert.equal(connection.sent.at(-1).reason, "session_not_found");
+});
+
+test("abort_session suppresses late chat output after successful termination", async () => {
+  const runtime = {
+    channel: {
+      routing: {
+        resolveAgentRoute() {
+          return {
+            accountId: "default",
+            agentId: "agent_abort_gate",
+          };
+        },
+      },
+      reply: {
+        resolveEnvelopeFormatOptions() {
+          return {};
+        },
+        formatAgentEnvelope({ body }) {
+          return body;
+        },
+        finalizeInboundContext(ctx) {
+          return ctx;
+        },
+        async dispatchReplyWithBufferedBlockDispatcher({ dispatcherOptions, replyOptions }) {
+          replyOptions?.onAgentRunStart?.("run_abort_gate");
+          await sleep(20);
+          await dispatcherOptions.deliver({ text: "late output after abort" }, { kind: "block" });
+        },
+      },
+      session: {
+        async createSession({ sessionId } = {}) {
+          return { sessionId: sessionId ?? "host_abort_gate" };
+        },
+        async abortSession() {},
+        async deleteSession() {},
+      },
+    },
+  };
+
+  const { bridge, connection } = createBridge(runtime);
+  await bridge.start();
+  const chatPromise = bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_abort_gate",
+    action: "chat",
+    payload: {
+      toolSessionId: "tool_abort_gate",
+      text: "hello",
+    },
+  });
+  await sleep(5);
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_abort_gate",
+    action: "abort_session",
+    payload: {
+      toolSessionId: "tool_abort_gate",
+    },
+  });
+  await chatPromise;
+
+  const trailing = connection.sent.filter((message) => message.toolSessionId === "tool_abort_gate");
+  assert.deepEqual(
+    trailing.map((message) => message.type),
+    ["tool_event", "tool_done"],
+  );
+});
+
+test("close_session failure preserves session mapping for retry", async () => {
+  let shouldFail = true;
+  const { bridge, connection } = createBridge({
+    subagent: {
+      async deleteSession() {},
+    },
+    channel: {
+      session: {
+        async createSession({ sessionId } = {}) {
+          return { sessionId: sessionId ?? "tool_close_retry" };
+        },
+        async deleteSession() {
+          if (shouldFail) {
+            shouldFail = false;
+            throw new Error("delete_failed_once");
+          }
+        },
+      },
+    },
+  });
+  await bridge.start();
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_close_retry",
+    action: "create_session",
+    payload: {
+      sessionId: "tool_close_retry",
+    },
+  });
+
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_close_retry",
+    action: "close_session",
+    payload: {
+      toolSessionId: "tool_close_retry",
+    },
+  });
+
+  assert.equal(connection.sent.at(-1).type, "tool_error");
+  assert.equal(connection.sent.at(-1).error, "delete_failed_once");
+
+  await bridge.handleDownstreamMessage({
+    type: "invoke",
+    welinkSessionId: "wl_close_retry",
+    action: "close_session",
+    payload: {
+      toolSessionId: "tool_close_retry",
+    },
+  });
+
+  assert.notEqual(connection.sent.at(-1).error, "unknown_tool_session");
 });
 
 test("unsupported permission_reply and question_reply fail closed with standard tool_error", async () => {
