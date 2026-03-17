@@ -1,5 +1,7 @@
 # Message Bridge OpenClaw Plugin
 
+> 迁移说明：`message-bridge-openclaw` 的主开发仓已迁移到 [agent-plugin](https://github.com/yuzhangCZ/agent-plugin)。当前目录保留用于联调夹具与历史参考，后续功能开发请优先在新仓进行。
+
 `message-bridge` is an OpenClaw channel plugin that connects an OpenClaw runtime
 to the existing `ai-gateway` WebSocket protocol used by the OpenCode
 `message-bridge` plugin.
