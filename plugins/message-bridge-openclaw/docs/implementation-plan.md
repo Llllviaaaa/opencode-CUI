@@ -138,6 +138,48 @@
 - `permission_reply` / `question_reply` 业务能力仍未实现（但 fail-closed 结构已规范化）
 - `pairing/security/messaging/directory/outbound` 仍未评估为本插件职责
 
+## P2 会话身份统一优化待办（2026-03-17）
+
+需求追溯标识：
+
+- `FR-MB-OPENCLAW-P2-SESSION-IDENTITY-UNIFICATION`
+
+优先级评估：
+
+- `P2（高于一般重构，低于当前阻断性协议 bug）`
+- 判断依据：
+  - `sessionKey` 本地映射已经是多处协议问题的共同根因。
+  - 当前已完成协议止血修复，短期不阻断 `ai-gateway` 对接。
+  - 若不继续统一，后续仍会反复出现“会话已终止但内部仍存活”“未知 session 判断漂移”“重试不可恢复”等问题。
+
+### P2-SI-01 目标能力
+
+- 以 `toolSessionId / host sessionId` 作为唯一会话身份。
+- `chat`、`create_session`、`close_session`、`abort_session`、active run tracking、tool event routing 全部以宿主 sessionId 为主键。
+- `sessionKey` 仅保留为运行时可派生实现细节，不再作为 bridge 的状态真相源。
+
+### P2-SI-02 收敛范围
+
+- bridge 层不再依赖 `SessionRegistry.ensure(...)` 作为会话合法性来源。
+- 未知 session、已终止 session、关闭/中止判定统一以宿主会话状态为准。
+- 运行中任务取消、事件抑制、会话清理全部围绕宿主 sessionId 建模。
+- OpenClaw runtime/reply 路径里对 `sessionKey` 的硬依赖需要逐步梳理并迁移。
+
+### P2-SI-03 分阶段落地
+
+- 第一阶段：维持当前协议止血修复，不再继续扩散新的本地映射逻辑。
+- 第二阶段：梳理 OpenClaw runtime/reply/session store 对 `sessionKey` 的硬依赖点。
+- 第三阶段：逐步将运行时主键切换为 host sessionId，删除 bridge 侧映射真相源角色。
+- 第四阶段：补全真实联调与回归测试，覆盖 `create_session/chat/close_session/abort_session` 全生命周期。
+
+### P2-SI-04 验收口径
+
+- 未知 `toolSessionId` 的 `chat/close_session/abort_session` 都由统一会话真相源判定。
+- 成功 `abort_session` 后，不再收到任何该 session 的 chat 输出。
+- 成功 `close_session` 后，不再保留 bridge 自建映射作为状态依据。
+- 宿主删除失败时，重试仍能命中同一真实会话。
+- 真实联调验证 `ai-gateway` 看到的 session 生命周期与宿主内部状态一致。
+
 本次刷新重点（v0.6）：
 
 - 增强阶段一诊断能力，新增 duplicate_connection 抑制逻辑

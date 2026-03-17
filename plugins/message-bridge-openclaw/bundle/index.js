@@ -20,6 +20,7 @@ var CHANNEL_ADD_FIX = "\u8FD0\u884C openclaw channels add --channel message-brid
 var NON_DEFAULT_ACCOUNT_ERROR_PREFIX = "message_bridge_single_account_only";
 var DEFAULT_ACCOUNT_CONFIG = {
   enabled: true,
+  debug: false,
   gateway: {
     url: "ws://localhost:8081/ws/agent",
     heartbeatIntervalMs: 3e4,
@@ -261,7 +262,7 @@ function resolveConfigSearchPaths(workspaceDir) {
 }
 
 // src/OpenClawGatewayBridge.ts
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { randomUUID as randomUUID2 } from "node:crypto";
 import os2 from "node:os";
 import {
   createReplyPrefixOptions,
@@ -295,6 +296,7 @@ var DefaultAkSkAuth = class {
 
 // src/connection/GatewayConnection.ts
 import { EventEmitter } from "node:events";
+var GATEWAY_REJECTION_CLOSE_CODES = /* @__PURE__ */ new Set([4403, 4408, 4409]);
 function asNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : void 0;
 }
@@ -316,6 +318,9 @@ function isRecord2(value) {
 }
 function isGatewayControlMessage(value) {
   return isRecord2(value) && (value.type === "register_ok" || value.type === "register_rejected");
+}
+function isGatewayRejectedCloseCode(code) {
+  return typeof code === "number" && Number.isFinite(code) && GATEWAY_REJECTION_CLOSE_CODES.has(code);
 }
 function extractGatewayMessageId(value) {
   if (!isRecord2(value)) {
@@ -359,6 +364,54 @@ function encodeBase64Url(value) {
 function buildAuthSubprotocol(payload) {
   return `auth.${encodeBase64Url(JSON.stringify(payload))}`;
 }
+function safeStringify(value) {
+  const seen = /* @__PURE__ */ new WeakSet();
+  try {
+    return JSON.stringify(value, (_key, raw) => {
+      if (typeof raw === "bigint") {
+        return raw.toString();
+      }
+      if (raw instanceof Error) {
+        return {
+          name: raw.name,
+          message: raw.message,
+          stack: raw.stack
+        };
+      }
+      if (raw && typeof raw === "object") {
+        if (seen.has(raw)) {
+          return "[Circular]";
+        }
+        seen.add(raw);
+      }
+      return raw;
+    });
+  } catch {
+    return String(value);
+  }
+}
+function formatRawPayload(payload) {
+  if (typeof payload === "string") {
+    return payload;
+  }
+  if (payload === null || payload === void 0) {
+    return "";
+  }
+  if (typeof payload === "number" || typeof payload === "boolean" || typeof payload === "bigint") {
+    return String(payload);
+  }
+  if (payload instanceof ArrayBuffer) {
+    return `[binary ArrayBuffer byteLength=${payload.byteLength}]`;
+  }
+  if (ArrayBuffer.isView(payload)) {
+    return `[binary ${payload.constructor.name} byteLength=${payload.byteLength}]`;
+  }
+  if (typeof Blob !== "undefined" && payload instanceof Blob) {
+    return `[binary Blob size=${payload.size} type=${payload.type || "application/octet-stream"}]`;
+  }
+  const json = safeStringify(payload);
+  return json === void 0 ? String(payload) : json;
+}
 var DefaultGatewayConnection = class extends EventEmitter {
   constructor(options) {
     super();
@@ -376,27 +429,60 @@ var DefaultGatewayConnection = class extends EventEmitter {
   isConnected() {
     return this.state === "CONNECTED" || this.state === "READY";
   }
+  logRawFrame(eventName, payload) {
+    if (!this.options.debug) {
+      return;
+    }
+    this.options.logger.info(`\u300C${eventName}\u300D===>\u300C${formatRawPayload(payload)}\u300D`);
+  }
   async connect() {
     this.manuallyDisconnected = false;
     this.setState("CONNECTING");
     this.options.logger.info("gateway.connect.started", { url: this.options.url });
     return new Promise((resolve, reject) => {
+      let settled = false;
+      let opened = false;
+      const finalizeResolve = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve();
+      };
+      const finalizeReject = (error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(error);
+      };
       const authPayload = this.options.authPayloadProvider?.();
       const protocols = authPayload ? [buildAuthSubprotocol(authPayload)] : void 0;
-      const ws = protocols ? new WebSocket(this.options.url, protocols) : new WebSocket(this.options.url);
+      let ws;
+      try {
+        ws = protocols ? new WebSocket(this.options.url, protocols) : new WebSocket(this.options.url);
+      } catch (error) {
+        this.setState("DISCONNECTED");
+        finalizeReject(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
       this.ws = ws;
-      ws.onopen = () => {
+      ws.onopen = (event) => {
+        opened = true;
+        this.reconnectAttempts = 0;
+        this.logRawFrame("onOpen", event);
         this.options.logger.info("gateway.open", { url: this.options.url });
         this.setState("CONNECTED");
         this.options.logger.info("gateway.register.sent");
         this.send(this.options.registerMessage);
-        resolve();
+        finalizeResolve();
       };
       ws.onmessage = async (event) => {
         const data = await this.decodeMessageData(event.data);
         if (data === null) {
           return;
         }
+        this.logRawFrame("onMessage", data);
         let parsed;
         try {
           parsed = JSON.parse(data);
@@ -426,8 +512,9 @@ var DefaultGatewayConnection = class extends EventEmitter {
           }
           const error = new Error(parsed.reason || "gateway_register_rejected");
           this.options.logger.error("gateway.register.rejected", { reason: parsed.reason });
+          this.manuallyDisconnected = true;
+          this.ws?.close();
           this.emit("error", error);
-          reject(error);
           return;
         }
         if (this.state !== "READY") {
@@ -435,29 +522,49 @@ var DefaultGatewayConnection = class extends EventEmitter {
             messageType: isRecord2(parsed) && typeof parsed.type === "string" ? parsed.type : void 0,
             state: this.state
           });
+          return;
         }
         this.emit("message", parsed);
       };
-      ws.onerror = () => {
+      ws.onerror = (event) => {
+        this.logRawFrame("onError", event);
         const error = new Error("gateway_websocket_error");
         this.options.logger.error("gateway.error");
         this.emit("error", error);
+        if (this.state !== "DISCONNECTED") {
+          this.setState("DISCONNECTED");
+        }
+        finalizeReject(error);
       };
       ws.onclose = (event) => {
         const close = event;
         const stateBeforeClose = this.state;
-        const reconnectPlanned = !this.manuallyDisconnected;
+        const rejected = isGatewayRejectedCloseCode(close.code);
+        const reconnectPlanned = opened && !this.manuallyDisconnected && !rejected;
         this.options.logger.warn("gateway.close", {
           code: asNumber(close.code),
           reason: asString(close.reason) ?? "",
           wasClean: asBoolean(close.wasClean),
           stateBeforeClose,
           manuallyDisconnected: this.manuallyDisconnected,
-          reconnectPlanned
+          reconnectPlanned,
+          opened,
+          rejected
         });
+        if (!opened) {
+          finalizeReject(new Error("gateway_websocket_closed_before_open"));
+        }
         this.stopHeartbeat();
         this.ws = null;
         this.setState("DISCONNECTED");
+        if (rejected) {
+          this.options.logger.warn("gateway.close.rejected", {
+            code: asNumber(close.code),
+            reason: asString(close.reason) ?? "",
+            rejected: true
+          });
+          return;
+        }
         if (reconnectPlanned) {
           this.scheduleReconnect();
         }
@@ -479,9 +586,21 @@ var DefaultGatewayConnection = class extends EventEmitter {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("gateway_not_connected");
     }
+    const messageType = isRecord2(message) && typeof message.type === "string" ? message.type : void 0;
+    const isControlMessage = messageType === "register" || messageType === "heartbeat";
+    if (this.state !== "READY" && !isControlMessage) {
+      this.options.logger.warn("gateway.send.rejected_not_ready", {
+        state: this.state,
+        messageType: messageType ?? "unknown"
+      });
+      throw new Error("Gateway connection is not ready. Cannot send business message.");
+    }
     const serialized = JSON.stringify(message);
+    if (this.options.debug) {
+      this.options.logger.info(`\u300CsendMessage\u300D===>\u300C${serialized}\u300D`);
+    }
     logDebug(this.options.logger, "gateway.send", {
-      messageType: isRecord2(message) && typeof message.type === "string" ? message.type : void 0,
+      messageType,
       payloadBytes: Buffer.byteLength(serialized, "utf8"),
       gatewayMessageId: logContext?.gatewayMessageId ?? extractGatewayMessageId(message),
       action: logContext?.action ?? extractMessageAction(message),
@@ -521,10 +640,12 @@ var DefaultGatewayConnection = class extends EventEmitter {
     if (this.reconnectTimer) {
       return;
     }
+    const baseDelay = Math.max(1, this.options.reconnectBaseMs);
+    const maxDelay = Math.max(1, this.options.reconnectMaxMs);
     const delay = this.options.reconnectExponential ? Math.min(
-      this.options.reconnectBaseMs * 2 ** this.reconnectAttempts,
-      this.options.reconnectMaxMs
-    ) : this.options.reconnectBaseMs;
+      baseDelay * 2 ** this.reconnectAttempts,
+      maxDelay
+    ) : Math.min(baseDelay, maxDelay);
     this.reconnectAttempts += 1;
     this.options.logger.info("gateway.reconnect.scheduled", {
       reconnectAttempts: this.reconnectAttempts,
@@ -532,6 +653,9 @@ var DefaultGatewayConnection = class extends EventEmitter {
     });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      if (this.manuallyDisconnected) {
+        return;
+      }
       this.options.logger.info("gateway.reconnect.attempt", {
         reconnectAttempts: this.reconnectAttempts
       });
@@ -539,6 +663,9 @@ var DefaultGatewayConnection = class extends EventEmitter {
         this.options.logger.warn("gateway.reconnect.failed", {
           error: error instanceof Error ? error.message : String(error)
         });
+        if (!this.manuallyDisconnected) {
+          this.scheduleReconnect();
+        }
       });
     }, delay);
   }
@@ -992,7 +1119,6 @@ function resolveRegisterMetadata(logger, deps = {}) {
 }
 
 // src/session/SessionRegistry.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
 var SessionRegistry = class {
   constructor(sessionPrefix) {
     this.sessionPrefix = sessionPrefix;
@@ -1013,10 +1139,6 @@ var SessionRegistry = class {
     };
     this.byToolSessionId.set(toolSessionId, record);
     return record;
-  }
-  create(welinkSessionId, requestedSessionId) {
-    const toolSessionId = requestedSessionId?.trim() || `tool_${randomUUID2()}`;
-    return this.ensure(toolSessionId, welinkSessionId);
   }
   get(toolSessionId) {
     return this.byToolSessionId.get(toolSessionId);
@@ -1122,8 +1244,8 @@ function buildSessionErrorEvent(sessionKey, error) {
 }
 function createAssistantStreamState(sessionKey) {
   return {
-    messageId: `msg_${randomUUID3()}`,
-    partId: `prt_${randomUUID3()}`,
+    messageId: `msg_${randomUUID2()}`,
+    partId: `prt_${randomUUID2()}`,
     sessionKey,
     seeded: false,
     accumulatedText: "",
@@ -1227,6 +1349,7 @@ var OpenClawGatewayBridge = class {
       reconnectMaxMs: options.account.gateway.reconnect.maxMs,
       reconnectExponential: options.account.gateway.reconnect.exponential,
       heartbeatIntervalMs: options.account.gateway.heartbeatIntervalMs,
+      debug: options.account.debug,
       authPayloadProvider: () => new DefaultAkSkAuth(options.account.auth.ak, options.account.auth.sk).generateAuthPayload(),
       registerMessage: {
         type: "register",
@@ -1291,6 +1414,8 @@ var OpenClawGatewayBridge = class {
   registerMetadata;
   activeToolSessions = /* @__PURE__ */ new Map();
   activeRunToSessionKey = /* @__PURE__ */ new Map();
+  terminatedToolSessionIds = /* @__PURE__ */ new Set();
+  terminatedSessionKeys = /* @__PURE__ */ new Set();
   running = false;
   status;
   unsubscribeAgentEvents = null;
@@ -1431,11 +1556,15 @@ var OpenClawGatewayBridge = class {
         }
         return { success: false, reason: "chat_failed" };
       case "create_session":
-        this.handleCreateSession(message, context);
-        return { success: true };
+        if (await this.handleCreateSession(message, context)) {
+          return { success: true };
+        }
+        return { success: false, reason: "create_session_failed" };
       case "close_session":
-        await this.handleCloseSession(message, context);
-        return { success: true };
+        if (await this.handleCloseSession(message, context)) {
+          return { success: true };
+        }
+        return { success: false, reason: "close_session_failed" };
       case "abort_session":
         if (await this.handleAbortSession(message, context)) {
           return { success: true };
@@ -1449,10 +1578,11 @@ var OpenClawGatewayBridge = class {
   }
   async handleChat(message, context) {
     const record = this.sessionRegistry.ensure(message.payload.toolSessionId, message.welinkSessionId);
+    this.clearSessionTermination(record);
     const assistantStream = createAssistantStreamState(record.sessionKey);
     const toolStates = /* @__PURE__ */ new Map();
     const startedAt = Date.now();
-    const chatRequestId = randomUUID3();
+    const chatRequestId = randomUUID2();
     const configuredTimeoutMs = this.options.account.runTimeoutMs;
     const selectedModel = createSelectedModelState();
     const executionPath = this.runtime.channel?.routing && this.runtime.channel?.reply ? "runtime_reply" : "subagent_fallback";
@@ -1580,6 +1710,9 @@ var OpenClawGatewayBridge = class {
         onModelSelected?.(selection);
       };
       const deliver = async (rawPayload, info) => {
+        if (this.isSessionTerminated(record)) {
+          return;
+        }
         const payload = isRecord4(rawPayload) ? normalizeOutboundReplyPayload(rawPayload) : normalizeOutboundReplyPayload({});
         if (info.kind === "tool") {
           const activeSession = this.activeToolSessions.get(record.sessionKey);
@@ -1670,6 +1803,10 @@ var OpenClawGatewayBridge = class {
         lastErrorExtra = void 0;
         break;
       }
+      if (this.isSessionTerminated(record)) {
+        this.clearActiveToolSession(record.sessionKey);
+        return true;
+      }
       const finalText = assistantStream.accumulatedText || "(empty response)";
       this.sendAssistantFinalResponse(
         record.toolSessionId,
@@ -1698,8 +1835,12 @@ var OpenClawGatewayBridge = class {
       this.sendToolDone({
         type: "tool_done",
         toolSessionId: record.toolSessionId,
-        welinkSessionId: record.welinkSessionId
+        welinkSessionId: context.welinkSessionId
       }, context);
+      this.clearActiveToolSession(record.sessionKey);
+      return true;
+    }
+    if (this.isSessionTerminated(record)) {
       this.clearActiveToolSession(record.sessionKey);
       return true;
     }
@@ -1726,7 +1867,7 @@ var OpenClawGatewayBridge = class {
     this.sendToolError({
       type: "tool_error",
       toolSessionId: record.toolSessionId,
-      welinkSessionId: record.welinkSessionId,
+      welinkSessionId: context.welinkSessionId,
       error: finalErrorMessage
     }, context);
     return false;
@@ -1750,6 +1891,9 @@ var OpenClawGatewayBridge = class {
         runId: run.runId,
         timeoutMs: configuredTimeoutMs
       });
+      if (this.isSessionTerminated(record)) {
+        return { ok: true };
+      }
       if (wait.status !== "ok") {
         const errorMessage = wait.error || `subagent_${wait.status}`;
         return {
@@ -1765,6 +1909,9 @@ var OpenClawGatewayBridge = class {
         sessionKey: record.sessionKey,
         limit: 50
       });
+      if (this.isSessionTerminated(record)) {
+        return { ok: true };
+      }
       const assistantText = extractAssistantText(session.messages) || "(empty response)";
       this.sendAssistantFinalResponse(record.toolSessionId, assistantStream, assistantText, context);
       this.logChatCompleted({
@@ -1792,7 +1939,7 @@ var OpenClawGatewayBridge = class {
       this.sendToolDone({
         type: "tool_done",
         toolSessionId: record.toolSessionId,
-        welinkSessionId: record.welinkSessionId
+        welinkSessionId: context.welinkSessionId
       }, context);
       this.clearActiveToolSession(record.sessionKey);
       return { ok: true };
@@ -1806,29 +1953,102 @@ var OpenClawGatewayBridge = class {
     const isTimeout = lowered.includes("timed out") || lowered.includes("timeout");
     return assistantStream.firstChunkAt === null && isTimeout;
   }
-  handleCreateSession(message, context) {
-    const record = this.sessionRegistry.create(message.welinkSessionId, message.payload.sessionId);
-    const response = {
-      type: "session_created",
-      welinkSessionId: message.welinkSessionId,
-      toolSessionId: record.toolSessionId,
-      session: {
-        sessionId: record.sessionKey
-      }
-    };
-    this.connection.send(response, {
-      ...context,
-      toolSessionId: record.toolSessionId,
-      welinkSessionId: message.welinkSessionId
-    });
+  async createHostSession(requestedSessionId) {
+    const sessionRuntime = this.runtime.channel?.session;
+    if (!sessionRuntime?.createSession) {
+      throw new Error("openclaw_runtime_missing_session_creator");
+    }
+    const created = await sessionRuntime.createSession({ sessionId: requestedSessionId });
+    const sessionId = created.sessionId?.trim();
+    if (!sessionId) {
+      throw new Error("create_session returned without sessionId");
+    }
+    return { sessionId };
   }
-  async handleCloseSession(message, _context) {
-    const record = this.sessionRegistry.delete(message.payload.toolSessionId);
-    if (record) {
-      this.clearActiveToolSession(record.sessionKey);
-      await this.getSubagentRuntime()?.deleteSession({
+  async deleteHostSession(record, mode) {
+    const sessionRuntime = this.runtime.channel?.session;
+    if (mode === "abort" && sessionRuntime?.abortSession) {
+      await sessionRuntime.abortSession({
+        sessionId: record.toolSessionId,
+        sessionKey: record.sessionKey,
+        deleteTranscript: true
+      });
+      return;
+    }
+    if (sessionRuntime?.deleteSession) {
+      await sessionRuntime.deleteSession({
+        sessionId: record.toolSessionId,
+        sessionKey: record.sessionKey,
+        deleteTranscript: true
+      });
+      return;
+    }
+    const subagent = this.getSubagentRuntime();
+    if (subagent?.deleteSession) {
+      await subagent.deleteSession({
         sessionKey: record.sessionKey
       });
+      return;
+    }
+    throw new Error("openclaw_runtime_missing_session_deleter");
+  }
+  async handleCreateSession(message, context) {
+    try {
+      const created = await this.createHostSession(message.payload.sessionId);
+      const record = this.sessionRegistry.ensure(created.sessionId, message.welinkSessionId);
+      const response = {
+        type: "session_created",
+        welinkSessionId: message.welinkSessionId,
+        toolSessionId: record.toolSessionId,
+        session: {
+          sessionId: created.sessionId
+        }
+      };
+      this.connection.send(response, {
+        ...context,
+        toolSessionId: record.toolSessionId,
+        welinkSessionId: message.welinkSessionId
+      });
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.sendToolError({
+        type: "tool_error",
+        toolSessionId: message.payload.sessionId,
+        welinkSessionId: message.welinkSessionId,
+        error: errorMessage
+      }, context);
+      return false;
+    }
+  }
+  async handleCloseSession(message, context) {
+    const record = this.sessionRegistry.get(message.payload.toolSessionId);
+    if (!record) {
+      this.sendToolError({
+        type: "tool_error",
+        toolSessionId: message.payload.toolSessionId,
+        welinkSessionId: message.welinkSessionId,
+        error: "unknown_tool_session",
+        reason: TOOL_ERROR_REASON.SESSION_NOT_FOUND
+      }, context);
+      return false;
+    }
+    this.markSessionTerminated(record);
+    try {
+      await this.deleteHostSession(record, "close");
+      this.clearActiveToolSession(record.sessionKey);
+      this.sessionRegistry.delete(message.payload.toolSessionId);
+      return true;
+    } catch (error) {
+      this.clearSessionTermination(record);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.sendToolError({
+        type: "tool_error",
+        toolSessionId: message.payload.toolSessionId,
+        welinkSessionId: message.welinkSessionId,
+        error: errorMessage
+      }, context);
+      return false;
     }
   }
   async handleAbortSession(message, context) {
@@ -1843,17 +2063,28 @@ var OpenClawGatewayBridge = class {
       }, context);
       return false;
     }
-    this.clearActiveToolSession(record.sessionKey);
-    await this.getSubagentRuntime()?.deleteSession({
-      sessionKey: record.sessionKey
-    });
-    this.sessionRegistry.delete(message.payload.toolSessionId);
-    this.sendToolDone({
-      type: "tool_done",
-      toolSessionId: message.payload.toolSessionId,
-      welinkSessionId: message.welinkSessionId
-    }, context);
-    return true;
+    this.markSessionTerminated(record);
+    try {
+      await this.deleteHostSession(record, "abort");
+      this.clearActiveToolSession(record.sessionKey);
+      this.sessionRegistry.delete(message.payload.toolSessionId);
+      this.sendToolDone({
+        type: "tool_done",
+        toolSessionId: message.payload.toolSessionId,
+        welinkSessionId: message.welinkSessionId
+      }, context);
+      return true;
+    } catch (error) {
+      this.clearSessionTermination(record);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.sendToolError({
+        type: "tool_error",
+        toolSessionId: message.payload.toolSessionId,
+        welinkSessionId: message.welinkSessionId,
+        error: errorMessage
+      }, context);
+      return false;
+    }
   }
   sendUnsupported(action, toolSessionId, welinkSessionId, context) {
     this.sendToolError({
@@ -1872,11 +2103,9 @@ var OpenClawGatewayBridge = class {
     };
   }
   buildChatEventContext(toolSessionId) {
-    const record = this.sessionRegistry.get(toolSessionId);
     return {
       action: "chat",
-      toolSessionId,
-      welinkSessionId: record?.welinkSessionId
+      toolSessionId
     };
   }
   sendToolEvent(message, context) {
@@ -1996,6 +2225,9 @@ var OpenClawGatewayBridge = class {
     state.seeded = true;
   }
   emitToolPartUpdate(toolSessionId, toolState, context) {
+    if (this.terminatedToolSessionIds.has(toolSessionId) || this.terminatedSessionKeys.has(toolState.sessionKey)) {
+      return;
+    }
     this.sendToolEvent({
       type: "tool_event",
       toolSessionId,
@@ -2023,6 +2255,17 @@ var OpenClawGatewayBridge = class {
     }
     this.activeToolSessions.delete(sessionKey);
   }
+  isSessionTerminated(record) {
+    return this.terminatedToolSessionIds.has(record.toolSessionId) || this.terminatedSessionKeys.has(record.sessionKey);
+  }
+  markSessionTerminated(record) {
+    this.terminatedToolSessionIds.add(record.toolSessionId);
+    this.terminatedSessionKeys.add(record.sessionKey);
+  }
+  clearSessionTermination(record) {
+    this.terminatedToolSessionIds.delete(record.toolSessionId);
+    this.terminatedSessionKeys.delete(record.sessionKey);
+  }
   handleRuntimeAgentEvent(evt) {
     if (evt.stream !== "tool" || !isRecord4(evt.data)) {
       return;
@@ -2034,9 +2277,12 @@ var OpenClawGatewayBridge = class {
     if (!sessionKey || !activeSession) {
       return;
     }
+    if (this.terminatedSessionKeys.has(sessionKey) || this.terminatedToolSessionIds.has(activeSession.toolSessionId)) {
+      return;
+    }
     const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
     const toolName = typeof evt.data.name === "string" && evt.data.name.length > 0 ? evt.data.name : "tool";
-    const toolCallId = typeof evt.data.toolCallId === "string" && evt.data.toolCallId.length > 0 ? evt.data.toolCallId : `tool_${randomUUID3()}`;
+    const toolCallId = typeof evt.data.toolCallId === "string" && evt.data.toolCallId.length > 0 ? evt.data.toolCallId : `tool_${randomUUID2()}`;
     const context = this.buildChatEventContext(activeSession.toolSessionId);
     this.ensureAssistantMessageStarted(activeSession.toolSessionId, activeSession.assistantStream, context);
     let toolState = activeSession.toolStates.get(toolCallId);
@@ -2044,7 +2290,7 @@ var OpenClawGatewayBridge = class {
       const nextToolState = {
         toolCallId,
         toolName,
-        partId: `tool_${randomUUID3()}`,
+        partId: `tool_${randomUUID2()}`,
         messageId: activeSession.assistantStream.messageId,
         sessionKey,
         status: "running"
@@ -2316,6 +2562,7 @@ function createProbeConnection(account) {
     reconnectMaxMs: account.gateway.reconnect.maxMs,
     reconnectExponential: account.gateway.reconnect.exponential,
     heartbeatIntervalMs: account.gateway.heartbeatIntervalMs,
+    debug: account.debug,
     authPayloadProvider: () => new DefaultAkSkAuth(account.auth.ak, account.auth.sk).generateAuthPayload(),
     registerMessage: {
       type: "register",
@@ -2601,6 +2848,7 @@ var messageBridgeConfigSchema = {
     additionalProperties: false,
     properties: {
       enabled: { type: "boolean" },
+      debug: { type: "boolean" },
       name: { type: "string", minLength: 1 },
       gateway: {
         type: "object",

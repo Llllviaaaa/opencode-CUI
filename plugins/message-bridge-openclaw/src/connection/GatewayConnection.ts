@@ -48,6 +48,8 @@ interface GatewayControlMessage {
   reason?: string;
 }
 
+const GATEWAY_REJECTION_CLOSE_CODES = new Set([4403, 4408, 4409]);
+
 type GatewayCloseEventLike = Partial<CloseEvent> & {
   code?: unknown;
   reason?: unknown;
@@ -80,6 +82,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isGatewayControlMessage(value: unknown): value is GatewayControlMessage {
   return isRecord(value) && (value.type === "register_ok" || value.type === "register_rejected");
+}
+
+function isGatewayRejectedCloseCode(code: unknown): boolean {
+  return typeof code === "number" && Number.isFinite(code) && GATEWAY_REJECTION_CLOSE_CODES.has(code);
 }
 
 function extractGatewayMessageId(value: unknown): string | undefined {
@@ -218,18 +224,46 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
     this.options.logger.info("gateway.connect.started", { url: this.options.url });
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      let opened = false;
+
+      const finalizeResolve = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve();
+      };
+
+      const finalizeReject = (error: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(error);
+      };
+
       const authPayload = this.options.authPayloadProvider?.();
       const protocols = authPayload ? [buildAuthSubprotocol(authPayload)] : undefined;
-      const ws = protocols ? new WebSocket(this.options.url, protocols) : new WebSocket(this.options.url);
+      let ws: WebSocket;
+      try {
+        ws = protocols ? new WebSocket(this.options.url, protocols) : new WebSocket(this.options.url);
+      } catch (error) {
+        this.setState("DISCONNECTED");
+        finalizeReject(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
       this.ws = ws;
 
       ws.onopen = (event) => {
+        opened = true;
+        this.reconnectAttempts = 0;
         this.logRawFrame("onOpen", event);
         this.options.logger.info("gateway.open", { url: this.options.url });
         this.setState("CONNECTED");
         this.options.logger.info("gateway.register.sent");
         this.send(this.options.registerMessage);
-        resolve();
+        finalizeResolve();
       };
 
       ws.onmessage = async (event) => {
@@ -272,8 +306,9 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
 
           const error = new Error(parsed.reason || "gateway_register_rejected");
           this.options.logger.error("gateway.register.rejected", { reason: parsed.reason });
+          this.manuallyDisconnected = true;
+          this.ws?.close();
           this.emit("error", error);
-          reject(error);
           return;
         }
 
@@ -282,6 +317,7 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
             messageType: isRecord(parsed) && typeof parsed.type === "string" ? parsed.type : undefined,
             state: this.state,
           });
+          return;
         }
 
         this.emit("message", parsed);
@@ -292,12 +328,17 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
         const error = new Error("gateway_websocket_error");
         this.options.logger.error("gateway.error");
         this.emit("error", error);
+        if (this.state !== "DISCONNECTED") {
+          this.setState("DISCONNECTED");
+        }
+        finalizeReject(error);
       };
 
       ws.onclose = (event) => {
         const close = event as GatewayCloseEventLike;
         const stateBeforeClose = this.state;
-        const reconnectPlanned = !this.manuallyDisconnected;
+        const rejected = isGatewayRejectedCloseCode(close.code);
+        const reconnectPlanned = opened && !this.manuallyDisconnected && !rejected;
         this.options.logger.warn("gateway.close", {
           code: asNumber(close.code),
           reason: asString(close.reason) ?? "",
@@ -305,10 +346,23 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
           stateBeforeClose,
           manuallyDisconnected: this.manuallyDisconnected,
           reconnectPlanned,
+          opened,
+          rejected,
         });
+        if (!opened) {
+          finalizeReject(new Error("gateway_websocket_closed_before_open"));
+        }
         this.stopHeartbeat();
         this.ws = null;
         this.setState("DISCONNECTED");
+        if (rejected) {
+          this.options.logger.warn("gateway.close.rejected", {
+            code: asNumber(close.code),
+            reason: asString(close.reason) ?? "",
+            rejected: true,
+          });
+          return;
+        }
         if (reconnectPlanned) {
           this.scheduleReconnect();
         }
@@ -332,12 +386,21 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("gateway_not_connected");
     }
+    const messageType = isRecord(message) && typeof message.type === "string" ? message.type : undefined;
+    const isControlMessage = messageType === "register" || messageType === "heartbeat";
+    if (this.state !== "READY" && !isControlMessage) {
+      this.options.logger.warn("gateway.send.rejected_not_ready", {
+        state: this.state,
+        messageType: messageType ?? "unknown",
+      });
+      throw new Error("Gateway connection is not ready. Cannot send business message.");
+    }
     const serialized = JSON.stringify(message);
     if (this.options.debug) {
       this.options.logger.info(`「sendMessage」===>「${serialized}」`);
     }
     logDebug(this.options.logger, "gateway.send", {
-      messageType: isRecord(message) && typeof message.type === "string" ? message.type : undefined,
+      messageType,
       payloadBytes: Buffer.byteLength(serialized, "utf8"),
       gatewayMessageId: logContext?.gatewayMessageId ?? extractGatewayMessageId(message),
       action: logContext?.action ?? extractMessageAction(message),
@@ -382,12 +445,14 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
       return;
     }
 
+    const baseDelay = Math.max(1, this.options.reconnectBaseMs);
+    const maxDelay = Math.max(1, this.options.reconnectMaxMs);
     const delay = this.options.reconnectExponential
       ? Math.min(
-          this.options.reconnectBaseMs * (2 ** this.reconnectAttempts),
-          this.options.reconnectMaxMs,
+          baseDelay * (2 ** this.reconnectAttempts),
+          maxDelay,
         )
-      : this.options.reconnectBaseMs;
+      : Math.min(baseDelay, maxDelay);
 
     this.reconnectAttempts += 1;
     this.options.logger.info("gateway.reconnect.scheduled", {
@@ -396,6 +461,9 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
     });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      if (this.manuallyDisconnected) {
+        return;
+      }
       this.options.logger.info("gateway.reconnect.attempt", {
         reconnectAttempts: this.reconnectAttempts,
       });
@@ -403,6 +471,9 @@ export class DefaultGatewayConnection extends EventEmitter implements GatewayCon
         this.options.logger.warn("gateway.reconnect.failed", {
           error: error instanceof Error ? error.message : String(error),
         });
+        if (!this.manuallyDisconnected) {
+          this.scheduleReconnect();
+        }
       });
     }, delay);
   }

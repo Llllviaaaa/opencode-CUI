@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { MessageBridgeSessionRecord } from "../types.js";
 
 export class SessionRegistry {
@@ -23,12 +22,6 @@ export class SessionRegistry {
     this.byToolSessionId.set(toolSessionId, record);
     return record;
   }
-
-  create(welinkSessionId?: string, requestedSessionId?: string): MessageBridgeSessionRecord {
-    const toolSessionId = requestedSessionId?.trim() || `tool_${randomUUID()}`;
-    return this.ensure(toolSessionId, welinkSessionId);
-  }
-
   get(toolSessionId: string): MessageBridgeSessionRecord | undefined {
     return this.byToolSessionId.get(toolSessionId);
   }

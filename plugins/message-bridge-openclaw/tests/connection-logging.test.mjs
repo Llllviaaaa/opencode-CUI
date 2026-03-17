@@ -78,16 +78,53 @@ function createConnection(logs, options = {}) {
   return conn;
 }
 
-test("gateway.close logs reconnectPlanned=false on manual disconnect", async (t) => {
-  const originalWebSocket = globalThis.WebSocket;
+function installFakeTimeouts() {
+  const scheduled = [];
+  const cancelled = new Set();
+  let seq = 0;
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
+
+  globalThis.setTimeout = ((callback, delay, ...args) => {
+    const id = ++seq;
+    scheduled.push({
+      id,
+      delay,
+      run: () => callback(...args),
+    });
+    return id;
+  });
+  globalThis.clearTimeout = ((id) => {
+    cancelled.add(id);
+  });
+
+  return {
+    scheduled,
+    cancelled,
+    restore() {
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
+    },
+    runNext() {
+      const next = scheduled.shift();
+      if (!next) {
+        return false;
+      }
+      if (!cancelled.has(next.id)) {
+        next.run();
+      }
+      return true;
+    },
+  };
+}
+
+test("gateway.close logs reconnectPlanned=false on manual disconnect", async (t) => {
+  const originalWebSocket = globalThis.WebSocket;
+  const timers = installFakeTimeouts();
   const logs = { debug: [], info: [], warn: [], error: [] };
   try {
     FakeWebSocket.instances = [];
     globalThis.WebSocket = FakeWebSocket;
-    globalThis.setTimeout = (() => 1);
-    globalThis.clearTimeout = () => {};
     const conn = createConnection(logs);
 
     const connecting = conn.connect();
@@ -108,22 +145,18 @@ test("gateway.close logs reconnectPlanned=false on manual disconnect", async (t)
     conn.disconnect();
   } finally {
     globalThis.WebSocket = originalWebSocket;
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
+    timers.restore();
   }
   t.diagnostic("manual disconnect close logging validated");
 });
 
 test("gateway.close logs reconnectPlanned=true on unexpected close", async (t) => {
   const originalWebSocket = globalThis.WebSocket;
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
+  const timers = installFakeTimeouts();
   const logs = { debug: [], info: [], warn: [], error: [] };
   try {
     FakeWebSocket.instances = [];
     globalThis.WebSocket = FakeWebSocket;
-    globalThis.setTimeout = (() => 1);
-    globalThis.clearTimeout = () => {};
     const conn = createConnection(logs);
 
     const connecting = conn.connect();
@@ -145,23 +178,19 @@ test("gateway.close logs reconnectPlanned=true on unexpected close", async (t) =
     conn.disconnect();
   } finally {
     globalThis.WebSocket = originalWebSocket;
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
+    timers.restore();
   }
   t.diagnostic("unexpected close logging validated");
 });
 
 test("gateway send/receive logs include message correlation fields", async (t) => {
   const originalWebSocket = globalThis.WebSocket;
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
+  const timers = installFakeTimeouts();
   const logs = { debug: [], info: [], warn: [], error: [] };
   let conn = null;
   try {
     FakeWebSocket.instances = [];
     globalThis.WebSocket = FakeWebSocket;
-    globalThis.setTimeout = (() => 1);
-    globalThis.clearTimeout = () => {};
     conn = createConnection(logs);
 
     const connecting = conn.connect();
@@ -222,10 +251,85 @@ test("gateway send/receive logs include message correlation fields", async (t) =
   } finally {
     conn?.disconnect();
     globalThis.WebSocket = originalWebSocket;
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
+    timers.restore();
   }
   t.diagnostic("gateway send/receive correlation logging validated");
+});
+
+test("downstream business messages are ignored before READY", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  const logs = { debug: [], info: [], warn: [], error: [] };
+  let conn = null;
+  let received = 0;
+  try {
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket;
+    conn = createConnection(logs);
+    conn.on("message", () => {
+      received += 1;
+    });
+
+    const connecting = conn.connect();
+    const ws = FakeWebSocket.instances[0];
+    ws.emitOpen();
+    await connecting;
+    ws.emitMessage({
+      type: "invoke",
+      messageId: "gw_before_ready",
+      action: "chat",
+      payload: { toolSessionId: "tool_before_ready", text: "hello" },
+    });
+    await Promise.resolve();
+
+    assert.equal(received, 0);
+    assert.equal(
+      logs.info.some((entry) => entry.message === "gateway.message.received_not_ready"),
+      true,
+    );
+  } finally {
+    conn?.disconnect();
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
+
+test("send rejects business messages before READY but allows heartbeat", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  const logs = { debug: [], info: [], warn: [], error: [] };
+  let conn = null;
+  try {
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket;
+    conn = createConnection(logs);
+
+    const connecting = conn.connect();
+    const ws = FakeWebSocket.instances[0];
+    ws.emitOpen();
+    await connecting;
+
+    assert.throws(
+      () =>
+        conn.send({
+          type: "tool_event",
+          toolSessionId: "tool_before_ready",
+          event: { type: "message.part.updated" },
+        }),
+      /not ready/i,
+    );
+    assert.equal(
+      logs.warn.some((entry) => entry.message === "gateway.send.rejected_not_ready"),
+      true,
+    );
+
+    assert.doesNotThrow(() =>
+      conn.send({
+        type: "heartbeat",
+        timestamp: "2026-03-17T00:00:00.000Z",
+      }),
+    );
+  } finally {
+    conn?.disconnect();
+    globalThis.WebSocket = originalWebSocket;
+  }
 });
 
 test("raw packet logs are disabled when debug=false", async () => {
@@ -297,5 +401,181 @@ test("raw packet logs are readable and formatted when debug=true", async () => {
   } finally {
     conn?.disconnect();
     globalThis.WebSocket = originalWebSocket;
+  }
+});
+
+for (const closeCode of [4403, 4408, 4409]) {
+  test(`gateway rejection close code ${closeCode} does not reconnect`, async () => {
+    const originalWebSocket = globalThis.WebSocket;
+    const timers = installFakeTimeouts();
+    const logs = { debug: [], info: [], warn: [], error: [] };
+    let conn = null;
+    try {
+      FakeWebSocket.instances = [];
+      globalThis.WebSocket = FakeWebSocket;
+      conn = createConnection(logs);
+
+      const connecting = conn.connect();
+      const ws = FakeWebSocket.instances[0];
+      ws.emitOpen();
+      await connecting;
+      ws.emitMessage({ type: "register_ok" });
+      await Promise.resolve();
+      ws.emitClose({ code: closeCode, reason: "rejected", wasClean: true });
+
+      assert.equal(timers.scheduled.length, 0);
+      assert.equal(
+        logs.warn.some((entry) => entry.message === "gateway.reconnect.scheduled"),
+        false,
+      );
+      assert.equal(
+        logs.warn.some(
+          (entry) =>
+            entry.message === "gateway.close.rejected" && entry.meta.code === closeCode,
+        ),
+        true,
+      );
+    } finally {
+      conn?.disconnect();
+      globalThis.WebSocket = originalWebSocket;
+      timers.restore();
+    }
+  });
+}
+
+test("register_rejected triggers manual disconnect and does not reconnect", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  const timers = installFakeTimeouts();
+  const logs = { debug: [], info: [], warn: [], error: [] };
+  let conn = null;
+  try {
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket;
+    conn = createConnection(logs);
+    conn.on("error", () => {});
+
+    const connecting = conn.connect();
+    const ws = FakeWebSocket.instances[0];
+    ws.emitOpen();
+    await connecting;
+    ws.emitMessage({ type: "register_rejected", reason: "bad ak/sk" });
+    await Promise.resolve();
+
+    const closeLog = logs.warn.find((entry) => entry.message === "gateway.close");
+    assert.equal(Boolean(closeLog), true);
+    assert.equal(closeLog.meta.manuallyDisconnected, true);
+    assert.equal(closeLog.meta.reconnectPlanned, false);
+    assert.equal(timers.scheduled.length, 0);
+    assert.equal(
+      logs.error.some((entry) => entry.message === "gateway.register.rejected"),
+      true,
+    );
+  } finally {
+    conn?.disconnect();
+    globalThis.WebSocket = originalWebSocket;
+    timers.restore();
+  }
+});
+
+test("reconnect attempts reset after a successful reconnect", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  const timers = installFakeTimeouts();
+  const logs = { debug: [], info: [], warn: [], error: [] };
+  let conn = null;
+  try {
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket;
+    conn = createConnection(logs);
+
+    const firstConnect = conn.connect();
+    const ws0 = FakeWebSocket.instances[0];
+    ws0.emitOpen();
+    await firstConnect;
+    ws0.emitMessage({ type: "register_ok" });
+    await Promise.resolve();
+    ws0.emitClose({ code: 1011, reason: "first drop", wasClean: false });
+    assert.equal(timers.scheduled[0]?.delay, 1);
+
+    assert.equal(timers.runNext(), true);
+    const ws1 = FakeWebSocket.instances[1];
+    ws1.emitOpen();
+    await Promise.resolve();
+    ws1.emitMessage({ type: "register_ok" });
+    await Promise.resolve();
+    ws1.emitClose({ code: 1011, reason: "second drop", wasClean: false });
+
+    assert.equal(timers.scheduled[0]?.delay, 1);
+  } finally {
+    conn?.disconnect();
+    globalThis.WebSocket = originalWebSocket;
+    timers.restore();
+  }
+});
+
+test("reconnect continues after first reconnect connect() failure", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  const timers = installFakeTimeouts();
+  const logs = { debug: [], info: [], warn: [], error: [] };
+  let conn = null;
+  try {
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket;
+    conn = createConnection(logs);
+    conn.on("error", () => {});
+
+    const firstConnect = conn.connect();
+    const ws0 = FakeWebSocket.instances[0];
+    ws0.emitOpen();
+    await firstConnect;
+    ws0.emitMessage({ type: "register_ok" });
+    await Promise.resolve();
+    ws0.emitClose({ code: 1011, reason: "drop", wasClean: false });
+    assert.equal(timers.scheduled[0]?.delay, 1);
+
+    const originalConnect = conn.connect.bind(conn);
+    let failReconnectOnce = true;
+    conn.connect = () => {
+      if (failReconnectOnce) {
+        failReconnectOnce = false;
+        return Promise.reject(new Error("simulated reconnect failure"));
+      }
+      return originalConnect();
+    };
+
+    assert.equal(timers.runNext(), true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.equal(timers.scheduled[0]?.delay, 2);
+  } finally {
+    conn?.disconnect();
+    globalThis.WebSocket = originalWebSocket;
+    timers.restore();
+  }
+});
+
+test("close before open rejects with gateway_websocket_closed_before_open", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  const timers = installFakeTimeouts();
+  const logs = { debug: [], info: [], warn: [], error: [] };
+  let conn = null;
+  try {
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket;
+    conn = createConnection(logs);
+
+    const connecting = conn.connect();
+    const ws = FakeWebSocket.instances[0];
+    ws.emitClose({ code: 1006, reason: "transport_down", wasClean: false });
+
+    await assert.rejects(connecting, /gateway_websocket_closed_before_open/);
+    assert.equal(
+      logs.info.some((entry) => entry.message === "gateway.reconnect.scheduled"),
+      false,
+    );
+  } finally {
+    conn?.disconnect();
+    globalThis.WebSocket = originalWebSocket;
+    timers.restore();
   }
 });
