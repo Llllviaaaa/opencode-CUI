@@ -37,11 +37,18 @@ public class ContextInjectionService {
         this.maxHistoryMessages = maxHistoryMessages;
     }
 
-    public String resolvePrompt(String sessionType, String currentMessage, List<ImMessageRequest.ChatMessage> chatHistory) {
+    public String resolvePrompt(String sessionType, String currentMessage,
+            List<ImMessageRequest.ChatMessage> chatHistory) {
+        log.debug("Resolving prompt: sessionType={}, historySize={}, messageLength={}",
+                sessionType,
+                chatHistory != null ? chatHistory.size() : 0,
+                currentMessage != null ? currentMessage.length() : 0);
         if (!injectionEnabled
                 || !SkillSession.SESSION_TYPE_GROUP.equalsIgnoreCase(sessionType)
                 || currentMessage == null
                 || currentMessage.isBlank()) {
+            log.debug("Context injection skipped: injectionEnabled={}, sessionType={}",
+                    injectionEnabled, sessionType);
             return currentMessage;
         }
 
@@ -55,9 +62,12 @@ public class ContextInjectionService {
             return currentMessage;
         }
 
-        return template
+        String result = template
                 .replace("{{chatHistory}}", historyText)
                 .replace("{{currentMessage}}", currentMessage);
+        log.info("Context injection applied: sessionType={}, historyLength={}, resultLength={}",
+                sessionType, historyText.length(), result.length());
+        return result;
     }
 
     private String loadTemplate() {

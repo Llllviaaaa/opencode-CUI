@@ -138,6 +138,7 @@ public class GatewayRelayService {
      * Parses JSON and delegates to GatewayMessageRouter for dispatch.
      */
     public void handleGatewayMessage(String rawMessage) {
+        log.debug("Received gateway message: length={}", rawMessage != null ? rawMessage.length() : 0);
         JsonNode node;
         try {
             node = objectMapper.readTree(rawMessage);
@@ -152,6 +153,7 @@ public class GatewayRelayService {
         if (ak == null || ak.isBlank()) {
             ak = node.path("agentId").asText(null);
         }
+        log.info("Gateway message received: type={}, ak={}, userId={}", type, ak, userId);
 
         messageRouter.route(type, ak, userId, node);
     }
@@ -172,6 +174,8 @@ public class GatewayRelayService {
      * Can be called by Controller when toolSessionId is null.
      */
     public void rebuildToolSession(String sessionId, SkillSession session, String pendingMessage) {
+        log.info("Initiating toolSession rebuild: sessionId={}, ak={}, hasPendingMessage={}",
+                sessionId, session != null ? session.getAk() : null, pendingMessage != null);
         rebuildService.rebuildToolSession(sessionId, session, pendingMessage,
                 new SessionRebuildService.RebuildCallback() {
                     @Override

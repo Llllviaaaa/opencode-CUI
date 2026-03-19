@@ -36,14 +36,19 @@ public class ImOutboundService {
     }
 
     public boolean sendTextToIm(String sessionType, String sessionId, String content, String assistantAccount) {
+        log.info("Sending IM outbound: sessionType={}, sessionId={}, assistant={}, contentLength={}",
+                sessionType, sessionId, assistantAccount, content != null ? content.length() : 0);
         if (sessionId == null || sessionId.isBlank()
                 || content == null || content.isBlank()
                 || assistantAccount == null || assistantAccount.isBlank()) {
+            log.warn("IM outbound skipped due to blank params: sessionId={}, assistant={}",
+                    sessionId, assistantAccount);
             return false;
         }
 
         String path = resolvePath(sessionType);
         if (path == null) {
+            log.warn("IM outbound unknown sessionType: {}", sessionType);
             return false;
         }
 
@@ -68,6 +73,8 @@ public class ImOutboundService {
                     JsonNode.class);
             JsonNode respBody = response.getBody();
             if (!response.getStatusCode().is2xxSuccessful() || respBody == null) {
+                log.warn("IM outbound HTTP error: sessionId={}, status={}",
+                        sessionId, response.getStatusCode());
                 return false;
             }
             JsonNode errorNode = respBody.path("error");
@@ -79,6 +86,8 @@ public class ImOutboundService {
                         errorNode.path("errorMsg").asText(null));
                 return false;
             }
+            log.info("IM outbound sent successfully: sessionType={}, sessionId={}, msgId={}",
+                    sessionType, sessionId, respBody.path("msgId").asText(null));
             return true;
         } catch (Exception e) {
             log.error("IM outbound request failed: sessionType={}, sessionId={}, error={}",

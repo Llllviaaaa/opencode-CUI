@@ -45,9 +45,16 @@ public class ImSessionManager {
      */
     public SkillSession findSession(String businessDomain, String sessionType,
             String sessionId, String ak) {
+        log.debug("Looking up session: domain={}, sessionType={}, sessionId={}, ak={}",
+                businessDomain, sessionType, sessionId, ak);
         SkillSession existing = sessionService.findByBusinessSession(businessDomain, sessionType, sessionId, ak);
         if (existing != null) {
+            log.debug("Session found: skillSessionId={}, toolSessionId={}",
+                    existing.getId(), existing.getToolSessionId());
             sessionService.touchSession(existing.getId());
+        } else {
+            log.debug("No session found: domain={}, sessionType={}, sessionId={}, ak={}",
+                    businessDomain, sessionType, sessionId, ak);
         }
         return existing;
     }
@@ -73,10 +80,13 @@ public class ImSessionManager {
                 log.info("Session creation already in progress for sessionId={}, skipping", sessionId);
                 return;
             }
+            log.info("Acquired creation lock: sessionId={}, ak={}", sessionId, ak);
 
             SkillSession existing = sessionService.findByBusinessSession(
                     businessDomain, sessionType, sessionId, ak);
             if (existing != null) {
+                log.info("Session already exists during async creation: skillSessionId={}, requesting toolSession",
+                        existing.getId());
                 sessionService.touchSession(existing.getId());
                 requestToolSession(existing, pendingMessage);
                 return;
@@ -90,6 +100,8 @@ public class ImSessionManager {
                     sessionType,
                     sessionId,
                     assistantAccount);
+            log.info("Session created: skillSessionId={}, userId={}, ak={}, sessionId={}",
+                    created.getId(), ownerWelinkId, ak, sessionId);
 
             requestToolSession(created, pendingMessage);
         } finally {
@@ -166,10 +178,14 @@ public class ImSessionManager {
 
     private SkillSession ensureToolSession(SkillSession session, boolean newlyCreated) {
         if (session.getToolSessionId() != null && !session.getToolSessionId().isBlank()) {
+            log.debug("Tool session already exists: skillSessionId={}, toolSessionId={}",
+                    session.getId(), session.getToolSessionId());
             return sessionService.getSession(session.getId());
         }
 
         if (newlyCreated) {
+            log.info("Sending create_session to gateway: skillSessionId={}, ak={}",
+                    session.getId(), session.getAk());
             gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
                     session.getAk(),
                     session.getUserId(),
@@ -177,6 +193,8 @@ public class ImSessionManager {
                     GatewayActions.CREATE_SESSION,
                     PayloadBuilder.buildPayload(objectMapper, Map.of("title", session.getTitle()))));
         } else {
+            log.info("Rebuilding tool session: skillSessionId={}, ak={}",
+                    session.getId(), session.getAk());
             gatewayRelayService.rebuildToolSession(String.valueOf(session.getId()), session, null);
         }
 
@@ -184,10 +202,13 @@ public class ImSessionManager {
     }
 
     private SkillSession waitForToolSession(Long sessionId) {
+        log.info("Waiting for toolSessionId: skillSessionId={}, timeout={}s", sessionId, autoCreateTimeoutSeconds);
         long deadline = System.currentTimeMillis() + autoCreateTimeoutSeconds * 1000L;
         while (System.currentTimeMillis() < deadline) {
             SkillSession latest = sessionService.findByIdSafe(sessionId);
             if (latest != null && latest.getToolSessionId() != null && !latest.getToolSessionId().isBlank()) {
+                log.info("ToolSessionId ready: skillSessionId={}, toolSessionId={}",
+                        sessionId, latest.getToolSessionId());
                 return latest;
             }
             try {
@@ -197,6 +218,8 @@ public class ImSessionManager {
                 throw new IllegalStateException("Interrupted while waiting for toolSessionId");
             }
         }
+        log.error("Timed out waiting for toolSessionId: skillSessionId={}, timeout={}s",
+                sessionId, autoCreateTimeoutSeconds);
         throw new IllegalStateException("Timed out waiting for tool session creation: " + sessionId);
     }
 

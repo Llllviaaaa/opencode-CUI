@@ -14,6 +14,7 @@ import com.opencode.cui.skill.service.ImSessionManager;
 import com.opencode.cui.skill.service.MessagePersistenceService;
 import com.opencode.cui.skill.service.PayloadBuilder;
 import com.opencode.cui.skill.service.SkillMessageService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -23,6 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/inbound")
 public class ImInboundController {
@@ -54,22 +56,36 @@ public class ImInboundController {
 
     @PostMapping("/messages")
     public ResponseEntity<ApiResponse<Void>> receiveMessage(@RequestBody ImMessageRequest request) {
+        log.info("Received IM inbound message: domain={}, sessionType={}, sessionId={}, assistant={}, msgType={}",
+                request != null ? request.businessDomain() : null,
+                request != null ? request.sessionType() : null,
+                request != null ? request.sessionId() : null,
+                request != null ? request.assistantAccount() : null,
+                request != null ? request.msgType() : null);
+
         String validationError = validate(request);
         if (validationError != null) {
+            log.warn("IM inbound validation failed: error={}, sessionId={}",
+                    validationError, request != null ? request.sessionId() : null);
             return ResponseEntity.badRequest().body(ApiResponse.error(400, validationError));
         }
 
         AssistantResolveResult resolveResult = resolverService.resolve(request.assistantAccount());
         if (resolveResult == null) {
+            log.warn("Failed to resolve assistant account: assistantAccount={}", request.assistantAccount());
             return ResponseEntity.ok(ApiResponse.error(404, "Invalid assistant account"));
         }
         String ak = resolveResult.ak();
         String ownerWelinkId = resolveResult.ownerWelinkId();
+        log.info("Resolved assistant account: assistantAccount={}, ak={}, ownerWelinkId={}",
+                request.assistantAccount(), ak, ownerWelinkId);
 
         String prompt = contextInjectionService.resolvePrompt(
                 request.sessionType(),
                 request.content(),
                 request.chatHistory());
+        log.debug("Context injection resolved: sessionType={}, promptLength={}",
+                request.sessionType(), prompt != null ? prompt.length() : 0);
 
         SkillSession session = sessionManager.findSession(
                 request.businessDomain(),
@@ -78,6 +94,8 @@ public class ImInboundController {
                 ak);
 
         if (session == null) {
+            log.info("No existing session found, creating async: domain={}, sessionType={}, sessionId={}, ak={}",
+                    request.businessDomain(), request.sessionType(), request.sessionId(), ak);
             sessionManager.createSessionAsync(
                     request.businessDomain(),
                     request.sessionType(),
@@ -90,11 +108,17 @@ public class ImInboundController {
         }
 
         if (session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
+            log.info("Session exists but toolSessionId not ready, requesting rebuild: skillSessionId={}",
+                    session.getId());
             sessionManager.requestToolSession(session, prompt);
             return ResponseEntity.ok(ApiResponse.ok(null));
         }
 
+        log.info("Session ready, forwarding to gateway: skillSessionId={}, toolSessionId={}, sessionType={}",
+                session.getId(), session.getToolSessionId(), request.sessionType());
+
         if (session.isImDirectSession()) {
+            log.debug("Direct session: persisting user message turn, skillSessionId={}", session.getId());
             messagePersistenceService.finalizeActiveAssistantTurn(session.getId());
             messageService.saveUserMessage(session.getId(), request.content());
             messagePersistenceService.markPendingUserMessage(session.getId());
@@ -110,6 +134,8 @@ public class ImInboundController {
                 GatewayActions.CHAT,
                 PayloadBuilder.buildPayload(objectMapper, payloadFields)));
 
+        log.info("Gateway invoke sent: skillSessionId={}, ak={}, action={}",
+                session.getId(), ak, GatewayActions.CHAT);
         return ResponseEntity.ok(ApiResponse.ok(null));
     }
 
