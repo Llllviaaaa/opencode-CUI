@@ -11,33 +11,30 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 /**
- * Manages communication with AI-Gateway.
+ * AI Gateway 通信服务。
+ * 负责 Skill Server 与 AI Gateway 之间的双向消息传输。
  *
- * Downstream (Skill -> Gateway):
- * - Sends invoke messages through the active internal WebSocket connection
- *
- * Upstream (Gateway -> Skill via WS):
- * - Delegates to GatewayMessageRouter for message routing and handling
- *
- * Multi-instance broadcast:
- * - Delegates to GatewayMessageRouter for Redis pub/sub broadcast
+ * 下行（Skill → Gateway）：通过 WebSocket 发送 invoke 指令
+ * 上行（Gateway → Skill）：接收并路由到 GatewayMessageRouter
+ * 多实例广播：通过 Redis Pub/Sub 实现跨实例消息广播
  */
 @Slf4j
 @Service
 public class GatewayRelayService {
 
-    public static final String SOURCE = "skill-server";
+    public static final String SOURCE = "skill-server"; // 消息来源标识
 
+    /** Gateway WebSocket 通信接口（由 WebSocket Handler 注入） */
     public interface GatewayRelayTarget {
-        boolean sendToGateway(String message);
+        boolean sendToGateway(String message); // 发送消息到 Gateway
 
-        boolean hasActiveConnection();
+        boolean hasActiveConnection(); // 是否有活跃的 WebSocket 连接
     }
 
-    private final ObjectMapper objectMapper;
-    private final GatewayMessageRouter messageRouter;
-    private final SessionRebuildService rebuildService;
-    private volatile GatewayRelayTarget gatewayRelayTarget;
+    private final ObjectMapper objectMapper; // JSON 序列化
+    private final GatewayMessageRouter messageRouter; // 上行消息路由器
+    private final SessionRebuildService rebuildService; // toolSession 重建服务
+    private volatile GatewayRelayTarget gatewayRelayTarget; // 当前 WebSocket 连接
 
     public GatewayRelayService(ObjectMapper objectMapper,
             GatewayMessageRouter messageRouter,
@@ -46,7 +43,7 @@ public class GatewayRelayService {
         this.messageRouter = messageRouter;
         this.rebuildService = rebuildService;
 
-        // Wire downstream sender callback to avoid circular dependency
+        // 向 MessageRouter 注入下行发送能力，避免循环依赖
         messageRouter.setDownstreamSender(this::sendInvokeToGateway);
     }
 
@@ -54,13 +51,12 @@ public class GatewayRelayService {
         this.gatewayRelayTarget = gatewayRelayTarget;
     }
 
-    // ==================== Downstream: Skill -> Gateway ====================
+    // ==================== 下行：Skill → Gateway ====================
 
     /**
-     * Send an invoke command to AI-Gateway over the active internal WebSocket.
-     *
-     * @param command the invoke command encapsulating ak, userId, sessionId,
-     *                action, and payload
+     * 通过 WebSocket 发送 invoke 指令到 AI Gateway。
+     * 
+     * @param command 调用指令，包含 ak、userId、sessionId、action 和 payload
      */
     public void sendInvokeToGateway(InvokeCommand command) {
         String action = command.action();
@@ -131,11 +127,11 @@ public class GatewayRelayService {
         }
     }
 
-    // ==================== Upstream: Gateway -> Skill (via WS) ====================
+    // ==================== 上行：Gateway → Skill ====================
 
     /**
-     * Handle an incoming message from AI-Gateway.
-     * Parses JSON and delegates to GatewayMessageRouter for dispatch.
+     * 处理来自 AI Gateway 的上行消息。
+     * 解析 JSON 后委派给 GatewayMessageRouter 进行路由分发。
      */
     public void handleGatewayMessage(String rawMessage) {
         log.debug("Received gateway message: length={}", rawMessage != null ? rawMessage.length() : 0);
@@ -158,20 +154,19 @@ public class GatewayRelayService {
         messageRouter.route(type, ak, userId, node);
     }
 
-    // ==================== Public Delegates ====================
+    // ==================== 公共委派方法 ====================
 
     /**
-     * Publish a protocol message via broadcast + buffer.
-     * Used by controllers for ad-hoc push (e.g. permission replies).
+     * 通过广播 + 缓冲区发布协议消息。
+     * 用于控制器中的即时推送（如权限回复）。
      */
     public void publishProtocolMessage(String sessionId, StreamMessage msg) {
         messageRouter.publishProtocolMessage(sessionId, msg);
     }
 
     /**
-     * Trigger toolSession rebuild: store pending message, notify frontend retry,
-     * send create_session to Gateway.
-     * Can be called by Controller when toolSessionId is null.
+     * 触发 toolSession 重建。
+     * 缓存待发消息 → 通知前端重试 → 发送 create_session 到 Gateway。
      */
     public void rebuildToolSession(String sessionId, SkillSession session, String pendingMessage) {
         log.info("Initiating toolSession rebuild: sessionId={}, ak={}, hasPendingMessage={}",

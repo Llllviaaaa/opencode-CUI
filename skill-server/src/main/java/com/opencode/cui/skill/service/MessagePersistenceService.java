@@ -11,20 +11,22 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Persists streamed assistant output.
- *
- * Active message identity tracking is delegated to
- * {@link ActiveMessageTracker}.
+ * 流式消息持久化服务。
+ * 负责将 AI Gateway 返回的流式消息（文本、工具调用、权限、文件等）持久化到数据库。
+ * 
+ * InboundController 直接使用的方法：
+ * - {@link #finalizeActiveAssistantTurn} — 结束当前助手回复轮次
+ * - {@link #markPendingUserMessage} — 标记用户消息待处理
  */
 @Slf4j
 @Service
 public class MessagePersistenceService {
 
-    private final SkillMessageService messageService;
-    private final SkillMessagePartRepository partRepository;
-    private final ObjectMapper objectMapper;
-    private final SnowflakeIdGenerator snowflakeIdGenerator;
-    private final ActiveMessageTracker tracker;
+    private final SkillMessageService messageService; // 消息 CRUD 服务
+    private final SkillMessagePartRepository partRepository; // 消息片段持久化仓库
+    private final ObjectMapper objectMapper; // JSON 序列化
+    private final SnowflakeIdGenerator snowflakeIdGenerator; // 分布式 ID 生成器
+    private final ActiveMessageTracker tracker; // 活跃消息状态追踪器
 
     public MessagePersistenceService(SkillMessageService messageService,
             SkillMessagePartRepository partRepository,
@@ -38,6 +40,7 @@ public class MessagePersistenceService {
         this.tracker = tracker;
     }
 
+    /** 为流式消息准备消息上下文（解析或创建活跃消息引用） */
     @Transactional
     public void prepareMessageContext(Long sessionId, StreamMessage msg) {
         if (msg == null || msg.getType() == null || !requiresMessageContext(msg)) {
@@ -47,7 +50,8 @@ public class MessagePersistenceService {
     }
 
     /**
-     * Persist a StreamMessage if it represents a final state.
+     * 当流式消息到达终态时，持久化到数据库。
+     * 根据消息类型分发到不同的持久化方法。
      */
     @Transactional
     public void persistIfFinal(Long sessionId, StreamMessage msg) {
@@ -75,16 +79,19 @@ public class MessagePersistenceService {
         }
     }
 
-    // ==================== Delegated Tracking Methods ====================
+    // ==================== 助手消息轮次跟踪方法（委派给 ActiveMessageTracker）====================
 
+    /** 清除会话的活跃消息状态 */
     public void clearSession(Long sessionId) {
         tracker.clearSession(sessionId);
     }
 
+    /** 标记有待处理的用户消息（在 ImInboundController 中发送新消息前调用） */
     public void markPendingUserMessage(Long sessionId) {
         tracker.markPendingUserMessage(sessionId);
     }
 
+    /** 消费待处理的用户消息标记（助手开始回复时调用） */
     public boolean consumePendingUserMessage(Long sessionId) {
         return tracker.consumePendingUserMessage(sessionId);
     }
@@ -121,12 +128,13 @@ public class MessagePersistenceService {
                 .build();
     }
 
+    /** 结束当前活跃的助手回复轮次（在 ImInboundController 中发送新消息前调用） */
     @Transactional
     public void finalizeActiveAssistantTurn(Long sessionId) {
         tracker.finalizeActiveAssistantTurn(sessionId);
     }
 
-    // ==================== Persistence Logic ====================
+    // ==================== 持久化逻辑 ====================
 
     private void persistTextPart(Long sessionId, StreamMessage msg, String partType,
             ActiveMessageTracker.ActiveMessageRef active) {
