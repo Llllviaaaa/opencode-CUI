@@ -718,15 +718,17 @@ GET /api/gateway/agents
 **响应：** `AgentSummaryResponse[]`
 ```json
 [{
-  "id": "12345",
   "ak": "agent-key",
+  "status": "ONLINE",
   "deviceName": "My-PC",
+  "os": "linux",
   "toolType": "opencode",
   "toolVersion": "1.4.0",
-  "status": "ONLINE",
-  "lastSeenAt": "2024-03-20T10:30:00"
+  "connectedAt": "2024-03-20T10:30:00"
 }]
 ```
+
+> **注意：** `AgentSummaryResponse` 是 record 类型，没有 `id` 字段，使用 `ak` 作为主标识。`status` 为枚举 `AgentStatus`（ONLINE/OFFLINE）。
 
 #### 查询 Agent 状态（含 OpenCode 在线检查）
 

@@ -143,12 +143,14 @@ GET /api/skill/sessions?status=active&ak=xxx&page=0&size=20
 ```json
 {
   "content": [ /* Session[] */ ],
-  "totalElements": 100,
+  "total": 100,        // 后端字段 totalElements，@JsonProperty("total") 序列化为 "total"
   "totalPages": 5,
-  "number": 0,
+  "page": 0,           // 后端字段 number，@JsonProperty("page") 序列化为 "page"
   "size": 20
 }
 ```
+
+> **注意：** Miniapp 的 TypeScript `PaginatedResponse` 接口定义了 `totalElements` 和 `number`，与后端实际 JSON 的 `total` 和 `page` 不一致。但代码中仅使用 `res.content`，该不一致不影响功能。
 
 #### 查询单个会话
 
@@ -337,7 +339,7 @@ interface StreamMessage {
   // ── 交互提问 ──
   header?: string;                        // 问题标题
   question?: string;                      // 问题内容
-  options?: QuestionOption[];             // 选项列表
+  options?: string[];                     // 选项列表（后端 QuestionInfo.options 为 List<String>）
 
   // ── 权限 ──
   permissionId?: string;                  // 权限请求 ID
@@ -547,10 +549,7 @@ class StreamMessage {
   "status": "running",
   "header": "用户确认",
   "question": "是否继续执行该操作？",
-  "options": [
-    { "label": "是" },
-    { "label": "否", "description": "取消操作" }
-  ]
+  "options": ["是", "否"]
 }
 ```
 
@@ -856,7 +855,7 @@ interface MessagePart {
   // 提问专有
   header?: string;
   question?: string;
-  options?: QuestionOption[];
+  options?: QuestionOption[];    // WS 传输为 string[]，前端 normalize 为 QuestionOption[]
   answered?: boolean;
 
   // 权限专有
