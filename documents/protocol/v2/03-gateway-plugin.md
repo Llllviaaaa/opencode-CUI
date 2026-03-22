@@ -60,16 +60,29 @@ Step 2: Nonce 重放检测
   Redis: SET NX gw:auth:nonce:{nonce} "1" EX 300
   → 已存在 → null（重放攻击）
 
-Step 3: AK 查表
-  SQL: SELECT sk, user_id FROM ak_sk_credential WHERE ak = ? AND status = 'ACTIVE'
-  → 未找到 → null
+Step 0 (可选): 调试模式检查
+  gateway.auth.skip-verification=true → 跳过全部校验，以 AK 作为 userId 直接放行
+  仅用于本地调试，生产环境必须为 false
 
-Step 4: 签名计算与比较
-  expected = Base64(HMAC-SHA256(sk, ak + ts + nonce))
-  MessageDigest.isEqual(expected, signature)  // 恒定时间比较，防时序攻击
-  → 不匹配 → null
+Step 3: 多级身份解析（resolveIdentity）
+  L1: Caffeine 本地缓存 → auth:identity:{ak}
+      TTL 5min，上限 10000 条
+      → 命中 → 信任缓存的 userId（首次 L3 已验签）
 
-Step 5: 返回 userId
+  L2: Redis 缓存 → GET auth:identity:{ak}
+      TTL 1h，JSON: {"userId":"...","level":"L3"}
+      → 命中 → 信任缓存的 userId，回填 L1
+
+  L3: 外部身份 API（需配置 gateway.auth.identity-api.base-url）
+      POST /appstore/wecodeapi/open/identity/check
+      Authorization: Bearer {bearer-token}
+      → checkResult=true → 返回 userId，回填 L1+L2
+      → checkResult=false → 直接拒绝
+      → 网络/超时异常 → 直接拒绝
+
+  L4: 拒绝认证（外部 API 是唯一权威来源，无本地 DB 降级）
+
+Step 4: 返回 userId
 ```
 
 ### 1.2 WebSocket 子协议
@@ -626,6 +639,7 @@ ensureTraceId()             // 若无 traceId → 生成 UUID
 | `gw:source:owner:{source}:{instanceId}` | String | 实例 ownership 心跳（Legacy 策略） | 30s |
 | `gw:source:owners:{source}` | Set | 集群级 source owner 注册表（Legacy 策略） | 无 |
 | `gw:auth:nonce:{nonce}` | String | Nonce 防重放 | 300s |
+| `auth:identity:{ak}` | String | **[v2 新增]** 认证缓存 L2（JSON: userId） | 3600s |
 | `gw:instance:{instanceId}` | String | **[v2 新增]** Gateway 实例自注册 | 30s |
 | `conn:ak:{ak}` | String | **[v2 新增]** Agent 连接绑定 | 无 |
 
