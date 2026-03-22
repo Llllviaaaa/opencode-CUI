@@ -48,7 +48,7 @@ public class SessionRouteService {
      */
     public void updateToolSessionId(Long welinkSessionId, String sourceType, String toolSessionId) {
         repository.updateToolSessionId(welinkSessionId, sourceType, toolSessionId);
-        log.debug("Updated toolSessionId: welinkSessionId={}, toolSessionId={}", welinkSessionId, toolSessionId);
+        log.info("Updated toolSessionId: welinkSessionId={}, toolSessionId={}", welinkSessionId, toolSessionId);
     }
 
     /**
@@ -56,7 +56,7 @@ public class SessionRouteService {
      */
     public void closeRoute(Long welinkSessionId, String sourceType) {
         repository.updateStatus(welinkSessionId, sourceType, "CLOSED");
-        log.debug("Closed session route: welinkSessionId={}, sourceType={}", welinkSessionId, sourceType);
+        log.info("Closed session route: welinkSessionId={}, sourceType={}", welinkSessionId, sourceType);
     }
 
     /**

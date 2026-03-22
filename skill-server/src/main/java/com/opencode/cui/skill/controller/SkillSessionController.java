@@ -56,6 +56,8 @@ public class SkillSessionController {
     public ResponseEntity<ApiResponse<SkillSession>> createSession(
             @CookieValue(value = "userId", required = false) String userIdCookie,
             @RequestBody CreateSessionRequest request) {
+        long start = System.nanoTime();
+        log.info("[ENTRY] createSession: ak={}, userId={}", request.getAk(), userIdCookie);
         String resolvedUserId = accessControlService.requireUserId(userIdCookie);
 
         SkillSession session = sessionService.createSession(
@@ -79,6 +81,8 @@ public class SkillSessionController {
                                             : Map.of())));
         }
 
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        log.info("[EXIT] createSession: sessionId={}, durationMs={}", session.getId(), elapsedMs);
         return ResponseEntity.ok(ApiResponse.ok(session));
     }
 
@@ -131,6 +135,7 @@ public class SkillSessionController {
         if (sessionId == null) {
             return ResponseEntity.ok(ApiResponse.error(400, "Invalid session ID"));
         }
+        log.info("[ENTRY] closeSession: sessionId={}", id);
         SkillSession session = accessControlService.requireSessionAccess(sessionId, userIdCookie);
 
         if (session.getAk() != null && session.getToolSessionId() != null) {
@@ -143,6 +148,7 @@ public class SkillSessionController {
                                     Map.of("toolSessionId", session.getToolSessionId()))));
         }
         sessionService.closeSession(sessionId);
+        log.info("[EXIT] closeSession: sessionId={}", id);
         return ResponseEntity.ok(ApiResponse.ok(Map.of("status", "closed", "welinkSessionId", id)));
     }
 
@@ -166,6 +172,7 @@ public class SkillSessionController {
         }
 
         // Send abort_session to AI-Gateway if toolSessionId and ak exist
+        log.info("[ENTRY] abortSession: sessionId={}", id);
         if (session.getAk() != null && session.getToolSessionId() != null) {
             gatewayRelayService.sendInvokeToGateway(
                     new InvokeCommand(session.getAk(),
@@ -176,6 +183,7 @@ public class SkillSessionController {
                                     Map.of("toolSessionId", session.getToolSessionId()))));
         }
 
+        log.info("[EXIT] abortSession: sessionId={}", id);
         return ResponseEntity.ok(ApiResponse.ok(Map.of("status", "aborted", "welinkSessionId", id)));
     }
 

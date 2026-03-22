@@ -56,17 +56,18 @@ public class ImMessageService {
         HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
 
         try {
-            ResponseEntity<String> response = restTemplate.postForEntity(sendUrl, request, String.class);
+            ResponseEntity<String> response = com.opencode.cui.skill.logging.LogTimer.timed(
+                    log, "ImMessage.send(chatId=" + chatId + ")",
+                    () -> restTemplate.postForEntity(sendUrl, request, String.class));
             if (response.getStatusCode().is2xxSuccessful()) {
                 log.info("IM message sent successfully: chatId={}, contentLength={}", chatId, content.length());
                 return true;
             } else {
-                log.error("IM message send failed: chatId={}, status={}, body={}",
-                        chatId, response.getStatusCode(), response.getBody());
+                log.error("IM message send failed: chatId={}, status={}", chatId, response.getStatusCode());
                 return false;
             }
         } catch (RestClientException e) {
-            log.error("IM message send error: chatId={}, error={}", chatId, e.getMessage(), e);
+            log.error("IM message send error: chatId={}, error={}", chatId, e.getMessage());
             return false;
         }
     }

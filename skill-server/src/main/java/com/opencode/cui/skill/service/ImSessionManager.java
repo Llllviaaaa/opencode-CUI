@@ -58,15 +58,15 @@ public class ImSessionManager {
      */
     public SkillSession findSession(String businessDomain, String sessionType,
             String sessionId, String ak) {
-        log.debug("Looking up session: domain={}, sessionType={}, sessionId={}, ak={}",
+        log.info("Looking up session: domain={}, sessionType={}, sessionId={}, ak={}",
                 businessDomain, sessionType, sessionId, ak);
         SkillSession existing = sessionService.findByBusinessSession(businessDomain, sessionType, sessionId, ak);
         if (existing != null) {
-            log.debug("Session found: skillSessionId={}, toolSessionId={}",
+            log.info("Session found: skillSessionId={}, toolSessionId={}",
                     existing.getId(), existing.getToolSessionId());
             sessionService.touchSession(existing.getId());
         } else {
-            log.debug("No session found: domain={}, sessionType={}, sessionId={}, ak={}",
+            log.info("No session found: domain={}, sessionType={}, sessionId={}, ak={}",
                     businessDomain, sessionType, sessionId, ak);
         }
         return existing;

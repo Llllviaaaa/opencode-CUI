@@ -45,6 +45,7 @@ public class GatewayApiClient {
      * @return list of online agent summaries
      */
     public List<AgentSummary> getOnlineAgentsByUserId(String userId) {
+        long start = System.nanoTime();
         try {
             String url = gatewayBaseUrl + "/api/gateway/agents?userId=" + userId;
             ResponseEntity<String> response = restTemplate.exchange(
@@ -52,6 +53,7 @@ public class GatewayApiClient {
                     HttpMethod.GET,
                     new HttpEntity<>(buildHeaders()),
                     String.class);
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 var root = objectMapper.readTree(response.getBody());
@@ -63,15 +65,18 @@ public class GatewayApiClient {
                         dataNode,
                         new TypeReference<List<AgentSummary>>() {
                         });
-                log.debug("Fetched {} online agents for userId={}", agents.size(), userId);
+                log.info("[EXT_CALL] GatewayAPI.getAgents success: userId={}, count={}, durationMs={}",
+                        userId, agents.size(), elapsedMs);
                 return agents;
             }
 
-            log.warn("Gateway returned non-success status: {}", response.getStatusCode());
+            log.warn("[EXT_CALL] GatewayAPI.getAgents non-success: userId={}, status={}, durationMs={}",
+                    userId, response.getStatusCode(), elapsedMs);
             return Collections.emptyList();
         } catch (Exception e) {
-            log.error("Failed to query Gateway for online agents: userId={}, error={}",
-                    userId, e.getMessage());
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            log.error("[EXT_CALL] GatewayAPI.getAgents failed: userId={}, durationMs={}, error={}",
+                    userId, elapsedMs, e.getMessage());
             return Collections.emptyList();
         }
     }

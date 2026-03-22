@@ -22,12 +22,14 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <h3>策略分支</h3>
  * <ul>
- *   <li><b>Mesh</b>（新版 Source，握手时带 instanceId）：路由缓存 + 广播降级</li>
- *   <li><b>Legacy</b>（旧版 Source，无 instanceId）：Owner 心跳 + Redis relay 跨 GW 中继</li>
+ * <li><b>Mesh</b>（新版 Source，握手时带 instanceId）：路由缓存 + 广播降级</li>
+ * <li><b>Legacy</b>（旧版 Source，无 instanceId）：Owner 心跳 + Redis relay 跨 GW 中继</li>
  * </ul>
  *
- * <p>连接建立时根据 instanceId 是否存在自动选择策略。
- * 上行消息路由优先走 Mesh 路径，失败后回退到 Legacy 路径。</p>
+ * <p>
+ * 连接建立时根据 instanceId 是否存在自动选择策略。
+ * 上行消息路由优先走 Mesh 路径，失败后回退到 Legacy 路径。
+ * </p>
  */
 @Slf4j
 @Service
@@ -151,11 +153,11 @@ public class SkillRelayService {
     public void learnRoute(String toolSessionId, String welinkSessionId, WebSocketSession ssSession) {
         if (toolSessionId != null && !toolSessionId.isBlank()) {
             routeCache.put(toolSessionId, ssSession);
-            log.debug("Learned route: toolSessionId={} → ssLink={}", toolSessionId, ssSession.getId());
+            log.info("Learned route: toolSessionId={} -> ssLink={}", toolSessionId, ssSession.getId());
         }
         if (welinkSessionId != null && !welinkSessionId.isBlank()) {
             routeCache.put(WELINK_ROUTE_PREFIX + welinkSessionId, ssSession);
-            log.debug("Learned route: welinkSessionId={} → ssLink={}", welinkSessionId, ssSession.getId());
+            log.info("Learned route: welinkSessionId={} -> ssLink={}", welinkSessionId, ssSession.getId());
         }
     }
 
@@ -184,12 +186,14 @@ public class SkillRelayService {
     /**
      * 将上行消息路由到正确的 Source 服务。
      *
-     * <p>路由顺序：</p>
+     * <p>
+     * 路由顺序：
+     * </p>
      * <ol>
-     *   <li>[Mesh] 查路由缓存（toolSessionId → SS 连接）→ 命中则直推</li>
-     *   <li>[Mesh] 查路由缓存（welinkSessionId → SS 连接）→ 命中则直推</li>
-     *   <li>[Mesh] 缓存未命中 → 广播到同 source_type 所有 Mesh SS 连接</li>
-     *   <li>[Legacy] Mesh 全部失败 → 回退到 Legacy 路径（owner relay 跨 GW 中继）</li>
+     * <li>[Mesh] 查路由缓存（toolSessionId -> SS 连接）-> 命中则直推</li>
+     * <li>[Mesh] 查路由缓存（welinkSessionId -> SS 连接）-> 命中则直推</li>
+     * <li>[Mesh] 缓存未命中 -> 广播到同 source_type 所有 Mesh SS 连接</li>
+     * <li>[Legacy] Mesh 全部失败 -> 回退到 Legacy 路径（owner relay 跨 GW 中继）</li>
      * </ol>
      *
      * @return true 如果消息被投递，false 如果无法投递
@@ -215,7 +219,7 @@ public class SkillRelayService {
         if (toolSessionId != null && !toolSessionId.isBlank()) {
             WebSocketSession target = routeCache.get(toolSessionId);
             if (target != null && target.isOpen()) {
-                log.debug("[Mesh] Route cache hit (toolSessionId): {} → linkId={}, type={}",
+                log.info("[Mesh] Route cache hit (toolSessionId): {} -> linkId={}, type={}",
                         toolSessionId, target.getId(), tracedMessage.getType());
                 if (sendToSession(target, tracedMessage)) {
                     // 顺带学习消息中可能携带的其他路由信息（如 session_created 同时带 toolSessionId + welinkSessionId）
@@ -229,18 +233,18 @@ public class SkillRelayService {
         if (welinkSessionId != null && !welinkSessionId.isBlank()) {
             WebSocketSession target = routeCache.get(WELINK_ROUTE_PREFIX + welinkSessionId);
             if (target != null && target.isOpen()) {
-                log.debug("[Mesh] Route cache hit (welinkSessionId): {} → linkId={}, type={}",
+                log.info("[Mesh] Route cache hit (welinkSessionId): {} -> linkId={}, type={}",
                         welinkSessionId, target.getId(), tracedMessage.getType());
                 if (sendToSession(target, tracedMessage)) {
                     // 关键：session_created 通过 welinkSessionId 缓存命中，此时消息同时携带 toolSessionId
-                    // 学习 toolSessionId → SS 连接映射，后续 Agent 的 tool_event 可直接命中
+                    // 学习 toolSessionId -> SS 连接映射，后续 Agent 的 tool_event 可直接命中
                     learnRouteFromUpstream(toolSessionId, welinkSessionId, target);
                     return true;
                 }
             }
         }
 
-        // 3. 缓存未命中 → 广播到 Mesh 连接池
+        // 3. 缓存未命中 -> 广播到 Mesh 连接池
         String sourceType = resolveSourceType(tracedMessage);
         if (sourceType == null) {
             log.debug("[Mesh] Cannot resolve source_type, skipping mesh broadcast: type={}", tracedMessage.getType());
@@ -281,7 +285,7 @@ public class SkillRelayService {
             }
         }
 
-        log.debug("Broadcast to source_type={}: sent to {}/{} instances, msgType={}",
+        log.info("Broadcast to source_type={}: sent to {}/{} instances, msgType={}",
                 sourceType, sent, pool.size(), message.getType());
         return sent > 0;
     }
@@ -300,16 +304,21 @@ public class SkillRelayService {
 
         GatewayMessage tracedMessage = message.ensureTraceId();
 
+        log.info("[ENTRY] SkillRelayService.handleInvokeFromSkill: ak={}, action={}, linkId={}",
+                tracedMessage.getAk(), tracedMessage.getAction(), session.getId());
+
         // 验证 source
         String boundSource = resolveBoundSource(session);
         String messageSource = tracedMessage.getSource();
         if (messageSource == null || messageSource.isBlank()) {
-            log.warn("Rejected invoke: missing source, linkId={}", session.getId());
+            log.warn("[SKIP] SkillRelayService.handleInvokeFromSkill: reason=missing_source, linkId={}",
+                    session.getId());
             sendProtocolError(session, ERROR_SOURCE_NOT_ALLOWED);
             return;
         }
         if (boundSource == null || !boundSource.equals(messageSource)) {
-            log.warn("Rejected invoke: source mismatch, bound={}, message={}, linkId={}",
+            log.warn(
+                    "[SKIP] SkillRelayService.handleInvokeFromSkill: reason=source_mismatch, bound={}, message={}, linkId={}",
                     boundSource, messageSource, session.getId());
             sendProtocolError(session, ERROR_SOURCE_MISMATCH);
             return;
@@ -317,31 +326,33 @@ public class SkillRelayService {
 
         // 验证 ak
         if (tracedMessage.getAk() == null || tracedMessage.getAk().isBlank()) {
-            log.warn("Rejected invoke: missing ak, linkId={}", session.getId());
+            log.warn("[SKIP] SkillRelayService.handleInvokeFromSkill: reason=missing_ak, linkId={}",
+                    session.getId());
             return;
         }
 
         // 验证 userId
         String expectedUserId = redisMessageBroker.getAgentUser(tracedMessage.getAk());
         if (tracedMessage.getUserId() == null || tracedMessage.getUserId().isBlank()) {
-            log.warn("Rejected invoke: missing userId, linkId={}, ak={}",
+            log.warn("[SKIP] SkillRelayService.handleInvokeFromSkill: reason=missing_userId, linkId={}, ak={}",
                     session.getId(), tracedMessage.getAk());
             return;
         }
         if (expectedUserId == null || !tracedMessage.getUserId().equals(expectedUserId)) {
-            log.warn("Rejected invoke: userId mismatch, expected={}, actual={}, ak={}",
+            log.warn(
+                    "[SKIP] SkillRelayService.handleInvokeFromSkill: reason=userId_mismatch, expected={}, actual={}, ak={}",
                     expectedUserId, tracedMessage.getUserId(), tracedMessage.getAk());
             return;
         }
 
-        // 路由学习：从 invoke 中提取 toolSessionId/welinkSessionId → SS 连接
+        // 路由学习：从 invoke 中提取 toolSessionId/welinkSessionId -> SS 连接
         learnRouteFromInvoke(tracedMessage, session);
 
         // 发布到 Agent（通过 Redis pub/sub agent:{ak}）
         redisMessageBroker.publishToAgent(tracedMessage.getAk(), tracedMessage.withoutRoutingContext());
 
-        log.debug("Forwarded invoke to agent: ak={}, action={}, source={}, gwInstanceId={}",
-                tracedMessage.getAk(), tracedMessage.getAction(), messageSource, gatewayInstanceId);
+        log.info("[EXIT->AGENT] Forwarded invoke to agent: action={}, source={}",
+                tracedMessage.getAction(), messageSource);
     }
 
     /**
@@ -362,14 +373,15 @@ public class SkillRelayService {
         }
         var toolSessionNode = message.getPayload().path("toolSessionId");
         return toolSessionNode.isMissingNode() || toolSessionNode.isNull()
-                ? null : toolSessionNode.asText(null);
+                ? null
+                : toolSessionNode.asText(null);
     }
 
     // ==================== 辅助方法 ====================
 
     /**
      * 解析消息的 source_type。
-     * 优先级: message.source → 路由缓存关联的 source → 单一活跃 source 推断
+     * 优先级: message.source -> 路由缓存关联的 source -> 单一活跃 source 推断
      */
     private String resolveSourceType(GatewayMessage message) {
         String source = message.getSource();
@@ -382,7 +394,8 @@ public class SkillRelayService {
             WebSocketSession cached = routeCache.get(toolSessionId);
             if (cached != null) {
                 String s = resolveBoundSource(cached);
-                if (s != null) return s;
+                if (s != null)
+                    return s;
             }
         }
         // 最终 fallback: 如果只有一种 source_type，直接用
@@ -414,7 +427,8 @@ public class SkillRelayService {
 
     private int getActiveConnectionCount(String sourceType) {
         Map<String, WebSocketSession> pool = sourceTypeSessions.get(sourceType);
-        if (pool == null) return 0;
+        if (pool == null)
+            return 0;
         return (int) pool.values().stream().filter(WebSocketSession::isOpen).count();
     }
 
@@ -424,9 +438,10 @@ public class SkillRelayService {
             synchronized (session) {
                 session.sendMessage(new TextMessage(json));
             }
+            log.info("[EXIT->SS] Sent to skill session: linkId={}, type={}", session.getId(), message.getType());
             return true;
         } catch (IOException e) {
-            log.error("Failed to send to source session: linkId={}, type={}",
+            log.error("[EXIT->SS] Failed to send to skill session: linkId={}, type={}",
                     session.getId(), message.getType(), e);
             return false;
         }

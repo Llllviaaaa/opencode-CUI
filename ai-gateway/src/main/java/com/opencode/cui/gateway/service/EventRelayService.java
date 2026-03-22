@@ -1,6 +1,7 @@
 package com.opencode.cui.gateway.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.gateway.logging.MdcHelper;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -75,7 +76,7 @@ public class EventRelayService {
         }
         redisMessageBroker.removeAgentUser(ak);
         redisMessageBroker.unsubscribeFromAgent(ak);
-        log.debug("Removed agent session: ak={}", ak);
+        log.info("Removed agent session: ak={}", ak);
     }
 
     public boolean hasAgentSession(String ak) {
@@ -89,32 +90,43 @@ public class EventRelayService {
      * Source 解析由 SkillRelayService 的路由缓存处理，不再查 Redis gw:agent:source:{ak}。
      */
     public void relayToSkillServer(String ak, GatewayMessage message) {
+        long start = System.nanoTime();
         GatewayMessage tracedMessage = message.ensureTraceId();
         String userId = redisMessageBroker.getAgentUser(ak);
         GatewayMessage forwarded = tracedMessage.withAk(ak)
                 .withUserId(userId);
 
-        log.debug("Routing upstream message: traceId={}, ak={}, userId={}, type={}, toolSessionId={}, welinkSessionId={}",
-                forwarded.getTraceId(), ak, userId, tracedMessage.getType(),
-                forwarded.getToolSessionId(), forwarded.getWelinkSessionId());
-
         try {
+            MdcHelper.fromGatewayMessage(forwarded);
+            MdcHelper.putScenario("relay-to-skill");
+
+            log.info(
+                    "[ENTRY] EventRelayService.relayToSkillServer: type={}, ak={}, toolSessionId={}, welinkSessionId={}",
+                    tracedMessage.getType(), ak, forwarded.getToolSessionId(), forwarded.getWelinkSessionId());
+
             boolean routed = skillRelayService.relayToSkill(forwarded);
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
             if (!routed) {
-                log.warn("Failed to route message to skill: ak={}, type={}, welinkSessionId={}",
-                        ak, message.getType(), forwarded.getWelinkSessionId());
+                log.warn(
+                        "[ERROR] EventRelayService.relayToSkillServer: reason=route_failed, type={}, welinkSessionId={}, durationMs={}",
+                        message.getType(), forwarded.getWelinkSessionId(), elapsedMs);
+            } else {
+                log.info("[EXIT] EventRelayService.relayToSkillServer: type={}, durationMs={}",
+                        message.getType(), elapsedMs);
             }
         } catch (Exception e) {
-            log.error("Failed to relay to skill: ak={}, type={}",
-                    ak, message.getType(), e);
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            log.error("[ERROR] EventRelayService.relayToSkillServer: type={}, durationMs={}",
+                    message.getType(), elapsedMs, e);
+        } finally {
+            MdcHelper.clearAll();
         }
     }
 
-
-
     public void relayToAgent(String ak, GatewayMessage message) {
+        log.info("[ENTRY] EventRelayService.relayToAgent: ak={}, type={}", ak, message.getType());
         redisMessageBroker.publishToAgent(ak, message.withoutRoutingContext());
-        log.debug("Published to agent channel: ak={}, type={}", ak, message.getType());
+        log.info("[EXIT->AGENT] EventRelayService.relayToAgent: ak={}, type={}", ak, message.getType());
     }
 
     private void sendToLocalAgent(String ak, GatewayMessage message) {
@@ -130,8 +142,8 @@ public class EventRelayService {
             synchronized (session) {
                 session.sendMessage(new TextMessage(json));
             }
-            log.debug("Sent to local agent: ak={}, type={}, seq={}",
-                    ak, message.getType(), message.getSequenceNumber());
+            log.info("[EXIT->AGENT] Sent to local agent: type={}, seq={}",
+                    message.getType(), message.getSequenceNumber());
         } catch (IOException e) {
             log.error("Failed to send to local agent: ak={}, type={}",
                     ak, message.getType(), e);
@@ -146,7 +158,7 @@ public class EventRelayService {
     public void sendStatusQuery(String ak) {
         GatewayMessage query = GatewayMessage.statusQuery();
         sendToLocalAgent(ak, query);
-        log.debug("Sent status_query to agent: ak={}", ak);
+        log.info("Sent status_query to agent: ak={}", ak);
     }
 
     /**

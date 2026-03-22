@@ -73,8 +73,9 @@ public class ImInboundController {
      */
     @PostMapping("/messages")
     public ResponseEntity<ApiResponse<Void>> receiveMessage(@RequestBody ImMessageRequest request) {
-        // ========== 第 1 步：记录入口日志 ==========
-        log.info("Received IM inbound message: domain={}, sessionType={}, sessionId={}, assistant={}, msgType={}",
+        long start = System.nanoTime();
+        log.info(
+                "[ENTRY] ImInboundController.receiveMessage: domain={}, sessionType={}, sessionId={}, assistant={}, msgType={}",
                 request != null ? request.businessDomain() : null,
                 request != null ? request.sessionType() : null,
                 request != null ? request.sessionId() : null,
@@ -84,7 +85,7 @@ public class ImInboundController {
         // ========== 第 2 步：参数校验 ==========
         String validationError = validate(request);
         if (validationError != null) {
-            log.warn("IM inbound validation failed: error={}, sessionId={}",
+            log.warn("[SKIP] ImInboundController.receiveMessage: reason=validation_failed, error={}, sessionId={}",
                     validationError, request != null ? request.sessionId() : null);
             return ResponseEntity.badRequest().body(ApiResponse.error(400, validationError));
         }
@@ -92,12 +93,13 @@ public class ImInboundController {
         // ========== 第 3 步：解析助手账号 → 获取 ak（应用密钥）和 ownerWelinkId（助手拥有者 ID）==========
         AssistantResolveResult resolveResult = resolverService.resolve(request.assistantAccount());
         if (resolveResult == null) {
-            log.warn("Failed to resolve assistant account: assistantAccount={}", request.assistantAccount());
+            log.warn("[SKIP] ImInboundController.receiveMessage: reason=resolve_failed, assistantAccount={}",
+                    request.assistantAccount());
             return ResponseEntity.ok(ApiResponse.error(404, "Invalid assistant account"));
         }
         String ak = resolveResult.ak();
         String ownerWelinkId = resolveResult.ownerWelinkId();
-        log.info("Resolved assistant account: assistantAccount={}, ak={}, ownerWelinkId={}",
+        log.info("ImInboundController.receiveMessage: resolved assistant={}, ak={}, ownerWelinkId={}",
                 request.assistantAccount(), ak, ownerWelinkId);
 
         // ========== 第 4 步：上下文注入（群聊场景下将 chatHistory 拼接到 prompt）==========
@@ -144,7 +146,7 @@ public class ImInboundController {
 
         // 单聊场景：在发送新消息前，先结束上一轮助手回复，保存用户消息，标记待处理状态
         if (session.isImDirectSession()) {
-            log.debug("Direct session: persisting user message turn, skillSessionId={}", session.getId());
+            log.info("Direct session: persisting user message turn, skillSessionId={}", session.getId());
             messagePersistenceService.finalizeActiveAssistantTurn(session.getId()); // 结束上一轮助手消息
             messageService.saveUserMessage(session.getId(), request.content()); // 保存本轮用户消息
             messagePersistenceService.markPendingUserMessage(session.getId()); // 标记用户消息待处理
@@ -161,8 +163,9 @@ public class ImInboundController {
                 GatewayActions.CHAT, // 动作类型：聊天
                 PayloadBuilder.buildPayload(objectMapper, payloadFields)));
 
-        log.info("Gateway invoke sent: skillSessionId={}, ak={}, action={}",
-                session.getId(), ak, GatewayActions.CHAT);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        log.info("[EXIT] ImInboundController.receiveMessage: skillSessionId={}, ak={}, action={}, durationMs={}",
+                session.getId(), ak, GatewayActions.CHAT, elapsedMs);
         return ResponseEntity.ok(ApiResponse.ok(null));
     }
 

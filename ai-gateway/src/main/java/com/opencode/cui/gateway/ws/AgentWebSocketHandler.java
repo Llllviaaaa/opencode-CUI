@@ -1,6 +1,7 @@
 package com.opencode.cui.gateway.ws;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.gateway.logging.MdcHelper;
 import com.opencode.cui.gateway.model.AgentConnection;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.AgentRegistryService;
@@ -115,11 +116,14 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
     @Override
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
             WebSocketHandler wsHandler, Map<String, Object> attributes) {
+        long start = System.nanoTime();
+        log.info("[ENTRY] AgentWSHandler.beforeHandshake: remoteAddr={}",
+                request.getRemoteAddress());
 
         // Extract auth from Sec-WebSocket-Protocol: "auth.{base64-json}"
         List<String> protocols = request.getHeaders().get("Sec-WebSocket-Protocol");
         if (protocols == null || protocols.isEmpty()) {
-            log.warn("WebSocket handshake rejected: no subprotocol provided");
+            log.warn("[AUTH] AgentWSHandler.beforeHandshake: reason=no_subprotocol");
             return false;
         }
 
@@ -139,7 +143,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
         }
 
         if (authPayload == null) {
-            log.warn("WebSocket handshake rejected: no auth subprotocol found");
+            log.warn("[AUTH] AgentWSHandler.beforeHandshake: reason=no_auth_subprotocol");
             return false;
         }
 
@@ -156,7 +160,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
             nonce = authNode.path("nonce").asText(null);
             sign = authNode.path("sign").asText(null);
         } catch (Exception e) {
-            log.warn("WebSocket handshake rejected: failed to decode auth subprotocol: {}",
+            log.warn("[AUTH] AgentWSHandler.beforeHandshake: reason=decode_failed, error={}",
                     e.getMessage());
             return false;
         }
@@ -164,7 +168,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
         // Verify AK/SK signature
         String userId = akSkAuthService.verify(ak, ts, nonce, sign);
         if (userId == null) {
-            log.warn("WebSocket handshake rejected: auth failed. ak={}", ak);
+            log.warn("[AUTH] AgentWSHandler.beforeHandshake: reason=auth_failed, ak={}", ak);
             return false;
         }
 
@@ -179,7 +183,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
         String selectedProtocol = AUTH_PROTOCOL_PREFIX + authPayload;
         response.getHeaders().set("Sec-WebSocket-Protocol", selectedProtocol);
 
-        log.info("WebSocket handshake accepted: ak={}, userId={}", ak, userId);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        log.info("[EXIT] AgentWSHandler.beforeHandshake: ak={}, userId={}, durationMs={}",
+                ak, userId, elapsedMs);
         return true;
     }
 
@@ -233,16 +239,25 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
         String userId = (String) session.getAttributes().get(ATTR_USER_ID);
         String akId = (String) session.getAttributes().get(ATTR_AK_ID);
 
-        switch (type) {
-            case GatewayMessage.Type.REGISTER -> handleRegister(session, message, userId, akId);
-            case GatewayMessage.Type.HEARTBEAT -> handleHeartbeat(session);
-            case GatewayMessage.Type.TOOL_EVENT, GatewayMessage.Type.TOOL_DONE,
-                    GatewayMessage.Type.TOOL_ERROR, GatewayMessage.Type.SESSION_CREATED,
-                    GatewayMessage.Type.PERMISSION_REQUEST ->
-                handleRelayToSkillServer(session, message);
-            case GatewayMessage.Type.STATUS_RESPONSE -> handleStatusResponse(session, message);
-            default -> log.warn("Unknown message type from PCAgent: type={}, sessionId={}",
-                    type, session.getId());
+        try {
+            MdcHelper.fromGatewayMessage(message);
+            MdcHelper.putAk(akId);
+            MdcHelper.putUserId(userId);
+            MdcHelper.putScenario("ws-agent-" + type);
+
+            switch (type) {
+                case GatewayMessage.Type.REGISTER -> handleRegister(session, message, userId, akId);
+                case GatewayMessage.Type.HEARTBEAT -> handleHeartbeat(session);
+                case GatewayMessage.Type.TOOL_EVENT, GatewayMessage.Type.TOOL_DONE,
+                        GatewayMessage.Type.TOOL_ERROR, GatewayMessage.Type.SESSION_CREATED,
+                        GatewayMessage.Type.PERMISSION_REQUEST ->
+                    handleRelayToSkillServer(session, message);
+                case GatewayMessage.Type.STATUS_RESPONSE -> handleStatusResponse(session, message);
+                default -> log.warn("Unknown message type from PCAgent: type={}, sessionId={}",
+                        type, session.getId());
+            }
+        } finally {
+            MdcHelper.clearAll();
         }
     }
 
@@ -286,11 +301,15 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
 
     private void handleRegister(WebSocketSession session, GatewayMessage message,
             String userId, String akId) {
+        long start = System.nanoTime();
         String deviceName = message.getDeviceName();
         String macAddress = message.getMacAddress();
         String os = message.getOs();
         String toolType = message.getToolType() != null ? message.getToolType() : "channel";
         String toolVersion = message.getToolVersion();
+
+        log.info("[ENTRY] AgentWSHandler.handleRegister: ak={}, toolType={}, os={}",
+                akId, toolType, os);
 
         // Step 1: Validate device binding (3rd party, fail-open)
         if (!deviceBindingService.validate(akId, macAddress, toolType)) {
@@ -340,8 +359,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
                 akId, toolType, toolVersion);
         eventRelayService.relayToSkillServer(akId, onlineMsg);
 
-        log.info("Agent registered via WebSocket: ak={}, agentId={}, device={}, mac={}, tool={}/{}",
-                akId, agentId, deviceName, macAddress, toolType, toolVersion);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        log.info(
+                "[EXIT] AgentWSHandler.handleRegister: ak={}, agentId={}, device={}, mac={}, tool={}/{}, durationMs={}",
+                akId, agentId, deviceName,
+                com.opencode.cui.gateway.logging.SensitiveDataMasker.maskMac(macAddress),
+                toolType, toolVersion, elapsedMs);
     }
 
     private void handleHeartbeat(WebSocketSession session) {
@@ -363,16 +386,22 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
     private void handleRelayToSkillServer(WebSocketSession session, GatewayMessage message) {
         String ak = sessionAkMap.get(session.getId());
         if (ak == null) {
-            log.warn("Relay attempt from unregistered session: sessionId={}, type={}",
+            log.warn(
+                    "[SKIP] AgentWSHandler.handleRelayToSkillServer: reason=unregistered_session, sessionId={}, type={}",
                     session.getId(), message.getType());
             return;
         }
 
-        // Trace: log sessionId from PCAgent message for upstream debugging
-        log.debug("PCAgent -> Skill relay: ak={}, type={}, welinkSessionId={}, toolSessionId={}",
-                ak, message.getType(), message.getWelinkSessionId(), message.getToolSessionId());
+        long start = System.nanoTime();
+        log.info(
+                "[ENTRY] AgentWSHandler.handleRelayToSkillServer: type={}, ak={}, welinkSessionId={}, toolSessionId={}",
+                message.getType(), ak, message.getWelinkSessionId(), message.getToolSessionId());
 
         eventRelayService.relayToSkillServer(ak, message);
+
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        log.info("[EXIT] AgentWSHandler.handleRelayToSkillServer: type={}, ak={}, durationMs={}",
+                message.getType(), ak, elapsedMs);
     }
 
     private void handleStatusResponse(WebSocketSession session, GatewayMessage message) {

@@ -132,9 +132,10 @@ public class AgentController {
                     .body(ApiResponse.error(400, "No active WebSocket session for agent"));
         }
 
+        log.info("[ENTRY] REST invoke to agent: ak={}, action={}", ak, message.getAction());
         eventRelayService.relayToAgent(ak, message.withAk(ak));
 
-        log.info("REST invoke to agent: ak={}, action={}", ak, message.getAction());
+        log.info("[EXIT] REST invoke to agent: ak={}, action={}", ak, message.getAction());
         return ResponseEntity.ok(ApiResponse.ok(new InvokeResult(true, "Command sent to agent")));
     }
 

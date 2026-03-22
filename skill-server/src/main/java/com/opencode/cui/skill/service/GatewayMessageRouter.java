@@ -97,12 +97,12 @@ public class GatewayMessageRouter {
         // v3: 广播降级时的 ownership 检查
         // 如果 sessionRouteService 已注入且 sessionId 已解析，检查该会话是否属于本实例
         if (sessionId != null && sessionRouteService != null && !sessionRouteService.isMySession(sessionId)) {
-            log.debug("Ignoring broadcast message: sessionId={} not owned by this instance, type={}",
+            log.debug("[SKIP] GatewayMessageRouter.route: reason=not_my_session, sessionId={}, type={}",
                     sessionId, type);
             return;
         }
 
-        log.debug("Gateway message dispatch: type={}, sessionId={}, ak={}, userId={}",
+        log.info("[ENTRY] GatewayMessageRouter.route: type={}, sessionId={}, ak={}, userId={}",
                 type, sessionId, ak, userId);
 
         switch (type) {
@@ -113,8 +113,10 @@ public class GatewayMessageRouter {
             case "agent_offline" -> handleAgentOffline(ak, userId);
             case "session_created" -> handleSessionCreated(ak, userId, node);
             case "permission_request" -> handlePermissionRequest(sessionId, userId, node);
-            default -> log.warn("Unknown gateway message type: {}", type);
+            default -> log.warn("[SKIP] GatewayMessageRouter.route: reason=unknown_type, type={}", type);
         }
+
+        log.info("[EXIT] GatewayMessageRouter.route: type={}, sessionId={}", type, sessionId);
     }
 
     private void handleToolEvent(String sessionId, String userId, JsonNode node) {
@@ -124,6 +126,7 @@ public class GatewayMessageRouter {
             return;
         }
 
+        log.info("handleToolEvent: sessionId={}", sessionId);
         activateIdleSession(sessionId, userId);
         SkillSession session = resolveSession(sessionId);
         StreamMessage msg = translateEvent(node, sessionId);
@@ -274,6 +277,7 @@ public class GatewayMessageRouter {
             return;
         }
 
+        log.info("handleToolDone: sessionId={}", sessionId);
         completedSessions.put(sessionId, Instant.now());
 
         StreamMessage msg = StreamMessage.sessionStatus("idle");
@@ -297,6 +301,7 @@ public class GatewayMessageRouter {
     private void handleToolError(String sessionId, String userId, JsonNode node) {
         String error = node.path("error").asText("Unknown error");
         String reason = node.path("reason").asText("");
+        log.info("handleToolError: sessionId={}, error={}, reason={}", sessionId, error, reason);
 
         if (sessionId == null) {
             log.error("Tool error without session: {}", error);
@@ -381,6 +386,7 @@ public class GatewayMessageRouter {
     private void handleSessionCreated(String ak, String userId, JsonNode node) {
         String toolSessionId = node.path("toolSessionId").asText(null);
         String sessionId = node.path("welinkSessionId").asText(null);
+        log.info("handleSessionCreated: sessionId={}, toolSessionId={}, ak={}", sessionId, toolSessionId, ak);
 
         if (sessionId == null || toolSessionId == null) {
             log.warn("session_created missing fields: sessionId={}, toolSessionId={}, ak={}, raw={}",
@@ -430,6 +436,7 @@ public class GatewayMessageRouter {
             log.warn("permission_request missing sessionId");
             return;
         }
+        log.info("handlePermissionRequest: sessionId={}", sessionId);
 
         StreamMessage msg = translator.translatePermissionFromGateway(node);
         SkillSession session = resolveSession(sessionId);
@@ -468,6 +475,8 @@ public class GatewayMessageRouter {
             envelope.put("userId", userId);
             envelope.set("message", objectMapper.valueToTree(msg));
             redisMessageBroker.publishToUser(userId, objectMapper.writeValueAsString(envelope));
+            log.info("[EXIT->FE] Broadcast StreamMessage: sessionId={}, type={}, userId={}",
+                    sessionId, msg.getType(), userId);
         } catch (Exception e) {
             log.error("Failed to broadcast StreamMessage to session {}: type={}, error={}",
                     sessionId, msg.getType(), e.getMessage());

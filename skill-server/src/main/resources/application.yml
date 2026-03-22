@@ -53,7 +53,7 @@ skill:
   gateway:
     ws-url: ${SKILL_GATEWAY_WS_URL:ws://localhost:8081/ws/skill}
     # Internal token for Skill Server -> AI-Gateway authentication
-    internal-token: ${SKILL_SERVER_INTERNAL_TOKEN:sk-intl-9f2a7d3e4b1c}
+    internal-token: ${SKILL_SERVER_INTERNAL_TOKEN:changeme}
     reconnect-initial-delay-ms: 1000
     reconnect-max-delay-ms: 30000
   im:
@@ -88,15 +88,6 @@ logging:
   file:
     name: ${opencode.logging.file}
   level:
-    com.opencode.cui.skill: DEBUG
+    com.opencode.cui.skill: INFO
     org.springframework.web.socket: INFO
-  pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
-    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
-  logback:
-    rollingpolicy:
-      file-name-pattern: ${SKILL_SERVER_LOG_ARCHIVE_PATTERN:${opencode.logging.archive-dir}/skill-server.%d{yyyy-MM-dd}.%i.log.gz}
-      max-file-size: ${SKILL_SERVER_LOG_MAX_FILE_SIZE:20MB}
-      max-history: ${SKILL_SERVER_LOG_MAX_HISTORY:30}
-      total-size-cap: ${SKILL_SERVER_LOG_TOTAL_SIZE_CAP:2GB}
-      clean-history-on-start: ${SKILL_SERVER_LOG_CLEAN_HISTORY_ON_START:false}
+  # pattern 和 rollingpolicy 已迁移到 logback-spring.xml

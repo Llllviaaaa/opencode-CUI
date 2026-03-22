@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.opencode.cui.skill.logging.MdcHelper;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
@@ -80,6 +81,9 @@ public class GatewayRelayService {
     public void sendInvokeToGateway(InvokeCommand command) {
         String action = command.action();
 
+        log.info("[ENTRY] GatewayRelayService.sendInvokeToGateway: ak={}, userId={}, sessionId={}, action={}",
+                command.ak(), command.userId(), command.sessionId(), action);
+
         // 发送新消息时清除已完成标记，防止新一轮对话的 tool_event 被误拦截
         if (GatewayActions.CHAT.equals(action)) {
             messageRouter.clearCompletionMark(command.sessionId());
@@ -92,8 +96,8 @@ public class GatewayRelayService {
 
         GatewayRelayTarget relayTarget = gatewayRelayTarget;
         if (relayTarget == null || !relayTarget.hasActiveConnection()) {
-            log.warn("Gateway WS connection not available, invoke dropped: ak={}, userId={}, action={}",
-                    command.ak(), command.userId(), action);
+            log.warn("[SKIP] GatewayRelayService.sendInvokeToGateway: reason=no_connection, ak={}, action={}",
+                    command.ak(), action);
             return;
         }
 
@@ -103,24 +107,25 @@ public class GatewayRelayService {
         if (gwInstanceId != null && !gwInstanceId.isBlank()) {
             sent = relayTarget.sendToGateway(gwInstanceId, messageText);
             if (!sent) {
-                // 精确投递失败 → fallback 广播
-                log.warn("Precise delivery failed, fallback to broadcast: ak={}, gwInstanceId={}, action={}",
-                        command.ak(), gwInstanceId, action);
+                // 精确投递失败 -> fallback 广播
+                log.warn(
+                        "GatewayRelayService.sendInvokeToGateway: precise delivery failed, fallback to broadcast, ak={}, gwInstanceId={}",
+                        command.ak(), gwInstanceId);
                 sent = relayTarget.broadcastToAllGateways(messageText);
             }
         } else {
-            // conn:ak 未注册（Agent 可能不在线）→ 广播到所有 GW
+            // conn:ak 未注册（Agent 可能不在线）-> 广播到所有 GW
             sent = relayTarget.broadcastToAllGateways(messageText);
         }
 
         if (!sent) {
-            log.warn("Failed to send invoke to any Gateway: ak={}, userId={}, action={}",
-                    command.ak(), command.userId(), action);
+            log.warn("[ERROR] GatewayRelayService.sendInvokeToGateway: reason=send_failed, ak={}, action={}",
+                    command.ak(), action);
             return;
         }
 
-        log.debug("Invoke sent via Gateway WS: ak={}, userId={}, action={}, gwInstanceId={}",
-                command.ak(), command.userId(), action, gwInstanceId);
+        log.info("[EXIT->GW] GatewayRelayService.sendInvokeToGateway: action={}, ak={}, gwInstanceId={}",
+                action, command.ak(), gwInstanceId);
     }
 
     /**
@@ -142,6 +147,10 @@ public class GatewayRelayService {
             message.put("welinkSessionId", command.sessionId());
         }
         message.put("action", command.action());
+
+        // 注入 traceId：从 MDC 获取或自动生成，确保跨服务链路可追踪
+        String traceId = MdcHelper.ensureTraceId();
+        message.put("traceId", traceId);
 
         try {
             if (command.payload() != null) {
@@ -168,24 +177,41 @@ public class GatewayRelayService {
      * 解析 JSON 后委派给 GatewayMessageRouter 进行路由分发。
      */
     public void handleGatewayMessage(String rawMessage) {
-        log.debug("Received gateway message: length={}", rawMessage != null ? rawMessage.length() : 0);
+        long start = System.nanoTime();
+        log.info("[ENTRY] GatewayRelayService.handleGatewayMessage: length={}",
+                rawMessage != null ? rawMessage.length() : 0);
         JsonNode node;
         try {
             node = objectMapper.readTree(rawMessage);
         } catch (JsonProcessingException e) {
-            log.error("Failed to parse gateway message: {}", rawMessage, e);
+            log.error("[ERROR] GatewayRelayService.handleGatewayMessage: reason=parse_failed, length={}",
+                    rawMessage != null ? rawMessage.length() : 0, e);
             return;
         }
 
-        String type = node.path("type").asText("");
-        String ak = node.path("ak").asText(null);
-        String userId = node.path("userId").asText(null);
-        if (ak == null || ak.isBlank()) {
-            ak = node.path("agentId").asText(null);
-        }
-        log.info("Gateway message received: type={}, ak={}, userId={}", type, ak, userId);
+        try {
+            // 从 Gateway 消息提取关联字段到 MDC，实现跨服务链路追踪
+            MdcHelper.fromJsonNode(node);
+            MdcHelper.putScenario("ws-gateway-" + node.path("type").asText("unknown"));
 
-        messageRouter.route(type, ak, userId, node);
+            String type = node.path("type").asText("");
+            String ak = node.path("ak").asText(null);
+            String userId = node.path("userId").asText(null);
+            if (ak == null || ak.isBlank()) {
+                ak = node.path("agentId").asText(null);
+                MdcHelper.putAk(ak); // 补充 fallback 的 ak 到 MDC
+            }
+            log.info("GatewayRelayService.handleGatewayMessage: dispatching type={}, ak={}, userId={}",
+                    type, ak, userId);
+
+            messageRouter.route(type, ak, userId, node);
+
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            log.info("[EXIT] GatewayRelayService.handleGatewayMessage: type={}, ak={}, durationMs={}",
+                    type, ak, elapsedMs);
+        } finally {
+            MdcHelper.clearAll();
+        }
     }
 
     // ==================== 公共委派方法 ====================

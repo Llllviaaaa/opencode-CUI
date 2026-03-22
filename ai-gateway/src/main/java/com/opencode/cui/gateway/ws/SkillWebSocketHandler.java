@@ -1,6 +1,7 @@
 package com.opencode.cui.gateway.ws;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.gateway.logging.MdcHelper;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.SkillRelayService;
 import lombok.extern.slf4j.Slf4j;
@@ -79,13 +80,24 @@ public class SkillWebSocketHandler extends TextWebSocketHandler implements Hands
             return;
         }
 
-        if (!GatewayMessage.Type.INVOKE.equals(message.getType())) {
-            log.warn("Unsupported message type from skill internal link: sessionId={}, type={}",
-                    session.getId(), message.getType());
-            return;
-        }
+        try {
+            MdcHelper.fromGatewayMessage(message);
+            MdcHelper.putScenario("ws-skill-invoke");
 
-        skillRelayService.handleInvokeFromSkill(session, message);
+            if (!GatewayMessage.Type.INVOKE.equals(message.getType())) {
+                log.warn("Unsupported message type from skill internal link: sessionId={}, type={}",
+                        session.getId(), message.getType());
+                return;
+            }
+
+            log.info("[ENTRY] SkillWSHandler.handleTextMessage: sessionId={}, ak={}, action={}",
+                    session.getId(), message.getAk(), message.getAction());
+            skillRelayService.handleInvokeFromSkill(session, message);
+            log.info("[EXIT] SkillWSHandler.handleTextMessage: sessionId={}, ak={}",
+                    session.getId(), message.getAk());
+        } finally {
+            MdcHelper.clearAll();
+        }
     }
 
     @Override

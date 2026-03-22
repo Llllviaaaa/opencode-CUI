@@ -63,6 +63,7 @@ public class IdentityApiClient {
             throw new IdentityApiException("Identity API not configured");
         }
 
+        long start = System.nanoTime();
         try {
             String requestBody = objectMapper.writeValueAsString(Map.of(
                     "ak", ak,
@@ -80,9 +81,11 @@ public class IdentityApiClient {
 
             HttpResponse<String> response = httpClient.send(request,
                     HttpResponse.BodyHandlers.ofString());
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
             if (response.statusCode() != 200) {
-                log.warn("Identity API returned non-200: status={}, ak={}", response.statusCode(), ak);
+                log.warn("[EXT_CALL] IdentityAPI.check failed: status={}, ak={}, durationMs={}",
+                        response.statusCode(), ak, elapsedMs);
                 throw new IdentityApiException("HTTP " + response.statusCode());
             }
 
@@ -91,17 +94,21 @@ public class IdentityApiClient {
 
             if (data.path("checkResult").asBoolean(false)) {
                 String userId = data.path("userId").asText(null);
-                log.debug("Identity API check success: ak={}, userId={}", ak, userId);
+                log.info("[EXT_CALL] IdentityAPI.check success: ak={}, userId={}, durationMs={}",
+                        ak, userId, elapsedMs);
                 return userId;
             }
 
-            log.info("Identity API check rejected: ak={}, code={}", ak, root.path("code").asText());
+            log.info("[EXT_CALL] IdentityAPI.check rejected: ak={}, code={}, durationMs={}",
+                    ak, root.path("code").asText(), elapsedMs);
             return null;
 
         } catch (IdentityApiException e) {
             throw e;
         } catch (Exception e) {
-            log.warn("Identity API call failed: ak={}, error={}", ak, e.getMessage());
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            log.warn("[EXT_CALL] IdentityAPI.check error: ak={}, durationMs={}, error={}",
+                    ak, elapsedMs, e.getMessage());
             throw new IdentityApiException("API call failed: " + e.getMessage(), e);
         }
     }

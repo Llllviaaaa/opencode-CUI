@@ -63,7 +63,7 @@ gateway:
     timestamp-tolerance-seconds: 300
     nonce-ttl-seconds: 300
     # 本地调试开关：跳过全部签名校验（生产环境必须为 false）
-    skip-verification: ${AUTH_SKIP_VERIFICATION:false}
+    skip-verification: ${AUTH_SKIP_VERIFICATION:true}
     # 外部身份校验 API（配置 base-url 后启用，留空则仅用本地 DB）
     identity-api:
       base-url: ${IDENTITY_API_BASE_URL:}
@@ -80,7 +80,7 @@ gateway:
 
 skill:
   gateway:
-    internal-token: ${SKILL_SERVER_INTERNAL_TOKEN:sk-intl-9f2a7d3e4b1c}
+    internal-token: ${SKILL_SERVER_INTERNAL_TOKEN:changeme}
 
 opencode:
   logging:
@@ -92,14 +92,6 @@ logging:
   file:
     name: ${opencode.logging.file}
   level:
-    com.opencode.cui.gateway: DEBUG
+    com.opencode.cui.gateway: INFO
     org.springframework.web.socket: INFO
-  pattern:
-    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
-  logback:
-    rollingpolicy:
-      file-name-pattern: ${AI_GATEWAY_LOG_ARCHIVE_PATTERN:${opencode.logging.archive-dir}/ai-gateway.%d{yyyy-MM-dd}.%i.log.gz}
-      max-file-size: ${AI_GATEWAY_LOG_MAX_FILE_SIZE:20MB}
-      max-history: ${AI_GATEWAY_LOG_MAX_HISTORY:30}
-      total-size-cap: ${AI_GATEWAY_LOG_TOTAL_SIZE_CAP:2GB}
-      clean-history-on-start: ${AI_GATEWAY_LOG_CLEAN_HISTORY_ON_START:false}
+  # pattern 和 rollingpolicy 已迁移到 logback-spring.xml

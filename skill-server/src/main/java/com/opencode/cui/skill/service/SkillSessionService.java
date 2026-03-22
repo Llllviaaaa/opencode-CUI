@@ -159,7 +159,7 @@ public class SkillSessionService {
     public boolean activateSession(Long sessionId) {
         int updated = sessionRepository.activateSession(sessionId);
         if (updated > 0) {
-            log.info("Activated session: id={} (IDLE → ACTIVE)", sessionId);
+            log.info("Activated session: id={} (IDLE -> ACTIVE)", sessionId);
             return true;
         }
         return false;

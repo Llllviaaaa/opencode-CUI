@@ -93,7 +93,7 @@ public class RedisMessageBroker {
     private void publishMessage(String channel, String message) {
         try {
             redisTemplate.convertAndSend(channel, message);
-            log.debug("Published to Redis channel {}", channel);
+            log.info("Published to Redis channel {}", channel);
         } catch (Exception e) {
             log.error("Failed to publish to Redis channel {}: {}", channel, e.getMessage(), e);
         }
@@ -107,7 +107,7 @@ public class RedisMessageBroker {
                 String json = new String(message.getBody(), StandardCharsets.UTF_8);
                 handler.accept(json);
 
-                log.debug("Received from Redis channel {}", channel);
+                log.info("Received from Redis channel {}", channel);
             } catch (Exception e) {
                 log.error("Failed to process message from channel {}: {}",
                         channel, e.getMessage(), e);

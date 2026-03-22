@@ -5,6 +5,8 @@ import com.opencode.cui.gateway.ws.SkillWebSocketHandler;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
@@ -12,7 +14,7 @@ import org.springframework.web.socket.server.standard.ServletServerContainerFact
 
 @Configuration
 @EnableWebSocket
-public class GatewayConfig implements WebSocketConfigurer {
+public class GatewayConfig implements WebSocketConfigurer, WebMvcConfigurer {
 
     @Value("${gateway.websocket.max-text-message-buffer-size-bytes:1048576}")
     private int maxTextMessageBufferSizeBytes;
@@ -22,11 +24,20 @@ public class GatewayConfig implements WebSocketConfigurer {
 
     private final AgentWebSocketHandler agentWebSocketHandler;
     private final SkillWebSocketHandler skillWebSocketHandler;
+    private final MdcRequestInterceptor mdcRequestInterceptor;
 
     public GatewayConfig(AgentWebSocketHandler agentWebSocketHandler,
-            SkillWebSocketHandler skillWebSocketHandler) {
+            SkillWebSocketHandler skillWebSocketHandler,
+            MdcRequestInterceptor mdcRequestInterceptor) {
         this.agentWebSocketHandler = agentWebSocketHandler;
         this.skillWebSocketHandler = skillWebSocketHandler;
+        this.mdcRequestInterceptor = mdcRequestInterceptor;
+    }
+
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        registry.addInterceptor(mdcRequestInterceptor)
+                .addPathPatterns("/api/**");
     }
 
     @Override

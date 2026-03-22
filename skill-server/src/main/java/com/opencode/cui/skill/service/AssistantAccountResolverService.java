@@ -72,6 +72,7 @@ public class AssistantAccountResolverService {
             return new AssistantResolveResult(cachedAk, cachedOwner); // 缓存命中，直接返回
         }
 
+        long start = System.nanoTime();
         try {
             // 构建 GET 请求：resolveUrl?partnerAccount=xxx
             String requestUrl = UriComponentsBuilder.fromUriString(resolveUrl)
@@ -86,13 +87,20 @@ public class AssistantAccountResolverService {
             HttpEntity<Void> request = new HttpEntity<>(headers);
             ResponseEntity<JsonNode> response = restTemplate.exchange(
                     requestUrl, HttpMethod.GET, request, JsonNode.class);
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
             // 从响应体中提取 ak 和 ownerWelinkId
             AssistantResolveResult result = extractResult(response.getBody());
             if (result == null) {
-                log.warn("Failed to resolve assistant account: assistantAccount={}", assistantAccount);
+                log.warn("[EXT_CALL] AssistantResolve failed: assistantAccount={}, durationMs={}",
+                        assistantAccount, elapsedMs);
                 return null;
             }
+
+            log.info("[EXT_CALL] AssistantResolve success: assistantAccount={}, ak={}, durationMs={}",
+                    assistantAccount,
+                    com.opencode.cui.skill.logging.SensitiveDataMasker.maskToken(result.ak()),
+                    elapsedMs);
 
             // 缓存解析结果到 Redis
             Duration ttl = Duration.ofMinutes(cacheTtlMinutes);
@@ -100,8 +108,9 @@ public class AssistantAccountResolverService {
             redisTemplate.opsForValue().set(ownerCacheKey, result.ownerWelinkId(), ttl);
             return result;
         } catch (Exception e) {
-            log.warn("Resolve assistant account failed: assistantAccount={}, error={}",
-                    assistantAccount, e.getMessage());
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            log.warn("[EXT_CALL] AssistantResolve error: assistantAccount={}, durationMs={}, error={}",
+                    assistantAccount, elapsedMs, e.getMessage());
             return null;
         }
     }

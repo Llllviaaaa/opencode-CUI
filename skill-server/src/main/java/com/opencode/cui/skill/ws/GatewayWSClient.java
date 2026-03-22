@@ -33,16 +33,18 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <h3>v3 重构</h3>
  * <ul>
- *   <li>从连单个 GW 改为连接所有 GW 实例（全连接网格）</li>
- *   <li>通过 {@link GatewayDiscoveryService} 动态发现 GW 实例变化</li>
- *   <li>支持按 instanceId 精确发送和广播到所有 GW</li>
- *   <li>每个 GW 连接独立重连逻辑</li>
+ * <li>从连单个 GW 改为连接所有 GW 实例（全连接网格）</li>
+ * <li>通过 {@link GatewayDiscoveryService} 动态发现 GW 实例变化</li>
+ * <li>支持按 instanceId 精确发送和广播到所有 GW</li>
+ * <li>每个 GW 连接独立重连逻辑</li>
  * </ul>
  *
  * <h3>兼容旧版 Gateway</h3>
- * <p>通过 {@code skill.gateway.ws-url} 配置种子 URL，旧版 GW 不注册
+ * <p>
+ * 通过 {@code skill.gateway.ws-url} 配置种子 URL，旧版 GW 不注册
  * {@code gw:instance:*} key 时仍可通过种子 URL 直连。
- * 种子连接和 discovery 动态连接并存。</p>
+ * 种子连接和 discovery 动态连接并存。
+ * </p>
  */
 @Slf4j
 @Component
@@ -197,7 +199,7 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget,
     @Override
     public void onGatewayAdded(String gwInstanceId, String wsUrl) {
         if (gwConnections.containsKey(gwInstanceId)) {
-            log.debug("GW instance already connected: {}", gwInstanceId);
+            log.info("GW instance already connected: {}", gwInstanceId);
             return;
         }
 
@@ -209,13 +211,13 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget,
                 if (seedConn.client != null && seedConn.client.isOpen()) {
                     // seed 连接存活 → 仅重映射 key，不断开连接，避免 GW 侧路由缓存清除
                     gwConnections.put(gwInstanceId, seedConn);
-                    log.info("Promoted seed connection to discovery: seed={} → discovery={}, url={}",
+                    log.info("Promoted seed connection to discovery: seed={} -> discovery={}, url={}",
                             duplicateSeedId, gwInstanceId, wsUrl);
                     return;
                 }
-                // seed 连接已断开（如 SS 先于 GW 启动）→ 关闭死连接，用 discovery ID 新建
+                // seed 连接已断开（如 SS 先于 GW 启动）-> 关闭死连接，用 discovery ID 新建
                 closeQuietly(seedConn.client);
-                log.info("Seed connection dead, replacing with discovery: seed={} → discovery={}, url={}",
+                log.info("Seed connection dead, replacing with discovery: seed={} -> discovery={}, url={}",
                         duplicateSeedId, gwInstanceId, wsUrl);
                 connectToGateway(gwInstanceId, wsUrl);
                 return;
@@ -355,9 +357,12 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget,
     private boolean sendViaClient(WebSocketClient client, String message) {
         try {
             client.send(message);
+            log.info("[EXIT->GW] WS message sent: gwInstanceId={}, length={}",
+                    resolveCurrentGwId(client), message.length());
             return true;
         } catch (Exception e) {
-            log.error("Failed to send message via GW WS: {}", e.getMessage());
+            log.error("[EXIT->GW] Failed to send via GW WS: gwInstanceId={}, error={}",
+                    resolveCurrentGwId(client), e.getMessage());
             return false;
         }
     }

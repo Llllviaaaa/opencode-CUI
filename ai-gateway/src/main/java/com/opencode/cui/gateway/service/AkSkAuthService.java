@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.opencode.cui.gateway.model.AgentConnection;
+import com.opencode.cui.gateway.repository.AgentConnectionRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -18,10 +20,10 @@ import java.util.concurrent.TimeUnit;
  * AK/SK 四级认证服务。
  *
  * <ul>
- *   <li>L1: Caffeine 本地缓存命中 → 信任缓存的 userId（外部 API 首次验签后回填）</li>
- *   <li>L2: Redis 缓存命中 → 信任缓存，回填 L1</li>
- *   <li>L3: 外部身份 API 校验（服务端验签）→ 回填 L1+L2</li>
- *   <li>L4: 拒绝认证</li>
+ * <li>L1: Caffeine 本地缓存命中 → 信任缓存的 userId（外部 API 首次验签后回填）</li>
+ * <li>L2: Redis 缓存命中 → 信任缓存，回填 L1</li>
+ * <li>L3: 外部身份 API 校验（服务端验签）→ 回填 L1+L2</li>
+ * <li>L4: 拒绝认证</li>
  * </ul>
  *
  * 安全保证：
@@ -40,6 +42,7 @@ public class AkSkAuthService {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final IdentityApiClient identityApiClient;
+    private final AgentConnectionRepository agentConnectionRepository;
 
     /** L1 本地缓存: ak → IdentityCacheEntry */
     private final Cache<String, IdentityCacheEntry> l1Cache;
@@ -55,6 +58,7 @@ public class AkSkAuthService {
             StringRedisTemplate redisTemplate,
             ObjectMapper objectMapper,
             IdentityApiClient identityApiClient,
+            AgentConnectionRepository agentConnectionRepository,
             @Value("${gateway.auth.timestamp-tolerance-seconds:300}") long timestampToleranceSeconds,
             @Value("${gateway.auth.nonce-ttl-seconds:300}") long nonceTtlSeconds,
             @Value("${gateway.auth.identity-cache.l1-ttl-seconds:300}") long l1TtlSeconds,
@@ -64,6 +68,7 @@ public class AkSkAuthService {
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
         this.identityApiClient = identityApiClient;
+        this.agentConnectionRepository = agentConnectionRepository;
         this.timestampToleranceSeconds = timestampToleranceSeconds;
         this.nonceTtlSeconds = nonceTtlSeconds;
         this.l2TtlSeconds = l2TtlSeconds;
@@ -73,7 +78,8 @@ public class AkSkAuthService {
                 .expireAfterWrite(Duration.ofSeconds(l1TtlSeconds))
                 .build();
         if (skipVerification) {
-            log.warn("⚠ Auth verification DISABLED (gateway.auth.skip-verification=true). DO NOT use in production!");
+            log.warn(
+                    "[WARN] Auth verification DISABLED (gateway.auth.skip-verification=true). DO NOT use in production!");
         }
     }
 
@@ -92,10 +98,11 @@ public class AkSkAuthService {
             return null;
         }
 
-        // 本地调试模式：跳过全部校验，以 AK 作为 userId 直接放行
+        // 本地调试模式：跳过签名校验，从数据库查真实 userId
         if (skipVerification) {
-            log.info("Auth SKIPPED (debug mode). ak={}, userId={}", ak, ak);
-            return ak;
+            String resolvedUserId = resolveUserIdFromDb(ak);
+            log.info("Auth SKIPPED (debug mode). ak={}, userId={}", ak, resolvedUserId);
+            return resolvedUserId;
         }
 
         // 1. 时间窗口校验
@@ -122,14 +129,17 @@ public class AkSkAuthService {
         }
 
         // 3. 多级身份解析
+        long authStart = System.nanoTime();
         IdentityCacheEntry identity = resolveIdentity(ak, timestamp, nonce, signature);
+        long authElapsedMs = (System.nanoTime() - authStart) / 1_000_000;
         if (identity == null) {
-            log.warn("Auth failed: identity not resolved. ak={}", ak);
+            log.warn("Auth failed: identity not resolved. ak={}, durationMs={}", ak, authElapsedMs);
             redisTemplate.delete(nonceKey);
             return null;
         }
 
-        log.info("Auth success. ak={}, userId={}, level={}", ak, identity.userId(), identity.level());
+        log.info("Auth success. ak={}, userId={}, level={}, durationMs={}", ak, identity.userId(), identity.level(),
+                authElapsedMs);
         return identity.userId();
     }
 
@@ -210,6 +220,28 @@ public class AkSkAuthService {
         } catch (JsonProcessingException e) {
             log.debug("Failed to write L2 cache: ak={}, error={}", ak, e.getMessage());
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Debug 模式辅助
+    // -----------------------------------------------------------------------
+
+    /**
+     * Debug 模式下从数据库解析真实 userId。
+     * 查 agent_connection 表中该 ak 最近一条记录的 user_id。
+     * 如果找不到（首次连接），fallback 到 ak 本身。
+     */
+    private String resolveUserIdFromDb(String ak) {
+        try {
+            AgentConnection conn = agentConnectionRepository.findLatestByAkId(ak);
+            if (conn != null && conn.getUserId() != null && !conn.getUserId().isBlank()) {
+                return conn.getUserId();
+            }
+        } catch (Exception e) {
+            log.warn("Debug mode: failed to resolve userId from DB for ak={}, fallback to ak. error={}",
+                    ak, e.getMessage());
+        }
+        return ak;
     }
 
     // -----------------------------------------------------------------------

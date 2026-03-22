@@ -86,6 +86,10 @@ public class SkillMessageController {
             return ResponseEntity.ok(ApiResponse.error(400, "Invalid session ID"));
         }
 
+        log.info("[ENTRY] SkillMessageController.sendMessage: sessionId={}, contentLength={}", sessionId,
+                request.getContent() != null ? request.getContent().length() : 0);
+        long start = System.nanoTime();
+
         SkillSession session = accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
 
         if (session.getStatus() == SkillSession.Status.CLOSED) {
@@ -100,6 +104,9 @@ public class SkillMessageController {
         // Route to AI-Gateway
         routeToGateway(session, sessionId, numericSessionId, request);
 
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        log.info("[EXIT] SkillMessageController.sendMessage: sessionId={}, ak={}, durationMs={}", sessionId,
+                session.getAk(), elapsedMs);
         return ResponseEntity.ok(ApiResponse.ok(ProtocolMessageMapper.toProtocolMessage(
                 message, List.of(), objectMapper)));
     }
@@ -110,12 +117,14 @@ public class SkillMessageController {
     private void routeToGateway(SkillSession session, String sessionId,
             Long numericSessionId, SendMessageRequest request) {
         if (session.getAk() == null) {
-            log.warn("No agent associated with session {}, cannot invoke AI", sessionId);
+            log.warn("[SKIP] SkillMessageController.routeToGateway: reason=no_agent, sessionId={}", sessionId);
             return;
         }
 
         if (session.getToolSessionId() == null) {
-            log.info("Session {} has no toolSessionId, triggering create_session rebuild", sessionId);
+            log.info(
+                    "[SKIP] SkillMessageController.routeToGateway: reason=no_toolSessionId, sessionId={}, triggering rebuild",
+                    sessionId);
             gatewayRelayService.rebuildToolSession(sessionId, session, request.getContent());
             return;
         }
@@ -135,6 +144,8 @@ public class SkillMessageController {
                     "toolSessionId", session.getToolSessionId()));
         }
 
+        log.info("SkillMessageController.routeToGateway: sessionId={}, action={}, ak={}",
+                sessionId, action, session.getAk());
         gatewayRelayService.sendInvokeToGateway(
                 new InvokeCommand(session.getAk(), session.getUserId(), sessionId, action, payload));
     }
@@ -181,6 +192,10 @@ public class SkillMessageController {
             return ResponseEntity.ok(ApiResponse.error(400, "Invalid session ID"));
         }
 
+        long start = System.nanoTime();
+        log.info("[ENTRY] SkillMessageController.sendToIm: sessionId={}, contentLength={}",
+                sessionId, request.getContent().length());
+
         SkillSession session;
         session = accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
 
@@ -195,12 +210,14 @@ public class SkillMessageController {
 
         boolean success = imMessageService.sendMessage(chatId, request.getContent());
 
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
         if (success) {
-            log.info("Sent content to IM: sessionId={}, chatId={}, contentLength={}",
-                    sessionId, chatId, request.getContent().length());
+            log.info("[EXIT] SkillMessageController.sendToIm: sessionId={}, chatId={}, contentLength={}, durationMs={}",
+                    sessionId, chatId, request.getContent().length(), elapsedMs);
             return ResponseEntity.ok(ApiResponse.ok(Map.of("success", true)));
         } else {
-            log.error("Failed to send content to IM: sessionId={}, chatId={}", sessionId, chatId);
+            log.error("[ERROR] SkillMessageController.sendToIm: sessionId={}, chatId={}, durationMs={}",
+                    sessionId, chatId, elapsedMs);
             return ResponseEntity.ok(ApiResponse.error(500, "Failed to send message to IM"));
         }
     }
@@ -230,6 +247,10 @@ public class SkillMessageController {
         if (numericSessionId == null) {
             return ResponseEntity.ok(ApiResponse.error(400, "Invalid session ID"));
         }
+
+        long start = System.nanoTime();
+        log.info("[ENTRY] SkillMessageController.replyPermission: sessionId={}, permId={}, response={}",
+                sessionId, permId, request.getResponse());
 
         SkillSession session;
         session = accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
@@ -269,8 +290,9 @@ public class SkillMessageController {
                 .build();
         gatewayRelayService.publishProtocolMessage(sessionId, replyMessage);
 
-        log.info("Permission reply sent: sessionId={}, permId={}, response={}",
-                sessionId, permId, request.getResponse());
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        log.info("[EXIT] SkillMessageController.replyPermission: sessionId={}, permId={}, response={}, durationMs={}",
+                sessionId, permId, request.getResponse(), elapsedMs);
 
         return ResponseEntity.ok(ApiResponse.ok(Map.of(
                 "welinkSessionId", sessionId,

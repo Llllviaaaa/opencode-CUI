@@ -56,7 +56,7 @@ public class ContextInjectionService {
      */
     public String resolvePrompt(String sessionType, String currentMessage,
             List<ImMessageRequest.ChatMessage> chatHistory) {
-        log.debug("Resolving prompt: sessionType={}, historySize={}, messageLength={}",
+        log.info("Resolving prompt: sessionType={}, historySize={}, messageLength={}",
                 sessionType,
                 chatHistory != null ? chatHistory.size() : 0,
                 currentMessage != null ? currentMessage.length() : 0);
@@ -64,7 +64,7 @@ public class ContextInjectionService {
                 || !SkillSession.SESSION_TYPE_GROUP.equalsIgnoreCase(sessionType)
                 || currentMessage == null
                 || currentMessage.isBlank()) {
-            log.debug("Context injection skipped: injectionEnabled={}, sessionType={}",
+            log.info("Context injection skipped: injectionEnabled={}, sessionType={}",
                     injectionEnabled, sessionType);
             return currentMessage; // 不满足注入条件，原样返回
         }

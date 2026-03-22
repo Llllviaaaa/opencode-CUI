@@ -56,6 +56,7 @@ public class DeviceBindingService {
             return true;
         }
 
+        long start = System.nanoTime();
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
@@ -70,9 +71,11 @@ public class DeviceBindingService {
             @SuppressWarnings("unchecked")
             Map<String, Object> response = restTemplate.postForObject(
                     bindingServiceUrl, request, Map.class);
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
             if (response != null && Boolean.TRUE.equals(response.get("valid"))) {
-                log.debug("Device binding validated: ak={}, mac={}, toolType={}", ak, macAddress, toolType);
+                log.info("[EXT_CALL] DeviceBinding.validate success: ak={}, toolType={}, durationMs={}",
+                        ak, toolType, elapsedMs);
                 return true;
             }
 

@@ -66,32 +66,35 @@ public class ImOutboundService {
             headers.setBearerAuth(imToken);
         }
 
+        long start = System.nanoTime();
         try {
             ResponseEntity<JsonNode> response = restTemplate.postForEntity(
                     joinUrl(imApiUrl, path),
                     new HttpEntity<>(body, headers),
                     JsonNode.class);
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
             JsonNode respBody = response.getBody();
             if (!response.getStatusCode().is2xxSuccessful() || respBody == null) {
-                log.warn("IM outbound HTTP error: sessionId={}, status={}",
-                        sessionId, response.getStatusCode());
+                log.warn("[EXT_CALL] ImOutbound.send HTTP error: sessionId={}, status={}, durationMs={}",
+                        sessionId, response.getStatusCode(), elapsedMs);
                 return false;
             }
             JsonNode errorNode = respBody.path("error");
             if (!errorNode.isMissingNode() && errorNode.has("errorCode")) {
-                log.error("IM outbound business error: sessionType={}, sessionId={}, errorCode={}, errorMsg={}",
-                        sessionType,
+                log.error("[EXT_CALL] ImOutbound.send business error: sessionId={}, errorCode={}, errorMsg={}, durationMs={}",
                         sessionId,
                         errorNode.path("errorCode").asText(null),
-                        errorNode.path("errorMsg").asText(null));
+                        errorNode.path("errorMsg").asText(null),
+                        elapsedMs);
                 return false;
             }
-            log.info("IM outbound sent successfully: sessionType={}, sessionId={}, msgId={}",
-                    sessionType, sessionId, respBody.path("msgId").asText(null));
+            log.info("[EXT_CALL] ImOutbound.send success: sessionType={}, sessionId={}, msgId={}, durationMs={}",
+                    sessionType, sessionId, respBody.path("msgId").asText(null), elapsedMs);
             return true;
         } catch (Exception e) {
-            log.error("IM outbound request failed: sessionType={}, sessionId={}, error={}",
-                    sessionType, sessionId, e.getMessage());
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            log.error("[EXT_CALL] ImOutbound.send failed: sessionId={}, durationMs={}, error={}",
+                    sessionId, elapsedMs, e.getMessage());
             return false;
         }
     }
