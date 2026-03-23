@@ -183,7 +183,7 @@ DISCONNECTED → CONNECTING → CONNECTED → READY
 | `macAddress` | 网卡 MAC 地址 | 设备绑定验证用 |
 | `os` | `process.platform` | linux/darwin/win32 |
 | `toolType` | 配置 `gateway.channel` | 默认 "opencode" |
-| `toolVersion` | package.json version | 插件版本 |
+| `toolVersion` | `global.health().version` | 插件版本 |
 
 **Gateway 处理（handleRegister）：**
 
@@ -429,15 +429,15 @@ EventRelayService.recordStatusResponse(ak, opencodeOnline)
 GatewayConnection.onMessage(raw)
   ↓
 DownstreamMessageNormalizer.normalize(message)
-  ├── 验证 type == "invoke"
-  ├── 验证 action ∈ 支持的动作
+  ├── 验证 type ∈ {"invoke", "status_query"}
+  ├── 若 type == "invoke"：验证 action ∈ 支持动作
   └── 验证 payload 字段类型
   ↓
 BridgeRuntime.handleDownstreamMessage(normalized)
   ↓
 根据 action 分发:
 
-  action == "status_query":
+  message.type == "status_query":
     → StatusQueryAction.execute()
     → 发送 status_response
 
@@ -463,10 +463,10 @@ BridgeRuntime.handleDownstreamMessage(normalized)
 |--------|---------|---------|---------|
 | `chat` | `client.session.prompt({path:{id}, body:{parts:[{type:'text', text}]}})` | `tool_done` | `tool_error`（含 reason 推断） |
 | `create_session` | `client.session.create({body: payload})` | `session_created` | `tool_error` |
-| `close_session` | `client.session.delete({path:{id}})` | `tool_done` | `tool_error` |
-| `abort_session` | `client.session.abort({path:{id}})` | `tool_done` | `tool_error` |
-| `permission_reply` | `client.postSessionIdPermissionsPermissionId(...)` | `tool_done` | `tool_error` |
-| `question_reply` | 先 GET `/question` 查找 → 再 POST `/question/{id}/reply` | `tool_done` | `tool_error` |
+| `close_session` | `client.session.delete({path:{id}})` | 无立即上行消息（等待后续事件） | `tool_error` |
+| `abort_session` | `client.session.abort({path:{id}})` | 无立即上行消息（等待后续事件） | `tool_error` |
+| `permission_reply` | `client.postSessionIdPermissionsPermissionId(...)` | 无立即上行消息（等待后续事件） | `tool_error` |
+| `question_reply` | 先 GET `/question` 查找 → 再 POST `/question/{id}/reply` | 无立即上行消息（等待后续事件） | `tool_error` |
 
 ### 3.4 `status_query` — 健康检查
 

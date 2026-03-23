@@ -620,10 +620,10 @@ event = {
   properties: {
     sessionID: "...",
     questions: [{
-      requestID: "req-001",
+      id: "req-001",
       tool: { callID: "call-q1" },
       question: "你确定要删除这个文件吗？",
-      options: ["是", "否"],
+      options: [{ label: "是" }, { label: "否" }],
       header: "确认操作"
     }]
   }

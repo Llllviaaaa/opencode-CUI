@@ -546,7 +546,7 @@ POST /question/req-001/reply
 
 **关联消息：**
 - 前置：`question`（StreamMessage）→ 用户在 Miniapp 上回答
-- 后续：`tool_done`（成功）或 `tool_error`（失败）
+- 后续：失败时 `tool_error`；成功时默认无立即上行消息，后续可能出现 `session.idle` 兜底触发 `tool_done`
 
 ---
 
@@ -634,7 +634,7 @@ POST /session/opencode-session-uuid/permissions/perm_abc123
 
 **关联消息：**
 - 前置：`permission.ask`（StreamMessage）→ 用户在 Miniapp 操作
-- 后续：`tool_done`（成功）或 `tool_error`（失败）；OpenCode 随后产生 `permission.updated` 事件
+- 后续：失败时 `tool_error`；成功时默认无立即上行消息；OpenCode 随后产生 `permission.updated` 事件
 
 ---
 
@@ -708,7 +708,7 @@ DELETE /session/opencode-session-uuid
 
 **关联消息：**
 - 前置：用户 Miniapp 删除会话操作
-- 后续：`tool_done`（成功）或 `tool_error`（失败）
+- 后续：失败时 `tool_error`；成功时默认无立即上行消息（后续可能由 `session.idle` 兜底触发 `tool_done`）
 
 ---
 
@@ -781,13 +781,13 @@ POST /session/opencode-session-uuid/abort
 
 **关联消息：**
 - 前置：用户 Miniapp 停止操作
-- 后续：`tool_done`（成功）或 `tool_error`（失败）
+- 后续：失败时 `tool_error`；成功时默认无立即上行消息（后续可能由 `session.idle` 兜底触发 `tool_done`）
 
 ---
 
 ## A.6 tool_event
 
-**概述：** Plugin 将 OpenCode SDK 产生的原始事件封装后透传给 Gateway，再中继到 Skill Server。
+**概述：** Plugin 将 OpenCode SDK 事件封装后发送给 Gateway（默认透传；`message.updated` 走投影裁剪），再中继到 Skill Server。
 
 **产生源头：**
 - 组件：Message Bridge Plugin（BridgeRuntime）
@@ -2270,12 +2270,12 @@ finishReason → reason
 {
   "type": "question.asked",
   "properties": {
+    "id": "req-001",
     "sessionID": "opencode-session-uuid",
+    "tool": { "callID": "call-q1" },
     "questions": [{
-      "requestID": "req-001",
-      "tool": { "callID": "call-q1" },
       "question": "你确定要删除这个文件吗？",
-      "options": ["是", "否"],
+      "options": [{ "label": "是" }, { "label": "否" }],
       "header": "确认操作"
     }]
   }
