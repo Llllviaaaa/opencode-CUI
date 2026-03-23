@@ -95,6 +95,8 @@ public class EventRelayService {
         GatewayMessage forwarded = tracedMessage.withAk(ak)
                 .withUserId(userId);
 
+        // 保存调用方的 MDC 上下文，方法结束后恢复（避免清除调用方已设置的 traceId/ak）
+        var previousMdc = MdcHelper.snapshot();
         try {
             MdcHelper.fromGatewayMessage(forwarded);
             MdcHelper.putScenario("relay-to-skill");
@@ -118,7 +120,7 @@ public class EventRelayService {
             log.error("[ERROR] EventRelayService.relayToSkillServer: type={}, durationMs={}",
                     message.getType(), elapsedMs, e);
         } finally {
-            MdcHelper.clearAll();
+            MdcHelper.restore(previousMdc);
         }
     }
 
