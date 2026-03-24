@@ -23,6 +23,8 @@ Message Bridge Plugin 通过 OpenCode SDK 与本地运行的 OpenCode CLI 交互
 
 ## 一、OpenCode SDK 事件契约（Plugin 接收）
 
+**参考基线：** `yuzhangCZ/opencode@learn-opencode(2af81fe84b50712018011efba74632ace3fb90fc)` `docs/api/sse/*`（仅作字段说明参考）
+
 ### 1.1 支持事件矩阵（实现基线）
 
 Plugin 通过 allowlist 精确匹配，仅接收并转发以下 11 种事件：
@@ -1480,25 +1482,3 @@ healthy === true → { opencodeOnline: true }
 | `action.{name}.started` | info | Action 开始执行 |
 | `action.{name}.completed` | info | Action 执行成功 |
 | `action.{name}.exception` | error | Action 执行异常 |
-
----
-
-## 八、实现对齐矩阵（基线提交）
-
-| 文档修订点 | 代码锚点（`main@f38ab206...`） |
-|---|---|
-| `tool_done` 仅 chat 成功/idle 兜底 | `plugins/message-bridge/src/runtime/compat/ToolDoneCompat.ts:40` |
-| invoke 成功后是否发 `tool_done` 由 decision 决定 | `plugins/message-bridge/src/runtime/BridgeRuntime.ts:519` |
-| 支持上游事件类型清单（11 类） | `plugins/message-bridge/src/contracts/upstream-events.ts:17` |
-| 上游事件字段提取规则（toolSessionId/extra） | `plugins/message-bridge/src/protocol/upstream/UpstreamEventExtractor.ts:149` |
-| `message.updated` 走上游投影 | `plugins/message-bridge/src/runtime/BridgeRuntime.ts:274` |
-| 仅 `message.updated` 进入投影，其他事件 raw 透传 | `plugins/message-bridge/src/transport/upstream/DefaultUpstreamTransportProjector.ts:6` |
-| `message.updated` 投影实现 | `plugins/message-bridge/src/transport/upstream/MessageUpdatedProjector.ts:45` |
-| `create_session` payload 为 `{ title?: string }` | `plugins/message-bridge/src/contracts/downstream-messages.ts:22` |
-| Question 请求 ID 从 `id` 读取 | `plugins/message-bridge/src/action/QuestionReplyAction.ts:65` |
-| register `toolVersion` 来源（health.version） | `plugins/message-bridge/src/runtime/Startup.ts:72` |
-| register 消息装载 `toolVersion` | `plugins/message-bridge/src/runtime/BridgeRuntime.ts:168` |
-| `status_query` 为独立消息类型 | `plugins/message-bridge/src/contracts/downstream-messages.ts:1` |
-| `status_query -> status_response` 处理路径 | `plugins/message-bridge/src/runtime/BridgeRuntime.ts:372` |
-| 环境变量映射权威实现 | `plugins/message-bridge/src/config/ConfigResolver.ts:131` |
-| 日志级别（allowlist/forwarding/tool_error） | `plugins/message-bridge/src/runtime/BridgeRuntime.ts:266` |
