@@ -100,7 +100,7 @@ OpenCode SDK                    Plugin                Gateway              Skill
 
 question.asked                  tool_event             tool_event           question                Part(question)
   questions[0]:                                                              toolName = "question"   question = "确认？"
-    requestID: "req-001"                                                     toolCallId              options = [...]
+    id: "req-001"                                                            toolCallId              options = [...]
     tool.callID: "call-q1"                                                   status = "running"      answered = false
     question: "确认？"                                                        questionInfo = {
     options: ["是", "否"]                                                       header, question,
@@ -116,10 +116,10 @@ SkillServer: invoke(question_reply, {answer:"是", toolCallId:"call-q1", toolSes
 Gateway → Plugin: invoke(question_reply)
   ↓
 Plugin: QuestionReplyAction
-  GET /question → 查找 req-001
-  POST /question/req-001/reply {answers:[["是"]]}
+  GET /question → 按 id 查找 req-001
+  POST /question/{requestID}/reply {answers:[["是"]]}
   ↓
-Plugin → Gateway: tool_done
+Plugin: question_reply 成功完成（不发送 tool_done）
 
 message.part.updated            tool_event             tool_event           question(completed)     Part(question)
   part:                                                                      status = "completed"    answered = true
@@ -153,7 +153,7 @@ Gateway → Plugin: invoke(permission_reply)
 Plugin: PermissionReplyAction
   POST /session/{id}/permissions/{permId} {response:"once"}
   ↓
-Plugin → Gateway: tool_done
+Plugin: permission_reply 成功完成（不发送 tool_done）
 
 permission.updated              tool_event             tool_event           permission.reply        Part(permission)
   status: "granted"                                                          response = "once"       permResolved = true
@@ -355,7 +355,7 @@ Plugin:                 ChatAction → SDK prompt()
 | 片段 ID | part.id / partID | — | — | partId | partId |
 | 工具调用 ID | callID / tool.callID | toolCallId | — | toolCallId | toolCallId |
 | 权限 ID | permissionID | permissionId | — | permissionId | permissionId |
-| 问题请求 ID | requestID | requestId | — | — | — |
+| 问题请求 ID | id | requestId | — | — | — |
 
 ### 3.3 事件/消息类型
 

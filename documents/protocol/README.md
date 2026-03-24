@@ -11,7 +11,7 @@ OpenCode-CUI 全链路协议报文文档，按层级组织。
 | [03-gateway-plugin.md](./03-gateway-plugin.md) | AI Gateway ↔ Message Bridge Plugin | AK/SK 签名认证、GatewayMessage 14 种类型完整字段表、Agent 注册生命周期、多实例 Rendezvous Hash 路由、Redis 频道与 Key 设计 |
 | [04-plugin-opencode.md](./04-plugin-opencode.md) | Plugin ↔ OpenCode SDK | OpenCode 11 种 SDK 事件原始结构、UpstreamEventExtractor 提取规则、7 种 Action 的 SDK API 调用、ToolDoneCompat 状态机、配置体系 |
 | [05-opencode-to-custom-protocol-mapping.md](./05-opencode-to-custom-protocol-mapping.md) | 全链路映射 | OpenCode 事件→自定义协议的四层转换映射、字段名称对应表、特殊时序处理（用户消息、tool_done、completionCache）、协议封装/解封装 |
-| [06-end-to-end-flows.md](./06-end-to-end-flows.md) | 全链路流程汇总 | 14 个完整业务场景的端到端流程：Agent 注册、创建会话、消息收发（文本/思考/工具/步骤）、交互提问、权限授权、tool_done、IM 入站/出站、Session 重建、心跳超时、关闭/中止会话、多实例路由与推送、错误处理 |
+| [06-end-to-end-flows.md](./06-end-to-end-flows.md) | 全链路流程汇总 | 15 个完整业务场景的端到端流程：Agent 注册、创建会话、消息收发（文本/思考/工具/步骤）、交互提问、权限授权、tool_done、IM 入站/出站、Session 重建、心跳超时、关闭/中止会话、多实例路由与推送、错误处理、status_query 健康查询 |
 | [07-message-type-lifecycle.md](./07-message-type-lifecycle.md) | 协议报文生命周期 | 按消息类型分类的全流程详解：GatewayMessage 14 种类型（invoke 分 6 个 action）、OpenCode SDK 11 种事件（message.part.updated 分 7 个 partType）、StreamMessage 19 种类型，每种含完整 JSON 报文示例与逐层处理细节 |
 
 ## 阅读建议
