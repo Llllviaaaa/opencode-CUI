@@ -4,12 +4,16 @@ import com.opencode.cui.skill.model.SessionRoute;
 import com.opencode.cui.skill.repository.SessionRouteRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
 
 /**
  * 会话级路由服务。
  *
  * 管理 session_route 表的 CRUD，提供 ownership 检查用于广播降级时的过滤。
+ * 包含生命周期管理（启动接管、优雅关闭）和数据清理功能。
  */
 @Slf4j
 @Service
@@ -24,9 +28,12 @@ public class SessionRouteService {
         this.instanceId = instanceId;
     }
 
+    // ==================== CRUD ====================
+
     /**
      * 创建路由记录。会话创建时调用。
      * toolSessionId 此时为 null，等 session_created 回来后由 updateToolSessionId 回填。
+     * 并发防护：重复插入时记录警告但不抛异常。
      */
     public void createRoute(String ak, Long welinkSessionId, String sourceType, String userId) {
         SessionRoute route = SessionRoute.builder()
@@ -38,9 +45,14 @@ public class SessionRouteService {
                 .userId(userId)
                 .status("ACTIVE")
                 .build();
-        repository.insert(route);
-        log.info("Created session route: ak={}, welinkSessionId={}, sourceType={}, sourceInstance={}",
-                ak, welinkSessionId, sourceType, instanceId);
+        try {
+            repository.insert(route);
+            log.info("Created session route: ak={}, welinkSessionId={}, sourceType={}, sourceInstance={}",
+                    ak, welinkSessionId, sourceType, instanceId);
+        } catch (DuplicateKeyException e) {
+            log.warn("路由记录已存在，跳过插入: ak={}, welinkSessionId={}, sourceType={}",
+                    ak, welinkSessionId, sourceType);
+        }
     }
 
     /**
@@ -59,9 +71,12 @@ public class SessionRouteService {
         log.info("Closed session route: welinkSessionId={}, sourceType={}", welinkSessionId, sourceType);
     }
 
+    // ==================== Ownership 检查 ====================
+
     /**
      * 检查指定 welinkSessionId 的会话是否属于本实例。
      * 广播降级时由 GatewayMessageRouter 调用。
+     * DB 异常时降级为 true（"不确定就处理"策略）。
      */
     public boolean isMySession(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
@@ -73,19 +88,84 @@ public class SessionRouteService {
             return route != null && instanceId.equals(route.getSourceInstance());
         } catch (NumberFormatException e) {
             return false;
+        } catch (Exception e) {
+            log.warn("isMySession 查询失败，降级为处理: sessionId={}, error={}", sessionId, e.getMessage());
+            return true;
         }
     }
 
     /**
+     * 确保路由 ownership：查路由 → 存在则判 ownership → 不存在则 auto-claim。
+     * <p>
+     * 用于存量会话迁移：旧会话在 session_route 中没有记录时，
+     * 第一个处理到该消息的实例会自动创建路由记录并获得 ownership。
+     * <p>
+     * DB 异常时降级为 true（"不确定就处理"策略）。
+     *
+     * @param sessionId welinkSessionId（字符串形式）
+     * @param ak        Agent Access Key
+     * @param userId    会话所有者
+     * @return true = 本实例应处理该消息；false = 不属于本实例
+     */
+    public boolean ensureRouteOwnership(String sessionId, String ak, String userId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return false;
+        }
+        try {
+            Long numericId = Long.parseLong(sessionId);
+            SessionRoute route = repository.findByWelinkSessionId(numericId);
+
+            if (route != null) {
+                // 路由存在，直接判 ownership
+                return instanceId.equals(route.getSourceInstance());
+            }
+
+            // 路由不存在 → auto-claim：创建路由抢占 ownership
+            log.info("路由记录不存在，auto-claim: sessionId={}, ak={}, sourceInstance={}",
+                    sessionId, ak, instanceId);
+            createRoute(ak, numericId, "skill-server", userId);
+
+            // 创建成功（无 DuplicateKey），本实例获得 ownership
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
+        } catch (DuplicateKeyException e) {
+            // 其他实例已抢先创建 → 重新查询判断 ownership
+            try {
+                Long numericId = Long.parseLong(sessionId);
+                SessionRoute route = repository.findByWelinkSessionId(numericId);
+                return route != null && instanceId.equals(route.getSourceInstance());
+            } catch (Exception ex) {
+                log.warn("auto-claim 后重查失败，降级为处理: sessionId={}, error={}",
+                        sessionId, ex.getMessage());
+                return true;
+            }
+        } catch (Exception e) {
+            log.warn("ensureRouteOwnership 异常，降级为处理: sessionId={}, error={}",
+                    sessionId, e.getMessage());
+            return true;
+        }
+    }
+
+
+    /**
      * 检查指定 toolSessionId 的会话是否属于本实例。
+     * DB 异常时降级为 true（"不确定就处理"策略）。
      */
     public boolean isMyToolSession(String toolSessionId) {
         if (toolSessionId == null || toolSessionId.isBlank()) {
             return false;
         }
-        SessionRoute route = repository.findByToolSessionId(toolSessionId);
-        return route != null && instanceId.equals(route.getSourceInstance());
+        try {
+            SessionRoute route = repository.findByToolSessionId(toolSessionId);
+            return route != null && instanceId.equals(route.getSourceInstance());
+        } catch (Exception e) {
+            log.warn("isMyToolSession 查询失败，降级为处理: toolSessionId={}, error={}", toolSessionId, e.getMessage());
+            return true;
+        }
     }
+
+    // ==================== 查询 ====================
 
     /**
      * 根据 toolSessionId 查询路由记录。
@@ -105,6 +185,50 @@ public class SessionRouteService {
             return null;
         }
         return repository.findByWelinkSessionId(welinkSessionId);
+    }
+
+    // ==================== 生命周期管理 ====================
+
+    /**
+     * 启动接管：将指定 AK 下所有 ACTIVE 路由的 sourceInstance 更新为当前实例。
+     * 解决 Pod 重启后 instanceId 变化导致 ownership 失效的问题。
+     */
+    public void takeoverActiveRoutes(String ak) {
+        int updated = repository.takeoverByAk(ak, instanceId);
+        if (updated > 0) {
+            log.info("接管路由记录: ak={}, count={}, newSourceInstance={}", ak, updated, instanceId);
+        }
+    }
+
+    /**
+     * 优雅关闭：关闭当前实例所有 ACTIVE 路由。
+     * 用于 @PreDestroy，确保缩容/滚动更新时不留孤儿记录。
+     */
+    public void closeAllByInstance() {
+        int closed = repository.closeAllBySourceInstance(instanceId);
+        log.info("优雅关闭路由记录: sourceInstance={}, count={}", instanceId, closed);
+    }
+
+    // ==================== 数据清理 ====================
+
+    /**
+     * 清理过期路由数据。
+     *
+     * @param activeTimeoutHours  ACTIVE 记录超过多少小时未更新视为僵尸，将被关闭
+     * @param closedRetentionDays CLOSED 记录保留多少天，超期将被删除
+     */
+    public void cleanupStaleRoutes(int activeTimeoutHours, int closedRetentionDays) {
+        LocalDateTime activeCutoff = LocalDateTime.now().minusHours(activeTimeoutHours);
+        int closedZombies = repository.closeStaleActiveRoutes(activeCutoff);
+        if (closedZombies > 0) {
+            log.info("清理僵尸 ACTIVE 路由: count={}, cutoff={}", closedZombies, activeCutoff);
+        }
+
+        LocalDateTime closedCutoff = LocalDateTime.now().minusDays(closedRetentionDays);
+        int purged = repository.purgeClosedBefore(closedCutoff);
+        if (purged > 0) {
+            log.info("清理历史 CLOSED 路由: count={}, cutoff={}", purged, closedCutoff);
+        }
     }
 
     public String getInstanceId() {

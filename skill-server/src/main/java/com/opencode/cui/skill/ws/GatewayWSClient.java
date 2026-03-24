@@ -3,6 +3,7 @@ package com.opencode.cui.skill.ws;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.service.GatewayDiscoveryService;
 import com.opencode.cui.skill.service.GatewayRelayService;
+import com.opencode.cui.skill.service.SessionRouteService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -57,6 +58,7 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget,
     private final GatewayRelayService gatewayRelayService;
     private final ObjectMapper objectMapper;
     private final GatewayDiscoveryService discoveryService;
+    private final SessionRouteService sessionRouteService;
 
     @Value("${skill.gateway.internal-token:changeme}")
     private String internalToken;
@@ -86,10 +88,12 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget,
 
     public GatewayWSClient(GatewayRelayService gatewayRelayService,
             ObjectMapper objectMapper,
-            GatewayDiscoveryService discoveryService) {
+            GatewayDiscoveryService discoveryService,
+            SessionRouteService sessionRouteService) {
         this.gatewayRelayService = gatewayRelayService;
         this.objectMapper = objectMapper;
         this.discoveryService = discoveryService;
+        this.sessionRouteService = sessionRouteService;
     }
 
     @PostConstruct
@@ -148,6 +152,14 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget,
             closeQuietly(conn.client);
         }
         gwConnections.clear();
+
+        // 优雅关闭：关闭本实例所有 ACTIVE 路由记录
+        try {
+            sessionRouteService.closeAllByInstance();
+        } catch (Exception e) {
+            log.warn("优雅关闭路由记录失败: {}", e.getMessage());
+        }
+
         log.info("GatewayWSClient shut down: all connections closed");
     }
 

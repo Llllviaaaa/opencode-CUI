@@ -124,6 +124,22 @@ class SessionRouteServiceTest {
 
             assertFalse(service.isMyToolSession("oc-uuid-001"));
         }
+
+        @Test
+        @DisplayName("isMySession DB 异常时降级返回 true")
+        void isMySessionReturnsTrueOnDbException() {
+            when(repository.findByWelinkSessionId(12345L)).thenThrow(new RuntimeException("DB connection lost"));
+
+            assertTrue(service.isMySession("12345"));
+        }
+
+        @Test
+        @DisplayName("isMyToolSession DB 异常时降级返回 true")
+        void isMyToolSessionReturnsTrueOnDbException() {
+            when(repository.findByToolSessionId("oc-uuid-001")).thenThrow(new RuntimeException("DB connection lost"));
+
+            assertTrue(service.isMyToolSession("oc-uuid-001"));
+        }
     }
 
     @Nested
@@ -148,6 +164,59 @@ class SessionRouteServiceTest {
         @DisplayName("findByToolSessionId null 时返回 null")
         void findByToolSessionIdReturnsNullForNull() {
             assertNull(service.findByToolSessionId(null));
+        }
+    }
+
+    @Nested
+    @DisplayName("启动接管与优雅关闭")
+    class LifecycleTests {
+
+        @Test
+        @DisplayName("takeoverActiveRoutes 将指定 AK 下所有 ACTIVE 路由的 sourceInstance 更新为当前实例")
+        void takeoverActiveRoutesUpdatesSourceInstance() {
+            service.takeoverActiveRoutes("ak-1");
+
+            verify(repository).takeoverByAk("ak-1", INSTANCE_ID);
+        }
+
+        @Test
+        @DisplayName("closeAllByInstance 关闭当前实例所有 ACTIVE 路由")
+        void closeAllByInstanceClosesAllActiveRoutes() {
+            service.closeAllByInstance();
+
+            verify(repository).closeAllBySourceInstance(INSTANCE_ID);
+        }
+    }
+
+    @Nested
+    @DisplayName("清理任务")
+    class CleanupTests {
+
+        @Test
+        @DisplayName("cleanupStaleRoutes 关闭超时的 ACTIVE 僵尸记录")
+        void cleanupStaleRoutesClosesZombies() {
+            when(repository.closeStaleActiveRoutes(any())).thenReturn(3);
+            when(repository.purgeClosedBefore(any())).thenReturn(10);
+
+            service.cleanupStaleRoutes(24, 7);
+
+            verify(repository).closeStaleActiveRoutes(any());
+            verify(repository).purgeClosedBefore(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("并发防护")
+    class ConcurrencyTests {
+
+        @Test
+        @DisplayName("createRoute 重复插入时不抛异常")
+        void createRouteDuplicateDoesNotThrow() {
+            when(repository.insert(any())).thenThrow(
+                    new org.springframework.dao.DuplicateKeyException("Duplicate entry"));
+
+            // 不应抛异常
+            service.createRoute("ak-1", 12345L, "skill-server", "user-123");
         }
     }
 }

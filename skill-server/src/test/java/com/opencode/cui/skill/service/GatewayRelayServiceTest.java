@@ -49,6 +49,8 @@ class GatewayRelayServiceTest {
         @Mock
         private ImOutboundService imOutboundService;
         @Mock
+        private SessionRouteService sessionRouteService;
+        @Mock
         private GatewayRelayService.GatewayRelayTarget gatewayRelayTarget;
 
         private GatewayMessageRouter messageRouter;
@@ -56,6 +58,11 @@ class GatewayRelayServiceTest {
 
         @BeforeEach
         void setUp() {
+                // ownership 检查默认放行，确保消息不被 SKIP
+                org.mockito.Mockito.lenient().when(sessionRouteService.ensureRouteOwnership(any(), any(), any())).thenReturn(true);
+                org.mockito.Mockito.lenient().when(sessionRouteService.isMySession(any())).thenReturn(true);
+                org.mockito.Mockito.lenient().when(sessionRouteService.isMyToolSession(any())).thenReturn(true);
+
                 messageRouter = new GatewayMessageRouter(
                                 new ObjectMapper(),
                                 messageService,
@@ -66,7 +73,8 @@ class GatewayRelayServiceTest {
                                 bufferService,
                                 rebuildService,
                                 interactionStateService,
-                                imOutboundService);
+                                imOutboundService,
+                                sessionRouteService);
                 service = new GatewayRelayService(
                                 new ObjectMapper(),
                                 messageRouter,

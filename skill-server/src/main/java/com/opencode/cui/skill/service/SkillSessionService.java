@@ -29,14 +29,17 @@ public class SkillSessionService {
 
     private final SkillSessionRepository sessionRepository;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
+    private final SessionRouteService sessionRouteService;
 
     @Value("${skill.session.idle-timeout-minutes:30}")
     private int idleTimeoutMinutes;
 
     public SkillSessionService(SkillSessionRepository sessionRepository,
-            SnowflakeIdGenerator snowflakeIdGenerator) {
+            SnowflakeIdGenerator snowflakeIdGenerator,
+            SessionRouteService sessionRouteService) {
         this.sessionRepository = sessionRepository;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
+        this.sessionRouteService = sessionRouteService;
     }
 
     /** 创建新的 Skill 会话。 */
@@ -63,6 +66,12 @@ public class SkillSessionService {
                 .build();
 
         sessionRepository.insert(session);
+
+        // 同步写入路由表
+        if (ak != null) {
+            sessionRouteService.createRoute(ak, session.getId(), "skill-server", userId);
+        }
+
         log.info("Created skill session: id={}, userId={}, ak={}, domain={}, bizSessionId={}",
                 session.getId(), userId, ak, session.getBusinessSessionDomain(), session.getBusinessSessionId());
         return session;
@@ -148,6 +157,10 @@ public class SkillSessionService {
     public SkillSession closeSession(Long sessionId) {
         sessionRepository.updateStatus(sessionId, SkillSession.Status.CLOSED.name());
         SkillSession session = getSession(sessionId);
+
+        // 同步关闭路由记录
+        sessionRouteService.closeRoute(sessionId, "skill-server");
+
         log.info("Closed skill session: id={}", sessionId);
         return session;
     }
@@ -226,5 +239,11 @@ public class SkillSessionService {
         int count = sessionRepository.markIdleSessions(SkillSession.Status.IDLE.name(), cutoff);
         log.info("Marked {} sessions as IDLE (inactive since before {})", count, cutoff);
 
+        // 附带清理路由表：24h 未更新的 ACTIVE 僵尸 + 7 天前的 CLOSED 历史
+        try {
+            sessionRouteService.cleanupStaleRoutes(24, 7);
+        } catch (Exception e) {
+            log.warn("路由表清理失败: {}", e.getMessage());
+        }
     }
 }

@@ -27,12 +27,15 @@ class SkillSessionServiceTest {
     @Mock
     private SnowflakeIdGenerator snowflakeIdGenerator;
 
+    @Mock
+    private SessionRouteService sessionRouteService;
+
     private SkillSessionService service;
 
     @BeforeEach
     void setUp() {
         lenient().when(snowflakeIdGenerator.nextId()).thenReturn(42L);
-        service = new SkillSessionService(sessionRepository, snowflakeIdGenerator);
+        service = new SkillSessionService(sessionRepository, snowflakeIdGenerator, sessionRouteService);
     }
 
     @Test

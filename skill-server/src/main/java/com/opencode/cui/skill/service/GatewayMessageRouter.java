@@ -74,8 +74,8 @@ public class GatewayMessageRouter {
     /** 下游发送者引用（延迟注入） */
     private volatile DownstreamSender downstreamSender;
 
-    /** v3: 会话路由服务（可选注入，null 时跳过 ownership 检查） */
-    private volatile SessionRouteService sessionRouteService;
+    /** 会话路由服务，用于多实例场景下的 ownership 检查 */
+    private final SessionRouteService sessionRouteService;
 
     public GatewayMessageRouter(ObjectMapper objectMapper,
             SkillMessageService messageService,
@@ -86,7 +86,8 @@ public class GatewayMessageRouter {
             StreamBufferService bufferService,
             SessionRebuildService rebuildService,
             ImInteractionStateService interactionStateService,
-            ImOutboundService imOutboundService) {
+            ImOutboundService imOutboundService,
+            SessionRouteService sessionRouteService) {
         this.objectMapper = objectMapper;
         this.messageService = messageService;
         this.sessionService = sessionService;
@@ -97,6 +98,7 @@ public class GatewayMessageRouter {
         this.rebuildService = rebuildService;
         this.interactionStateService = interactionStateService;
         this.imOutboundService = imOutboundService;
+        this.sessionRouteService = sessionRouteService;
     }
 
     /** 设置下游命令发送者。 */
@@ -104,12 +106,7 @@ public class GatewayMessageRouter {
         this.downstreamSender = sender;
     }
 
-    /**
-     * v3: 注入会话路由服务，用于广播降级时的 ownership 检查。
-     */
-    public void setSessionRouteService(SessionRouteService sessionRouteService) {
-        this.sessionRouteService = sessionRouteService;
-    }
+
 
     /** 清除会话的完成标记，使其可以再次接收事件。 */
     public void clearCompletionMark(String sessionId) {
@@ -125,9 +122,8 @@ public class GatewayMessageRouter {
     public void route(String type, String ak, String userId, JsonNode node) {
         String sessionId = requiresSessionAffinity(type) ? resolveSessionId(type, node) : null;
 
-        // v3: 广播降级时的 ownership 检查
-        // 会话路由服务已注入且 sessionId 已解析时，检查该会话是否属于本实例
-        if (sessionId != null && sessionRouteService != null && !sessionRouteService.isMySession(sessionId)) {
+        // 多实例 ownership 检查 + 存量会话 auto-claim
+        if (sessionId != null && !sessionRouteService.ensureRouteOwnership(sessionId, ak, userId)) {
             log.debug("[SKIP] GatewayMessageRouter.route: reason=not_my_session, sessionId={}, type={}",
                     sessionId, type);
             return;
@@ -444,6 +440,7 @@ public class GatewayMessageRouter {
                 return;
             }
             sessionService.updateToolSessionId(numericId, toolSessionId);
+            sessionRouteService.updateToolSessionId(numericId, "skill-server", toolSessionId);
             retryPendingMessage(sessionId, ak, userId, toolSessionId);
         } catch (Exception e) {
             log.error("Failed to update tool session ID: sessionId={}, error={}", sessionId, e.getMessage());

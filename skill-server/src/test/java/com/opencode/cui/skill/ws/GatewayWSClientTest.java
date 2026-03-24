@@ -21,7 +21,7 @@ class GatewayWSClientTest {
     @DisplayName("buildAuthProtocol 生成包含 source 和 instanceId 的 base64url 子协议")
     void buildAuthProtocolContainsSourceAndInstanceId() throws Exception {
         GatewayWSClient client = new GatewayWSClient(
-                Mockito.mock(GatewayRelayService.class), new ObjectMapper(), null);
+                Mockito.mock(GatewayRelayService.class), new ObjectMapper(), null, null);
         ReflectionTestUtils.setField(client, "internalToken", "secret-token");
         ReflectionTestUtils.setField(client, "instanceId", "ss-az1-2");
 
@@ -41,7 +41,7 @@ class GatewayWSClientTest {
     @DisplayName("无连接时 hasActiveConnection 返回 false")
     void hasActiveConnectionReturnsFalseWithNoConnections() {
         GatewayWSClient client = new GatewayWSClient(
-                Mockito.mock(GatewayRelayService.class), new ObjectMapper(), null);
+                Mockito.mock(GatewayRelayService.class), new ObjectMapper(), null, null);
 
         assertFalse(client.hasActiveConnection());
     }
@@ -50,7 +50,7 @@ class GatewayWSClientTest {
     @DisplayName("无连接时 sendToGateway 返回 false")
     void sendToGatewayReturnsFalseWithNoConnections() {
         GatewayWSClient client = new GatewayWSClient(
-                Mockito.mock(GatewayRelayService.class), new ObjectMapper(), null);
+                Mockito.mock(GatewayRelayService.class), new ObjectMapper(), null, null);
 
         assertFalse(client.sendToGateway("test-message"));
     }
@@ -59,7 +59,7 @@ class GatewayWSClientTest {
     @DisplayName("无连接时 sendToGateway(instanceId, message) 返回 false")
     void sendToGatewayByInstanceReturnsFalseWithNoConnections() {
         GatewayWSClient client = new GatewayWSClient(
-                Mockito.mock(GatewayRelayService.class), new ObjectMapper(), null);
+                Mockito.mock(GatewayRelayService.class), new ObjectMapper(), null, null);
 
         assertFalse(client.sendToGateway("gw-1", "test-message"));
     }
@@ -68,7 +68,7 @@ class GatewayWSClientTest {
     @DisplayName("无连接时 broadcastToAllGateways 返回 false")
     void broadcastToAllGatewaysReturnsFalseWithNoConnections() {
         GatewayWSClient client = new GatewayWSClient(
-                Mockito.mock(GatewayRelayService.class), new ObjectMapper(), null);
+                Mockito.mock(GatewayRelayService.class), new ObjectMapper(), null, null);
 
         assertFalse(client.broadcastToAllGateways("test-message"));
     }
@@ -77,7 +77,7 @@ class GatewayWSClientTest {
     @DisplayName("getConnectedInstanceIds 初始为空")
     void getConnectedInstanceIdsInitiallyEmpty() {
         GatewayWSClient client = new GatewayWSClient(
-                Mockito.mock(GatewayRelayService.class), new ObjectMapper(), null);
+                Mockito.mock(GatewayRelayService.class), new ObjectMapper(), null, null);
 
         assertTrue(client.getConnectedInstanceIds().isEmpty());
     }

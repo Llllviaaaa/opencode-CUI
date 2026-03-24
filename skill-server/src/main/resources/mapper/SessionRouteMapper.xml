@@ -52,4 +52,31 @@
           AND source_type = #{sourceType}
     </update>
 
+    <update id="takeoverByAk">
+        UPDATE session_route
+        SET source_instance = #{newSourceInstance}, updated_at = NOW()
+        WHERE ak = #{ak}
+          AND status = 'ACTIVE'
+    </update>
+
+    <update id="closeAllBySourceInstance">
+        UPDATE session_route
+        SET status = 'CLOSED', updated_at = NOW()
+        WHERE source_instance = #{sourceInstance}
+          AND status = 'ACTIVE'
+    </update>
+
+    <update id="closeStaleActiveRoutes">
+        UPDATE session_route
+        SET status = 'CLOSED', updated_at = NOW()
+        WHERE status = 'ACTIVE'
+          AND updated_at &lt; #{cutoffTime}
+    </update>
+
+    <delete id="purgeClosedBefore">
+        DELETE FROM session_route
+        WHERE status = 'CLOSED'
+          AND updated_at &lt; #{cutoffTime}
+    </delete>
+
 </mapper>
