@@ -14,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -21,6 +22,7 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.Iterator;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Gateway 上行消息路由器。
@@ -66,6 +68,19 @@ public class GatewayMessageRouter {
             .expireAfterWrite(Duration.ofSeconds(5))
             .maximumSize(1_000)
             .build();
+
+    // ==================== Metrics counters ====================
+
+    /** Count of messages dispatched locally (this instance is the session owner). */
+    private final AtomicLong routeLocalCount = new AtomicLong();
+    /** Count of messages relayed to a remote SS instance via Redis pub/sub. */
+    private final AtomicLong routeRelayCount = new AtomicLong();
+    /** Count of successful session owner takeovers. */
+    private final AtomicLong takeoverCount = new AtomicLong();
+    /** Count of failed takeover attempts (another instance won the race). */
+    private final AtomicLong takeoverConflictCount = new AtomicLong();
+    /** Count of shouldTakeover detections where the current owner was found dead. */
+    private final AtomicLong ownerProbeDeadCount = new AtomicLong();
 
     /**
      * 下游命令发送接口。
@@ -168,6 +183,7 @@ public class GatewayMessageRouter {
         if (sessionId == null) {
             log.info("[ENTRY] GatewayMessageRouter.route: type={}, sessionId=null, ak={}, userId={}",
                     type, ak, userId);
+            routeLocalCount.incrementAndGet();
             dispatchLocally(type, sessionId, ak, userId, node);
             log.info("[EXIT] GatewayMessageRouter.route: type={}, sessionId=null", type);
             return;
@@ -180,6 +196,7 @@ public class GatewayMessageRouter {
         if (instanceId.equals(ownerInstance)) {
             log.info("[ENTRY] GatewayMessageRouter.route: type={}, sessionId={}, ak={}, strategy=local_owner",
                     type, sessionId, ak);
+            routeLocalCount.incrementAndGet();
             dispatchLocally(type, sessionId, ak, userId, node);
             log.info("[EXIT] GatewayMessageRouter.route: type={}, sessionId={}", type, sessionId);
             return;
@@ -190,6 +207,7 @@ public class GatewayMessageRouter {
             String rawMessage = serializeRelayMessage(type, ak, userId, node);
             long subscribers = redisMessageBroker.publishToSsRelay(ownerInstance, rawMessage);
             if (subscribers > 0) {
+                routeRelayCount.incrementAndGet();
                 log.info("[EXIT] GatewayMessageRouter.route: type={}, sessionId={}, strategy=relay_to_{}",
                         type, sessionId, ownerInstance);
                 return; // relay succeeded
@@ -205,6 +223,7 @@ public class GatewayMessageRouter {
                 // No route record → auto-claim via ensureRouteOwnership
                 boolean claimed = sessionRouteService.ensureRouteOwnership(sessionId, ak, userId);
                 if (claimed) {
+                    takeoverCount.incrementAndGet();
                     log.info("[ENTRY] GatewayMessageRouter.route: type={}, sessionId={}, strategy=auto_claim",
                             type, sessionId);
                     dispatchLocally(type, sessionId, ak, userId, node);
@@ -215,6 +234,7 @@ public class GatewayMessageRouter {
                 // Owner is dead → optimistic-lock takeover
                 boolean taken = sessionRouteService.tryTakeover(sessionId, ownerInstance, instanceId);
                 if (taken) {
+                    takeoverCount.incrementAndGet();
                     log.info("[ENTRY] GatewayMessageRouter.route: type={}, sessionId={}, strategy=takeover_from_{}",
                             type, sessionId, ownerInstance);
                     dispatchLocally(type, sessionId, ak, userId, node);
@@ -223,6 +243,7 @@ public class GatewayMessageRouter {
                 }
             }
             // Takeover/claim failed → someone else won → forward to winner
+            takeoverConflictCount.incrementAndGet();
             String winner = sessionRouteService.getOwnerInstance(sessionId);
             if (winner != null && !instanceId.equals(winner)) {
                 String rawMessage = serializeRelayMessage(type, ak, userId, node);
@@ -233,6 +254,7 @@ public class GatewayMessageRouter {
             }
             // Winner is this instance (race condition) → process locally
             if (instanceId.equals(winner)) {
+                routeLocalCount.incrementAndGet();
                 log.info("[ENTRY] GatewayMessageRouter.route: type={}, sessionId={}, strategy=won_race",
                         type, sessionId);
                 dispatchLocally(type, sessionId, ak, userId, node);
@@ -278,6 +300,7 @@ public class GatewayMessageRouter {
 
         // Tier 1: check Redis heartbeat
         if (!skillInstanceRegistry.isInstanceAlive(ownerInstance)) {
+            ownerProbeDeadCount.incrementAndGet();
             log.info("shouldTakeover: heartbeat missing for owner={}, sessionId={}", ownerInstance, sessionId);
             return true;
         }
@@ -289,6 +312,7 @@ public class GatewayMessageRouter {
             if (route != null && route.getUpdatedAt() != null) {
                 long elapsedSeconds = ChronoUnit.SECONDS.between(route.getUpdatedAt(), LocalDateTime.now());
                 if (elapsedSeconds > ownerDeadThresholdSeconds) {
+                    ownerProbeDeadCount.incrementAndGet();
                     log.info("shouldTakeover: updated_at expired for owner={}, sessionId={}, elapsed={}s, threshold={}s",
                             ownerInstance, sessionId, elapsedSeconds, ownerDeadThresholdSeconds);
                     return true;
@@ -995,5 +1019,18 @@ public class GatewayMessageRouter {
     /** 获取重建回调实例。 */
     private SessionRebuildService.RebuildCallback rebuildCallback() {
         return rebuildCallback;
+    }
+
+    // ==================== Metrics ====================
+
+    /**
+     * Periodically logs routing metrics for observability.
+     * Outputs cumulative counters since service startup.
+     */
+    @Scheduled(fixedDelay = 60_000)
+    void logMetrics() {
+        log.info("[METRICS] route: local={}, relay={} | takeover: success={}, conflict={}, probeDead={}",
+                routeLocalCount.get(), routeRelayCount.get(),
+                takeoverCount.get(), takeoverConflictCount.get(), ownerProbeDeadCount.get());
     }
 }

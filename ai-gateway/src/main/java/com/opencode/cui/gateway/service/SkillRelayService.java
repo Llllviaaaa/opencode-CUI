@@ -18,6 +18,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Source 服务 WebSocket 连接管理 + 上行消息路由（复合路由器）。
@@ -79,6 +80,19 @@ public class SkillRelayService {
 
     @Value("${gateway.legacy-relay.enabled:false}")
     private boolean legacyRelayEnabled;
+
+    // ==================== Metrics counters ====================
+
+    /** Count of invoke messages delivered to a locally connected Agent. */
+    private final AtomicLong relayLocalCount = new AtomicLong();
+    /** Count of invoke messages relayed to a remote GW instance via Redis pub/sub. */
+    private final AtomicLong relayPubsubCount = new AtomicLong();
+    /** Count of invoke messages enqueued to the pending queue (Agent offline). */
+    private final AtomicLong relayPendingCount = new AtomicLong();
+    /** Count of upstream route lookups that hit a known entry in UpstreamRoutingTable. */
+    private final AtomicLong routingHitCount = new AtomicLong();
+    /** Count of upstream route lookups that fell back to broadcast (no routing table entry). */
+    private final AtomicLong routingBroadcastCount = new AtomicLong();
 
     /** Lazy-initialized reference to EventRelayService (set via setter to break circular dependency). */
     private EventRelayService eventRelayService;
@@ -272,11 +286,13 @@ public class SkillRelayService {
                     log.info("[V2] Hash-routed to source: sourceType={}, routingKey={}, linkId={}, type={}",
                             sourceType, routingKey, target.getId(), tracedMessage.getType());
                     if (sendToSession(target, tracedMessage)) {
+                        routingHitCount.incrementAndGet();
                         return true;
                     }
                 }
             }
             // Ring miss or send failure → broadcast to that sourceType
+            routingBroadcastCount.incrementAndGet();
             return broadcastToSourceType(sourceType, tracedMessage);
         }
 
@@ -290,14 +306,17 @@ public class SkillRelayService {
                     log.info("[V2] Hash-routed via message.source: sourceType={}, routingKey={}, linkId={}, type={}",
                             messageSource, routingKey, target.getId(), tracedMessage.getType());
                     if (sendToSession(target, tracedMessage)) {
+                        routingHitCount.incrementAndGet();
                         return true;
                     }
                 }
             }
+            routingBroadcastCount.incrementAndGet();
             return broadcastToSourceType(messageSource, tracedMessage);
         }
 
         // 4. Broadcast to all sourceType groups (one per group via hash or first open)
+        routingBroadcastCount.incrementAndGet();
         return broadcastToAllGroups(tracedMessage, routingKey);
     }
 
@@ -472,12 +491,14 @@ public class SkillRelayService {
 
         // V2: 3-tier delivery — local → remote GW relay → pending queue
         if (deliverToLocalAgent(ak, agentMessage)) {
+            relayLocalCount.incrementAndGet();
             log.info("[EXIT->AGENT] Delivered invoke locally: ak={}, action={}, source={}",
                     ak, tracedMessage.getAction(), messageSource);
             return;
         }
 
         if (relayToRemoteGw(ak, tracedMessage, messageSource)) {
+            relayPubsubCount.incrementAndGet();
             log.info("[EXIT->RELAY] Relayed invoke to remote GW: ak={}, action={}, source={}",
                     ak, tracedMessage.getAction(), messageSource);
             return;
@@ -485,6 +506,7 @@ public class SkillRelayService {
 
         // Agent not found anywhere → enqueue pending
         enqueueToPending(ak, agentMessage);
+        relayPendingCount.incrementAndGet();
         log.info("[EXIT->PENDING] Enqueued invoke to pending: ak={}, action={}, source={}",
                 ak, tracedMessage.getAction(), messageSource);
 
@@ -731,6 +753,17 @@ public class SkillRelayService {
     }
 
     // ==================== 定时任务 ====================
+
+    /**
+     * Periodically logs routing metrics for observability.
+     * Outputs cumulative counters since service startup.
+     */
+    @Scheduled(fixedDelay = 60_000)
+    void logMetrics() {
+        log.info("[METRICS] relay: local={}, pubsub={}, pending={} | routing: hit={}, broadcast={}",
+                relayLocalCount.get(), relayPubsubCount.get(), relayPendingCount.get(),
+                routingHitCount.get(), routingBroadcastCount.get());
+    }
 
     /**
      * 定时刷新 Legacy 策略的 owner 心跳。
