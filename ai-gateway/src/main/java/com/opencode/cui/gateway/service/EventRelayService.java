@@ -3,7 +3,10 @@ package com.opencode.cui.gateway.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.gateway.logging.MdcHelper;
 import com.opencode.cui.gateway.model.GatewayMessage;
+import com.opencode.cui.gateway.model.RelayMessage;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -33,13 +36,72 @@ public class EventRelayService {
     private final ObjectMapper objectMapper;
     private final RedisMessageBroker redisMessageBroker;
     private final SkillRelayService skillRelayService;
+    private final String selfInstanceId;
 
     public EventRelayService(ObjectMapper objectMapper,
             RedisMessageBroker redisMessageBroker,
-            SkillRelayService skillRelayService) {
+            SkillRelayService skillRelayService,
+            @Value("${gateway.instance-id:${HOSTNAME:gateway-local}}") String selfInstanceId) {
         this.objectMapper = objectMapper;
         this.redisMessageBroker = redisMessageBroker;
         this.skillRelayService = skillRelayService;
+        this.selfInstanceId = selfInstanceId;
+    }
+
+    /**
+     * Subscribes this GW instance to its own relay channel {@code gw:relay:{selfInstanceId}}.
+     *
+     * <p>On message receipt:
+     * <ol>
+     *   <li>If the raw JSON contains {@code "type":"relay"}, parse as {@link RelayMessage} and
+     *       extract {@code originalMessage}.</li>
+     *   <li>Otherwise treat as legacy raw {@link GatewayMessage} JSON (backward compatibility).</li>
+     *   <li>Deserialize to {@link GatewayMessage} and deliver to the local Agent session.</li>
+     * </ol>
+     */
+    @PostConstruct
+    public void subscribeToSelfRelayChannel() {
+        redisMessageBroker.subscribeToGwRelay(selfInstanceId, this::handleGwRelayMessage);
+        log.info("[ENTRY] EventRelayService subscribed to GW relay channel: instanceId={}", selfInstanceId);
+    }
+
+    /**
+     * Handles a raw JSON string received from the GW relay channel.
+     *
+     * <p>Distinguishes new-format ({@link RelayMessage}) from legacy raw {@link GatewayMessage}
+     * JSON by checking for the {@code "type":"relay"} discriminator.
+     *
+     * @param rawJson raw JSON string from Redis
+     */
+    void handleGwRelayMessage(String rawJson) {
+        try {
+            String gatewayMessageJson;
+            if (rawJson.contains("\"type\":\"relay\"")) {
+                // New format: RelayMessage wrapper
+                RelayMessage relayMessage = objectMapper.readValue(rawJson, RelayMessage.class);
+                gatewayMessageJson = relayMessage.originalMessage();
+                log.info("EventRelayService.handleGwRelayMessage: new-format relay, sourceType={}",
+                        relayMessage.sourceType());
+            } else {
+                // Legacy format: raw GatewayMessage JSON
+                gatewayMessageJson = rawJson;
+                log.info("EventRelayService.handleGwRelayMessage: legacy-format relay, length={}", rawJson.length());
+            }
+
+            GatewayMessage message = objectMapper.readValue(gatewayMessageJson, GatewayMessage.class);
+            String ak = message.getAk();
+            if (ak == null || ak.isBlank()) {
+                log.warn("[ERROR] EventRelayService.handleGwRelayMessage: ak is null or blank, dropping message type={}",
+                        message.getType());
+                return;
+            }
+
+            log.info("EventRelayService.handleGwRelayMessage: delivering to local agent, ak={}, type={}", ak, message.getType());
+            sendToLocalAgent(ak, message);
+        } catch (Exception e) {
+            log.error("[ERROR] EventRelayService.handleGwRelayMessage: failed to process relay message: {}",
+                    e.getMessage(), e);
+        }
     }
 
     public void registerAgentSession(String ak, String userId, WebSocketSession session) {

@@ -3,6 +3,7 @@ package com.opencode.cui.gateway.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.gateway.model.GatewayMessage;
+import com.opencode.cui.gateway.model.RelayMessage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
@@ -34,6 +35,8 @@ import java.util.function.Consumer;
  * <h3>Channel 模式</h3>
  * <ul>
  *   <li>{@code agent:{ak}} — 路由 invoke 命令到持有 Agent WS 的 Gateway 实例（保留，Phase 2 后可废弃）</li>
+ *   <li>{@code gw:relay:{instanceId}} — GW 实例间 relay 通道，消息格式为 {@link RelayMessage} JSON；
+ *       与旧版 Legacy 路径同名，但新版消息带有 {@code "type":"relay"} 包装字段以区分</li>
  * </ul>
  */
 @Slf4j
@@ -51,6 +54,9 @@ public class RedisMessageBroker {
 
     private static final String AGENT_CHANNEL_PREFIX = "agent:";
     private static final String AGENT_USER_KEY_PREFIX = "gw:agent:user:";
+
+    /** Channel prefix for GW-to-GW relay: gw:relay:{instanceId} */
+    private static final String GW_RELAY_CHANNEL_PREFIX = "gw:relay:";
 
     // ==================== 废弃的 Key/Channel 前缀（Phase 1.3 重写后移除） ====================
 
@@ -226,6 +232,65 @@ public class RedisMessageBroker {
 
     public void unsubscribeFromAgent(String agentId) {
         String channel = AGENT_CHANNEL_PREFIX + agentId;
+        unsubscribe(channel);
+    }
+
+    // ==================== GW relay pub/sub（Phase 1.4 新增） ====================
+
+    /**
+     * Subscribes this GW instance to its own relay channel {@code gw:relay:{instanceId}}.
+     *
+     * <p>The handler receives raw JSON strings. Messages in the new format carry a
+     * {@code "type":"relay"} wrapper ({@link RelayMessage}); legacy messages are raw
+     * {@link GatewayMessage} JSON without that wrapper.
+     *
+     * <p>Call this once during {@code @PostConstruct} initialization with the self instance ID.
+     *
+     * @param instanceId this GW instance's ID
+     * @param handler    callback that receives the raw JSON string from Redis
+     */
+    public void subscribeToGwRelay(String instanceId, Consumer<String> handler) {
+        String channel = GW_RELAY_CHANNEL_PREFIX + instanceId;
+        unsubscribeFromGwRelay(instanceId);
+
+        MessageListener listener = (Message message, byte[] pattern) -> {
+            try {
+                String json = new String(message.getBody());
+                handler.accept(json);
+                log.info("Received from GW relay channel {}: length={}", channel, json.length());
+            } catch (Exception e) {
+                log.error("Failed to process message from GW relay channel {}: {}", channel, e.getMessage(), e);
+            }
+        };
+        activeListeners.put(channel, listener);
+        listenerContainer.addMessageListener(listener, new ChannelTopic(channel));
+        log.info("Subscribed to GW relay channel: {}", channel);
+    }
+
+    /**
+     * Publishes a raw JSON string (a serialized {@link RelayMessage}) to the target GW instance's
+     * relay channel {@code gw:relay:{targetInstanceId}}.
+     *
+     * @param targetInstanceId the GW instance ID that owns the target Agent's WebSocket connection
+     * @param message          serialized {@link RelayMessage} JSON
+     */
+    public void publishToGwRelay(String targetInstanceId, String message) {
+        String channel = GW_RELAY_CHANNEL_PREFIX + targetInstanceId;
+        try {
+            redisTemplate.convertAndSend(channel, message);
+            log.info("Published to GW relay channel {}: length={}", channel, message.length());
+        } catch (Exception e) {
+            log.error("Failed to publish to GW relay channel {}: {}", channel, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Unsubscribes from this GW instance's relay channel. Called on shutdown or re-subscription.
+     *
+     * @param instanceId this GW instance's ID
+     */
+    public void unsubscribeFromGwRelay(String instanceId) {
+        String channel = GW_RELAY_CHANNEL_PREFIX + instanceId;
         unsubscribe(channel);
     }
 

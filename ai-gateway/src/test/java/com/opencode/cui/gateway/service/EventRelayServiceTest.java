@@ -33,7 +33,7 @@ class EventRelayServiceTest {
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        service = new EventRelayService(objectMapper, redisMessageBroker, skillRelayService);
+        service = new EventRelayService(objectMapper, redisMessageBroker, skillRelayService, "gw-test-01");
     }
 
     // ==================== Agent Session Management ====================
