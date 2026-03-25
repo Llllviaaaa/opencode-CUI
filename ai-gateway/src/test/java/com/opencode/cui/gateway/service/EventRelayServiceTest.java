@@ -28,12 +28,14 @@ class EventRelayServiceTest {
     private SkillRelayService skillRelayService;
 
     private ObjectMapper objectMapper;
+    private UpstreamRoutingTable routingTable;
     private EventRelayService service;
 
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        service = new EventRelayService(objectMapper, redisMessageBroker, skillRelayService, "gw-test-01");
+        routingTable = new UpstreamRoutingTable(100000, 30);
+        service = new EventRelayService(objectMapper, redisMessageBroker, skillRelayService, routingTable, "gw-test-01");
     }
 
     // ==================== Agent Session Management ====================

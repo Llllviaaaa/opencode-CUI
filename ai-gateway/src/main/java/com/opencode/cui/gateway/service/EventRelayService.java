@@ -36,16 +36,22 @@ public class EventRelayService {
     private final ObjectMapper objectMapper;
     private final RedisMessageBroker redisMessageBroker;
     private final SkillRelayService skillRelayService;
+    private final UpstreamRoutingTable routingTable;
     private final String selfInstanceId;
 
     public EventRelayService(ObjectMapper objectMapper,
             RedisMessageBroker redisMessageBroker,
             SkillRelayService skillRelayService,
+            UpstreamRoutingTable routingTable,
             @Value("${gateway.instance-id:${HOSTNAME:gateway-local}}") String selfInstanceId) {
         this.objectMapper = objectMapper;
         this.redisMessageBroker = redisMessageBroker;
         this.skillRelayService = skillRelayService;
+        this.routingTable = routingTable;
         this.selfInstanceId = selfInstanceId;
+
+        // Break circular dependency: SkillRelayService needs EventRelayService for local agent lookup
+        skillRelayService.setEventRelayService(this);
     }
 
     /**
@@ -76,16 +82,28 @@ public class EventRelayService {
     void handleGwRelayMessage(String rawJson) {
         try {
             String gatewayMessageJson;
+            String relaySourceType = null;
+            java.util.List<String> relayRoutingKeys = null;
+
             if (rawJson.contains("\"type\":\"relay\"")) {
                 // New format: RelayMessage wrapper
                 RelayMessage relayMessage = objectMapper.readValue(rawJson, RelayMessage.class);
                 gatewayMessageJson = relayMessage.originalMessage();
+                relaySourceType = relayMessage.sourceType();
+                relayRoutingKeys = relayMessage.routingKeys();
                 log.info("EventRelayService.handleGwRelayMessage: new-format relay, sourceType={}",
-                        relayMessage.sourceType());
+                        relaySourceType);
             } else {
                 // Legacy format: raw GatewayMessage JSON
                 gatewayMessageJson = rawJson;
                 log.info("EventRelayService.handleGwRelayMessage: legacy-format relay, length={}", rawJson.length());
+            }
+
+            // V2: Propagate routing knowledge from relay metadata
+            if (relaySourceType != null && relayRoutingKeys != null && !relayRoutingKeys.isEmpty()) {
+                routingTable.learnFromRelay(relayRoutingKeys, relaySourceType);
+                log.info("EventRelayService.handleGwRelayMessage: propagated {} routing keys for sourceType={}",
+                        relayRoutingKeys.size(), relaySourceType);
             }
 
             GatewayMessage message = objectMapper.readValue(gatewayMessageJson, GatewayMessage.class);
@@ -190,6 +208,33 @@ public class EventRelayService {
         log.info("[ENTRY] EventRelayService.relayToAgent: ak={}, type={}", ak, message.getType());
         redisMessageBroker.publishToAgent(ak, message.withoutRoutingContext());
         log.info("[EXIT->AGENT] EventRelayService.relayToAgent: ak={}, type={}", ak, message.getType());
+    }
+
+    /**
+     * Attempts to deliver a message to a locally connected Agent.
+     * Used by SkillRelayService for V2 local-first delivery.
+     *
+     * @return true if the Agent is connected locally and the message was sent successfully
+     */
+    public boolean sendToLocalAgentIfPresent(String ak, GatewayMessage message) {
+        WebSocketSession session = agentSessions.get(ak);
+        if (session == null || !session.isOpen()) {
+            return false;
+        }
+
+        try {
+            String json = objectMapper.writeValueAsString(message);
+            synchronized (session) {
+                session.sendMessage(new TextMessage(json));
+            }
+            log.info("[EXIT->AGENT] Sent to local agent (V2 direct): ak={}, type={}",
+                    ak, message.getType());
+            return true;
+        } catch (IOException e) {
+            log.error("[ERROR] Failed to send to local agent (V2 direct): ak={}, type={}",
+                    ak, message.getType(), e);
+            return false;
+        }
     }
 
     private void sendToLocalAgent(String ak, GatewayMessage message) {

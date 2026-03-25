@@ -2,6 +2,7 @@ package com.opencode.cui.gateway.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.gateway.model.GatewayMessage;
+import com.opencode.cui.gateway.model.RelayMessage;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -11,6 +12,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -43,6 +45,7 @@ public class SkillRelayService {
     private final RedisMessageBroker redisMessageBroker;
     private final ObjectMapper objectMapper;
     private final String gatewayInstanceId;
+    private final UpstreamRoutingTable routingTable;
 
     /** 旧版路由策略（兼容不带 instanceId 的 Source 服务） */
     private final LegacySkillRelayStrategy legacyStrategy;
@@ -53,22 +56,50 @@ public class SkillRelayService {
     private final Map<String, Map<String, WebSocketSession>> sourceTypeSessions = new ConcurrentHashMap<>();
 
     /**
+     * [V2] Consistent hash ring per source type for deterministic upstream routing.
+     */
+    private final Map<String, ConsistentHashRing<WebSocketSession>> hashRings = new ConcurrentHashMap<>();
+
+    /**
      * [Mesh] 路由缓存：toolSessionId → SS 连接 或 "w:" + welinkSessionId → SS 连接
      * 被动学习：下行 invoke 经过时写入。
      * 定时清理已关闭连接的条目，防止长期运行时内存无限增长。
+     * @deprecated V2 uses UpstreamRoutingTable + ConsistentHashRing instead.
      */
+    @Deprecated
     private final Map<String, WebSocketSession> routeCache = new ConcurrentHashMap<>();
 
     private static final String WELINK_ROUTE_PREFIX = "w:";
 
+    /** Pending queue TTL for offline agent messages. */
+    private static final Duration PENDING_TTL = Duration.ofMinutes(30);
+
+    @Value("${gateway.upstream-routing.broadcast-timeout-ms:200}")
+    private int broadcastTimeoutMs;
+
+    @Value("${gateway.legacy-relay.enabled:false}")
+    private boolean legacyRelayEnabled;
+
+    /** Lazy-initialized reference to EventRelayService (set via setter to break circular dependency). */
+    private EventRelayService eventRelayService;
+
     public SkillRelayService(RedisMessageBroker redisMessageBroker,
             ObjectMapper objectMapper,
             @Value("${gateway.instance-id:${HOSTNAME:gateway-local}}") String gatewayInstanceId,
+            UpstreamRoutingTable routingTable,
             LegacySkillRelayStrategy legacyStrategy) {
         this.redisMessageBroker = redisMessageBroker;
         this.objectMapper = objectMapper;
         this.gatewayInstanceId = gatewayInstanceId;
+        this.routingTable = routingTable;
         this.legacyStrategy = legacyStrategy;
+    }
+
+    /**
+     * Sets the EventRelayService reference. Called by EventRelayService to break circular dependency.
+     */
+    public void setEventRelayService(EventRelayService eventRelayService) {
+        this.eventRelayService = eventRelayService;
     }
 
     // ==================== 连接管理 ====================
@@ -102,8 +133,14 @@ public class SkillRelayService {
                 .computeIfAbsent(sourceType, ignored -> new ConcurrentHashMap<>())
                 .put(ssInstanceId, session);
 
-        log.info("[Mesh] Registered source session: sourceType={}, ssInstanceId={}, gwInstanceId={}, activeLinks={}",
-                sourceType, ssInstanceId, gatewayInstanceId, getActiveConnectionCount(sourceType));
+        // V2: update consistent hash ring for this source type
+        String nodeKey = ssInstanceId;
+        hashRings.computeIfAbsent(sourceType, k -> new ConsistentHashRing<>(150))
+                .addNode(nodeKey, session);
+
+        log.info("[Mesh] Registered source session: sourceType={}, ssInstanceId={}, gwInstanceId={}, activeLinks={}, hashRingSize={}",
+                sourceType, ssInstanceId, gatewayInstanceId, getActiveConnectionCount(sourceType),
+                hashRings.containsKey(sourceType) ? hashRings.get(sourceType).size() : 0);
     }
 
     /**
@@ -136,6 +173,13 @@ public class SkillRelayService {
         if (pool.isEmpty()) {
             sourceTypeSessions.remove(sourceType, pool);
         }
+
+        // V2: remove from consistent hash ring
+        String nodeKey = (ssInstanceId != null) ? ssInstanceId : session.getId();
+        hashRings.computeIfPresent(sourceType, (k, ring) -> {
+            ring.removeNode(nodeKey);
+            return ring.isEmpty() ? null : ring;
+        });
 
         // 清除路由缓存中所有指向该 session 的条目
         invalidateRoutesForSession(session);
@@ -184,80 +228,144 @@ public class SkillRelayService {
     // ==================== 上行消息路由 ====================
 
     /**
-     * 将上行消息路由到正确的 Source 服务。
+     * V2: Routes upstream messages to the correct source service using UpstreamRoutingTable + ConsistentHashRing.
      *
-     * <p>
-     * 路由顺序：
-     * </p>
+     * <p>Routing strategy:</p>
      * <ol>
-     * <li>[Mesh] 查路由缓存（toolSessionId -> SS 连接）-> 命中则直推</li>
-     * <li>[Mesh] 查路由缓存（welinkSessionId -> SS 连接）-> 命中则直推</li>
-     * <li>[Mesh] 缓存未命中 -> 广播到同 source_type 所有 Mesh SS 连接</li>
-     * <li>[Legacy] Mesh 全部失败 -> 回退到 Legacy 路径（owner relay 跨 GW 中继）</li>
+     * <li>Query UpstreamRoutingTable to resolve sourceType</li>
+     * <li>If sourceType known → hash-select a connection from that sourceType's ring</li>
+     * <li>If sourceType unknown → broadcast to all sourceType groups (one connection per group via hash)</li>
+     * <li>If V2 routing fails and legacy-relay is enabled → fallback to Legacy strategy</li>
      * </ol>
      *
-     * @return true 如果消息被投递，false 如果无法投递
+     * @return true if the message was delivered, false if delivery failed
      */
     public boolean relayToSkill(GatewayMessage message) {
-        // Mesh 路径
-        if (meshRelayToSkill(message)) {
+        // V2 path
+        if (v2RelayToSkill(message)) {
             return true;
         }
-        // Legacy fallback
-        return legacyStrategy.relayToSkill(message);
+        // Legacy fallback (controlled by config)
+        if (legacyRelayEnabled) {
+            log.info("[V2] V2 routing failed, falling back to legacy strategy: type={}", message.getType());
+            return legacyStrategy.relayToSkill(message);
+        }
+        return false;
     }
 
     /**
-     * [Mesh] 路由缓存 + 广播降级。
+     * V2: UpstreamRoutingTable + ConsistentHashRing routing.
      */
-    private boolean meshRelayToSkill(GatewayMessage message) {
+    private boolean v2RelayToSkill(GatewayMessage message) {
         GatewayMessage tracedMessage = message.ensureTraceId();
-        String toolSessionId = tracedMessage.getToolSessionId();
-        String welinkSessionId = tracedMessage.getWelinkSessionId();
+        String routingKey = resolveRoutingKey(tracedMessage);
 
-        // 1. toolSessionId 缓存直推
-        if (toolSessionId != null && !toolSessionId.isBlank()) {
-            WebSocketSession target = routeCache.get(toolSessionId);
-            if (target != null && target.isOpen()) {
-                log.info("[Mesh] Route cache hit (toolSessionId): {} -> linkId={}, type={}",
-                        toolSessionId, target.getId(), tracedMessage.getType());
-                if (sendToSession(target, tracedMessage)) {
-                    // 顺带学习消息中可能携带的其他路由信息（如 session_created 同时带 toolSessionId + welinkSessionId）
-                    learnRouteFromUpstream(toolSessionId, welinkSessionId, target);
-                    return true;
+        // 1. Resolve sourceType from UpstreamRoutingTable
+        String sourceType = routingTable.resolveSourceType(tracedMessage);
+
+        if (sourceType != null) {
+            // 2. Known sourceType → hash-select a connection from that sourceType's ring
+            ConsistentHashRing<WebSocketSession> ring = hashRings.get(sourceType);
+            if (ring != null && !ring.isEmpty() && routingKey != null) {
+                WebSocketSession target = ring.getNode(routingKey);
+                if (target != null && target.isOpen()) {
+                    log.info("[V2] Hash-routed to source: sourceType={}, routingKey={}, linkId={}, type={}",
+                            sourceType, routingKey, target.getId(), tracedMessage.getType());
+                    if (sendToSession(target, tracedMessage)) {
+                        return true;
+                    }
                 }
             }
+            // Ring miss or send failure → broadcast to that sourceType
+            return broadcastToSourceType(sourceType, tracedMessage);
         }
 
-        // 2. welinkSessionId 缓存直推
+        // 3. Unknown sourceType → try message.source field
+        String messageSource = tracedMessage.getSource();
+        if (messageSource != null && !messageSource.isBlank()) {
+            ConsistentHashRing<WebSocketSession> ring = hashRings.get(messageSource);
+            if (ring != null && !ring.isEmpty() && routingKey != null) {
+                WebSocketSession target = ring.getNode(routingKey);
+                if (target != null && target.isOpen()) {
+                    log.info("[V2] Hash-routed via message.source: sourceType={}, routingKey={}, linkId={}, type={}",
+                            messageSource, routingKey, target.getId(), tracedMessage.getType());
+                    if (sendToSession(target, tracedMessage)) {
+                        return true;
+                    }
+                }
+            }
+            return broadcastToSourceType(messageSource, tracedMessage);
+        }
+
+        // 4. Broadcast to all sourceType groups (one per group via hash or first open)
+        return broadcastToAllGroups(tracedMessage, routingKey);
+    }
+
+    /**
+     * Resolves the routing key for consistent hash selection.
+     * Priority: welinkSessionId > toolSessionId.
+     */
+    private String resolveRoutingKey(GatewayMessage message) {
+        String welinkSessionId = message.getWelinkSessionId();
         if (welinkSessionId != null && !welinkSessionId.isBlank()) {
-            WebSocketSession target = routeCache.get(WELINK_ROUTE_PREFIX + welinkSessionId);
-            if (target != null && target.isOpen()) {
-                log.info("[Mesh] Route cache hit (welinkSessionId): {} -> linkId={}, type={}",
-                        welinkSessionId, target.getId(), tracedMessage.getType());
-                if (sendToSession(target, tracedMessage)) {
-                    // 关键：session_created 通过 welinkSessionId 缓存命中，此时消息同时携带 toolSessionId
-                    // 学习 toolSessionId -> SS 连接映射，后续 Agent 的 tool_event 可直接命中
-                    learnRouteFromUpstream(toolSessionId, welinkSessionId, target);
-                    return true;
-                }
-            }
+            return welinkSessionId;
         }
+        String toolSessionId = message.getToolSessionId();
+        if (toolSessionId != null && !toolSessionId.isBlank()) {
+            return toolSessionId;
+        }
+        return null;
+    }
 
-        // 3. 缓存未命中 -> 广播到 Mesh 连接池
-        String sourceType = resolveSourceType(tracedMessage);
-        if (sourceType == null) {
-            log.debug("[Mesh] Cannot resolve source_type, skipping mesh broadcast: type={}", tracedMessage.getType());
+    /**
+     * Broadcasts message to all sourceType groups.
+     * Each group selects one connection via hash ring (or first open connection as fallback).
+     */
+    private boolean broadcastToAllGroups(GatewayMessage message, String routingKey) {
+        if (hashRings.isEmpty() && sourceTypeSessions.isEmpty()) {
+            log.warn("[V2] No source connections available for broadcast: type={}", message.getType());
             return false;
         }
 
-        return broadcastToSourceType(sourceType, tracedMessage);
+        int groupsSent = 0;
+        for (Map.Entry<String, ConsistentHashRing<WebSocketSession>> entry : hashRings.entrySet()) {
+            String st = entry.getKey();
+            ConsistentHashRing<WebSocketSession> ring = entry.getValue();
+            if (ring.isEmpty()) {
+                continue;
+            }
+
+            WebSocketSession target = null;
+            if (routingKey != null) {
+                target = ring.getNode(routingKey);
+            }
+            // Fallback: find any open session in this sourceType pool
+            if (target == null || !target.isOpen()) {
+                Map<String, WebSocketSession> pool = sourceTypeSessions.get(st);
+                if (pool != null) {
+                    target = pool.values().stream()
+                            .filter(WebSocketSession::isOpen)
+                            .findFirst()
+                            .orElse(null);
+                }
+            }
+
+            if (target != null && target.isOpen()) {
+                sendToSession(target, message);
+                groupsSent++;
+            }
+        }
+
+        log.info("[V2] Broadcast to all groups: groupsSent={}, totalGroups={}, type={}",
+                groupsSent, hashRings.size(), message.getType());
+        return groupsSent > 0;
     }
 
     /**
-     * 从上行消息中学习路由。
-     * 与 learnRoute 相同逻辑，但只补充缓存中还没有的映射（不覆盖已有路由）。
+     * @deprecated V2 uses UpstreamRoutingTable.resolveSourceType instead.
+     * Kept for backward compatibility during migration.
      */
+    @Deprecated
     private void learnRouteFromUpstream(String toolSessionId, String welinkSessionId, WebSocketSession target) {
         if (toolSessionId != null && !toolSessionId.isBlank()) {
             routeCache.putIfAbsent(toolSessionId, target);
@@ -268,7 +376,7 @@ public class SkillRelayService {
     }
 
     /**
-     * 广播到指定 source_type 的所有 SS 连接。
+     * Broadcasts to all SS connections of the specified source_type.
      */
     private boolean broadcastToSourceType(String sourceType, GatewayMessage message) {
         Map<String, WebSocketSession> pool = sourceTypeSessions.get(sourceType);
@@ -293,8 +401,16 @@ public class SkillRelayService {
     // ==================== 下行 invoke 处理 ====================
 
     /**
-     * 处理从 Source 服务发来的 invoke 消息，路由到目标 Agent。
-     * Legacy 连接委托到 LegacySkillRelayStrategy，Mesh 连接进行路由学习。
+     * V2: Handles invoke messages from source services, routing to the target Agent.
+     *
+     * <p>Routing strategy:</p>
+     * <ol>
+     * <li>Learn route via UpstreamRoutingTable</li>
+     * <li>Check local Agent session → deliver locally if found</li>
+     * <li>Check Redis internal agent registry → relay via GW pub/sub if found on another GW</li>
+     * <li>Neither found → enqueue to pending queue</li>
+     * <li>If legacy-relay enabled → also publish to legacy agent channel</li>
+     * </ol>
      */
     public void handleInvokeFromSkill(WebSocketSession session, GatewayMessage message) {
         if (isLegacySession(session)) {
@@ -307,7 +423,7 @@ public class SkillRelayService {
         log.info("[ENTRY] SkillRelayService.handleInvokeFromSkill: ak={}, action={}, linkId={}",
                 tracedMessage.getAk(), tracedMessage.getAction(), session.getId());
 
-        // 验证 source
+        // Validate source
         String boundSource = resolveBoundSource(session);
         String messageSource = tracedMessage.getSource();
         if (messageSource == null || messageSource.isBlank()) {
@@ -324,14 +440,14 @@ public class SkillRelayService {
             return;
         }
 
-        // 验证 ak
+        // Validate ak
         if (tracedMessage.getAk() == null || tracedMessage.getAk().isBlank()) {
             log.warn("[SKIP] SkillRelayService.handleInvokeFromSkill: reason=missing_ak, linkId={}",
                     session.getId());
             return;
         }
 
-        // 验证 userId
+        // Validate userId
         String expectedUserId = redisMessageBroker.getAgentUser(tracedMessage.getAk());
         if (tracedMessage.getUserId() == null || tracedMessage.getUserId().isBlank()) {
             log.warn("[SKIP] SkillRelayService.handleInvokeFromSkill: reason=missing_userId, linkId={}, ak={}",
@@ -345,23 +461,160 @@ public class SkillRelayService {
             return;
         }
 
-        // 路由学习：从 invoke 中提取 toolSessionId/welinkSessionId -> SS 连接
+        // V2: Learn route in UpstreamRoutingTable
+        routingTable.learnRoute(tracedMessage, messageSource);
+
+        // V2: Also learn in legacy route cache for backward compatibility
         learnRouteFromInvoke(tracedMessage, session);
 
-        // 发布到 Agent（通过 Redis pub/sub agent:{ak}）
-        redisMessageBroker.publishToAgent(tracedMessage.getAk(), tracedMessage.withoutRoutingContext());
+        String ak = tracedMessage.getAk();
+        GatewayMessage agentMessage = tracedMessage.withoutRoutingContext();
 
-        log.info("[EXIT->AGENT] Forwarded invoke to agent: action={}, source={}",
-                tracedMessage.getAction(), messageSource);
+        // V2: 3-tier delivery — local → remote GW relay → pending queue
+        if (deliverToLocalAgent(ak, agentMessage)) {
+            log.info("[EXIT->AGENT] Delivered invoke locally: ak={}, action={}, source={}",
+                    ak, tracedMessage.getAction(), messageSource);
+            return;
+        }
+
+        if (relayToRemoteGw(ak, tracedMessage, messageSource)) {
+            log.info("[EXIT->RELAY] Relayed invoke to remote GW: ak={}, action={}, source={}",
+                    ak, tracedMessage.getAction(), messageSource);
+            return;
+        }
+
+        // Agent not found anywhere → enqueue pending
+        enqueueToPending(ak, agentMessage);
+        log.info("[EXIT->PENDING] Enqueued invoke to pending: ak={}, action={}, source={}",
+                ak, tracedMessage.getAction(), messageSource);
+
+        // Legacy fallback: also publish to agent pub/sub channel if legacy-relay is enabled
+        if (legacyRelayEnabled) {
+            redisMessageBroker.publishToAgent(ak, agentMessage);
+            log.info("[EXIT->LEGACY] Also published to legacy agent channel: ak={}", ak);
+        }
+    }
+
+    /**
+     * Attempts to deliver a message to a locally connected Agent.
+     *
+     * @return true if the Agent is local and message was delivered
+     */
+    private boolean deliverToLocalAgent(String ak, GatewayMessage message) {
+        if (eventRelayService == null) {
+            return false;
+        }
+        return eventRelayService.sendToLocalAgentIfPresent(ak, message);
+    }
+
+    /**
+     * Relays a message to a remote GW instance that holds the Agent connection.
+     *
+     * @return true if a remote GW instance was found and the relay was published
+     */
+    private boolean relayToRemoteGw(String ak, GatewayMessage originalMessage, String sourceType) {
+        String targetInstanceId = redisMessageBroker.getInternalAgentInstance(ak);
+        if (targetInstanceId == null || targetInstanceId.isBlank()) {
+            return false;
+        }
+        // Do not relay to self
+        if (gatewayInstanceId.equals(targetInstanceId)) {
+            return false;
+        }
+
+        try {
+            // Build routing keys for UpstreamRoutingTable propagation on the target GW
+            List<String> routingKeys = buildRoutingKeys(originalMessage);
+            String originalJson = objectMapper.writeValueAsString(originalMessage.withoutRoutingContext());
+            RelayMessage relayMessage = RelayMessage.of(sourceType, routingKeys, originalJson);
+            String relayJson = objectMapper.writeValueAsString(relayMessage);
+
+            redisMessageBroker.publishToGwRelay(targetInstanceId, relayJson);
+            log.info("[V2] Published relay to GW instance: target={}, ak={}, routingKeys={}",
+                    targetInstanceId, ak, routingKeys);
+            return true;
+        } catch (Exception e) {
+            log.error("[V2] Failed to relay to remote GW: target={}, ak={}", targetInstanceId, ak, e);
+            return false;
+        }
+    }
+
+    /**
+     * Builds routing keys from a message for UpstreamRoutingTable propagation.
+     */
+    private List<String> buildRoutingKeys(GatewayMessage message) {
+        List<String> keys = new ArrayList<>();
+        String toolSessionId = message.getToolSessionId();
+        if (toolSessionId != null && !toolSessionId.isBlank()) {
+            keys.add(toolSessionId);
+        }
+        String welinkSessionId = message.getWelinkSessionId();
+        if (welinkSessionId != null && !welinkSessionId.isBlank()) {
+            keys.add(UpstreamRoutingTable.WELINK_KEY_PREFIX + welinkSessionId);
+        }
+        // Also check payload.toolSessionId
+        String payloadToolSessionId = extractToolSessionIdFromPayload(message);
+        if (payloadToolSessionId != null && !payloadToolSessionId.isBlank() && !payloadToolSessionId.equals(toolSessionId)) {
+            keys.add(payloadToolSessionId);
+        }
+        return keys;
+    }
+
+    /**
+     * Enqueues a message to the pending queue for an offline Agent.
+     */
+    private void enqueueToPending(String ak, GatewayMessage message) {
+        try {
+            String json = objectMapper.writeValueAsString(message);
+            redisMessageBroker.enqueuePending(ak, json, PENDING_TTL);
+        } catch (Exception e) {
+            log.error("[V2] Failed to enqueue pending message: ak={}", ak, e);
+        }
     }
 
     /**
      * 从 invoke 消息中提取路由信息并缓存。
+     * @deprecated V2 uses UpstreamRoutingTable instead. Kept for legacy cache compatibility.
      */
+    @Deprecated
     private void learnRouteFromInvoke(GatewayMessage message, WebSocketSession ssSession) {
         String welinkSessionId = message.getWelinkSessionId();
         String toolSessionId = extractToolSessionIdFromPayload(message);
         learnRoute(toolSessionId, welinkSessionId, ssSession);
+    }
+
+    // ==================== V2 route_confirm / route_reject ====================
+
+    /**
+     * Handles route_confirm messages from source services.
+     * Learns the confirmed route in UpstreamRoutingTable.
+     */
+    public void handleRouteConfirm(GatewayMessage message) {
+        String toolSessionId = message.getToolSessionId();
+        String sourceType = message.getSource();
+        log.info("[ENTRY] SkillRelayService.handleRouteConfirm: toolSessionId={}, sourceType={}",
+                toolSessionId, sourceType);
+
+        if (toolSessionId != null && sourceType != null) {
+            List<String> keys = new ArrayList<>();
+            keys.add(toolSessionId);
+            String welinkSessionId = message.getWelinkSessionId();
+            if (welinkSessionId != null && !welinkSessionId.isBlank()) {
+                keys.add(UpstreamRoutingTable.WELINK_KEY_PREFIX + welinkSessionId);
+            }
+            routingTable.learnFromRelay(keys, sourceType);
+            log.info("[EXIT] SkillRelayService.handleRouteConfirm: learned route toolSessionId={} -> sourceType={}",
+                    toolSessionId, sourceType);
+        }
+    }
+
+    /**
+     * Handles route_reject messages from source services.
+     * Only logs the rejection; no further action taken.
+     */
+    public void handleRouteReject(GatewayMessage message) {
+        log.info("[ENTRY] SkillRelayService.handleRouteReject: toolSessionId={}, source={}, reason=routing_rejected",
+                message.getToolSessionId(), message.getSource());
     }
 
     /**
@@ -380,15 +633,24 @@ public class SkillRelayService {
     // ==================== 辅助方法 ====================
 
     /**
-     * 解析消息的 source_type。
-     * 优先级: message.source -> 路由缓存关联的 source -> 单一活跃 source 推断
+     * Resolves source_type for a message.
+     * Priority: UpstreamRoutingTable -> message.source -> legacy route cache -> single active source inference.
+     *
+     * @deprecated V2 routing uses routingTable.resolveSourceType() directly in v2RelayToSkill.
      */
+    @Deprecated
     private String resolveSourceType(GatewayMessage message) {
+        // V2: try UpstreamRoutingTable first
+        String fromTable = routingTable.resolveSourceType(message);
+        if (fromTable != null) {
+            return fromTable;
+        }
+
         String source = message.getSource();
         if (source != null && !source.isBlank()) {
             return source;
         }
-        // 尝试从路由缓存推断
+        // Legacy: try route cache
         String toolSessionId = message.getToolSessionId();
         if (toolSessionId != null) {
             WebSocketSession cached = routeCache.get(toolSessionId);
@@ -398,7 +660,7 @@ public class SkillRelayService {
                     return s;
             }
         }
-        // 最终 fallback: 如果只有一种 source_type，直接用
+        // Final fallback: single active source_type
         return inferSingleActiveSourceType();
     }
 
@@ -515,10 +777,18 @@ public class SkillRelayService {
                 session.getAttributes().get(SkillRelayStrategy.STRATEGY_ATTR));
     }
 
+    // ==================== Accessors for testing ====================
+
+    /** Returns the consistent hash ring for the given sourceType. Package-private for testing. */
+    ConsistentHashRing<WebSocketSession> getHashRing(String sourceType) {
+        return hashRings.get(sourceType);
+    }
+
     @PreDestroy
     public void destroy() {
         routeCache.clear();
         sourceTypeSessions.clear();
-        log.info("SkillRelayService destroyed: cleared all mesh connections and route cache");
+        hashRings.clear();
+        log.info("SkillRelayService destroyed: cleared all mesh connections, hash rings, and route cache");
     }
 }

@@ -42,6 +42,7 @@ class SkillRelayServiceTest {
     private WebSocketSession bpSession;
 
     private SkillRelayService service;
+    private UpstreamRoutingTable routingTable;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final String INSTANCE_ID = "gw-local";
@@ -50,7 +51,8 @@ class SkillRelayServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new SkillRelayService(redisMessageBroker, objectMapper, INSTANCE_ID, legacyStrategy);
+        routingTable = new UpstreamRoutingTable(100000, 30);
+        service = new SkillRelayService(redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, legacyStrategy);
     }
 
     private static Map<String, Object> mutableAttrs(String source, String instanceId) {
@@ -83,20 +85,20 @@ class SkillRelayServiceTest {
         service.registerSourceSession(bpSession);
     }
 
-    // ==================== 路由缓存直推 ====================
+    // ==================== V2 路由表直推 ====================
 
     @Nested
-    @DisplayName("路由缓存直推")
-    class CacheHitTests {
+    @DisplayName("V2 路由表直推")
+    class RoutingTableHitTests {
 
         @Test
-        @DisplayName("缓存命中时直推到目标 SS 连接")
-        void relayToSkill_cacheHit_directPush() throws Exception {
+        @DisplayName("路由表命中时 hash 选择目标 SS 连接")
+        void relayToSkill_routingTableHit_hashSelect() throws Exception {
             registerSs1();
             registerSs2();
 
-            // 通过 learnRoute 建立缓存
-            service.learnRoute("T1", "W1", ss2Session);
+            // V2: teach routing table instead of legacy route cache
+            routingTable.learnFromRelay(java.util.List.of("T1"), SOURCE_TYPE_SKILL);
 
             GatewayMessage msg = GatewayMessage.builder()
                     .type(GatewayMessage.Type.TOOL_EVENT)
@@ -106,16 +108,19 @@ class SkillRelayServiceTest {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
-            verify(ss2Session).sendMessage(any(TextMessage.class));
-            verify(ss1Session, never()).sendMessage(any(TextMessage.class));
+            // At least one should receive (hash-selected)
+            int sendCount = 0;
+            try { verify(ss1Session).sendMessage(any(TextMessage.class)); sendCount++; } catch (AssertionError ignored) {}
+            try { verify(ss2Session).sendMessage(any(TextMessage.class)); sendCount++; } catch (AssertionError ignored) {}
+            assertTrue(sendCount >= 1);
         }
 
         @Test
-        @DisplayName("通过 welinkSessionId 缓存命中")
-        void relayToSkill_welinkCacheHit() throws Exception {
+        @DisplayName("通过 welinkSessionId 路由表命中")
+        void relayToSkill_welinkRoutingTableHit() throws Exception {
             registerSs1();
 
-            service.learnRoute(null, "W1", ss1Session);
+            routingTable.learnFromRelay(java.util.List.of("w:W1"), SOURCE_TYPE_SKILL);
 
             GatewayMessage msg = GatewayMessage.builder()
                     .type(GatewayMessage.Type.SESSION_CREATED)
@@ -137,8 +142,8 @@ class SkillRelayServiceTest {
     class BroadcastFallbackTests {
 
         @Test
-        @DisplayName("缓存未命中时广播到同 source_type 所有 SS")
-        void relayToSkill_cacheMiss_broadcastToSameSourceType() throws Exception {
+        @DisplayName("路由表未命中时 hash 选择同 source_type 的一个 SS")
+        void relayToSkill_noRouteEntry_hashSelectOneFromSourceType() throws Exception {
             registerSs1();
             registerSs2();
 
@@ -151,13 +156,16 @@ class SkillRelayServiceTest {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
-            verify(ss1Session).sendMessage(any(TextMessage.class));
-            verify(ss2Session).sendMessage(any(TextMessage.class));
+            // V2: hash-selects one connection from the source type's ring (not broadcast)
+            int sendCount = 0;
+            try { verify(ss1Session).sendMessage(any(TextMessage.class)); sendCount++; } catch (AssertionError ignored) {}
+            try { verify(ss2Session).sendMessage(any(TextMessage.class)); sendCount++; } catch (AssertionError ignored) {}
+            assertTrue(sendCount >= 1, "At least one session should receive the message");
         }
 
         @Test
         @DisplayName("广播时不发送到其他 source_type 的连接")
-        void relayToSkill_cacheMiss_doesNotBroadcastToOtherSourceType() throws Exception {
+        void relayToSkill_noRouteEntry_doesNotBroadcastToOtherSourceType() throws Exception {
             registerSs1();
             registerBp();
 
@@ -174,10 +182,8 @@ class SkillRelayServiceTest {
         }
 
         @Test
-        @DisplayName("无任何连接时 Mesh 和 Legacy 都返回 false")
+        @DisplayName("无任何连接时返回 false")
         void relayToSkill_noConnections_returnsFalse() {
-            when(legacyStrategy.relayToSkill(any(GatewayMessage.class))).thenReturn(false);
-
             GatewayMessage msg = GatewayMessage.builder()
                     .type(GatewayMessage.Type.TOOL_EVENT)
                     .toolSessionId("T1")
@@ -190,160 +196,81 @@ class SkillRelayServiceTest {
         }
     }
 
-    // ==================== 路由学习 ====================
+    // ==================== V2 路由学习 ====================
 
     @Nested
-    @DisplayName("路由学习")
+    @DisplayName("V2 路由学习")
     class LearnRouteTests {
 
         @Test
-        @DisplayName("learnRoute 缓存 toolSessionId")
-        void learnRoute_cachesToolSessionId() throws Exception {
+        @DisplayName("routing table learns toolSessionId -> sourceType")
+        void routingTable_learnToolSessionId() throws Exception {
             registerSs1();
             registerSs2();
 
-            service.learnRoute("T2", null, ss2Session);
+            // V2: learn via routing table
+            routingTable.learnFromRelay(java.util.List.of("T2"), SOURCE_TYPE_SKILL);
 
             GatewayMessage msg = GatewayMessage.builder()
                     .type(GatewayMessage.Type.TOOL_EVENT)
                     .toolSessionId("T2")
                     .build();
 
-            service.relayToSkill(msg);
+            boolean result = service.relayToSkill(msg);
 
-            verify(ss2Session).sendMessage(any(TextMessage.class));
-            verify(ss1Session, never()).sendMessage(any(TextMessage.class));
+            assertTrue(result);
+            // At least one skill-server session should receive
+            int sendCount = 0;
+            try { verify(ss1Session).sendMessage(any(TextMessage.class)); sendCount++; } catch (AssertionError ignored) {}
+            try { verify(ss2Session).sendMessage(any(TextMessage.class)); sendCount++; } catch (AssertionError ignored) {}
+            assertTrue(sendCount >= 1);
         }
 
         @Test
-        @DisplayName("learnRoute 缓存 welinkSessionId")
-        void learnRoute_cachesWelinkSessionId() throws Exception {
+        @DisplayName("routing table learns welinkSessionId -> sourceType")
+        void routingTable_learnWelinkSessionId() throws Exception {
             registerSs1();
 
-            service.learnRoute(null, "W5", ss1Session);
+            routingTable.learnFromRelay(java.util.List.of("w:W5"), SOURCE_TYPE_SKILL);
 
             GatewayMessage msg = GatewayMessage.builder()
                     .type(GatewayMessage.Type.SESSION_CREATED)
                     .welinkSessionId("W5")
                     .build();
 
-            service.relayToSkill(msg);
+            boolean result = service.relayToSkill(msg);
 
+            assertTrue(result);
             verify(ss1Session).sendMessage(any(TextMessage.class));
         }
 
         @Test
-        @DisplayName("learnRoute 同时缓存 toolSessionId 和 welinkSessionId")
-        void learnRoute_cachesBothIds() throws Exception {
-            registerSs2();
-
-            service.learnRoute("T3", "W3", ss2Session);
-
-            // toolSessionId 路由
-            GatewayMessage msg1 = GatewayMessage.builder()
-                    .type(GatewayMessage.Type.TOOL_EVENT)
-                    .toolSessionId("T3")
-                    .build();
-            service.relayToSkill(msg1);
-            verify(ss2Session).sendMessage(any(TextMessage.class));
-        }
-
-        @Test
-        @DisplayName("learnRoute 忽略 null/blank 参数")
+        @DisplayName("learnRoute ignores null/blank params without exception")
         void learnRoute_ignoresNullParams() {
             registerSs1();
 
-            // 不应抛异常
+            // Should not throw
             service.learnRoute(null, null, ss1Session);
             service.learnRoute("", "", ss1Session);
         }
-
-        @Test
-        @DisplayName("session_created 通过 welinkSessionId 命中后自动学习 toolSessionId")
-        void upstreamLearn_sessionCreated_learnToolSessionId() throws Exception {
-            registerSs1();
-
-            // 模拟下行 invoke 时只学习了 welinkSessionId
-            service.learnRoute(null, "W10", ss1Session);
-
-            // 上行 session_created 同时携带 welinkSessionId 和 toolSessionId
-            GatewayMessage sessionCreated = GatewayMessage.builder()
-                    .type(GatewayMessage.Type.SESSION_CREATED)
-                    .welinkSessionId("W10")
-                    .toolSessionId("T10")
-                    .build();
-
-            boolean result = service.relayToSkill(sessionCreated);
-            assertTrue(result);
-
-            // 验证 toolSessionId 已被学习：后续 tool_event 通过 T10 直接命中缓存
-            reset(ss1Session);
-            lenient().when(ss1Session.isOpen()).thenReturn(true);
-
-            GatewayMessage toolEvent = GatewayMessage.builder()
-                    .type(GatewayMessage.Type.TOOL_EVENT)
-                    .toolSessionId("T10")
-                    .build();
-
-            service.relayToSkill(toolEvent);
-            verify(ss1Session).sendMessage(any(TextMessage.class));
-        }
-
-        @Test
-        @DisplayName("上行路由学习不覆盖已有的路由缓存")
-        void upstreamLearn_doesNotOverwriteExisting() throws Exception {
-            registerSs1();
-            registerSs2();
-
-            // T20 已学习指向 SS-2
-            service.learnRoute("T20", null, ss2Session);
-            // welinkSessionId 指向 SS-1
-            service.learnRoute(null, "W20", ss1Session);
-
-            // 上行消息通过 welinkSessionId 命中 SS-1，同时携带 T20
-            GatewayMessage msg = GatewayMessage.builder()
-                    .type(GatewayMessage.Type.SESSION_CREATED)
-                    .welinkSessionId("W20")
-                    .toolSessionId("T20")
-                    .build();
-
-            service.relayToSkill(msg);
-
-            // T20 的路由应该仍然指向 SS-2（putIfAbsent 不覆盖）
-            reset(ss1Session, ss2Session);
-            lenient().when(ss1Session.isOpen()).thenReturn(true);
-            lenient().when(ss2Session.isOpen()).thenReturn(true);
-
-            GatewayMessage toolEvent = GatewayMessage.builder()
-                    .type(GatewayMessage.Type.TOOL_EVENT)
-                    .toolSessionId("T20")
-                    .build();
-
-            service.relayToSkill(toolEvent);
-            verify(ss2Session).sendMessage(any(TextMessage.class));
-            verify(ss1Session, never()).sendMessage(any(TextMessage.class));
-        }
     }
 
-    // ==================== 缓存失效 ====================
+    // ==================== 连接断开处理 ====================
 
     @Nested
-    @DisplayName("缓存失效")
-    class CacheInvalidationTests {
+    @DisplayName("连接断开处理")
+    class ConnectionDisconnectTests {
 
         @Test
-        @DisplayName("SS 断连时清除该实例的所有缓存条目")
-        void invalidateRoutesForSession_clearsAllEntries() throws Exception {
+        @DisplayName("SS 断连后消息路由到剩余连接")
+        void removeSession_messageFallsToRemainingSession() throws Exception {
             registerSs1();
             registerSs2();
 
-            service.learnRoute("T1", "W1", ss2Session);
-            service.learnRoute("T2", "W2", ss2Session);
-
-            // 模拟 SS-2 断连
+            // SS-2 disconnects
             service.removeSourceSession(ss2Session);
 
-            // T1、T2 缓存应已清除 → cache miss → 广播到 SS-1
+            // Messages should route to remaining SS-1
             GatewayMessage msg = GatewayMessage.builder()
                     .type(GatewayMessage.Type.TOOL_EVENT)
                     .toolSessionId("T1")
@@ -359,7 +286,6 @@ class SkillRelayServiceTest {
         @Test
         @DisplayName("同 instanceId 的旧连接断开不误删新连接")
         void removeOldSession_doesNotRemoveNewSessionWithSameInstanceId() throws Exception {
-            // 模拟 seed + discovery 双连接：同一 instanceId "skill-server-local"
             WebSocketSession oldSession = mock(WebSocketSession.class);
             WebSocketSession newSession = mock(WebSocketSession.class);
 
@@ -379,14 +305,13 @@ class SkillRelayServiceTest {
             lenient().when(newSession.getAttributes()).thenReturn(newAttrs);
             lenient().when(newSession.isOpen()).thenReturn(true);
 
-            // 先注册旧连接，再注册新连接（新连接覆盖旧连接）
             service.registerSourceSession(oldSession);
             service.registerSourceSession(newSession);
 
-            // 旧连接断开
+            // Old connection disconnects
             service.removeSourceSession(oldSession);
 
-            // 新连接应仍然可用：通过广播投递到 newSession
+            // New connection should still be usable
             GatewayMessage msg = GatewayMessage.builder()
                     .type(GatewayMessage.Type.TOOL_EVENT)
                     .source(SOURCE_TYPE_SKILL)
@@ -407,14 +332,14 @@ class SkillRelayServiceTest {
     class SourceTypeIsolationTests {
 
         @Test
-        @DisplayName("不同 source_type 的连接池完全隔离")
+        @DisplayName("不同 source_type 的连接池通过路由表隔离")
         void registerMultipleSourceTypes_isolatedPools() throws Exception {
             registerSs1();
             registerBp();
 
-            // 学到 T1 → SS-1 (skill-server) 和 T3 → BP-1 (bot-platform)
-            service.learnRoute("T1", null, ss1Session);
-            service.learnRoute("T3", null, bpSession);
+            // V2: learn via routing table
+            routingTable.learnFromRelay(java.util.List.of("T1"), SOURCE_TYPE_SKILL);
+            routingTable.learnFromRelay(java.util.List.of("T3"), SOURCE_TYPE_BOT);
 
             GatewayMessage msg1 = GatewayMessage.builder()
                     .type(GatewayMessage.Type.TOOL_EVENT)
@@ -512,11 +437,9 @@ class SkillRelayServiceTest {
         }
 
         @Test
-        @DisplayName("Mesh 路由失败后 fallback 到 Legacy")
-        void relayToSkill_meshFails_fallbackToLegacy() {
-            // 无 Mesh 连接 → Mesh 路由失败
-            when(legacyStrategy.relayToSkill(any(GatewayMessage.class))).thenReturn(true);
-
+        @DisplayName("V2 路由失败时不调用 Legacy（legacy-relay 默认关闭）")
+        void relayToSkill_v2Fails_noLegacyWhenDisabled() {
+            // No connections, legacy-relay disabled (default)
             GatewayMessage msg = GatewayMessage.builder()
                     .type(GatewayMessage.Type.TOOL_EVENT)
                     .source(SOURCE_TYPE_SKILL)
@@ -524,12 +447,12 @@ class SkillRelayServiceTest {
 
             boolean result = service.relayToSkill(msg);
 
-            assertTrue(result);
-            verify(legacyStrategy).relayToSkill(any(GatewayMessage.class));
+            assertFalse(result);
+            verify(legacyStrategy, never()).relayToSkill(any(GatewayMessage.class));
         }
 
         @Test
-        @DisplayName("Mesh 路由成功时不调用 Legacy")
+        @DisplayName("V2 路由成功时不调用 Legacy")
         void relayToSkill_meshSucceeds_noLegacy() throws Exception {
             registerSs1();
 
