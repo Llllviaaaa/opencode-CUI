@@ -10,6 +10,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -17,6 +19,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -27,13 +31,18 @@ class SessionRouteServiceTest {
     @Mock
     private SessionRouteRepository repository;
 
+    @Mock
+    private StringRedisTemplate redisTemplate;
+
     private SessionRouteService service;
 
     private static final String INSTANCE_ID = "ss-az1-1";
 
     @BeforeEach
     void setUp() {
-        service = new SessionRouteService(repository, INSTANCE_ID);
+        ValueOperations<String, String> valueOps = mock(ValueOperations.class);
+        lenient().when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        service = new SessionRouteService(repository, redisTemplate, INSTANCE_ID, 1800);
     }
 
     @Nested

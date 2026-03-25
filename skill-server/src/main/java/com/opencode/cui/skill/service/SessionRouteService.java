@@ -5,8 +5,10 @@ import com.opencode.cui.skill.repository.SessionRouteRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 
 /**
@@ -14,18 +16,30 @@ import java.time.LocalDateTime;
  *
  * 管理 session_route 表的 CRUD，提供 ownership 检查用于广播降级时的过滤。
  * 包含生命周期管理（启动接管、优雅关闭）和数据清理功能。
+ *
+ * Redis cache layer: ss:internal:session:{welinkSessionId} → instanceId
+ * Read: check Redis first, fallback to MySQL and backfill on miss.
+ * Write: MySQL first, then Redis. Redis failures are non-fatal (WARN + continue).
  */
 @Slf4j
 @Service
 public class SessionRouteService {
 
+    private static final String SESSION_CACHE_PREFIX = "ss:internal:session:";
+
     private final SessionRouteRepository repository;
+    private final StringRedisTemplate redisTemplate;
     private final String instanceId;
+    private final int ownershipCacheTtlSeconds;
 
     public SessionRouteService(SessionRouteRepository repository,
-            @Value("${skill.instance-id:${HOSTNAME:skill-server-local}}") String instanceId) {
+            StringRedisTemplate redisTemplate,
+            @Value("${skill.instance-id:${HOSTNAME:skill-server-local}}") String instanceId,
+            @Value("${skill.session.ownership-cache-ttl-seconds:1800}") int ownershipCacheTtlSeconds) {
         this.repository = repository;
+        this.redisTemplate = redisTemplate;
         this.instanceId = instanceId;
+        this.ownershipCacheTtlSeconds = ownershipCacheTtlSeconds;
     }
 
     // ==================== CRUD ====================
@@ -34,6 +48,7 @@ public class SessionRouteService {
      * 创建路由记录。会话创建时调用。
      * toolSessionId 此时为 null，等 session_created 回来后由 updateToolSessionId 回填。
      * 并发防护：重复插入时记录警告但不抛异常。
+     * After successful MySQL insert, writes ownership to Redis cache.
      */
     public void createRoute(String ak, Long welinkSessionId, String sourceType, String userId) {
         SessionRoute route = SessionRoute.builder()
@@ -52,7 +67,10 @@ public class SessionRouteService {
         } catch (DuplicateKeyException e) {
             log.warn("路由记录已存在，跳过插入: ak={}, welinkSessionId={}, sourceType={}",
                     ak, welinkSessionId, sourceType);
+            return;
         }
+        // Write ownership to Redis after successful MySQL insert
+        writeCacheOwnership(welinkSessionId.toString(), instanceId);
     }
 
     /**
@@ -65,10 +83,13 @@ public class SessionRouteService {
 
     /**
      * 关闭路由。会话关闭时调用。
+     * Deletes Redis cache entry after MySQL update.
      */
     public void closeRoute(Long welinkSessionId, String sourceType) {
         repository.updateStatus(welinkSessionId, sourceType, "CLOSED");
         log.info("Closed session route: welinkSessionId={}, sourceType={}", welinkSessionId, sourceType);
+        // Remove ownership from Redis after route is closed
+        deleteCacheOwnership(welinkSessionId.toString());
     }
 
     // ==================== Ownership 检查 ====================
@@ -124,6 +145,7 @@ public class SessionRouteService {
             log.info("路由记录不存在，auto-claim: sessionId={}, ak={}, sourceInstance={}",
                     sessionId, ak, instanceId);
             createRoute(ak, numericId, "skill-server", userId);
+            // createRoute already writes Redis cache on success
 
             // 创建成功（无 DuplicateKey），本实例获得 ownership
             return true;
@@ -162,6 +184,55 @@ public class SessionRouteService {
         } catch (Exception e) {
             log.warn("isMyToolSession 查询失败，降级为处理: toolSessionId={}, error={}", toolSessionId, e.getMessage());
             return true;
+        }
+    }
+
+    // ==================== 路由发现（relay 路由使用） ====================
+
+    /**
+     * Returns the owning instance ID for the given welinkSessionId.
+     * Read strategy: Redis first → MySQL fallback with cache backfill.
+     * Returns null if no ACTIVE route exists.
+     *
+     * @param welinkSessionId the session ID (string form)
+     * @return owning instanceId, or null if not found
+     */
+    public String getOwnerInstance(String welinkSessionId) {
+        if (welinkSessionId == null || welinkSessionId.isBlank()) {
+            return null;
+        }
+        // 1. Check Redis cache first
+        try {
+            String cached = redisTemplate.opsForValue().get(SESSION_CACHE_PREFIX + welinkSessionId);
+            if (cached != null) {
+                log.info("getOwnerInstance cache hit: welinkSessionId={}, owner={}", welinkSessionId, cached);
+                return cached;
+            }
+        } catch (Exception e) {
+            log.warn("getOwnerInstance Redis read failed, falling back to MySQL: welinkSessionId={}, error={}",
+                    welinkSessionId, e.getMessage());
+        }
+
+        // 2. Redis miss → query MySQL
+        try {
+            Long numericId = Long.parseLong(welinkSessionId);
+            SessionRoute route = repository.findByWelinkSessionId(numericId);
+            if (route != null && "ACTIVE".equals(route.getStatus())) {
+                String owner = route.getSourceInstance();
+                log.info("getOwnerInstance MySQL hit: welinkSessionId={}, owner={}", welinkSessionId, owner);
+                // 3. Backfill Redis cache
+                writeCacheOwnership(welinkSessionId, owner);
+                return owner;
+            }
+            log.info("getOwnerInstance no active route: welinkSessionId={}", welinkSessionId);
+            return null;
+        } catch (NumberFormatException e) {
+            log.warn("getOwnerInstance invalid welinkSessionId format: {}", welinkSessionId);
+            return null;
+        } catch (Exception e) {
+            log.warn("getOwnerInstance MySQL query failed: welinkSessionId={}, error={}",
+                    welinkSessionId, e.getMessage());
+            return null;
         }
     }
 
@@ -233,5 +304,39 @@ public class SessionRouteService {
 
     public String getInstanceId() {
         return instanceId;
+    }
+
+    // ==================== Redis cache helpers ====================
+
+    /**
+     * Writes session ownership to Redis cache with configured TTL.
+     * Failures are non-fatal: logs WARN and continues.
+     */
+    private void writeCacheOwnership(String welinkSessionId, String owner) {
+        try {
+            redisTemplate.opsForValue().set(
+                    SESSION_CACHE_PREFIX + welinkSessionId,
+                    owner,
+                    Duration.ofSeconds(ownershipCacheTtlSeconds));
+            log.info("Cached session ownership: welinkSessionId={}, owner={}, ttl={}s",
+                    welinkSessionId, owner, ownershipCacheTtlSeconds);
+        } catch (Exception e) {
+            log.warn("Failed to write session ownership cache: welinkSessionId={}, error={}",
+                    welinkSessionId, e.getMessage());
+        }
+    }
+
+    /**
+     * Deletes session ownership from Redis cache.
+     * Failures are non-fatal: logs WARN and continues.
+     */
+    private void deleteCacheOwnership(String welinkSessionId) {
+        try {
+            redisTemplate.delete(SESSION_CACHE_PREFIX + welinkSessionId);
+            log.info("Deleted session ownership cache: welinkSessionId={}", welinkSessionId);
+        } catch (Exception e) {
+            log.warn("Failed to delete session ownership cache: welinkSessionId={}, error={}",
+                    welinkSessionId, e.getMessage());
+        }
     }
 }
