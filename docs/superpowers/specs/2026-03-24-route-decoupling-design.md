@@ -496,7 +496,7 @@ T+1.5s   SS-C 发送 Snapshot（历史消息 + 实时流式状态）→ 用户 A
 
 | 组件 | 规格 | 用途 |
 |------|------|------|
-| GW Redis Cluster | 3主3从，8GB | Agent 连接注册表、实例注册、pending 队列 |
+| GW Redis Cluster | 3主3从，8GB | Agent 连接注册表、实例注册、pending 队列、invoke 串行化队列 |
 | SS Redis Cluster | 3主3从，8GB | Session 所有权注册表、用户 WS 注册表、实例注册、pending 队列 |
 
 > MySQL 不再参与实时路由决策。现有 `session_route` 表可保留用于历史查询和运维审计，但路由层面纯靠 Redis + 动态恢复。
@@ -532,6 +532,9 @@ gateway:
   upstream-routing:
     cache-max-size: 100000          # 路由学习表最大条目数
     cache-expire-minutes: 30        # 无活动过期时间
+  invoke-queue:
+    active-invoke-ttl-seconds: 300  # active-invoke TTL（5分钟，tool_event 时刷新）
+    max-queue-size: 100             # 单 toolSessionId 最大排队数
 ```
 
 ### SS 侧
@@ -581,6 +584,9 @@ skill:
 | `upstream.routing.size` | 路由学习表当前条目数 | 接近 max-size 时告警 |
 | `push.user.grpc.rate` | gRPC PushToUser 调用频率 | 基线监控 |
 | `push.user.grpc.error.rate` | PushToUser 失败率 | > 5% 时告警（可能有 SS 实例异常） |
+| `invoke.queue.depth` | invoke 队列深度 | 持续 > 10 时告警（Agent 处理慢） |
+| `invoke.queue.wait_ms` | invoke 排队等待时间 | P99 > 30s 时告警 |
+| `invoke.active.ttl_expired` | active-invoke TTL 过期次数 | > 0 时告警（Agent 可能异常） |
 
 ## 13. GW 上行路由：自动学习
 
@@ -611,44 +617,54 @@ Agent 回复 tool_event（携带 welinkSessionId=S1）
 
 ```java
 // GW 本地内存，Caffeine Cache，无需 Redis
-private final Cache<String, String> routingTable = Caffeine.newBuilder()
+// value 为 Set<String>：一个 toolSessionId 可能同时被多个 sourceType 使用
+private final Cache<String, Set<String>> routingTable = Caffeine.newBuilder()
         .expireAfterAccess(Duration.ofMinutes(30))  // 30 分钟无活动过期
         .maximumSize(100_000)                        // 最大 10 万条路由
         .build();
 
 // 学习：从 source 连接收到 invoke 时调用
 void learnRoute(GatewayMessage message, String sourceType) {
-    // 从顶层字段学习 welinkSessionId
+    // 从顶层字段学习 welinkSessionId（一对一，welinkSessionId 由 source 侧生成）
     String welinkSessionId = message.getWelinkSessionId();
     if (welinkSessionId != null && !welinkSessionId.isBlank()) {
-        routingTable.put("w:" + welinkSessionId, sourceType);
+        routingTable.put("w:" + welinkSessionId, Set.of(sourceType));
     }
-    // 从 payload 学习 toolSessionId
+    // 从 payload 学习 toolSessionId（一对多，同一 toolSessionId 可能被多个 sourceType 使用）
     String toolSessionId = extractToolSessionIdFromPayload(message);
     if (toolSessionId != null && !toolSessionId.isBlank()) {
-        routingTable.put(toolSessionId, sourceType);
+        routingTable.asMap().compute(toolSessionId, (key, existing) -> {
+            if (existing == null) return Set.of(sourceType);
+            Set<String> updated = new HashSet<>(existing);
+            updated.add(sourceType);
+            return Set.copyOf(updated);
+        });
     }
 }
 
-// 查询：Agent 回复消息时调用
-String resolveSourceType(GatewayMessage message) {
+// 查询：Agent 回复消息时调用，返回所有关联的 sourceType
+Set<String> resolveSourceTypes(GatewayMessage message) {
     // Agent 回复优先用 toolSessionId 查（大部分回复只有 toolSessionId）
     String toolSessionId = message.getToolSessionId();
     if (toolSessionId != null) {
-        String st = routingTable.getIfPresent(toolSessionId);
-        if (st != null) return st;
+        Set<String> types = routingTable.getIfPresent(toolSessionId);
+        if (types != null && !types.isEmpty()) return types;
     }
     // fallback：用 welinkSessionId 查（session_created 场景）
     String welinkSessionId = message.getWelinkSessionId();
     if (welinkSessionId != null) {
-        String st = routingTable.getIfPresent("w:" + welinkSessionId);
-        if (st != null) return st;
+        Set<String> types = routingTable.getIfPresent("w:" + welinkSessionId);
+        if (types != null && !types.isEmpty()) return types;
     }
-    return null;
+    return Set.of();
 }
 ```
 
-**两种 key 是独立的路由条目，不是 welinkSessionId 和 toolSessionId 之间的映射关系。**
+**设计要点**：
+- `welinkSessionId → Set<sourceType>`：welinkSessionId 由 source 侧生成，一对一，Set 中通常只有一个元素
+- `toolSessionId → Set<sourceType>`：toolSessionId 由 Agent 生成，可能被多个 source 服务共用，Set 中可能有多个元素
+- 两种 key 是独立的路由条目，不是 welinkSessionId 和 toolSessionId 之间的映射关系
+- 路由时向 Set 中所有 sourceType 组各 hash 选一条连接发送
 
 ### 13.4 学习时机
 
@@ -656,40 +672,58 @@ String resolveSourceType(GatewayMessage message) {
 
 | invoke 场景 | 顶层 welinkSessionId | payload 中 toolSessionId | 学习结果 |
 |------------|---------------------|------------------------|---------|
-| create_session（新建会话） | "42" | 无 | `routingTable["w:42"] = skill-server` |
-| chat（存量会话对话） | 无 | "ts-abc" | `routingTable["ts-abc"] = skill-server` |
+| create_session（新建会话） | "42" | 无 | `routingTable["w:42"] = {skill-server}` |
+| chat（存量会话对话） | 无 | "ts-abc" | `routingTable["ts-abc"] += skill-server` |
 | 两者都有 | "42" | "ts-abc" | 两条都学 |
+| 另一个 source 也用该 toolSession | 无 | "ts-abc" | `routingTable["ts-abc"] += bot-platform`（Set 变为 {skill-server, bot-platform}） |
 
 **Agent 回复的路由查找**：
 
 | Agent 回复类型 | 携带字段 | 查找过程 |
 |--------------|---------|---------|
-| session_created | welinkSessionId + toolSessionId | 先查 toolSessionId → 未命中 → 查 "w:" + welinkSessionId → 命中 ✅ |
-| tool_event / tool_done / tool_error | 只有 toolSessionId | 查 toolSessionId → 命中（之前 chat invoke 已学过）✅ |
+| session_created | welinkSessionId + toolSessionId | 先查 toolSessionId → 未命中 → 查 "w:" + welinkSessionId → 命中 → 返回 Set ✅ |
+| tool_event / tool_done / tool_error | 只有 toolSessionId | 查 toolSessionId → 命中 → 返回 Set（可能含多个 sourceType）✅ |
+
+**多 sourceType 路由**：当 `resolveSourceTypes` 返回多个 sourceType 时，GW 向每个 sourceType 组各 hash 选一条连接发送。各 source 服务收到后通过自身 DB 判断是否属于自己。
 
 **存量会话的完整流程**：
 ```
 1. 用户在已有会话中发消息
 2. SS 发 invoke(action=chat, payload={toolSessionId:"ts-abc"})
-   → GW 从 payload 学习 routingTable["ts-abc"] = skill-server ✅
+   → GW 从 payload 学习 routingTable["ts-abc"] += skill-server ✅
 
 3. Agent 回复 tool_event(toolSessionId="ts-abc")
-   → GW 查 routingTable["ts-abc"] → skill-server → 命中 ✅
+   → GW 查 routingTable["ts-abc"] → {skill-server} → 命中 ✅
+   → 向 skill-server 组 hash 选连接发送
+```
+
+**多 source 共用 toolSession 的流程**：
+```
+1. SS 发 invoke(payload={toolSessionId:"ts-abc"})
+   → routingTable["ts-abc"] = {skill-server}
+
+2. bot-platform 也发 invoke(payload={toolSessionId:"ts-abc"})
+   → routingTable["ts-abc"] = {skill-server, bot-platform}
+
+3. Agent 回复 tool_event(toolSessionId="ts-abc")
+   → GW 查 routingTable["ts-abc"] → {skill-server, bot-platform}
+   → 向两个组各 hash 选一条连接发送
+   → 各 source 服务自行判断是否处理
 ```
 
 **新建会话的完整流程**：
 ```
 1. SS 发 invoke(action=create_session, welinkSessionId="42")
-   → GW 学习 routingTable["w:42"] = skill-server ✅
+   → GW 学习 routingTable["w:42"] = {skill-server} ✅
 
 2. Agent 回复 session_created(welinkSessionId="42", toolSessionId="ts-abc")
    → GW 查 routingTable["ts-abc"] → 未命中
-   → GW 查 routingTable["w:42"] → skill-server → 命中 ✅
+   → GW 查 routingTable["w:42"] → {skill-server} → 命中 ✅
    → 路由成功后，从 session_created 消息中顺带学习：
-     routingTable["ts-abc"] = skill-server ✅
+     routingTable["ts-abc"] += skill-server ✅
 
 3. Agent 后续回复 tool_event(toolSessionId="ts-abc")
-   → GW 查 routingTable["ts-abc"] → 命中 ✅
+   → GW 查 routingTable["ts-abc"] → {skill-server} → 命中 ✅
 ```
 
 ### 13.5 路由未命中处理
@@ -715,14 +749,14 @@ invoke 消息到达 GW-A，但 Agent 在 GW-B 上。GW-A 学到了路由，GW-B 
 
 ```
 SS invoke(toolSessionId="ts-abc") → GW-A 的 WS 连接
-  → GW-A 学习：routingTable["ts-abc"] = skill-server
+  → GW-A 学习：routingTable["ts-abc"] += skill-server
   → GW-A 本地无 Agent → gRPC Relay 到 GW-B
     RelayRequest { source_type="skill-server", routing_keys=["ts-abc"] }
-  → GW-B 收到 Relay，也学习：routingTable["ts-abc"] = skill-server ✅
+  → GW-B 收到 Relay，也学习：routingTable["ts-abc"] += skill-server ✅
   → GW-B 投递给本地 Agent
 
 Agent 回复 tool_event(toolSessionId="ts-abc") → GW-B
-  → GW-B 查 routingTable["ts-abc"] → skill-server → 命中 ✅
+  → GW-B 查 routingTable["ts-abc"] → {skill-server} → 命中 ✅
 ```
 
 gRPC RelayRequest 增加路由传播字段：
@@ -752,15 +786,197 @@ message RelayRequest {
 ```
 Agent 发 tool_event（toolSessionId="ts-abc"）→ GW-B 收到
   │
-  ├─ 查 routingTable["ts-abc"] → skill-server（之前 invoke relay 时已学到）
+  ├─ 查 routingTable["ts-abc"] → {skill-server, bot-platform}（之前 invoke relay 时已学到）
   │
-  ├─ 在 skill-server 连接组内 hash("ts-abc") 选连接 → SS-A 的 WS 连接
-  │    → 发送给 SS-A
+  ├─ 向每个 sourceType 组各 hash 选一条连接发送：
+  │    skill-server 组：hash("ts-abc") → SS-A 的 WS 连接 → 发送
+  │    bot-platform 组：hash("ts-abc") → BP-A 的 WS 连接 → 发送
   │
-  └─ SS-A 收到后，SS 内部自行处理：
-       → 通过 toolSessionId 反查 welinkSessionId（sessionService.findByToolSessionId）
-       → 查 session ownership → owner 是 SS-B
-       → gRPC Relay 给 SS-B
-       → SS-B 处理业务
-       → SS-B 查用户 WS 注册表 → gRPC PushToUser 给所有在线设备
+  ├─ SS-A 收到后，SS 内部自行处理：
+  │    → 通过 toolSessionId 反查 welinkSessionId（sessionService.findByToolSessionId）
+  │    → 找到 → 查 session ownership → owner 是 SS-B
+  │    → gRPC Relay 给 SS-B → SS-B 处理业务
+  │    → SS-B 查用户 WS 注册表 → gRPC PushToUser 给所有在线设备
+  │
+  └─ BP-A 收到后，bot-platform 内部自行处理：
+       → 查本地 session 表，确认 toolSessionId 是否属于自己
+       → 是 → 处理
+       → 否 → 丢弃
 ```
+
+## 14. Invoke 串行化与群聊精准投递
+
+### 14.1 问题
+
+某些特殊 Agent（如知识库 bot）共用 toolSessionId：
+- 所有单聊共用一个 toolSessionId
+- 所有群聊共用一个 toolSessionId
+- Agent 实质上只有 2 个 toolSessionId
+
+**群聊场景的难题**：
+
+```
+群聊 A（welinkSessionId=A）→ invoke(toolSessionId="ts-group") → Agent
+群聊 B（welinkSessionId=B）→ invoke(toolSessionId="ts-group") → Agent
+群聊 C（welinkSessionId=C）→ invoke(toolSessionId="ts-group") → Agent
+
+Agent 回复 tool_event(toolSessionId="ts-group")
+  → 这条回复属于群聊 A、B 还是 C？
+```
+
+需要解决两个问题：
+1. **跨 source 的 invoke 串行化**：同一 toolSessionId 的 invoke 可能来自不同 source 服务，必须保证一次只有一个在处理
+2. **回复精准投递**：Agent 回复只有 toolSessionId，需要关联到正确的 welinkSessionId
+
+### 14.2 方案：Redis Invoke Queue
+
+在 GW 的 Redis Cluster 中维护 per-toolSessionId 的 invoke 队列，保证串行化，同时记录当前处理的 welinkSessionId。
+
+**Redis 数据结构**：
+
+```
+gw:invoke-queue:{toolSessionId}   → Redis List（FIFO 队列，存储待处理的 invoke 信息）
+gw:active-invoke:{toolSessionId}  → String（当前正在处理的 invoke 路由信息，带 TTL）
+```
+
+**active-invoke 存储内容**：
+
+```json
+{
+  "welinkSessionId": "A",
+  "sourceType": "skill-server",
+  "traceId": "uuid-xxx",
+  "enqueuedAt": 1711267200000
+}
+```
+
+### 14.3 核心流程
+
+**入队 + 尝试激活**（Lua 脚本，原子操作）：
+
+```lua
+-- enqueue_and_activate.lua
+-- KEYS[1] = gw:invoke-queue:{toolSessionId}
+-- KEYS[2] = gw:active-invoke:{toolSessionId}
+-- ARGV[1] = invokeData (JSON)
+-- ARGV[2] = TTL seconds (如 300)
+
+-- 入队
+redis.call('RPUSH', KEYS[1], ARGV[1])
+
+-- 尝试激活：如果当前无活跃 invoke，出队并激活
+if redis.call('EXISTS', KEYS[2]) == 0 then
+    local next = redis.call('LPOP', KEYS[1])
+    if next then
+        redis.call('SET', KEYS[2], next, 'EX', tonumber(ARGV[2]))
+        return next  -- 返回需要立即投递的 invoke
+    end
+end
+return nil  -- 已有活跃 invoke，排队等待
+```
+
+**tool_event 到达时**（刷新 TTL + 获取路由信息）：
+
+```lua
+-- refresh_and_resolve.lua
+-- KEYS[1] = gw:active-invoke:{toolSessionId}
+-- ARGV[1] = TTL seconds
+
+if redis.call('EXISTS', KEYS[1]) == 1 then
+    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
+    return redis.call('GET', KEYS[1])  -- 返回 welinkSessionId 等路由信息
+end
+return nil
+```
+
+**tool_done 到达时**（完成当前 + 激活下一个）：
+
+```lua
+-- complete_and_next.lua
+-- KEYS[1] = gw:invoke-queue:{toolSessionId}
+-- KEYS[2] = gw:active-invoke:{toolSessionId}
+-- ARGV[1] = TTL seconds
+
+-- 清除当前活跃
+redis.call('DEL', KEYS[2])
+
+-- 尝试激活下一个
+local next = redis.call('LPOP', KEYS[1])
+if next then
+    redis.call('SET', KEYS[2], next, 'EX', tonumber(ARGV[1]))
+    return next  -- 返回下一个需要投递的 invoke
+end
+return nil  -- 队列为空
+```
+
+### 14.4 完整时序：群聊精准投递
+
+```
+T+0.0s   群聊 A 发消息 → SS 发 invoke(toolSessionId="ts-group", welinkSessionId=A)
+T+0.0s   GW-B 收到 → enqueue_and_activate：
+           active-invoke 不存在 → 出队 → SET active-invoke = {welinkSessionId:A, sourceType:skill-server}
+           → 投递给 Agent ✅
+
+T+0.5s   群聊 B 发消息 → SS 发 invoke(toolSessionId="ts-group", welinkSessionId=B)
+T+0.5s   GW-B 收到 → enqueue_and_activate：
+           active-invoke 存在 → 入队等待 ⏳
+
+T+1.0s   Agent 回复 tool_event(toolSessionId="ts-group")
+T+1.0s   GW-B → refresh_and_resolve → active-invoke = {welinkSessionId:A, sourceType:skill-server}
+           → 精准路由到 skill-server 组 → SS 投递给群聊 A ✅
+
+T+3.0s   Agent 回复 tool_done(toolSessionId="ts-group")
+T+3.0s   GW-B → complete_and_next：
+           DEL active-invoke → LPOP 队列 → 取出群聊 B 的 invoke
+           → SET active-invoke = {welinkSessionId:B, sourceType:skill-server}
+           → 投递给 Agent ✅
+
+T+4.0s   Agent 回复 tool_event(toolSessionId="ts-group")
+T+4.0s   GW-B → refresh_and_resolve → active-invoke = {welinkSessionId:B}
+           → 精准路由给群聊 B ✅
+```
+
+### 14.5 TTL 超时保护
+
+- `active-invoke` 设 TTL 300 秒（5 分钟）
+- 每次收到 `tool_event` 时刷新 TTL（只要 Agent 还在持续输出 streaming 事件，就不会过期）
+- 只有 Agent **完全无响应** 超过 5 分钟，才认为异常，释放队列
+- TTL 过期后，下一个排队的 invoke 自动激活
+
+### 14.6 Agent 宕机/重连场景
+
+```
+T+0.0s   Agent 在处理群聊 A 的 invoke 时宕机
+           active-invoke = {welinkSessionId:A}（Redis 中保留）
+           invoke-queue 中有群聊 B 的 invoke（Redis 中保留）
+
+T+3.0s   Agent 重连到 GW-C
+T+3.0s   GW-C 检查 gw:active-invoke:{toolSessionId}
+           → 存在 → 重新投递给 Agent（续处理群聊 A 的请求）
+           → Agent 完成后 tool_done → 自动出队群聊 B 的 invoke
+```
+
+队列和活跃状态都在 Redis 中，不受 GW 实例宕机/重连影响。
+
+### 14.7 与上行路由的配合
+
+invoke 串行化解决了 `toolSessionId → welinkSessionId` 的精准关联，上行路由流程变为：
+
+```
+Agent 回复 tool_event(toolSessionId="ts-group") → GW-B 收到
+  │
+  ├─ 查 gw:active-invoke:ts-group → {welinkSessionId:A, sourceType:skill-server}
+  │    → 精确知道 sourceType 和 welinkSessionId ✅
+  │
+  ├─ 在 skill-server 组内 hash("A") 选连接 → SS-A
+  │    → 消息中注入 welinkSessionId=A
+  │    → SS-A 精准投递给群聊 A ✅
+  │
+  └─ routingTable 学习表作为 fallback
+       → 仅在 active-invoke 未命中时使用（如非共用 toolSessionId 的普通 Agent）
+```
+
+**路由优先级**：
+1. `gw:active-invoke:{toolSessionId}` → 精确路由（共用 toolSessionId 场景）
+2. `routingTable[toolSessionId]` → 学习表路由（普通 Agent 场景）
+3. 广播到所有 sourceType 组 → fallback
