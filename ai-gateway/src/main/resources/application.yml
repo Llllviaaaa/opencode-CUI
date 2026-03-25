@@ -74,6 +74,10 @@ gateway:
       l1-max-size: ${AUTH_CACHE_L1_MAX_SIZE:10000}
       l2-ttl-seconds: ${AUTH_CACHE_L2_TTL:3600}
 
+  # Internal HTTP API for Skill Server to discover GW instances (new routing design)
+  internal-api:
+    enabled: ${GATEWAY_INTERNAL_API_ENABLED:true}
+
   websocket:
     max-text-message-buffer-size-bytes: 1048576
 

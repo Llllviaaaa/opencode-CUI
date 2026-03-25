@@ -20,15 +20,20 @@ import java.util.Map;
  * 将本 Gateway 实例的 WebSocket 地址注册到 Redis，
  * 供 Source 服务（如 Skill Server）通过定期扫描发现所有 Gateway 实例。
  *
- * Redis Key: gw:instance:{instanceId}
- * Value: {"wsUrl":"ws://...","startedAt":"..."}
+ * Redis Key (legacy, shared): gw:instance:{instanceId}
+ * Redis Key (internal):       gw:internal:instance:{instanceId}
+ * Value: {"instanceId":"...","wsUrl":"ws://...","startedAt":"...","lastHeartbeat":"..."}
  * TTL: 可配置（默认 30s），通过定时任务刷新
+ *
+ * Dual-write strategy: both keys are maintained so that legacy Skill Servers (scanning
+ * gw:instance:*) and new Skill Servers (calling GET /internal/instances) can coexist.
  */
 @Slf4j
 @Service
 public class GatewayInstanceRegistry {
 
     private static final String KEY_PREFIX = "gw:instance:";
+    private static final String INTERNAL_KEY_PREFIX = "gw:internal:instance:";
 
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
@@ -54,7 +59,7 @@ public class GatewayInstanceRegistry {
     @PostConstruct
     public void register() {
         writeToRedis();
-        log.info("Gateway instance registered: instanceId={}, wsUrl={}, ttl={}s",
+        log.info("[ENTRY] Gateway instance registered: instanceId={}, wsUrl={}, ttl={}s",
                 instanceId, wsUrl, ttl.getSeconds());
     }
 
@@ -71,7 +76,8 @@ public class GatewayInstanceRegistry {
     public void destroy() {
         try {
             redisTemplate.delete(redisKey());
-            log.info("Gateway instance deregistered: instanceId={}", instanceId);
+            redisTemplate.delete(internalRedisKey());
+            log.info("[EXIT] Gateway instance deregistered from both keys: instanceId={}", instanceId);
         } catch (Exception e) {
             log.warn("Failed to deregister gateway instance: instanceId={}, error={}",
                     instanceId, e.getMessage());
@@ -87,22 +93,31 @@ public class GatewayInstanceRegistry {
     }
 
     private void writeToRedis() {
-        redisTemplate.opsForValue().set(redisKey(), buildRegistrationValue(), ttl);
+        String value = buildRegistrationValue();
+        // Legacy key: consumed by old-version Skill Servers scanning gw:instance:*
+        redisTemplate.opsForValue().set(redisKey(), value, ttl);
+        // Internal key: consumed by new-version Skill Servers via GET /internal/instances
+        redisTemplate.opsForValue().set(internalRedisKey(), value, ttl);
     }
 
     private String redisKey() {
         return KEY_PREFIX + instanceId;
     }
 
+    private String internalRedisKey() {
+        return INTERNAL_KEY_PREFIX + instanceId;
+    }
+
     private String buildRegistrationValue() {
         try {
             return objectMapper.writeValueAsString(Map.of(
+                    "instanceId", instanceId,
                     "wsUrl", wsUrl,
                     "startedAt", startedAt,
                     "lastHeartbeat", Instant.now().toString()));
         } catch (JsonProcessingException e) {
-            // ObjectMapper 序列化简单 Map 不应失败，兜底返回最小合法 JSON
-            return "{\"wsUrl\":\"" + wsUrl + "\"}";
+            // ObjectMapper serialization of a simple Map should never fail; fallback to minimal JSON
+            return "{\"instanceId\":\"" + instanceId + "\",\"wsUrl\":\"" + wsUrl + "\"}";
         }
     }
 }
