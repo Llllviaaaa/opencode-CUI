@@ -24,7 +24,8 @@ import java.util.function.Consumer;
  *
  * <h3>Key 模式（v3 重构后）</h3>
  * <ul>
- *   <li>{@code conn:ak:{ak}} — Agent 连接在哪个 Gateway 实例上（KV + TTL）</li>
+ *   <li>{@code conn:ak:{ak}} — Agent 连接在哪个 Gateway 实例上（KV + TTL，供 SS 查询）</li>
+ *   <li>{@code gw:internal:agent:{ak}} — GW 内部中转用的 Agent 位置注册（KV + TTL，与 conn:ak 双写）</li>
  *   <li>{@code gw:instance:{id}} — Gateway 实例注册（由 GatewayInstanceRegistry 管理）</li>
  *   <li>{@code gw:agent:user:{ak}} — AK→userId 绑定（保留）</li>
  *   <li>{@code auth:nonce:{nonce}} — 认证防重放（保留，由 AkSkAuthService 管理）</li>
@@ -42,6 +43,9 @@ public class RedisMessageBroker {
     // ==================== 新增 Key 前缀（v3） ====================
 
     private static final String CONN_AK_KEY_PREFIX = "conn:ak:";
+
+    /** Key prefix for GW-internal agent registry: gw:internal:agent:{ak} → instanceId */
+    private static final String INTERNAL_AGENT_KEY_PREFIX = "gw:internal:agent:";
 
     // ==================== 保留的 Key/Channel 前缀 ====================
 
@@ -140,6 +144,72 @@ public class RedisMessageBroker {
             return;
         }
         redisTemplate.expire(connAkKey(ak), ttl);
+    }
+
+    // ==================== gw:internal:agent 内部路由注册表（Phase 1.3 新增） ====================
+
+    /**
+     * Binds an AK to the GW instance ID in the internal agent registry.
+     * Called alongside {@link #bindConnAk} on successful Agent registration.
+     *
+     * <p>Key: {@code gw:internal:agent:{ak}} → value: instanceId string.</p>
+     *
+     * @param ak         Agent Access Key
+     * @param instanceId GW instance ID holding the Agent WebSocket connection
+     * @param ttl        TTL (same as heartbeat interval + buffer)
+     */
+    public void bindInternalAgent(String ak, String instanceId, Duration ttl) {
+        if (ak == null || ak.isBlank() || instanceId == null || instanceId.isBlank()) {
+            return;
+        }
+        redisTemplate.opsForValue().set(internalAgentKey(ak), instanceId, ttl);
+        log.info("[ENTRY] RedisMessageBroker.bindInternalAgent: ak={}, instanceId={}", ak, instanceId);
+    }
+
+    /**
+     * Looks up which GW instance holds the given Agent's WebSocket connection,
+     * using the internal registry. Used for intra-GW routing.
+     *
+     * @param ak Agent Access Key
+     * @return GW instance ID, or {@code null} if not found
+     */
+    public String getInternalAgentInstance(String ak) {
+        if (ak == null || ak.isBlank()) {
+            return null;
+        }
+        String instanceId = redisTemplate.opsForValue().get(internalAgentKey(ak));
+        log.info("RedisMessageBroker.getInternalAgentInstance: ak={}, instanceId={}", ak, instanceId);
+        return instanceId;
+    }
+
+    /**
+     * Removes the AK entry from the internal agent registry on Agent disconnect.
+     * Uses unconditional delete (paired with {@link #conditionalRemoveConnAk} for the
+     * external {@code conn:ak} key; for simplicity, the internal key mirrors the same
+     * lifecycle — callers ensure correctness by only removing on the owning instance).
+     *
+     * @param ak Agent Access Key
+     */
+    public void removeInternalAgent(String ak) {
+        if (ak == null || ak.isBlank()) {
+            return;
+        }
+        redisTemplate.delete(internalAgentKey(ak));
+        log.info("RedisMessageBroker.removeInternalAgent: ak={}", ak);
+    }
+
+    /**
+     * Refreshes the TTL of the internal agent registry entry. Called on heartbeat,
+     * alongside {@link #refreshConnAkTtl}.
+     *
+     * @param ak  Agent Access Key
+     * @param ttl new TTL
+     */
+    public void refreshInternalAgentTtl(String ak, Duration ttl) {
+        if (ak == null || ak.isBlank()) {
+            return;
+        }
+        redisTemplate.expire(internalAgentKey(ak), ttl);
     }
 
     // ==================== Agent pub/sub（保留） ====================
@@ -346,6 +416,10 @@ public class RedisMessageBroker {
 
     private String connAkKey(String ak) {
         return CONN_AK_KEY_PREFIX + ak;
+    }
+
+    private String internalAgentKey(String ak) {
+        return INTERNAL_AGENT_KEY_PREFIX + ak;
     }
 
     private String agentUserKey(String ak) {

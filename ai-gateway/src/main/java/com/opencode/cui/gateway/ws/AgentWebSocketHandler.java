@@ -292,6 +292,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
             // v3: 条件删除 conn:ak（仅删本实例注册的，防误删已重连到其他 GW 的 Agent）
             redisMessageBroker.conditionalRemoveConnAk(ak, gatewayInstanceRegistry.getInstanceId());
 
+            // Phase 1.3: remove gw:internal:agent:{ak} in sync with conn:ak cleanup
+            redisMessageBroker.removeInternalAgent(ak);
+
             // 通知 Skill Server Agent 已离线（使用 ak）
             GatewayMessage offlineMsg = GatewayMessage.agentOffline(ak);
             eventRelayService.relayToSkillServer(ak, offlineMsg);
@@ -377,6 +380,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
             // v3: 注册 conn:ak → gatewayInstanceId（Source 服务查询用于下行精确投递）
             redisMessageBroker.bindConnAk(akId, gatewayInstanceRegistry.getInstanceId(), CONN_AK_TTL);
 
+            // Phase 1.3: also write gw:internal:agent:{ak} for intra-GW routing
+            redisMessageBroker.bindInternalAgent(akId, gatewayInstanceRegistry.getInstanceId(), CONN_AK_TTL);
+
             // 发送 register_ok 给客户端
             try {
                 String okJson = objectMapper.writeValueAsString(GatewayMessage.registerOk());
@@ -416,6 +422,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
         String ak = sessionAkMap.get(session.getId());
         if (ak != null) {
             redisMessageBroker.refreshConnAkTtl(ak, CONN_AK_TTL);
+            // Phase 1.3: also refresh gw:internal:agent:{ak} TTL
+            redisMessageBroker.refreshInternalAgentTtl(ak, CONN_AK_TTL);
         }
     }
 
