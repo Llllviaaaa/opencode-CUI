@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -220,5 +221,79 @@ public class RedisMessageBroker {
             return null;
         }
         return redisTemplate.opsForValue().get("conn:ak:" + ak);
+    }
+
+    // ==================== 用户 WS 连接注册表（Task 2.7） ====================
+
+    private static final String USER_WS_KEY_PREFIX = "ss:internal:user-ws:";
+
+    /**
+     * 注册用户 WS 连接：对指定实例的计数 HINCRBY +1。
+     *
+     * @param userId     用户 ID
+     * @param instanceId SS 实例 ID
+     */
+    public void registerUserWs(String userId, String instanceId) {
+        String key = USER_WS_KEY_PREFIX + userId;
+        Long newCount = redisTemplate.opsForHash().increment(key, instanceId, 1L);
+        log.info("[ENTRY] registerUserWs: userId={}, instanceId={}, count={}", userId, instanceId, newCount);
+    }
+
+    /**
+     * 注销用户 WS 连接：对指定实例的计数 HINCRBY -1，结果 ≤ 0 则 HDEL 该 field。
+     *
+     * @param userId     用户 ID
+     * @param instanceId SS 实例 ID
+     */
+    public void unregisterUserWs(String userId, String instanceId) {
+        String key = USER_WS_KEY_PREFIX + userId;
+        Long remaining = redisTemplate.opsForHash().increment(key, instanceId, -1L);
+        log.info("[EXIT] unregisterUserWs: userId={}, instanceId={}, remaining={}", userId, instanceId, remaining);
+        if (remaining != null && remaining <= 0) {
+            redisTemplate.opsForHash().delete(key, instanceId);
+            log.info("[EXIT] unregisterUserWs: cleaned up field, userId={}, instanceId={}", userId, instanceId);
+        }
+    }
+
+    /**
+     * 查询该用户有 WS 连接的所有 SS 实例 ID 集合。
+     *
+     * @param userId 用户 ID
+     * @return 有活跃连接的实例 ID 集合（无连接时返回空集合）
+     */
+    public Set<String> getUserWsInstances(String userId) {
+        String key = USER_WS_KEY_PREFIX + userId;
+        Set<Object> rawKeys = redisTemplate.opsForHash().keys(key);
+        Set<String> result = new HashSet<>();
+        for (Object k : rawKeys) {
+            result.add(String.valueOf(k));
+        }
+        log.info("getUserWsInstances: userId={}, instances={}", userId, result);
+        return result;
+    }
+
+    /**
+     * SS 实例启动时清理宕机残留：扫描所有 {@code ss:internal:user-ws:*} Hash，
+     * 删除其中属于本实例的 field，防止历史脏数据影响路由判断。
+     *
+     * @param instanceId 本 SS 实例 ID
+     */
+    public void cleanupUserWsForInstance(String instanceId) {
+        log.info("[ENTRY] cleanupUserWsForInstance: instanceId={}", instanceId);
+        String pattern = USER_WS_KEY_PREFIX + "*";
+        ScanOptions options = ScanOptions.scanOptions().match(pattern).count(100).build();
+        int cleaned = 0;
+        try (Cursor<String> cursor = redisTemplate.scan(options)) {
+            while (cursor.hasNext()) {
+                String key = cursor.next();
+                Object value = redisTemplate.opsForHash().get(key, instanceId);
+                if (value != null) {
+                    redisTemplate.opsForHash().delete(key, instanceId);
+                    cleaned++;
+                    log.info("cleanupUserWsForInstance: removed stale entry, key={}, instanceId={}", key, instanceId);
+                }
+            }
+        }
+        log.info("[EXIT] cleanupUserWsForInstance: instanceId={}, cleaned={}", instanceId, cleaned);
     }
 }

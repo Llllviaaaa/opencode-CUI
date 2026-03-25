@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.service.RedisMessageBroker;
+import com.opencode.cui.skill.service.SkillInstanceRegistry;
 import com.opencode.cui.skill.service.SkillSessionService;
 import com.opencode.cui.skill.service.SnapshotService;
 import org.junit.jupiter.api.Assertions;
@@ -37,6 +38,7 @@ class SkillStreamHandlerTest {
         private SnapshotService snapshotService;
         private SkillSessionService sessionService;
         private RedisMessageBroker redisMessageBroker;
+        private SkillInstanceRegistry skillInstanceRegistry;
         private ObjectMapper objectMapper = new ObjectMapper();
 
         @BeforeEach
@@ -44,11 +46,14 @@ class SkillStreamHandlerTest {
                 snapshotService = mock(SnapshotService.class);
                 sessionService = mock(SkillSessionService.class);
                 redisMessageBroker = mock(RedisMessageBroker.class);
+                skillInstanceRegistry = mock(SkillInstanceRegistry.class);
+                when(skillInstanceRegistry.getInstanceId()).thenReturn("ss-test-instance");
                 handler = new SkillStreamHandler(
                                 objectMapper,
                                 sessionService,
                                 snapshotService,
-                                redisMessageBroker);
+                                redisMessageBroker,
+                                skillInstanceRegistry);
         }
 
         @Test
