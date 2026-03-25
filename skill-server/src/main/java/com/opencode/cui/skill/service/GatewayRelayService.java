@@ -78,6 +78,18 @@ public class GatewayRelayService {
 
         // 向 MessageRouter 注入下行发送能力，避免循环依赖
         messageRouter.setDownstreamSender(this::sendInvokeToGateway);
+        // 向 MessageRouter 注入路由响应发送能力（Task 2.10）
+        messageRouter.setRouteResponseSender(new GatewayMessageRouter.RouteResponseSender() {
+            @Override
+            public void sendRouteConfirm(String toolSessionId, String welinkSessionId) {
+                GatewayRelayService.this.sendRouteConfirm(toolSessionId, welinkSessionId);
+            }
+
+            @Override
+            public void sendRouteReject(String toolSessionId) {
+                GatewayRelayService.this.sendRouteReject(toolSessionId);
+            }
+        });
     }
 
     public void setGatewayRelayTarget(GatewayRelayTarget gatewayRelayTarget) {
@@ -231,6 +243,81 @@ public class GatewayRelayService {
         } finally {
             MdcHelper.clearAll();
         }
+    }
+
+    // ==================== 路由协议响应（Task 2.10） ====================
+
+    /**
+     * 向 AI Gateway 发送 route_confirm，确认 SS 已接受该 toolSessionId 的路由归属。
+     *
+     * @param toolSessionId  OpenCode 侧会话 ID
+     * @param welinkSessionId SS 侧会话 ID（可为 null）
+     */
+    public void sendRouteConfirm(String toolSessionId, String welinkSessionId) {
+        log.info("[ENTRY] GatewayRelayService.sendRouteConfirm: toolSessionId={}, welinkSessionId={}",
+                toolSessionId, welinkSessionId);
+
+        ObjectNode message = objectMapper.createObjectNode();
+        message.put("type", "route_confirm");
+        message.put("toolSessionId", toolSessionId);
+        message.put("source", SOURCE);
+        if (welinkSessionId != null && !welinkSessionId.isBlank()) {
+            message.put("welinkSessionId", welinkSessionId);
+        }
+
+        String traceId = MdcHelper.ensureTraceId();
+        message.put("traceId", traceId);
+
+        String messageText;
+        try {
+            messageText = objectMapper.writeValueAsString(message);
+        } catch (JsonProcessingException e) {
+            log.error("[ERROR] GatewayRelayService.sendRouteConfirm: serialize_failed, toolSessionId={}", toolSessionId, e);
+            return;
+        }
+
+        GatewayRelayTarget relayTarget = gatewayRelayTarget;
+        if (relayTarget == null || !relayTarget.hasActiveConnection()) {
+            log.warn("[SKIP] GatewayRelayService.sendRouteConfirm: reason=no_connection, toolSessionId={}", toolSessionId);
+            return;
+        }
+
+        boolean sent = relayTarget.sendToGateway(messageText);
+        log.info("[EXIT] GatewayRelayService.sendRouteConfirm: toolSessionId={}, sent={}", toolSessionId, sent);
+    }
+
+    /**
+     * 向 AI Gateway 发送 route_reject，通知 GW 本 SS 无法处理该 toolSessionId 的消息。
+     *
+     * @param toolSessionId OpenCode 侧会话 ID
+     */
+    public void sendRouteReject(String toolSessionId) {
+        log.info("[ENTRY] GatewayRelayService.sendRouteReject: toolSessionId={}", toolSessionId);
+
+        ObjectNode message = objectMapper.createObjectNode();
+        message.put("type", "route_reject");
+        message.put("toolSessionId", toolSessionId);
+        message.put("source", SOURCE);
+
+        String traceId = MdcHelper.ensureTraceId();
+        message.put("traceId", traceId);
+
+        String messageText;
+        try {
+            messageText = objectMapper.writeValueAsString(message);
+        } catch (JsonProcessingException e) {
+            log.error("[ERROR] GatewayRelayService.sendRouteReject: serialize_failed, toolSessionId={}", toolSessionId, e);
+            return;
+        }
+
+        GatewayRelayTarget relayTarget = gatewayRelayTarget;
+        if (relayTarget == null || !relayTarget.hasActiveConnection()) {
+            log.warn("[SKIP] GatewayRelayService.sendRouteReject: reason=no_connection, toolSessionId={}", toolSessionId);
+            return;
+        }
+
+        boolean sent = relayTarget.sendToGateway(messageText);
+        log.info("[EXIT] GatewayRelayService.sendRouteReject: toolSessionId={}, sent={}", toolSessionId, sent);
     }
 
     // ==================== 公共委派方法 ====================
