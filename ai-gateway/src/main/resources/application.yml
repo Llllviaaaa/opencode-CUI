@@ -48,6 +48,10 @@ gateway:
     clock-backwards-strategy: ${GATEWAY_SNOWFLAKE_CLOCK_BACKWARDS_STRATEGY:WAIT}
     max-backward-ms: ${GATEWAY_SNOWFLAKE_MAX_BACKWARD_MS:5}
 
+  relay:
+    # TTL for the gw:pending:{ak} downlink buffer queue (Phase 1.6)
+    pending-ttl-seconds: ${GATEWAY_PENDING_TTL_SECONDS:60}
+
   skill-relay:
     owner-heartbeat-interval-seconds: 10
     owner-ttl-seconds: 30

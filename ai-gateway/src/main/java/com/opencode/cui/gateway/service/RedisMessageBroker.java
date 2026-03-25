@@ -14,7 +14,9 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -82,6 +84,69 @@ public class RedisMessageBroker {
         this.redisTemplate = redisTemplate;
         this.listenerContainer = listenerContainer;
         this.objectMapper = objectMapper;
+    }
+
+    // ==================== gw:pending:{ak} 下行消息缓冲队列（Phase 1.6） ====================
+
+    /** Key prefix for per-agent downlink pending queue: gw:pending:{ak} → Redis List of GatewayMessage JSON */
+    private static final String PENDING_KEY_PREFIX = "gw:pending:";
+
+    /**
+     * Lua script: atomically fetch all elements and delete the list.
+     * Returns all list elements as a multi-bulk reply, then deletes the key.
+     * This prevents a race where a new message is enqueued between LRANGE and DEL.
+     */
+    private static final DefaultRedisScript<List> DRAIN_PENDING_SCRIPT = new DefaultRedisScript<>(
+            "local msgs = redis.call('LRANGE', KEYS[1], 0, -1)\n" +
+            "redis.call('DEL', KEYS[1])\n" +
+            "return msgs",
+            List.class);
+
+    /**
+     * Enqueues a downlink message for an offline agent.
+     *
+     * <p>Appends {@code message} to the Redis List at {@code gw:pending:{ak}} and refreshes
+     * the list TTL. The TTL is reset on every push so it counts from the last enqueue.
+     *
+     * @param ak      Agent Access Key
+     * @param message serialized GatewayMessage JSON string
+     * @param ttl     expiry for the entire pending list
+     */
+    public void enqueuePending(String ak, String message, Duration ttl) {
+        if (ak == null || ak.isBlank() || message == null) {
+            return;
+        }
+        String key = pendingKey(ak);
+        redisTemplate.opsForList().rightPush(key, message);
+        redisTemplate.expire(key, ttl);
+        log.info("[ENTRY] RedisMessageBroker.enqueuePending: ak={}, queueKey={}", ak, key);
+    }
+
+    /**
+     * Atomically drains all pending messages for the given agent and clears the queue.
+     *
+     * <p>Uses a Lua script to LRANGE + DEL in one round-trip, preventing any concurrent
+     * enqueue from being silently lost between a plain LRANGE and a subsequent DEL.
+     *
+     * @param ak Agent Access Key
+     * @return list of GatewayMessage JSON strings in FIFO order; empty list if none
+     */
+    @SuppressWarnings("unchecked")
+    public List<String> drainPending(String ak) {
+        if (ak == null || ak.isBlank()) {
+            return Collections.emptyList();
+        }
+        String key = pendingKey(ak);
+        List<String> messages = redisTemplate.execute(DRAIN_PENDING_SCRIPT, java.util.List.of(key));
+        if (messages == null) {
+            return Collections.emptyList();
+        }
+        log.info("RedisMessageBroker.drainPending: ak={}, count={}", ak, messages.size());
+        return messages;
+    }
+
+    private String pendingKey(String ak) {
+        return PENDING_KEY_PREFIX + ak;
     }
 
     // ==================== conn:ak 连接注册表（v3 新增） ====================

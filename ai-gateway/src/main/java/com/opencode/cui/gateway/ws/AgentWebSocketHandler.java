@@ -91,6 +91,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
     @Value("${gateway.agent.register-timeout-seconds:10}")
     private int registerTimeoutSeconds;
 
+    @Value("${gateway.relay.pending-ttl-seconds:60}")
+    private int pendingTtlSeconds;
+
     /** wsSessionId → ak 映射，用于断开时的路由清理 */
     private final Map<String, String> sessionAkMap = new ConcurrentHashMap<>();
 
@@ -391,6 +394,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
                 log.error("Failed to send register_ok: ak={}", akId, e);
             }
 
+            // Drain pending downlink messages buffered while agent was offline
+            drainAndDeliverPending(akId, session);
+
             // 通知 Skill Server Agent 已上线（以 ak 为键）
             GatewayMessage onlineMsg = GatewayMessage.agentOnline(
                     akId, toolType, toolVersion);
@@ -462,6 +468,40 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
     }
 
     // ==================== 辅助方法 ====================
+
+    /**
+     * Drains all pending downlink messages buffered in Redis for the given agent and
+     * delivers them over the newly established WebSocket session.
+     *
+     * <p>Called immediately after {@code register_ok} is sent so the agent receives
+     * any messages that arrived while it was offline. Does nothing if the queue is empty.
+     *
+     * @param ak      Agent Access Key
+     * @param session the agent's newly registered WebSocket session
+     */
+    private void drainAndDeliverPending(String ak, WebSocketSession session) {
+        List<String> pending = redisMessageBroker.drainPending(ak);
+        if (pending.isEmpty()) {
+            return;
+        }
+        log.info("[ENTRY] AgentWSHandler.drainAndDeliverPending: ak={}, count={}", ak, pending.size());
+        int delivered = 0;
+        for (String json : pending) {
+            if (!session.isOpen()) {
+                log.warn("AgentWSHandler.drainAndDeliverPending: session closed mid-drain, ak={}, remaining={}",
+                        ak, pending.size() - delivered);
+                break;
+            }
+            try {
+                session.sendMessage(new TextMessage(json));
+                delivered++;
+            } catch (IOException e) {
+                log.error("[ERROR] AgentWSHandler.drainAndDeliverPending: failed to deliver pending message, ak={}, error={}",
+                        ak, e.getMessage());
+            }
+        }
+        log.info("[EXIT] AgentWSHandler.drainAndDeliverPending: ak={}, delivered={}/{}", ak, delivered, pending.size());
+    }
 
     /** 发送拒绝消息并关闭 WebSocket 连接。 */
     private void sendAndClose(WebSocketSession session, GatewayMessage message, CloseStatus status) {
