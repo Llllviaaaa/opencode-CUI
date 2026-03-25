@@ -272,6 +272,23 @@ public class RedisMessageBroker {
         return result;
     }
 
+    // ==================== 跨实例消息序号（Task 2.8） ====================
+
+    private static final String STREAM_SEQ_KEY_PREFIX = "ss:stream-seq:";
+
+    /**
+     * 获取指定会话的下一个跨实例传输序号（Redis INCR）。
+     * 多 SS 实例共享同一序号空间，确保消息在前端按正确顺序渲染。
+     *
+     * @param welinkSessionId 会话 ID
+     * @return 递增后的序号（从 1 开始）
+     */
+    public long nextStreamSeq(String welinkSessionId) {
+        String key = STREAM_SEQ_KEY_PREFIX + welinkSessionId;
+        Long seq = redisTemplate.opsForValue().increment(key);
+        return seq != null ? seq : 1L;
+    }
+
     /**
      * SS 实例启动时清理宕机残留：扫描所有 {@code ss:internal:user-ws:*} Hash，
      * 删除其中属于本实例的 field，防止历史脏数据影响路由判断。

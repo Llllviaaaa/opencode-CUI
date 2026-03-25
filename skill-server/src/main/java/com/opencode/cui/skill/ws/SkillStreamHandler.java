@@ -65,9 +65,13 @@ public class SkillStreamHandler extends TextWebSocketHandler {
             .expireAfterAccess(Duration.ofHours(1)).maximumSize(10_000).build();
 
     /**
-     * 每会话的传输层序列号计数器。
-     * 使用 Caffeine 防止已关闭 session 的计数器永久驻留。
+     * 每会话的本地传输层序列号计数器（已废弃，由 Redis INCR 替代）。
+     * 保留字段以兼容可能存在的反射引用，不再参与序号生成。
+     *
+     * @deprecated 使用 {@link RedisMessageBroker#nextStreamSeq(String)} 获取跨实例序号
      */
+    @Deprecated
+    @SuppressWarnings("unused")
     private final Cache<String, AtomicLong> seqCounters = Caffeine.newBuilder()
             .expireAfterAccess(Duration.ofHours(1)).maximumSize(10_000).build();
     private final ConcurrentHashMap<String, AtomicInteger> activeConnectionCounts = new ConcurrentHashMap<>();
@@ -388,9 +392,12 @@ public class SkillStreamHandler extends TextWebSocketHandler {
         }
     }
 
-    /** 获取下一个传输层序列号。 */
+    /**
+     * 获取下一个传输层序列号。
+     * 使用 Redis INCR 实现跨实例共享序号空间，确保多 SS 实例下消息顺序一致。
+     */
     private long nextTransportSeq(String sessionId) {
-        return seqCounters.get(sessionId, key -> new AtomicLong(0)).incrementAndGet();
+        return redisMessageBroker.nextStreamSeq(sessionId);
     }
 
     /** 从 Cookie 中提取 userId。 */

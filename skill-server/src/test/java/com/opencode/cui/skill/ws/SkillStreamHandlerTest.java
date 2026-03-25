@@ -46,6 +46,8 @@ class SkillStreamHandlerTest {
                 snapshotService = mock(SnapshotService.class);
                 sessionService = mock(SkillSessionService.class);
                 redisMessageBroker = mock(RedisMessageBroker.class);
+                // nextStreamSeq 改为 Redis INCR 实现，mock 需显式 stub 以返回合法序号
+                when(redisMessageBroker.nextStreamSeq(any())).thenAnswer(inv -> 1L);
                 skillInstanceRegistry = mock(SkillInstanceRegistry.class);
                 when(skillInstanceRegistry.getInstanceId()).thenReturn("ss-test-instance");
                 handler = new SkillStreamHandler(
