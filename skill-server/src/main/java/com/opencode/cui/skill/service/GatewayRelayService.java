@@ -196,18 +196,21 @@ public class GatewayRelayService {
             message.put("payload", command.payload());
         }
 
-        // 注入 assistantId（集中拦截：所有 invoke 消息自动覆盖）
-        String assistantId = assistantIdResolverService.resolve(command.ak(), command.sessionId());
-        if (assistantId != null) {
-            ObjectNode targetPayload;
-            JsonNode existingPayload = message.get("payload");
-            if (existingPayload instanceof ObjectNode on) {
-                targetPayload = on;
-            } else {
-                targetPayload = objectMapper.createObjectNode();
-                message.set("payload", targetPayload);
+        // 注入 assistantId：仅在 create_session 和 chat 时注入
+        if (GatewayActions.CREATE_SESSION.equals(command.action())
+                || GatewayActions.CHAT.equals(command.action())) {
+            String assistantId = assistantIdResolverService.resolve(command.ak(), command.sessionId());
+            if (assistantId != null) {
+                ObjectNode targetPayload;
+                JsonNode existingPayload = message.get("payload");
+                if (existingPayload instanceof ObjectNode on) {
+                    targetPayload = on;
+                } else {
+                    targetPayload = objectMapper.createObjectNode();
+                    message.set("payload", targetPayload);
+                }
+                targetPayload.put("assistantId", assistantId);
             }
-            targetPayload.put("assistantId", assistantId);
         }
 
         try {

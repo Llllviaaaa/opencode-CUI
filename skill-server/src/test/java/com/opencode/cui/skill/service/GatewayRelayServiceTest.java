@@ -767,6 +767,25 @@ class GatewayRelayServiceTest {
                 assertEquals("agent-id", sent.path("payload").path("assistantId").asText());
         }
 
+        @Test
+        @DisplayName("buildInvokeMessage skips assistantId for non-chat/create_session actions")
+        void buildInvokeMessageSkipsForNonChatActions() throws Exception {
+                when(gatewayRelayTarget.hasActiveConnection()).thenReturn(true);
+                when(gatewayRelayTarget.sendViaHash(any(), any())).thenReturn(true);
+
+                service.sendInvokeToGateway(
+                                new InvokeCommand("ak-001", "user-1", "42", "question_reply",
+                                                "{\"answer\":\"yes\",\"toolCallId\":\"tc-1\"}"));
+
+                ArgumentCaptor<String> msgCaptor = ArgumentCaptor.forClass(String.class);
+                verify(gatewayRelayTarget).sendViaHash(eq("ak-001"), msgCaptor.capture());
+
+                JsonNode sent = objectMapper.readTree(msgCaptor.getValue());
+                assertTrue(sent.path("payload").path("assistantId").isMissingNode());
+                // resolver 不应被调用
+                verify(assistantIdResolverService, never()).resolve(any(), any());
+        }
+
         private JsonNode readPublishedMessage(String payload) {
                 try {
                         return objectMapper.readTree(payload);
