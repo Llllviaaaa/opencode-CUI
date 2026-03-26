@@ -75,7 +75,6 @@
         SELECT * FROM agent_connection
         WHERE ak_id = #{akId}
           AND status = 'ONLINE'
-        LIMIT 1
     </select>
 
     <select id="findByAkIdAndToolType" resultMap="AgentConnectionResultMap">

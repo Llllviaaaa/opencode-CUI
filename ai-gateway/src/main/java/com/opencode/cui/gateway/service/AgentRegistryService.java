@@ -128,8 +128,8 @@ public class AgentRegistryService {
         return repository.findLatestByAkId(ak);
     }
 
-    /** 获取指定 AK 的在线连接记录（仅 status=ONLINE）。 */
-    public AgentConnection findOnlineByAk(String ak) {
+    /** 获取指定 AK 的在线连接记录列表（仅 status=ONLINE）。 */
+    public List<AgentConnection> findOnlineByAk(String ak) {
         return repository.findOnlineByAkId(ak);
     }
 

@@ -74,8 +74,7 @@ public class AgentController {
 
         List<AgentConnection> agents;
         if (ak != null && !ak.isBlank()) {
-            AgentConnection online = agentRegistryService.findOnlineByAk(ak);
-            agents = online != null ? List.of(online) : List.of();
+            agents = agentRegistryService.findOnlineByAk(ak);
         } else if (userId != null && !userId.isBlank()) {
             agents = agentRegistryService.findOnlineByUserId(userId);
         } else {
