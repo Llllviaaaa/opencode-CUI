@@ -128,6 +128,11 @@ public class AgentRegistryService {
         return repository.findLatestByAkId(ak);
     }
 
+    /** 获取指定 AK 的在线连接记录（仅 status=ONLINE）。 */
+    public AgentConnection findOnlineByAk(String ak) {
+        return repository.findOnlineByAkId(ak);
+    }
+
     /**
      * 定时任务：检测心跳超时的 Agent 并标记为离线。
      * 执行间隔由 gateway.agent.heartbeat-check-interval-seconds 配置。

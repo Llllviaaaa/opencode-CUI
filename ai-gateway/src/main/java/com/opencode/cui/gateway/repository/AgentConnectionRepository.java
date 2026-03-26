@@ -51,6 +51,9 @@ public interface AgentConnectionRepository {
         /** 查询指定 AK 的最新连接记录 */
         AgentConnection findLatestByAkId(@Param("akId") String akId);
 
+        /** 查询指定 AK 的在线连接记录（仅返回 status=ONLINE） */
+        AgentConnection findOnlineByAkId(@Param("akId") String akId);
+
         /** 按 AK + 工具类型查询（不限状态，用于身份复用） */
         AgentConnection findByAkIdAndToolType(
                         @Param("akId") String akId,
