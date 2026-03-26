@@ -50,7 +50,7 @@ public class SessionRouteService {
 
     public SessionRouteService(SessionRouteRepository repository,
             StringRedisTemplate redisTemplate,
-            @Value("${skill.instance-id:${HOSTNAME:skill-server-local}}") String instanceId,
+            @Value("${HOSTNAME:skill-server-local}") String instanceId,
             @Value("${skill.session.ownership-cache-ttl-seconds:1800}") int ownershipCacheTtlSeconds) {
         this.repository = repository;
         this.redisTemplate = redisTemplate;

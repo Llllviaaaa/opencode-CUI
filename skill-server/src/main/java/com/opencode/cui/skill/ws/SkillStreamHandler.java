@@ -6,10 +6,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.RedisMessageBroker;
-import com.opencode.cui.skill.service.SkillInstanceRegistry;
 import com.opencode.cui.skill.service.SkillSessionService;
 import com.opencode.cui.skill.service.SnapshotService;
-import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
@@ -49,7 +47,6 @@ public class SkillStreamHandler extends TextWebSocketHandler {
     private final SkillSessionService sessionService;
     private final SnapshotService snapshotService;
     private final RedisMessageBroker redisMessageBroker;
-    private final SkillInstanceRegistry skillInstanceRegistry;
 
     /**
      * 按 userId 分组的协议订阅者。
@@ -79,21 +76,11 @@ public class SkillStreamHandler extends TextWebSocketHandler {
     public SkillStreamHandler(ObjectMapper objectMapper,
             SkillSessionService sessionService,
             SnapshotService snapshotService,
-            RedisMessageBroker redisMessageBroker,
-            SkillInstanceRegistry skillInstanceRegistry) {
+            RedisMessageBroker redisMessageBroker) {
         this.objectMapper = objectMapper;
         this.sessionService = sessionService;
         this.snapshotService = snapshotService;
         this.redisMessageBroker = redisMessageBroker;
-        this.skillInstanceRegistry = skillInstanceRegistry;
-    }
-
-    /** 启动时清理本实例宕机残留的 WS 注册条目。 */
-    @PostConstruct
-    public void cleanupStaleWsEntries() {
-        String instanceId = skillInstanceRegistry.getInstanceId();
-        log.info("[ENTRY] SkillStreamHandler.cleanupStaleWsEntries: instanceId={}", instanceId);
-        redisMessageBroker.cleanupUserWsForInstance(instanceId);
     }
 
     @Override
@@ -174,7 +161,6 @@ public class SkillStreamHandler extends TextWebSocketHandler {
         if (connections == 1) {
             subscribeToUserStream(userId);
         }
-        redisMessageBroker.registerUserWs(userId, skillInstanceRegistry.getInstanceId());
         preloadActiveSessionOwners(userId);
         log.info("Skill protocol stream subscriber connected: userId={}, wsId={}, remoteAddr={}",
                 userId, session.getId(), session.getRemoteAddress());
@@ -197,8 +183,6 @@ public class SkillStreamHandler extends TextWebSocketHandler {
             if (!removed) {
                 return;
             }
-
-            redisMessageBroker.unregisterUserWs(userId, skillInstanceRegistry.getInstanceId());
 
             AtomicInteger counter = activeConnectionCounts.get(userId);
             if (counter != null) {

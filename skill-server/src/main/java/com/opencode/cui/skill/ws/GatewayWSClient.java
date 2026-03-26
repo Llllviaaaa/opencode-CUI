@@ -41,10 +41,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <li>每个 GW 连接独立重连逻辑</li>
  * </ul>
  *
- * <h3>兼容旧版 Gateway</h3>
+ * <h3>种子 URL 兜底</h3>
  * <p>
- * 通过 {@code skill.gateway.ws-url} 配置种子 URL，旧版 GW 不注册
- * {@code gw:instance:*} key 时仍可通过种子 URL 直连。
+ * 通过 {@code skill.gateway.ws-url} 配置种子 URL，
+ * 在 HTTP discovery 尚未返回结果前提供初始连接。
  * 种子连接和 discovery 动态连接并存。
  * </p>
  */
@@ -64,10 +64,10 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget,
     @Value("${skill.gateway.internal-token:changeme}")
     private String internalToken;
 
-    @Value("${skill.instance-id:${HOSTNAME:skill-server-local}}")
+    @Value("${HOSTNAME:skill-server-local}")
     private String instanceId;
 
-    /** 种子 URL：兼容旧版 GW（不注册 gw:instance:* 的 GW） */
+    /** 种子 URL：HTTP discovery 返回前提供初始 GW 连接 */
     @Value("${skill.gateway.ws-url:}")
     private String seedWsUrl;
 
@@ -117,7 +117,7 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget,
             discoveryService.addListener(this);
         }
 
-        // 种子连接：兼容旧版 GW（不注册 gw:instance:* 的 GW）
+        // 种子连接：HTTP discovery 返回前提供初始 GW 连接
         if (seedWsUrl != null && !seedWsUrl.isBlank()) {
             String seedId = "seed-" + extractHostPort(seedWsUrl);
             log.info("Connecting to seed Gateway: id={}, url={}", seedId, seedWsUrl);

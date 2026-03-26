@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.service.RedisMessageBroker;
-import com.opencode.cui.skill.service.SkillInstanceRegistry;
 import com.opencode.cui.skill.service.SkillSessionService;
 import com.opencode.cui.skill.service.SnapshotService;
 import org.junit.jupiter.api.Assertions;
@@ -38,7 +37,6 @@ class SkillStreamHandlerTest {
         private SnapshotService snapshotService;
         private SkillSessionService sessionService;
         private RedisMessageBroker redisMessageBroker;
-        private SkillInstanceRegistry skillInstanceRegistry;
         private ObjectMapper objectMapper = new ObjectMapper();
 
         @BeforeEach
@@ -48,14 +46,11 @@ class SkillStreamHandlerTest {
                 redisMessageBroker = mock(RedisMessageBroker.class);
                 // nextStreamSeq 改为 Redis INCR 实现，mock 需显式 stub 以返回合法序号
                 when(redisMessageBroker.nextStreamSeq(any())).thenAnswer(inv -> 1L);
-                skillInstanceRegistry = mock(SkillInstanceRegistry.class);
-                when(skillInstanceRegistry.getInstanceId()).thenReturn("ss-test-instance");
                 handler = new SkillStreamHandler(
                                 objectMapper,
                                 sessionService,
                                 snapshotService,
-                                redisMessageBroker,
-                                skillInstanceRegistry);
+                                redisMessageBroker);
         }
 
         @Test

@@ -31,7 +31,7 @@ public class SkillInstanceRegistry {
     private final String instanceId;
 
     public SkillInstanceRegistry(StringRedisTemplate redisTemplate,
-            @Value("${skill.instance-id:${HOSTNAME:skill-server-local}}") String instanceId) {
+            @Value("${HOSTNAME:skill-server-local}") String instanceId) {
         this.redisTemplate = redisTemplate;
         this.instanceId = instanceId;
     }
@@ -81,7 +81,7 @@ public class SkillInstanceRegistry {
     /**
      * 返回本实例 ID。
      *
-     * @return 实例 ID，来源于配置 {@code skill.instance-id} 或环境变量 {@code HOSTNAME}
+     * @return 实例 ID，来源于环境变量 {@code HOSTNAME}，本地开发默认 {@code skill-server-local}
      */
     public String getInstanceId() {
         return instanceId;

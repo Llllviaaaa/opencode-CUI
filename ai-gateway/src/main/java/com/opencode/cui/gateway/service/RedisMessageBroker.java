@@ -29,7 +29,7 @@ import java.util.function.Consumer;
  * <ul>
  *   <li>{@code conn:ak:{ak}} — Agent 连接在哪个 Gateway 实例上（KV + TTL，供 SS 查询）</li>
  *   <li>{@code gw:internal:agent:{ak}} — GW 内部中转用的 Agent 位置注册（KV + TTL，与 conn:ak 双写）</li>
- *   <li>{@code gw:instance:{id}} — Gateway 实例注册（由 GatewayInstanceRegistry 管理）</li>
+ *   <li>{@code gw:internal:instances} — Gateway 实例聚合 HASH（由 GatewayInstanceRegistry 管理）</li>
  *   <li>{@code gw:agent:user:{ak}} — AK→userId 绑定（保留）</li>
  *   <li>{@code auth:nonce:{nonce}} — 认证防重放（保留，由 AkSkAuthService 管理）</li>
  * </ul>

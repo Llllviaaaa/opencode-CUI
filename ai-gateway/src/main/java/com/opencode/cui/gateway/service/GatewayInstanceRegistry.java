@@ -10,61 +10,59 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 
 /**
  * Gateway 实例注册服务。
  *
- * 将本 Gateway 实例的 WebSocket 地址注册到 Redis，
- * 供 Source 服务（如 Skill Server）通过定期扫描发现所有 Gateway 实例。
+ * <p>将本 Gateway 实例信息注册到 Redis 聚合 HASH，
+ * 供 Skill Server 通过 HTTP 接口 {@code GET /internal/instances} 发现所有 GW 实例。
  *
- * Redis Key (legacy, shared): gw:instance:{instanceId}
- * Redis Key (internal):       gw:internal:instance:{instanceId}
- * Value: {"instanceId":"...","wsUrl":"ws://...","startedAt":"...","lastHeartbeat":"..."}
- * TTL: 可配置（默认 30s），通过定时任务刷新
+ * <p>Redis 数据结构：
+ * <ul>
+ *   <li>Key: {@value #INSTANCES_HASH_KEY} (HASH)</li>
+ *   <li>Field: instanceId</li>
+ *   <li>Value: JSON (instanceId, wsUrl, startedAt, lastHeartbeat)</li>
+ * </ul>
  *
- * Dual-write strategy: both keys are maintained so that legacy Skill Servers (scanning
- * gw:instance:*) and new Skill Servers (calling GET /internal/instances) can coexist.
+ * <p>HASH 无整体 TTL，单个 field 靠 {@code lastHeartbeat} 时间戳判活，
+ * 由 {@link com.opencode.cui.gateway.controller.InternalInstanceController} 读取时惰性清理过期条目。
  */
 @Slf4j
 @Service
 public class GatewayInstanceRegistry {
 
-    private static final String KEY_PREFIX = "gw:instance:";
-    private static final String INTERNAL_KEY_PREFIX = "gw:internal:instance:";
+    /** 所有 GW 实例聚合的 Redis HASH key。 */
+    public static final String INSTANCES_HASH_KEY = "gw:internal:instances";
 
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final String instanceId;
     private final String wsUrl;
-    private final Duration ttl;
     private final String startedAt;
 
     public GatewayInstanceRegistry(
             StringRedisTemplate redisTemplate,
             ObjectMapper objectMapper,
             @Value("${gateway.instance-id:${HOSTNAME:gateway-local}}") String instanceId,
-            @Value("${gateway.instance-registry.ws-url:ws://localhost:8081/ws/skill}") String wsUrl,
-            @Value("${gateway.instance-registry.ttl-seconds:30}") int ttlSeconds) {
+            @Value("${gateway.instance-registry.ws-url:ws://localhost:8081/ws/skill}") String wsUrl) {
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
         this.instanceId = instanceId;
         this.wsUrl = wsUrl;
-        this.ttl = Duration.ofSeconds(ttlSeconds);
         this.startedAt = Instant.now().toString();
     }
 
     @PostConstruct
     public void register() {
         writeToRedis();
-        log.info("[ENTRY] Gateway instance registered: instanceId={}, wsUrl={}, ttl={}s",
-                instanceId, wsUrl, ttl.getSeconds());
+        log.info("[ENTRY] Gateway instance registered: instanceId={}, wsUrl={}", instanceId, wsUrl);
     }
 
     /**
-     * 定时刷新心跳，防止 Redis key 过期导致 Source 服务误判 GW 下线。
+     * 定时刷新心跳，更新 {@code lastHeartbeat} 时间戳。
+     * 读端通过检查 {@code lastHeartbeat} 是否过期来判断实例是否存活。
      */
     @Scheduled(fixedDelayString = "${gateway.instance-registry.refresh-interval-seconds:10}000")
     public void refreshHeartbeat() {
@@ -75,9 +73,8 @@ public class GatewayInstanceRegistry {
     @PreDestroy
     public void destroy() {
         try {
-            redisTemplate.delete(redisKey());
-            redisTemplate.delete(internalRedisKey());
-            log.info("[EXIT] Gateway instance deregistered from both keys: instanceId={}", instanceId);
+            redisTemplate.opsForHash().delete(INSTANCES_HASH_KEY, instanceId);
+            log.info("[EXIT] Gateway instance deregistered: instanceId={}", instanceId);
         } catch (Exception e) {
             log.warn("Failed to deregister gateway instance: instanceId={}, error={}",
                     instanceId, e.getMessage());
@@ -94,18 +91,7 @@ public class GatewayInstanceRegistry {
 
     private void writeToRedis() {
         String value = buildRegistrationValue();
-        // Legacy key: consumed by old-version Skill Servers scanning gw:instance:*
-        redisTemplate.opsForValue().set(redisKey(), value, ttl);
-        // Internal key: consumed by new-version Skill Servers via GET /internal/instances
-        redisTemplate.opsForValue().set(internalRedisKey(), value, ttl);
-    }
-
-    private String redisKey() {
-        return KEY_PREFIX + instanceId;
-    }
-
-    private String internalRedisKey() {
-        return INTERNAL_KEY_PREFIX + instanceId;
+        redisTemplate.opsForHash().put(INSTANCES_HASH_KEY, instanceId, value);
     }
 
     private String buildRegistrationValue() {
