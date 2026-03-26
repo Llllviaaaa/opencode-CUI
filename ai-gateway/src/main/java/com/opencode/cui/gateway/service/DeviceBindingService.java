@@ -25,6 +25,14 @@ public class DeviceBindingService {
     @Value("${gateway.device-binding.enabled:false}")
     private boolean enabled;
 
+    /** 是否校验 MAC 地址绑定 */
+    @Value("${gateway.device-binding.check-mac:true}")
+    private boolean checkMac;
+
+    /** 是否校验 toolType 绑定 */
+    @Value("${gateway.device-binding.check-tool-type:true}")
+    private boolean checkToolType;
+
     private final AgentConnectionRepository agentConnectionRepository;
 
     public DeviceBindingService(AgentConnectionRepository agentConnectionRepository) {
@@ -33,7 +41,7 @@ public class DeviceBindingService {
 
     /**
      * 校验 AK 设备绑定。
-     * 一个 AK 只允许绑定一台设备（MAC）和一个 toolType。
+     * 根据开关配置，校验 MAC 地址和/或 toolType 是否与历史绑定一致。
      *
      * @param ak         Access Key ID
      * @param macAddress 设备 MAC 地址
@@ -55,23 +63,28 @@ public class DeviceBindingService {
                 return true;
             }
 
-            // 校验 toolType 是否一致
-            String boundToolType = existing.getToolType();
-            if (boundToolType != null && !boundToolType.equalsIgnoreCase(toolType)) {
-                log.warn("Device binding rejected: toolType mismatch. ak={}, bound={}, requested={}",
-                        ak, boundToolType, toolType);
-                return false;
+            // 校验 toolType 是否一致（受 check-tool-type 开关控制）
+            if (checkToolType) {
+                String boundToolType = existing.getToolType();
+                if (boundToolType != null && !boundToolType.equalsIgnoreCase(toolType)) {
+                    log.warn("Device binding rejected: toolType mismatch. ak={}, bound={}, requested={}",
+                            ak, boundToolType, toolType);
+                    return false;
+                }
             }
 
-            // 校验 MAC 地址是否一致
-            String boundMac = existing.getMacAddress();
-            if (boundMac != null && macAddress != null && !boundMac.equalsIgnoreCase(macAddress)) {
-                log.warn("Device binding rejected: MAC mismatch. ak={}, bound={}, requested={}",
-                        ak, boundMac, macAddress);
-                return false;
+            // 校验 MAC 地址是否一致（受 check-mac 开关控制）
+            if (checkMac) {
+                String boundMac = existing.getMacAddress();
+                if (boundMac != null && macAddress != null && !boundMac.equalsIgnoreCase(macAddress)) {
+                    log.warn("Device binding rejected: MAC mismatch. ak={}, bound={}, requested={}",
+                            ak, boundMac, macAddress);
+                    return false;
+                }
             }
 
-            log.debug("Device binding valid: ak={}, mac={}, toolType={}", ak, macAddress, toolType);
+            log.debug("Device binding valid: ak={}, mac={}, toolType={}, checkMac={}, checkToolType={}",
+                    ak, macAddress, toolType, checkMac, checkToolType);
             return true;
 
         } catch (Exception e) {
