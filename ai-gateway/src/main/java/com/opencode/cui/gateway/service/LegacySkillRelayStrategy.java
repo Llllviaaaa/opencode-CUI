@@ -151,7 +151,7 @@ public class LegacySkillRelayStrategy implements SkillRelayStrategy {
             return routed;
         }
 
-        redisMessageBroker.publishToRelay(ownerId, routedMessage);
+        redisMessageBroker.publishToLegacyRelay(ownerId, routedMessage);
         log.debug("[Legacy] Relayed to remote owner: source={}, ownerId={}", source, ownerId);
         return true;
     }
@@ -246,7 +246,7 @@ public class LegacySkillRelayStrategy implements SkillRelayStrategy {
     public void destroy() {
         sourceSessions.keySet().forEach(this::clearOwnerState);
         if (relaySubscribed.compareAndSet(true, false)) {
-            redisMessageBroker.unsubscribeFromRelay(instanceId);
+            redisMessageBroker.unsubscribeFromLegacyRelay(instanceId);
         }
         log.info("[Legacy] Destroyed: cleared all owner state and relay subscriptions");
     }
@@ -351,7 +351,7 @@ public class LegacySkillRelayStrategy implements SkillRelayStrategy {
 
     private void ensureRelaySubscription() {
         if (relaySubscribed.compareAndSet(false, true)) {
-            redisMessageBroker.subscribeToRelay(instanceId, this::handleRelayedMessage);
+            redisMessageBroker.subscribeToLegacyRelay(instanceId, this::handleRelayedMessage);
         }
     }
 
@@ -375,7 +375,7 @@ public class LegacySkillRelayStrategy implements SkillRelayStrategy {
 
     private void unsubscribeRelayIfIdle() {
         if (!hasAnyOpenSession() && relaySubscribed.compareAndSet(true, false)) {
-            redisMessageBroker.unsubscribeFromRelay(instanceId);
+            redisMessageBroker.unsubscribeFromLegacyRelay(instanceId);
         }
     }
 

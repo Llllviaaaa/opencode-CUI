@@ -89,7 +89,7 @@ class LegacySkillRelayStrategyTest {
         void register_subscribesRelay() {
             registerSs1();
 
-            verify(redisMessageBroker).subscribeToRelay(eq(INSTANCE_ID), any());
+            verify(redisMessageBroker).subscribeToLegacyRelay(eq(INSTANCE_ID), any());
         }
 
         @Test
@@ -99,7 +99,7 @@ class LegacySkillRelayStrategyTest {
             strategy.removeSession(ss1);
 
             verify(redisMessageBroker).removeSourceOwner(SOURCE, INSTANCE_ID);
-            verify(redisMessageBroker).unsubscribeFromRelay(INSTANCE_ID);
+            verify(redisMessageBroker).unsubscribeFromLegacyRelay(INSTANCE_ID);
         }
 
         @Test
@@ -166,7 +166,7 @@ class LegacySkillRelayStrategyTest {
             boolean result = strategy.relayToSkill(msg);
 
             assertTrue(result);
-            verify(redisMessageBroker).publishToRelay(eq("gw-remote"), any(GatewayMessage.class));
+            verify(redisMessageBroker).publishToLegacyRelay(eq("gw-remote"), any(GatewayMessage.class));
         }
 
         @Test
