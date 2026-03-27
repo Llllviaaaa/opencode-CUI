@@ -93,17 +93,30 @@ public class SkillWebSocketHandler extends TextWebSocketHandler implements Hands
             MdcHelper.fromGatewayMessage(message);
             MdcHelper.putScenario("ws-skill-invoke");
 
-            if (!GatewayMessage.Type.INVOKE.equals(message.getType())) {
-                log.warn("Unsupported message type from skill internal link: sessionId={}, type={}",
-                        session.getId(), message.getType());
-                return;
+            String type = message.getType();
+            switch (type) {
+                case GatewayMessage.Type.INVOKE -> {
+                    log.info("[ENTRY] SkillWSHandler.handleTextMessage: sessionId={}, ak={}, action={}",
+                            session.getId(), message.getAk(), message.getAction());
+                    skillRelayService.handleInvokeFromSkill(session, message);
+                    log.info("[EXIT] SkillWSHandler.handleTextMessage: sessionId={}, ak={}",
+                            session.getId(), message.getAk());
+                }
+                case GatewayMessage.Type.ROUTE_CONFIRM -> {
+                    log.info("[ENTRY] SkillWSHandler.handleRouteConfirm: sessionId={}, toolSessionId={}",
+                            session.getId(), message.getToolSessionId());
+                    skillRelayService.handleRouteConfirm(message);
+                    log.info("[EXIT] SkillWSHandler.handleRouteConfirm: sessionId={}", session.getId());
+                }
+                case GatewayMessage.Type.ROUTE_REJECT -> {
+                    log.info("[ENTRY] SkillWSHandler.handleRouteReject: sessionId={}, toolSessionId={}",
+                            session.getId(), message.getToolSessionId());
+                    skillRelayService.handleRouteReject(message);
+                    log.info("[EXIT] SkillWSHandler.handleRouteReject: sessionId={}", session.getId());
+                }
+                default -> log.warn("Unsupported message type from skill internal link: sessionId={}, type={}",
+                        session.getId(), type);
             }
-
-            log.info("[ENTRY] SkillWSHandler.handleTextMessage: sessionId={}, ak={}, action={}",
-                    session.getId(), message.getAk(), message.getAction());
-            skillRelayService.handleInvokeFromSkill(session, message);
-            log.info("[EXIT] SkillWSHandler.handleTextMessage: sessionId={}, ak={}",
-                    session.getId(), message.getAk());
         } finally {
             MdcHelper.clearAll();
         }
