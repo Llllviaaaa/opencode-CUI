@@ -13,9 +13,9 @@ import java.util.List;
  * GW-A publishes a {@code RelayMessage} to {@code gw:relay:{gwB-instanceId}}.
  * GW-B receives it, extracts {@code originalMessage}, and delivers to the local Agent.
  *
- * <p>Backward-compatibility note: the legacy path published raw {@code GatewayMessage} JSON
- * to the same channel prefix. Receivers distinguish new-format messages by checking for the
- * {@code "type":"relay"} field.
+ * <p>Note: the legacy upstream path (Agent→SS) uses a separate channel
+ * {@code gw:legacy-relay:{instanceId}} with raw {@code GatewayMessage} JSON,
+ * and does not use this wrapper.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record RelayMessage(

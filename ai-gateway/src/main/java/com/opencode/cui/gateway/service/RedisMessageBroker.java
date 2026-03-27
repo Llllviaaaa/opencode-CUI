@@ -37,8 +37,10 @@ import java.util.function.Consumer;
  * <h3>Channel 模式</h3>
  * <ul>
  *   <li>{@code agent:{ak}} — 路由 invoke 命令到持有 Agent WS 的 Gateway 实例（保留，Phase 2 后可废弃）</li>
- *   <li>{@code gw:relay:{instanceId}} — GW 实例间 relay 通道，消息格式为 {@link RelayMessage} JSON；
- *       与旧版 Legacy 路径同名，但新版消息带有 {@code "type":"relay"} 包装字段以区分</li>
+ *   <li>{@code gw:relay:{instanceId}} — V2 GW 实例间 relay 通道（下行，SS→Agent），
+ *       消息格式为 {@link RelayMessage} JSON</li>
+ *   <li>{@code gw:legacy-relay:{instanceId}} — Legacy GW 实例间 relay 通道（上行，Agent→SS），
+ *       消息格式为裸 {@link GatewayMessage} JSON</li>
  * </ul>
  */
 @Slf4j
