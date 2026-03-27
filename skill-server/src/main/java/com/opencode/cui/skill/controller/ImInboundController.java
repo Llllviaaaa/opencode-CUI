@@ -187,10 +187,9 @@ public class ImInboundController {
         log.info("Session ready, forwarding to gateway: skillSessionId={}, toolSessionId={}, sessionType={}",
                 session.getId(), session.getToolSessionId(), request.sessionType());
 
-        // 单聊场景：在发送新消息前，先结束上一轮助手回复，保存用户消息，标记待处理状态
+        // 单聊场景：保存用户消息，标记待处理状态
         if (session.isImDirectSession()) {
             log.info("Direct session: persisting user message turn, skillSessionId={}", session.getId());
-            messagePersistenceService.finalizeActiveAssistantTurn(session.getId()); // 结束上一轮助手消息
             messageService.saveUserMessage(session.getId(), request.content()); // 保存本轮用户消息
             messagePersistenceService.markPendingUserMessage(session.getId()); // 标记用户消息待处理
         }

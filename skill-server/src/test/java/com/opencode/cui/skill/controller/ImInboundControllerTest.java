@@ -111,7 +111,6 @@ class ImInboundControllerTest {
                 var response = controller.receiveMessage(request);
 
                 assertEquals(HttpStatus.OK, response.getStatusCode());
-                verify(messagePersistenceService).finalizeActiveAssistantTurn(101L);
                 verify(messageService).saveUserMessage(101L, "hello");
                 verify(messagePersistenceService).markPendingUserMessage(101L);
                 ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
@@ -153,7 +152,6 @@ class ImInboundControllerTest {
                 var response = controller.receiveMessage(request);
 
                 assertEquals(HttpStatus.OK, response.getStatusCode());
-                verify(messagePersistenceService, never()).finalizeActiveAssistantTurn(any());
                 verify(messageService, never()).saveUserMessage(any(), any());
                 verify(gatewayRelayService).sendInvokeToGateway(any(InvokeCommand.class));
         }
