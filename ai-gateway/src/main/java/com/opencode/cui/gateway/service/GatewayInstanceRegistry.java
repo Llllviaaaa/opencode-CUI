@@ -10,6 +10,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.time.Instant;
 import java.util.Map;
 
@@ -26,6 +28,9 @@ import java.util.Map;
  *   <li>Value: JSON (instanceId, wsUrl, startedAt, lastHeartbeat)</li>
  * </ul>
  *
+ * <p>wsUrl 在启动时自动探测：优先使用 K8s Downward API 注入的 {@code POD_IP} 环境变量，
+ * fallback 到 {@code InetAddress.getLocalHost()}。
+ *
  * <p>HASH 无整体 TTL，单个 field 靠 {@code lastHeartbeat} 时间戳判活，
  * 由 {@link com.opencode.cui.gateway.controller.InternalInstanceController} 读取时惰性清理过期条目。
  */
@@ -36,26 +41,35 @@ public class GatewayInstanceRegistry {
     /** 所有 GW 实例聚合的 Redis HASH key。 */
     public static final String INSTANCES_HASH_KEY = "gw:internal:instances";
 
+    private static final String WS_PATH = "/ws/skill";
+
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
-    private final String instanceId;
-    private final String wsUrl;
-    private final String startedAt;
 
-    public GatewayInstanceRegistry(
-            StringRedisTemplate redisTemplate,
-            ObjectMapper objectMapper,
-            @Value("${gateway.instance-id:${HOSTNAME:gateway-local}}") String instanceId,
-            @Value("${gateway.instance-registry.ws-url:ws://localhost:8081/ws/skill}") String wsUrl) {
+    @Value("${gateway.instance-id:${HOSTNAME:gateway-local}}")
+    private String instanceId;
+
+    @Value("${POD_IP:}")
+    private String podIp;
+
+    @Value("${server.port:8081}")
+    private int serverPort;
+
+    @Value("${server.servlet.context-path:}")
+    private String contextPath;
+
+    private String wsUrl;
+    private String startedAt;
+
+    public GatewayInstanceRegistry(StringRedisTemplate redisTemplate, ObjectMapper objectMapper) {
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
-        this.instanceId = instanceId;
-        this.wsUrl = wsUrl;
-        this.startedAt = Instant.now().toString();
     }
 
     @PostConstruct
     public void register() {
+        this.startedAt = Instant.now().toString();
+        this.wsUrl = buildWsUrl();
         writeToRedis();
         log.info("[ENTRY] Gateway instance registered: instanceId={}, wsUrl={}", instanceId, wsUrl);
     }
@@ -89,6 +103,37 @@ public class GatewayInstanceRegistry {
         return wsUrl;
     }
 
+    private String buildWsUrl() {
+        String ip = resolveIp();
+        String host = ip.contains(":") ? "[" + ip + "]" : ip;
+        String url = "ws://" + host + ":" + serverPort + contextPath + WS_PATH;
+
+        if (isLoopback(ip)) {
+            log.warn("GatewayInstanceRegistry: detected loopback address, wsUrl={} — multi-instance routing may not work", url);
+        }
+
+        return url;
+    }
+
+    private String resolveIp() {
+        if (podIp != null && !podIp.isBlank()) {
+            log.info("Using POD_IP for wsUrl: {}", podIp);
+            return podIp;
+        }
+        try {
+            String localIp = InetAddress.getLocalHost().getHostAddress();
+            log.info("POD_IP not set, falling back to InetAddress.getLocalHost(): {}", localIp);
+            return localIp;
+        } catch (UnknownHostException e) {
+            log.warn("Failed to resolve local IP, falling back to 127.0.0.1: {}", e.getMessage());
+            return "127.0.0.1";
+        }
+    }
+
+    private static boolean isLoopback(String ip) {
+        return "127.0.0.1".equals(ip) || "::1".equals(ip);
+    }
+
     private void writeToRedis() {
         String value = buildRegistrationValue();
         redisTemplate.opsForHash().put(INSTANCES_HASH_KEY, instanceId, value);
@@ -102,7 +147,6 @@ public class GatewayInstanceRegistry {
                     "startedAt", startedAt,
                     "lastHeartbeat", Instant.now().toString()));
         } catch (JsonProcessingException e) {
-            // ObjectMapper serialization of a simple Map should never fail; fallback to minimal JSON
             return "{\"instanceId\":\"" + instanceId + "\",\"wsUrl\":\"" + wsUrl + "\"}";
         }
     }
