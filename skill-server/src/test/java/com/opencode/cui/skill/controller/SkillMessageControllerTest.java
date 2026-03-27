@@ -96,7 +96,6 @@ class SkillMessageControllerTest {
         assertNotNull(body);
         assertEquals("1", body.getData().getWelinkSessionId());
         assertEquals("user", body.getData().getRole());
-        verify(messagePersistenceService).finalizeActiveAssistantTurn(1L);
         ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
         verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
         assertEquals("99", cmdCaptor.getValue().ak());

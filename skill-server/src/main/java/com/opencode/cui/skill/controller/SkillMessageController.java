@@ -115,7 +115,6 @@ public class SkillMessageController {
         }
 
         // 持久化用户消息
-        messagePersistenceService.finalizeActiveAssistantTurn(numericSessionId);
         SkillMessage message = messageService.saveUserMessage(numericSessionId, request.getContent());
         messagePersistenceService.markPendingUserMessage(numericSessionId);
 
