@@ -1,6 +1,7 @@
 package com.opencode.cui.gateway.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.gateway.model.GatewayMessage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -10,6 +11,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 
 import java.time.Duration;
@@ -159,6 +161,43 @@ class RedisMessageBrokerTest {
             broker.bindAgentUser("ak-1", null);
             assertNull(broker.getAgentUser(null));
             assertNull(broker.getAgentUser(""));
+        }
+    }
+
+    // ==================== Legacy Relay pub/sub ====================
+
+    @Nested
+    @DisplayName("Legacy Relay pub/sub")
+    class LegacyRelayTests {
+
+        @Test
+        @DisplayName("subscribeToLegacyRelay 订阅 gw:legacy-relay:{instanceId} channel")
+        void subscribeToLegacyRelay_subscribesCorrectChannel() {
+            broker.subscribeToLegacyRelay("gw-az1-1", msg -> {});
+
+            verify(listenerContainer).addMessageListener(
+                    any(), eq(new ChannelTopic("gw:legacy-relay:gw-az1-1")));
+        }
+
+        @Test
+        @DisplayName("unsubscribeFromLegacyRelay 取消订阅 gw:legacy-relay:{instanceId} channel")
+        void unsubscribeFromLegacyRelay_unsubscribesCorrectChannel() {
+            broker.subscribeToLegacyRelay("gw-az1-1", msg -> {});
+            broker.unsubscribeFromLegacyRelay("gw-az1-1");
+
+            verify(listenerContainer).removeMessageListener(any());
+        }
+
+        @Test
+        @DisplayName("publishToLegacyRelay 发布到 gw:legacy-relay:{instanceId} channel")
+        void publishToLegacyRelay_publishesCorrectChannel() {
+            GatewayMessage msg = GatewayMessage.builder()
+                    .type(GatewayMessage.Type.TOOL_EVENT)
+                    .build();
+
+            broker.publishToLegacyRelay("gw-az1-1", msg);
+
+            verify(redisTemplate).convertAndSend(eq("gw:legacy-relay:gw-az1-1"), anyString());
         }
     }
 }

@@ -60,10 +60,10 @@ public class RedisMessageBroker {
     /** Channel prefix for GW-to-GW relay: gw:relay:{instanceId} */
     private static final String GW_RELAY_CHANNEL_PREFIX = "gw:relay:";
 
-    // ==================== 废弃的 Key/Channel 前缀（Phase 1.3 重写后移除） ====================
+    /** Channel prefix for Legacy GW-to-GW relay: gw:legacy-relay:{instanceId} */
+    private static final String GW_LEGACY_RELAY_CHANNEL_PREFIX = "gw:legacy-relay:";
 
-    @Deprecated
-    private static final String RELAY_CHANNEL_PREFIX = "gw:relay:";
+    // ==================== 废弃的 Key/Channel 前缀（Phase 1.3 重写后移除） ====================
     @Deprecated
     private static final String SOURCE_OWNER_KEY_PREFIX = "gw:source:owner:";
     @Deprecated
@@ -359,6 +359,40 @@ public class RedisMessageBroker {
         unsubscribe(channel);
     }
 
+    // ==================== Legacy GW relay pub/sub ====================
+
+    /**
+     * 将 {@link GatewayMessage} 发布到目标 GW 实例的 legacy relay channel
+     * {@code gw:legacy-relay:{targetInstanceId}}。
+     *
+     * <p>供 {@link LegacySkillRelayStrategy} 处理上行（Agent→SS）跨 GW 路由时使用。
+     *
+     * @param instanceId 目标 GW 实例 ID
+     * @param message    需要中转的 GatewayMessage
+     */
+    public void publishToLegacyRelay(String instanceId, GatewayMessage message) {
+        publishMessage(legacyRelayChannel(instanceId), message);
+    }
+
+    /**
+     * 订阅 legacy relay channel {@code gw:legacy-relay:{instanceId}}。
+     *
+     * @param instanceId 本 GW 实例 ID
+     * @param handler    接收反序列化后 {@link GatewayMessage} 的回调
+     */
+    public void subscribeToLegacyRelay(String instanceId, Consumer<GatewayMessage> handler) {
+        subscribe(legacyRelayChannel(instanceId), handler);
+    }
+
+    /**
+     * 取消订阅 legacy relay channel {@code gw:legacy-relay:{instanceId}}。
+     *
+     * @param instanceId 本 GW 实例 ID
+     */
+    public void unsubscribeFromLegacyRelay(String instanceId) {
+        unsubscribe(legacyRelayChannel(instanceId));
+    }
+
     // ==================== agentUser（保留） ====================
 
     public void bindAgentUser(String ak, String userId) {
@@ -386,17 +420,17 @@ public class RedisMessageBroker {
 
     @Deprecated
     public void publishToRelay(String instanceId, GatewayMessage message) {
-        publishMessage(relayChannel(instanceId), message);
+        publishToLegacyRelay(instanceId, message);
     }
 
     @Deprecated
     public void subscribeToRelay(String instanceId, Consumer<GatewayMessage> handler) {
-        subscribe(relayChannel(instanceId), handler);
+        subscribeToLegacyRelay(instanceId, handler);
     }
 
     @Deprecated
     public void unsubscribeFromRelay(String instanceId) {
-        unsubscribe(relayChannel(instanceId));
+        unsubscribeFromLegacyRelay(instanceId);
     }
 
     @Deprecated
@@ -556,9 +590,8 @@ public class RedisMessageBroker {
         return AGENT_USER_KEY_PREFIX + ak;
     }
 
-    @Deprecated
-    private String relayChannel(String instanceId) {
-        return RELAY_CHANNEL_PREFIX + instanceId;
+    private String legacyRelayChannel(String instanceId) {
+        return GW_LEGACY_RELAY_CHANNEL_PREFIX + instanceId;
     }
 
     @Deprecated
