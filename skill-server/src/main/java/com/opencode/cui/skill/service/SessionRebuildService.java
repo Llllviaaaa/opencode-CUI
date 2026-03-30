@@ -13,6 +13,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * 会话重建服务。
@@ -20,14 +22,15 @@ import java.time.Duration;
  * 自动触发重建流程：通知前端重试状态 → 清除旧会话 → 向 Gateway 发送 create_session 命令。
  *
  * <p>
- * 使用 Redis 暂存待重建的用户消息（支持多实例），重建完成后自动重试发送。
+ * 使用 Redis List 暂存待重建的用户消息（支持多实例 + 群聊多人并发），
+ * 重建完成后按 FIFO 顺序逐条重试发送。
  * </p>
  */
 @Slf4j
 @Service
 public class SessionRebuildService {
 
-    /** 待重建消息 Redis key 前缀：ss:pending-rebuild:{sessionId} → 用户消息文本 */
+    /** 待重建消息 Redis key 前缀：ss:pending-rebuild:{sessionId} → List of 用户消息文本 */
     private static final String PENDING_MSG_PREFIX = "ss:pending-rebuild:";
     /** 重建计数器 Redis key 前缀：ss:rebuild-counter:{sessionId} → 已重建次数 */
     private static final String REBUILD_COUNTER_PREFIX = "ss:rebuild-counter:";
@@ -71,7 +74,7 @@ public class SessionRebuildService {
      * 执行工具会话重建核心流程。
      * <ol>
      * <li>检查重建计数器是否超限</li>
-     * <li>缓存待重试的用户消息到 Redis</li>
+     * <li>缓存待重试的用户消息到 Redis List（追加，不覆盖）</li>
      * <li>广播 retry 状态到前端</li>
      * <li>向 Gateway 发送 create_session 命令</li>
      * </ol>
@@ -84,7 +87,7 @@ public class SessionRebuildService {
         if (attempts > maxRebuildAttempts) {
             log.warn("Rebuild exhausted: session={}, attempts={}, cooldownSeconds={}",
                     sessionId, attempts, rebuildCooldownSeconds);
-            clearPendingMessage(sessionId);
+            clearPendingMessages(sessionId);
             Long numericId = ProtocolUtils.parseSessionId(sessionId);
             if (numericId != null) {
                 sessionService.clearToolSessionId(numericId);
@@ -97,10 +100,10 @@ public class SessionRebuildService {
 
         log.info("Rebuild attempt {}/{} for session={}", attempts, maxRebuildAttempts, sessionId);
 
-        // --- 缓存待重试消息到 Redis ---
+        // --- 缓存待重试消息到 Redis List（追加，支持群聊多人并发） ---
         if (pendingMessage != null && !pendingMessage.isBlank()) {
-            storePendingMessage(sessionId, pendingMessage);
-            log.info("Stored pending retry message for session {}: '{}'",
+            appendPendingMessage(sessionId, pendingMessage);
+            log.info("Appended pending retry message for session {}: '{}'",
                     sessionId,
                     pendingMessage.substring(0, Math.min(50, pendingMessage.length())));
         }
@@ -109,7 +112,7 @@ public class SessionRebuildService {
 
         if (session.getAk() == null || session.getAk().isBlank()) {
             log.error("Cannot rebuild session {}: no ak associated", sessionId);
-            clearPendingMessage(sessionId);
+            clearPendingMessages(sessionId);
             callback.broadcast(sessionId, session.getUserId(),
                     StreamMessage.error("AI session expired and cannot be rebuilt"));
             return;
@@ -133,29 +136,48 @@ public class SessionRebuildService {
         log.info("Rebuild create_session sent for welinkSession={}, ak={}", sessionId, session.getAk());
     }
 
-    /** 消费并返回待重建的用户消息，消费后从 Redis 中移除（原子操作）。 */
-    public String consumePendingMessage(String sessionId) {
+    /**
+     * 追加一条待重建消息到 Redis List。
+     * 供 ImInboundController Case C 在发送 CHAT 前预缓存消息，
+     * 以及 rebuildToolSession 缓存待重试消息。
+     */
+    public void appendPendingMessage(String sessionId, String message) {
         String key = PENDING_MSG_PREFIX + sessionId;
         try {
-            String pendingText = redisTemplate.opsForValue().get(key);
-            if (pendingText != null) {
-                redisTemplate.delete(key);
-            }
-            return pendingText;
+            redisTemplate.opsForList().rightPush(key, message);
+            redisTemplate.expire(key, PENDING_MSG_TTL);
         } catch (Exception e) {
-            log.error("[ERROR] consumePendingMessage: Redis 操作失败, sessionId={}, error={}",
+            log.error("[ERROR] appendPendingMessage: Redis 操作失败, sessionId={}, error={}",
                     sessionId, e.getMessage());
-            return null;
         }
     }
 
-    /** 清除会话的待重建消息缓存。 */
-    public void clearPendingMessage(String sessionId) {
+    /**
+     * 消费所有待重建的用户消息，消费后从 Redis 中移除。
+     * 返回 FIFO 顺序的消息列表，重建完成后逐条重发。
+     *
+     * @return 待重发的消息列表，空列表表示无待发消息
+     */
+    public List<String> consumePendingMessages(String sessionId) {
+        String key = PENDING_MSG_PREFIX + sessionId;
+        try {
+            List<String> messages = redisTemplate.opsForList().range(key, 0, -1);
+            redisTemplate.delete(key);
+            return messages != null ? messages : Collections.emptyList();
+        } catch (Exception e) {
+            log.error("[ERROR] consumePendingMessages: Redis 操作失败, sessionId={}, error={}",
+                    sessionId, e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    /** 清除会话的所有待重建消息。 */
+    public void clearPendingMessages(String sessionId) {
         String key = PENDING_MSG_PREFIX + sessionId;
         try {
             redisTemplate.delete(key);
         } catch (Exception e) {
-            log.warn("[WARN] clearPendingMessage: Redis 操作失败, sessionId={}, error={}",
+            log.warn("[WARN] clearPendingMessages: Redis 操作失败, sessionId={}, error={}",
                     sessionId, e.getMessage());
         }
     }
@@ -181,7 +203,7 @@ public class SessionRebuildService {
             rebuildToolSession(sessionId, session, pendingMessage, callback);
         } catch (Exception e) {
             log.error("Failed to rebuild session {}: {}", sessionId, e.getMessage(), e);
-            clearPendingMessage(sessionId);
+            clearPendingMessages(sessionId);
         }
     }
 
@@ -201,17 +223,6 @@ public class SessionRebuildService {
             log.warn("[WARN] incrementRebuildCounter: Redis 操作失败, 降级放行, sessionId={}, error={}",
                     sessionId, e.getMessage());
             return 1;
-        }
-    }
-
-    /** 存储待重建消息到 Redis，带 TTL。 */
-    private void storePendingMessage(String sessionId, String message) {
-        String key = PENDING_MSG_PREFIX + sessionId;
-        try {
-            redisTemplate.opsForValue().set(key, message, PENDING_MSG_TTL);
-        } catch (Exception e) {
-            log.error("[ERROR] storePendingMessage: Redis 操作失败, sessionId={}, error={}",
-                    sessionId, e.getMessage());
         }
     }
 

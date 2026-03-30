@@ -686,41 +686,49 @@ public class GatewayMessageRouter {
         } catch (Exception e) {
             log.error("[ERROR] handleSessionCreated: toolSessionId 绑定失败, sessionId={}, error={}",
                     sessionId, e.getMessage());
-            rebuildService.clearPendingMessage(sessionId);
+            rebuildService.clearPendingMessages(sessionId);
             return;
         }
 
-        retryPendingMessage(sessionId, ak, userId, toolSessionId);
+        retryPendingMessages(sessionId, ak, userId, toolSessionId);
     }
 
-    /** 重建完成后重试发送待处理的用户消息。 */
-    private void retryPendingMessage(String sessionId, String ak, String userId, String toolSessionId) {
-        String pendingText = rebuildService.consumePendingMessage(sessionId);
-        if (pendingText == null) {
-            log.info("[SKIP] retryPendingMessage: reason=no_pending_message, sessionId={}", sessionId);
+    /** 重建完成后按 FIFO 顺序逐条重发所有待处理的用户消息。 */
+    private void retryPendingMessages(String sessionId, String ak, String userId, String toolSessionId) {
+        java.util.List<String> pendingMessages = rebuildService.consumePendingMessages(sessionId);
+        if (pendingMessages.isEmpty()) {
+            log.info("[SKIP] retryPendingMessages: reason=no_pending_messages, sessionId={}", sessionId);
             return;
         }
 
-        log.info("[ENTRY] retryPendingMessage: sessionId={}, ak={}, textLength={}",
-                sessionId, ak, pendingText.length());
-
-        ObjectNode chatPayload = objectMapper.createObjectNode();
-        chatPayload.put("text", pendingText);
-        chatPayload.put("toolSessionId", toolSessionId);
-        String payloadStr;
-        try {
-            payloadStr = objectMapper.writeValueAsString(chatPayload);
-        } catch (JsonProcessingException e) {
-            payloadStr = "{}";
-        }
+        log.info("[ENTRY] retryPendingMessages: sessionId={}, ak={}, count={}",
+                sessionId, ak, pendingMessages.size());
 
         DownstreamSender sender = downstreamSender;
-        if (sender != null) {
-            sender.sendInvokeToGateway(new InvokeCommand(ak, userId, sessionId, GatewayActions.CHAT, payloadStr));
-            log.info("[EXIT] retryPendingMessage: CHAT sent, sessionId={}, ak={}", sessionId, ak);
-        } else {
-            log.warn("[ERROR] retryPendingMessage: reason=no_downstream_sender, sessionId={}", sessionId);
+        if (sender == null) {
+            log.warn("[ERROR] retryPendingMessages: reason=no_downstream_sender, sessionId={}", sessionId);
+            return;
         }
+
+        int sent = 0;
+        for (String pendingText : pendingMessages) {
+            if (pendingText == null || pendingText.isBlank()) {
+                continue;
+            }
+            ObjectNode chatPayload = objectMapper.createObjectNode();
+            chatPayload.put("text", pendingText);
+            chatPayload.put("toolSessionId", toolSessionId);
+            String payloadStr;
+            try {
+                payloadStr = objectMapper.writeValueAsString(chatPayload);
+            } catch (JsonProcessingException e) {
+                payloadStr = "{}";
+            }
+            sender.sendInvokeToGateway(new InvokeCommand(ak, userId, sessionId, GatewayActions.CHAT, payloadStr));
+            sent++;
+        }
+
+        log.info("[EXIT] retryPendingMessages: sessionId={}, ak={}, sent={}/{}", sessionId, ak, sent, pendingMessages.size());
         broadcastStreamMessage(sessionId, userId, StreamMessage.sessionStatus("busy"));
     }
 
