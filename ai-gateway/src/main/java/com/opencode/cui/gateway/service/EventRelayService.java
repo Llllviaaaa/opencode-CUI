@@ -95,6 +95,12 @@ public class EventRelayService {
                     return;
                 }
 
+                // Handle to-source-broadcast relay: broadcast to all local Source connections (L3 fallback)
+                if (RelayMessage.RELAY_TO_SOURCE_BROADCAST.equals(relayMessage.relayType())) {
+                    skillRelayService.handleToSourceBroadcastRelay(relayMessage.originalMessage());
+                    return;
+                }
+
                 gatewayMessageJson = relayMessage.originalMessage();
                 relaySourceType = relayMessage.sourceType();
                 relayRoutingKeys = relayMessage.routingKeys();

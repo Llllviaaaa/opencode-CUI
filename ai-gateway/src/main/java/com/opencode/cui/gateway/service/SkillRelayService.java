@@ -12,6 +12,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -94,6 +97,20 @@ public class SkillRelayService {
     private final AtomicLong routingHitCount = new AtomicLong();
     /** Count of upstream route lookups that fell back to broadcast (no routing table entry). */
     private final AtomicLong routingBroadcastCount = new AtomicLong();
+    /** Count of upstream messages routed via Redis L2 (cross-GW relay). */
+    private final AtomicLong routingRedisL2Count = new AtomicLong();
+    /** Count of upstream messages routed via Level 3 broadcast relay. */
+    private final AtomicLong routingL3BroadcastCount = new AtomicLong();
+
+    /**
+     * Per-source broadcast rate limiter: sourceType → last broadcast timestamps (epoch millis).
+     * Uses a Caffeine cache with sliding window to enforce max 10 broadcasts/source/second.
+     */
+    private final Cache<String, AtomicLong> broadcastRateLimiter = Caffeine.newBuilder()
+            .expireAfterAccess(Duration.ofMinutes(5))
+            .maximumSize(1000)
+            .build();
+    private static final int BROADCAST_RATE_LIMIT_PER_SECOND = 10;
 
     /** Lazy-initialized reference to EventRelayService (set via setter to break circular dependency). */
     private EventRelayService eventRelayService;
@@ -291,22 +308,25 @@ public class SkillRelayService {
     }
 
     /**
-     * V2: UpstreamRoutingTable + ConsistentHashRing routing.
+     * V2: Three-level upstream routing.
+     *
+     * <p>Level 1: Caffeine L1 (UpstreamRoutingTable) + local hashRing — 0-hop local delivery</p>
+     * <p>Level 2: Redis L2 — precise session route lookup, local delivery or cross-GW relay</p>
+     * <p>Level 3: Broadcast fallback — relay to all GWs holding Source connections</p>
      */
     private boolean v2RelayToSkill(GatewayMessage message) {
         GatewayMessage tracedMessage = message.ensureTraceId();
         String routingKey = resolveRoutingKey(tracedMessage);
 
-        // 1. Resolve sourceType from UpstreamRoutingTable
+        // ===== Level 1: Caffeine L1 — UpstreamRoutingTable + local hashRing =====
         String sourceType = routingTable.resolveSourceType(tracedMessage);
 
         if (sourceType != null) {
-            // 2. Known sourceType → hash-select a connection from that sourceType's ring
             ConsistentHashRing<WebSocketSession> ring = hashRings.get(sourceType);
             if (ring != null && !ring.isEmpty() && routingKey != null) {
                 WebSocketSession target = ring.getNode(routingKey);
                 if (target != null && target.isOpen()) {
-                    log.info("[V2] Hash-routed to source: sourceType={}, routingKey={}, linkId={}, type={}",
+                    log.info("[V2-L1] Hash-routed to source: sourceType={}, routingKey={}, linkId={}, type={}",
                             sourceType, routingKey, target.getId(), tracedMessage.getType());
                     if (sendToSession(target, tracedMessage)) {
                         routingHitCount.incrementAndGet();
@@ -314,19 +334,22 @@ public class SkillRelayService {
                     }
                 }
             }
-            // Ring miss or send failure → broadcast to that sourceType
-            routingBroadcastCount.incrementAndGet();
-            return broadcastToSourceType(sourceType, tracedMessage);
+            // L1 known sourceType but no local connection — try local broadcast to that type first
+            if (broadcastToSourceType(sourceType, tracedMessage)) {
+                routingHitCount.incrementAndGet();
+                return true;
+            }
+            // Fall through to L2
         }
 
-        // 3. Unknown sourceType → try message.source field
+        // Also try message.source field as sourceType hint for L1
         String messageSource = tracedMessage.getSource();
         if (messageSource != null && !messageSource.isBlank()) {
             ConsistentHashRing<WebSocketSession> ring = hashRings.get(messageSource);
             if (ring != null && !ring.isEmpty() && routingKey != null) {
                 WebSocketSession target = ring.getNode(routingKey);
                 if (target != null && target.isOpen()) {
-                    log.info("[V2] Hash-routed via message.source: sourceType={}, routingKey={}, linkId={}, type={}",
+                    log.info("[V2-L1] Hash-routed via message.source: sourceType={}, routingKey={}, linkId={}, type={}",
                             messageSource, routingKey, target.getId(), tracedMessage.getType());
                     if (sendToSession(target, tracedMessage)) {
                         routingHitCount.incrementAndGet();
@@ -334,13 +357,154 @@ public class SkillRelayService {
                     }
                 }
             }
-            routingBroadcastCount.incrementAndGet();
-            return broadcastToSourceType(messageSource, tracedMessage);
+            if (broadcastToSourceType(messageSource, tracedMessage)) {
+                routingHitCount.incrementAndGet();
+                return true;
+            }
         }
 
-        // 4. Broadcast to all sourceType groups (one per group via hash or first open)
+        // ===== Level 2: Redis L2 — precise session route from Redis =====
+        boolean l2Result = l2RedisRoute(tracedMessage, routingKey);
+        if (l2Result) {
+            routingRedisL2Count.incrementAndGet();
+            return true;
+        }
+
+        // ===== Level 3: Broadcast fallback — relay to all GWs with Source connections =====
         routingBroadcastCount.incrementAndGet();
-        return broadcastToAllGroups(tracedMessage, routingKey);
+        // Try local broadcast first
+        boolean localBroadcast = broadcastToAllGroups(tracedMessage, routingKey);
+        // Also relay to remote GWs
+        l3BroadcastRelay(tracedMessage);
+        routingL3BroadcastCount.incrementAndGet();
+        return localBroadcast;
+    }
+
+    /**
+     * Level 2: Redis-based precise session route lookup.
+     * Queries Redis for toolSessionId/welinkSessionId → sourceType:sourceInstanceId mapping,
+     * then either delivers locally or relays to the correct remote GW.
+     *
+     * @return true if message was delivered or relayed
+     */
+    private boolean l2RedisRoute(GatewayMessage message, String routingKey) {
+        String toolSessionId = message.getToolSessionId();
+        String welinkSessionId = message.getWelinkSessionId();
+
+        // Query Redis route table
+        String routeValue = redisMessageBroker.getSessionRoute(toolSessionId);
+        if (routeValue == null) {
+            routeValue = redisMessageBroker.getWelinkSessionRoute(welinkSessionId);
+        }
+
+        if (routeValue == null) {
+            log.debug("[V2-L2] No Redis route found: toolSessionId={}, welinkSessionId={}",
+                    toolSessionId, welinkSessionId);
+            return false;
+        }
+
+        // Parse "sourceType:sourceInstanceId"
+        String[] parts = routeValue.split(":", 2);
+        if (parts.length < 2) {
+            log.warn("[V2-L2] Invalid route format: routeValue={}", routeValue);
+            return false;
+        }
+        String targetSourceType = parts[0];
+        String targetSourceInstanceId = parts[1];
+
+        // Try local delivery first
+        WebSocketSession localSession = findLocalSourceConnection(targetSourceType, targetSourceInstanceId);
+        if (localSession != null) {
+            log.info("[V2-L2] Local delivery: sourceType={}, sourceInstanceId={}, linkId={}, type={}",
+                    targetSourceType, targetSourceInstanceId, localSession.getId(), message.getType());
+            if (sendToSession(localSession, message)) {
+                return true;
+            }
+        }
+
+        // Query Redis: which GWs hold this Source connection?
+        Map<String, Long> gwMap = redisMessageBroker.getSourceConnections(targetSourceType, targetSourceInstanceId);
+        for (String targetGwId : gwMap.keySet()) {
+            if (!gatewayInstanceId.equals(targetGwId)) {
+                try {
+                    String messageJson = objectMapper.writeValueAsString(message);
+                    redisMessageBroker.publishToSourceRelay(targetGwId, targetSourceType,
+                            targetSourceInstanceId, messageJson);
+                    log.info("[V2-L2] Cross-GW relay: targetGw={}, sourceType={}, sourceInstanceId={}, type={}",
+                            targetGwId, targetSourceType, targetSourceInstanceId, message.getType());
+                    return true;
+                } catch (Exception e) {
+                    log.error("[V2-L2] Failed to serialize message for cross-GW relay: type={}", message.getType(), e);
+                }
+            }
+        }
+
+        log.debug("[V2-L2] Route found but no reachable GW: sourceType={}, sourceInstanceId={}",
+                targetSourceType, targetSourceInstanceId);
+        return false;
+    }
+
+    /**
+     * Level 3: Broadcast relay to all remote GWs that hold any Source connection.
+     * Subject to per-source rate limiting (max {@link #BROADCAST_RATE_LIMIT_PER_SECOND} broadcasts/source/second).
+     *
+     * <p>Receiving GWs that have no matching local Source connection will silently discard the message.</p>
+     */
+    private void l3BroadcastRelay(GatewayMessage message) {
+        String sourceHint = message.getSource();
+        String rateLimitKey = sourceHint != null ? sourceHint : "__all__";
+
+        // Per-source rate limiting using sliding 1-second window
+        if (!acquireBroadcastPermit(rateLimitKey)) {
+            log.warn("[V2-L3] Broadcast rate limited: source={}", rateLimitKey);
+            return;
+        }
+
+        try {
+            String messageJson = objectMapper.writeValueAsString(message);
+            RelayMessage broadcastRelay = RelayMessage.toSourceBroadcast(messageJson);
+            String relayJson = objectMapper.writeValueAsString(broadcastRelay);
+
+            // Discover all GW instances that hold Source connections
+            java.util.Set<String> gwIds = redisMessageBroker.discoverAllSourceGwInstances();
+            int relayed = 0;
+            for (String targetGwId : gwIds) {
+                if (gatewayInstanceId.equals(targetGwId)) {
+                    continue; // skip self — local broadcast already handled
+                }
+                redisMessageBroker.publishToGwRelay(targetGwId, relayJson);
+                relayed++;
+            }
+            log.info("[V2-L3] Broadcast relay to {} remote GWs: type={}, source={}",
+                    relayed, message.getType(), sourceHint);
+        } catch (Exception e) {
+            log.error("[V2-L3] Failed to broadcast relay: type={}", message.getType(), e);
+        }
+    }
+
+    /**
+     * Attempts to acquire a broadcast permit for the given source key.
+     * Implements a simple sliding window rate limiter: max {@link #BROADCAST_RATE_LIMIT_PER_SECOND} per second.
+     *
+     * @return true if permit acquired, false if rate limited
+     */
+    private boolean acquireBroadcastPermit(String sourceKey) {
+        // Window timestamp tracker
+        AtomicLong windowStart = broadcastRateLimiter.get(sourceKey + ":ts", k -> new AtomicLong(0));
+        AtomicLong counter = broadcastRateLimiter.get(sourceKey + ":cnt", k -> new AtomicLong(0));
+
+        long now = System.currentTimeMillis();
+        long ws = windowStart.get();
+
+        if (now - ws > 1000) {
+            // New window
+            windowStart.set(now);
+            counter.set(1);
+            return true;
+        } else {
+            long count = counter.incrementAndGet();
+            return count <= BROADCAST_RATE_LIMIT_PER_SECOND;
+        }
     }
 
     /**
@@ -438,6 +602,27 @@ public class SkillRelayService {
         log.info("Broadcast to source_type={}: sent to {}/{} instances, msgType={}",
                 sourceType, sent, pool.size(), message.getType());
         return sent > 0;
+    }
+
+    /**
+     * Handles a to-source-broadcast relay from a remote GW (Level 3).
+     * Broadcasts the payload to all local Source connections.
+     * Called by EventRelayService when it receives a {@code to-source-broadcast} relay.
+     *
+     * @param payload the GatewayMessage JSON payload to broadcast
+     */
+    public void handleToSourceBroadcastRelay(String payload) {
+        try {
+            GatewayMessage message = objectMapper.readValue(payload, GatewayMessage.class);
+            GatewayMessage tracedMessage = message.ensureTraceId();
+            String routingKey = resolveRoutingKey(tracedMessage);
+            boolean delivered = broadcastToAllGroups(tracedMessage, routingKey);
+            if (!delivered) {
+                log.debug("[V2-L3-RX] No local source connections for broadcast relay: type={}", message.getType());
+            }
+        } catch (Exception e) {
+            log.error("[V2-L3-RX] Failed to handle to-source-broadcast relay", e);
+        }
     }
 
     // ==================== 下行 invoke 处理 ====================
@@ -821,9 +1006,10 @@ public class SkillRelayService {
      */
     @Scheduled(fixedDelay = 60_000)
     void logMetrics() {
-        log.info("[METRICS] relay: local={}, pubsub={}, pending={} | routing: hit={}, broadcast={}",
+        log.info("[METRICS] relay: local={}, pubsub={}, pending={} | routing: L1hit={}, L2redis={}, L3broadcast={}, broadcastFallback={}",
                 relayLocalCount.get(), relayPubsubCount.get(), relayPendingCount.get(),
-                routingHitCount.get(), routingBroadcastCount.get());
+                routingHitCount.get(), routingRedisL2Count.get(), routingL3BroadcastCount.get(),
+                routingBroadcastCount.get());
     }
 
     /**

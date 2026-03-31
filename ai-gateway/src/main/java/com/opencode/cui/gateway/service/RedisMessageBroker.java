@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -557,6 +558,36 @@ public class RedisMessageBroker {
 
     private String sourceConnKey(String sourceType, String sourceInstanceId) {
         return SOURCE_CONN_KEY_PREFIX + sourceType + ":" + sourceInstanceId;
+    }
+
+    /**
+     * Discovers all GW instance IDs that currently hold Source connections of any type.
+     * Scans all {@code gw:source-conn:*} keys in Redis and collects active GW instance IDs.
+     *
+     * @return set of GW instance IDs (excluding stale entries older than 30s)
+     */
+    public Set<String> discoverAllSourceGwInstances() {
+        Set<String> keys = redisTemplate.keys(SOURCE_CONN_KEY_PREFIX + "*");
+        if (keys == null || keys.isEmpty()) {
+            return Collections.emptySet();
+        }
+        long now = Instant.now().getEpochSecond();
+        Set<String> gwIds = new HashSet<>();
+        for (String key : keys) {
+            Map<Object, Object> entries = redisTemplate.opsForHash().entries(key);
+            for (Map.Entry<Object, Object> entry : entries.entrySet()) {
+                String gwId = String.valueOf(entry.getKey());
+                try {
+                    long ts = Long.parseLong(String.valueOf(entry.getValue()));
+                    if (now - ts <= 30) {
+                        gwIds.add(gwId);
+                    }
+                } catch (NumberFormatException ignored) {
+                    // skip invalid entries
+                }
+            }
+        }
+        return gwIds;
     }
 
     // ==================== Session 路由映射 (gw:route) ====================
