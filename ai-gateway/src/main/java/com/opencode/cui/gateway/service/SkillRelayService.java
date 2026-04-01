@@ -489,7 +489,7 @@ public class SkillRelayService {
      * @return true if permit acquired, false if rate limited
      */
     private boolean acquireBroadcastPermit(String sourceKey) {
-        // Window timestamp tracker
+        // Window timestamp tracker — uses CAS to safely rotate window
         AtomicLong windowStart = broadcastRateLimiter.get(sourceKey + ":ts", k -> new AtomicLong(0));
         AtomicLong counter = broadcastRateLimiter.get(sourceKey + ":cnt", k -> new AtomicLong(0));
 
@@ -497,14 +497,15 @@ public class SkillRelayService {
         long ws = windowStart.get();
 
         if (now - ws > 1000) {
-            // New window
-            windowStart.set(now);
-            counter.set(1);
-            return true;
-        } else {
-            long count = counter.incrementAndGet();
-            return count <= BROADCAST_RATE_LIMIT_PER_SECOND;
+            // Attempt to rotate window via CAS; loser threads fall through to increment
+            if (windowStart.compareAndSet(ws, now)) {
+                counter.set(1);
+                return true;
+            }
+            // CAS failed — another thread already rotated, fall through to increment
         }
+        long count = counter.incrementAndGet();
+        return count <= BROADCAST_RATE_LIMIT_PER_SECOND;
     }
 
     /**
