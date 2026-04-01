@@ -681,34 +681,31 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
         }
       }
 
-      // permission.reply: 审批完成后移除对应的 bubble 消息
+      // permission.reply: 审批完成后移除 bubble + SubtaskBlock 内的 permission
+      // 让流式效果与刷新后一致（刷新后 permission 不显示）
       if (type === 'permission.reply') {
-        const bubbleKey = msg.permissionId ?? msg.permissionId ?? '';
+        const bubbleKey = msg.permissionId ?? '';
         const bubbleId = `bubble-${subagentSessionId}-${bubbleKey}`;
-        setMessages((prev) => prev.filter((m) => m.id !== bubbleId));
-
-        // 同时更新 SubtaskBlock 内的 permission part 状态
-        if (msg.permissionId || msg.response) {
-          setMessages((prev) =>
-            prev.map((message) => {
-              if (message.id !== virtualMessageId) return message;
-              return {
-                ...message,
-                parts: (message.parts ?? []).map((p) => {
-                  if (p.type !== 'subtask' || p.subagentSessionId !== subagentSessionId) return p;
-                  return {
-                    ...p,
-                    subParts: (p.subParts ?? []).map((sp) =>
-                      sp.type === 'permission' && sp.permissionId === msg.permissionId
-                        ? { ...sp, permResolved: true, permissionResponse: msg.response }
-                        : sp,
-                    ),
-                  };
-                }),
-              };
-            }),
-          );
-        }
+        setMessages((prev) => {
+          // 1. 移除 bubble 消息
+          const filtered = prev.filter((m) => m.id !== bubbleId);
+          // 2. 从 SubtaskBlock 内移除已处理的 permission subPart
+          return filtered.map((message) => {
+            if (message.id !== virtualMessageId) return message;
+            return {
+              ...message,
+              parts: (message.parts ?? []).map((p) => {
+                if (p.type !== 'subtask' || p.subagentSessionId !== subagentSessionId) return p;
+                return {
+                  ...p,
+                  subParts: (p.subParts ?? []).filter(
+                    (sp) => !(sp.type === 'permission' && sp.permissionId === msg.permissionId),
+                  ),
+                };
+              }),
+            };
+          });
+        });
       }
     },
     [setMessages],
