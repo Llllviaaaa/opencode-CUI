@@ -657,9 +657,10 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
         }
       }
 
-      // permission/question 冒泡：直接创建独立的虚拟消息（不走 StreamAssembler）
+      // permission.ask / question: 冒泡到主对话流（创建临时 bubble 消息）
       if (type === 'permission.ask' || type === 'question') {
-        const bubbleId = `bubble-${subagentSessionId}-${msg.permissionId ?? msg.toolCallId ?? Date.now()}`;
+        const bubbleKey = msg.permissionId ?? msg.toolCallId ?? '';
+        const bubbleId = `bubble-${subagentSessionId}-${bubbleKey}`;
         const bubblePart = streamMessageToSubPart(msg);
         if (bubblePart) {
           setMessages((prev) => {
@@ -677,6 +678,36 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
               },
             ];
           });
+        }
+      }
+
+      // permission.reply: 审批完成后移除对应的 bubble 消息
+      if (type === 'permission.reply') {
+        const bubbleKey = msg.permissionId ?? msg.permissionId ?? '';
+        const bubbleId = `bubble-${subagentSessionId}-${bubbleKey}`;
+        setMessages((prev) => prev.filter((m) => m.id !== bubbleId));
+
+        // 同时更新 SubtaskBlock 内的 permission part 状态
+        if (msg.permissionId || msg.response) {
+          setMessages((prev) =>
+            prev.map((message) => {
+              if (message.id !== virtualMessageId) return message;
+              return {
+                ...message,
+                parts: (message.parts ?? []).map((p) => {
+                  if (p.type !== 'subtask' || p.subagentSessionId !== subagentSessionId) return p;
+                  return {
+                    ...p,
+                    subParts: (p.subParts ?? []).map((sp) =>
+                      sp.type === 'permission' && sp.permissionId === msg.permissionId
+                        ? { ...sp, permResolved: true, permissionResponse: msg.response }
+                        : sp,
+                    ),
+                  };
+                }),
+              };
+            }),
+          );
         }
       }
     },
@@ -701,10 +732,22 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
       case 'thinking.done':
       case 'tool.update':
       case 'permission.ask':
-      case 'permission.reply':
       case 'file':
         applyStreamedMessage(msg);
         break;
+
+      case 'permission.reply': {
+        applyStreamedMessage(msg);
+        // 移除 subagent 冒泡的 permission bubble（如果有）
+        const replyPermId = msg.permissionId
+          ?? msg.permissionId as string | undefined;
+        if (replyPermId) {
+          setMessages((prev) => prev.filter(
+            (m) => !m.id.startsWith('bubble-') || !m.id.endsWith(`-${replyPermId}`),
+          ));
+        }
+        break;
+      }
 
       case 'question': {
         const messageId = msg.messageId ?? msg.sourceMessageId;
