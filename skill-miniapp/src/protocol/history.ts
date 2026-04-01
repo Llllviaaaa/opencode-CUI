@@ -367,25 +367,34 @@ export function normalizeHistoryMessages(rawMessages: BackendMessage[]): Message
 function mergeConsecutiveAssistantMessages(messages: Message[]): Message[] {
   const result: Message[] = [];
 
+  const hasSubagentParts = (msg: Message): boolean =>
+    (msg.parts ?? []).some((p) => p.subagentSessionId || p.type === 'subtask');
+
   for (const msg of messages) {
     const prev = result[result.length - 1];
+    // 不合并包含 subagent parts 的消息（保持顺序不错乱）
+    const prevHasSub = prev ? hasSubagentParts(prev) : false;
+    const currHasSub = hasSubagentParts(msg);
+
     if (
       prev &&
       prev.role === 'assistant' &&
       msg.role === 'assistant' &&
-      !msg.content // 有独立文本内容的 assistant 消息不合并（它是一个完整的回复）
+      !prevHasSub &&
+      !currHasSub &&
+      !msg.content
     ) {
-      // 合并 parts 到前一条
       prev.parts = [...(prev.parts ?? []), ...(msg.parts ?? [])];
     } else if (
       prev &&
       prev.role === 'assistant' &&
       msg.role === 'assistant' &&
+      !prevHasSub &&
+      !currHasSub &&
       msg.content &&
       !prev.content &&
       prev.parts?.length
     ) {
-      // 前一条只有 parts 没有 content，当前有 content → 合并
       prev.content = msg.content;
       prev.parts = [...(prev.parts ?? []), ...(msg.parts ?? [])];
     } else {
