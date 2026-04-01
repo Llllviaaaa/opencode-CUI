@@ -22,6 +22,7 @@ export type StreamMessageType =
   | 'permission.reply'
   | 'agent.online'
   | 'agent.offline'
+  | 'message.user'
   | 'error'
   | 'snapshot'
   | 'streaming';
