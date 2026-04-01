@@ -163,6 +163,7 @@ public class StreamMessage {
         public static final String AGENT_ONLINE = "agent.online";
         public static final String AGENT_OFFLINE = "agent.offline";
         public static final String ERROR = "error";
+        public static final String MESSAGE_USER = "message.user";
 
         public static final String SNAPSHOT = "snapshot";
         public static final String STREAMING = "streaming";
@@ -208,6 +209,21 @@ public class StreamMessage {
     public static StreamMessage agentOffline() {
         return StreamMessage.builder()
                 .type(Types.AGENT_OFFLINE)
+                .build();
+    }
+
+    /**
+     * 创建 message.user 消息（多端同步用户消息）。
+     */
+    public static StreamMessage userMessage(String messageId, Integer messageSeq,
+                                            String content, String welinkSessionId) {
+        return StreamMessage.builder()
+                .type(Types.MESSAGE_USER)
+                .messageId(messageId)
+                .messageSeq(messageSeq)
+                .role("user")
+                .content(content)
+                .welinkSessionId(welinkSessionId)
                 .build();
     }
 
