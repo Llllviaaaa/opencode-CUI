@@ -735,15 +735,19 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
         break;
 
       case 'permission.reply': {
-        // 移除 subagent 冒泡的 bubble（如果有）
+        // 1. 移除 subagent 冒泡的 bubble（如果有）
         const replyPermId = msg.permissionId;
         if (replyPermId) {
           setMessages((prev) => prev.filter(
             (m) => !(m.id.startsWith('bubble-') && m.id.endsWith(`-${replyPermId}`)),
           ));
         }
-        // permission.reply 不走 applyStreamedMessage（不创建新消息）
-        // PermissionCard 已通过 local state 显示"已处理"状态
+        // 2. 只有主会话的 reply 才走 applyStreamedMessage（更新已有 permission part 状态）
+        //    subagent 的 reply 没有有效的 messageId，会创建孤立消息，所以跳过
+        const replyMsgId = msg.messageId ?? msg.sourceMessageId;
+        if (replyMsgId && !replyMsgId.startsWith('subtask-')) {
+          applyStreamedMessage(msg);
+        }
         break;
       }
 
