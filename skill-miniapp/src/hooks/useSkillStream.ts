@@ -548,24 +548,27 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
       const { subagentSessionId, subagentName, type } = msg;
       if (!subagentSessionId) return;
 
-      const messageId = msg.messageId ?? msg.sourceMessageId;
-      if (!messageId) return;
+      // 方案 B：用 subagentSessionId 作为虚拟 message 的 ID
+      // 子 session 的事件 messageId 是子 session 内部的，miniapp 中不存在
+      // 所以为每个 subagent 创建一条独立的虚拟 message
+      const virtualMessageId = `subtask-${subagentSessionId}`;
 
-      // 确保 subtask part 存在
-      setMessages((prev) =>
-        prev.map((message) => {
-          if (String(message.id) !== String(messageId)) return message;
-          const parts = message.parts ?? [];
-          const hasSubtask = parts.some(
-            (p) => p.type === 'subtask' && p.subagentSessionId === subagentSessionId,
-          );
-          if (!hasSubtask) {
-            return {
-              ...message,
+      // 确保虚拟 message 存在（含单个 subtask part）
+      setMessages((prev) => {
+        const exists = prev.some((m) => m.id === virtualMessageId);
+        if (!exists) {
+          return [
+            ...prev,
+            {
+              id: virtualMessageId,
+              role: 'assistant' as const,
+              content: '',
+              contentType: 'plain' as const,
+              timestamp: Date.now(),
+              isStreaming: true,
               parts: [
-                ...parts,
                 {
-                  partId: `subtask-${subagentSessionId}`,
+                  partId: virtualMessageId,
                   type: 'subtask' as const,
                   content: '',
                   isStreaming: true,
@@ -576,23 +579,23 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
                   subParts: [],
                 },
               ],
-            };
-          }
-          return message;
-        }),
-      );
+            },
+          ];
+        }
+        return prev;
+      });
 
       // 将消息内容追加到 subtask block 的 subParts 中
       const subPart = streamMessageToSubPart(msg);
       if (subPart) {
         setMessages((prev) =>
           prev.map((message) => {
-            if (String(message.id) !== String(messageId)) return message;
+            if (message.id !== virtualMessageId) return message;
             return {
               ...message,
               parts: (message.parts ?? []).map((p) => {
                 if (p.type !== 'subtask' || p.subagentSessionId !== subagentSessionId) return p;
-                // 对于 text 类型的 delta，合并到最后一个 text subPart
+                // 对于 text/thinking delta，合并到最后一个同类型 subPart
                 if ((msg.type === 'text.delta' || msg.type === 'thinking.delta') && p.subParts?.length) {
                   const lastPart = p.subParts[p.subParts.length - 1];
                   if (lastPart.type === subPart.type && lastPart.isStreaming) {
@@ -622,9 +625,10 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
         if (newStatus) {
           setMessages((prev) =>
             prev.map((message) => {
-              if (String(message.id) !== String(messageId)) return message;
+              if (message.id !== virtualMessageId) return message;
               return {
                 ...message,
+                isStreaming: false,
                 parts: (message.parts ?? []).map((p) =>
                   p.type === 'subtask' && p.subagentSessionId === subagentSessionId
                     ? { ...p, subagentStatus: newStatus, isStreaming: false }
