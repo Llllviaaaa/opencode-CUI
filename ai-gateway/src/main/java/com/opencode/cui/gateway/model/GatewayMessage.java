@@ -123,6 +123,14 @@ public class GatewayMessage {
     /** Token 用量信息 */
     private JsonNode usage;
 
+    // ==================== Subagent 字段 ====================
+
+    /** 子 session ID（Plugin 映射重写后附加） */
+    private String subagentSessionId;
+
+    /** 子 agent 名称（Plugin 映射重写后附加） */
+    private String subagentName;
+
     // ==================== 多实例协调字段 ====================
 
     /** 消息序号，用于多实例间的消息排序 */
