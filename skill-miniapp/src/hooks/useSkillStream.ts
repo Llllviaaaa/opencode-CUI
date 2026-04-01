@@ -708,15 +708,11 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
         applyStreamedMessage(msg);
         break;
 
-      case 'permission.reply': {
-        // 主会话的 reply 走 applyStreamedMessage 更新已有 permission part 状态
-        // subagent 的 reply 在 handleSubagentMessage 中处理（更新 SubtaskBlock 内 permission 状态）
-        const replyMsgId = msg.messageId ?? msg.sourceMessageId;
-        if (replyMsgId && !replyMsgId.startsWith('subtask-')) {
-          applyStreamedMessage(msg);
-        }
+      case 'permission.reply':
+        // 不调 applyStreamedMessage（避免创建额外的"已处理"消息）
+        // 主会话: PermissionCard 通过 local state 显示已处理
+        // subagent: handleSubagentMessage 中更新 SubtaskBlock 内 permission 状态
         break;
-      }
 
       case 'question': {
         const messageId = msg.messageId ?? msg.sourceMessageId;
@@ -996,6 +992,32 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
       if (!sessionId) {
         return;
       }
+
+      // 立即更新 messages state 中 permission part 的 permResolved
+      // 防止后续 re-render 时 PermissionCard 的 useEffect 重置 resolved 状态
+      setMessages((prev) =>
+        prev.map((message) => ({
+          ...message,
+          parts: (message.parts ?? []).map((p) => {
+            // 直接在 message parts 中匹配
+            if (p.type === 'permission' && p.permissionId === permissionId) {
+              return { ...p, permResolved: true, permissionResponse: response };
+            }
+            // SubtaskBlock 内的 subParts 中匹配
+            if (p.type === 'subtask' && p.subParts?.length) {
+              return {
+                ...p,
+                subParts: p.subParts.map((sp) =>
+                  sp.type === 'permission' && sp.permissionId === permissionId
+                    ? { ...sp, permResolved: true, permissionResponse: response }
+                    : sp,
+                ),
+              };
+            }
+            return p;
+          }),
+        })),
+      );
 
       setError(null);
       try {
