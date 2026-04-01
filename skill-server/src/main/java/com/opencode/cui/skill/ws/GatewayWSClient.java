@@ -23,6 +23,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
 /**
  * Gateway WebSocket connection pool manager.
@@ -68,8 +69,8 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget {
     @Value("${skill.gateway.reconnect-max-delay-ms:30000}")
     private long reconnectMaxDelayMs;
 
-    /** Connection pool: fixed-size array of PooledConnection */
-    private volatile PooledConnection[] pool;
+    /** Connection pool: fixed-size array of PooledConnection (AtomicReferenceArray for thread-safe element access) */
+    private volatile AtomicReferenceArray<PooledConnection> pool;
 
     /** Round-robin counter for connection selection */
     private final AtomicInteger roundRobinCounter = new AtomicInteger(0);
@@ -100,9 +101,12 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget {
 
         // Initialize connection pool
         int count = Math.max(1, connectionCount);
-        pool = new PooledConnection[count];
+        AtomicReferenceArray<PooledConnection> newPool = new AtomicReferenceArray<>(count);
         for (int i = 0; i < count; i++) {
-            pool[i] = new PooledConnection(i);
+            newPool.set(i, new PooledConnection(i));
+        }
+        pool = newPool;
+        for (int i = 0; i < count; i++) {
             connectPoolSlot(i);
         }
 
@@ -123,10 +127,13 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget {
             Thread.currentThread().interrupt();
         }
 
-        PooledConnection[] snapshot = pool;
+        AtomicReferenceArray<PooledConnection> snapshot = pool;
         if (snapshot != null) {
-            for (PooledConnection conn : snapshot) {
-                closeQuietly(conn.client);
+            for (int i = 0; i < snapshot.length(); i++) {
+                PooledConnection conn = snapshot.get(i);
+                if (conn != null) {
+                    closeQuietly(conn.client);
+                }
             }
         }
 
@@ -144,18 +151,21 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget {
 
     @Override
     public boolean sendToGateway(String message) {
-        PooledConnection[] snapshot = pool;
-        if (snapshot == null || snapshot.length == 0) {
+        AtomicReferenceArray<PooledConnection> snapshot = pool;
+        if (snapshot == null || snapshot.length() == 0) {
             return false;
         }
 
-        int count = snapshot.length;
+        int count = snapshot.length();
         int start = (roundRobinCounter.getAndIncrement() & Integer.MAX_VALUE) % count;
 
         // Try round-robin starting from the selected slot, wrapping around
         for (int i = 0; i < count; i++) {
             int idx = (start + i) % count;
-            PooledConnection conn = snapshot[idx];
+            PooledConnection conn = snapshot.get(idx);
+            if (conn == null) {
+                continue;
+            }
             WebSocketClient client = conn.client;
             if (client != null && client.isOpen()) {
                 return sendViaClient(idx, client, message);
@@ -168,12 +178,13 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget {
 
     @Override
     public boolean hasActiveConnection() {
-        PooledConnection[] snapshot = pool;
+        AtomicReferenceArray<PooledConnection> snapshot = pool;
         if (snapshot == null) {
             return false;
         }
-        for (PooledConnection conn : snapshot) {
-            if (conn.client != null && conn.client.isOpen()) {
+        for (int i = 0; i < snapshot.length(); i++) {
+            PooledConnection conn = snapshot.get(i);
+            if (conn != null && conn.client != null && conn.client.isOpen()) {
                 return true;
             }
         }
@@ -193,8 +204,9 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget {
             InternalWebSocketClient client = new InternalWebSocketClient(
                     slotIndex, uri, authProtocol);
 
-            pool[slotIndex].client = client;
-            pool[slotIndex].reconnectAttempts.set(0);
+            PooledConnection conn = pool.get(slotIndex);
+            conn.client = client;
+            conn.reconnectAttempts.set(0);
 
             client.connectBlocking(10, TimeUnit.SECONDS);
         } catch (Exception e) {
@@ -208,12 +220,17 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget {
             return;
         }
 
-        PooledConnection[] snapshot = pool;
-        if (snapshot == null || slotIndex >= snapshot.length) {
+        AtomicReferenceArray<PooledConnection> snapshot = pool;
+        if (snapshot == null || slotIndex >= snapshot.length()) {
             return;
         }
 
-        int attempts = snapshot[slotIndex].reconnectAttempts.incrementAndGet();
+        PooledConnection conn = snapshot.get(slotIndex);
+        if (conn == null) {
+            return;
+        }
+
+        int attempts = conn.reconnectAttempts.incrementAndGet();
         long delay = Math.min(
                 reconnectInitialDelayMs * (1L << Math.min(attempts - 1, 20)),
                 reconnectMaxDelayMs);
@@ -229,7 +246,7 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget {
                 String authProtocol = buildAuthProtocol();
                 InternalWebSocketClient newClient = new InternalWebSocketClient(
                         slotIndex, uri, authProtocol);
-                pool[slotIndex].client = newClient;
+                pool.get(slotIndex).client = newClient;
                 newClient.connectBlocking(10, TimeUnit.SECONDS);
             } catch (Exception e) {
                 log.error("Reconnect for pool slot {} failed: {}", slotIndex, e.getMessage());
@@ -311,9 +328,12 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget {
 
         @Override
         public void onOpen(ServerHandshake handshake) {
-            PooledConnection[] snapshot = pool;
-            if (snapshot != null && slotIndex < snapshot.length) {
-                snapshot[slotIndex].reconnectAttempts.set(0);
+            AtomicReferenceArray<PooledConnection> snapshot = pool;
+            if (snapshot != null && slotIndex < snapshot.length()) {
+                PooledConnection conn = snapshot.get(slotIndex);
+                if (conn != null) {
+                    conn.reconnectAttempts.set(0);
+                }
             }
             log.info("Connected to GW via pool slot {}: url={}, status={}", slotIndex, uri, handshake.getHttpStatus());
         }
