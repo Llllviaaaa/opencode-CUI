@@ -106,33 +106,119 @@ question-icon [test-writer] 使用哪个测试框架？            <-- 冒泡
 
 ---
 
+## OpenCode Subagent 事件生命周期（源码验证）
+
+> 以下事件序列基于 OpenCode 源码（packages/opencode/src/）验证。
+
+### 关键事实
+
+1. **Subagent 的 tool 名称是 `task`**（不是 `agent`），定义在 `tool/task.ts`
+2. **SubtaskPart 没有状态字段** — 它是声明式的，描述"要做什么"。执行状态通过独立的 **ToolPart{tool:"task"}** 跟踪
+3. **父 session 中的 ToolPart metadata 包含子 sessionId** — `ctx.metadata({ sessionId: child })`
+4. **只有 `permission.asked` 和 `permission.replied`** — 没有 `permission.updated` 事件
+5. **事件系统分两类**：SyncEvent（持久化+广播：session.created、message.part.updated）和 BusEvent（仅广播：session.status、permission.asked、question.asked）
+
+### 完整事件序列（LLM 调用 task tool）
+
+```
+═══ 父 Session (sessionID: parent-456) ═══
+
+① message.part.updated
+   ToolPart { tool: "task", status: "pending", sessionID: "parent-456" }
+   （LLM 开始生成 task tool 调用参数）
+
+② message.part.updated
+   ToolPart { tool: "task", status: "running", sessionID: "parent-456" }
+   （参数完成，tool 开始执行）
+
+③ permission.asked { sessionID: "parent-456" }
+   （询问用户是否允许启动 subagent —— 注意这在父 session 上下文）
+
+④ session.created { sessionID: "child-123", info: { parentID: "parent-456", ... } }
+   （子 session 创建）
+
+⑤ message.part.updated
+   ToolPart { tool: "task", metadata: { sessionId: "child-123" }, sessionID: "parent-456" }
+   （父 session 的 tool part 更新 metadata，写入子 sessionId）
+
+═══ 子 Session (sessionID: child-123) ═══
+
+⑥ session.status { sessionID: "child-123", status: { type: "busy" } }
+
+⑦ message.updated — UserMessage on child-123
+⑧ message.part.updated — TextPart（用户 prompt）on child-123
+
+⑨ message.updated — AssistantMessage on child-123
+⑩ message.part.updated / message.part.delta — LLM 输出 on child-123
+   （子 agent 的文本、工具调用等，全部 sessionID = child-123）
+
+⑪ permission.asked { sessionID: "child-123" }
+   （子 session 中工具执行时的权限请求）
+
+⑫ question.asked { sessionID: "child-123" }
+   （子 session 中的提问）
+
+... 子 session 可能多轮循环 ...
+
+⑬ session.status { sessionID: "child-123", status: { type: "idle" } }
+   session.idle { sessionID: "child-123" }
+
+═══ 回到父 Session ═══
+
+⑭ message.part.updated
+   ToolPart { tool: "task", status: "completed", output: "...", sessionID: "parent-456" }
+   （task tool 返回结果，父 session 继续）
+```
+
+### 用户通过 @ 或 command 触发的路径
+
+区别在于开头：用户消息中包含一个 `SubtaskPart { type: "subtask", prompt, agent }`，
+然后 `handleSubtask` 自动创建 assistant message + ToolPart{tool:"task"}，
+后续流程与上述步骤 ④-⑭ 相同。
+
+### 当前 Plugin 事件白名单缺口
+
+`session.created` **不在** 当前 `SUPPORTED_UPSTREAM_EVENT_TYPES` 中。需要新增。
+
+---
+
 ## 全链路数据流
 
 ```
-1. OpenCode 创建 subagent
-   → session.created { id: "child-123", parentID: "parent-456" }
-   → Plugin 缓存映射: child-123 → { parentId: parent-456, agentName: "code-reviewer" }
+1. 父 session 中 LLM 调用 task tool
+   → ②: ToolPart{tool:"task", status:"running"} 正常转发到 skill-server
+   → skill-server 翻译为 tool.update，miniapp 收到后创建 SubtaskBlock（折叠块）
 
-2. 子 session 产生事件（text/tool/permission/question）
-   → Plugin 拦截，重写 toolSessionId 为 parent-456
+2. OpenCode 创建子 session
+   → ④: session.created { parentID: "parent-456" }
+   → Plugin 捕获，缓存映射: child-123 → { parentId: parent-456, agentName: "..." }
+   → session.created 不转发给 Gateway（仅用于建立映射）
+
+3. 子 session 产生事件（text/tool/permission/question）
+   → Plugin 查映射，重写 toolSessionId 为 parent-456
    → 附加 subagentSessionId: "child-123", subagentName: "code-reviewer"
    → 转发 tool_event 到 Gateway
 
-3. Gateway 正常路由（parent-456 有映射）
-   → skill-server 收到事件
-   → OpenCodeEventTranslator 识别 subagent 字段
+4. Gateway 正常路由（parent-456 有映射）
+   → skill-server 收到事件，识别 subagent 字段
    → 生成带 subagent 元数据的 StreamMessage
    → 持久化（扁平存储，带 subagent 标识）
    → WebSocket 推送给 miniapp
 
-4. miniapp 收到消息
+5. miniapp 收到消息
    → 普通 part: 归入对应 subtask block
    → permission/question: 同时归入 subtask block + 冒泡到主对话流
 
-5. 用户交互（回复 permission/question）
+6. 用户交互（回复 permission/question）
    → miniapp POST 到 skill-server（携带 subagentSessionId）
-   → skill-server 构建 invoke，附加子 session 信息
-   → Gateway → Plugin 用 child-123（真实子 sessionId）回复 OpenCode
+   → skill-server 构建 invoke，用 child-123（真实子 sessionId）
+   → Gateway → Plugin 用 child-123 回复 OpenCode
+
+7. 子 session 完成
+   → ⑬: session.idle { sessionID: child-123 }
+   → Plugin 重写为 parent-456，但标记为子 session idle（不触发父 session tool_done）
+   → ⑭: ToolPart{tool:"task", status:"completed"} 正常转发
+   → miniapp 更新 SubtaskBlock 状态为已完成
 ```
 
 ### 各层职责
@@ -253,12 +339,38 @@ if (subagentMapping) {
 
 ### session.created 事件处理
 
-在 `handleEvent()` 中，事件提取后立即检查是否为 `session.created`：
+`session.created` 需要加入 `SUPPORTED_UPSTREAM_EVENT_TYPES`，但**只用于建立映射，不转发给 Gateway**。
+
+在 `handleEvent()` 中，事件提取后立即检查：
 
 ```typescript
 // 步骤 1 之后：主动捕获 session.created 事件
 if (normalized.common.eventType === 'session.created') {
   this.subagentSessionMapper.onSessionCreated(normalized.raw);
+  // session.created 不转发给 Gateway，仅用于建立映射
+  // 子 session 的创建信息通过父 session 的 ToolPart{tool:"task"} metadata 传递
+  return;
+}
+```
+
+### ToolDoneCompat 兼容处理
+
+子 session 的 `session.idle` 经过映射重写后，`toolSessionId` 变为父 session ID。必须防止它错误触发父 session 的 `tool_done`：
+
+```typescript
+// handleEvent() 中 session.idle 处理
+if (normalized.common.eventType === 'session.idle') {
+  const subagentMapping = await this.subagentSessionMapper.resolve(
+    normalized.common.toolSessionId
+  );
+  if (subagentMapping) {
+    // 子 session 的 idle → 不进入 ToolDoneCompat（避免误触父 session tool_done）
+    // 仅转发事件（已重写 toolSessionId），skill-server 用它更新 SubtaskBlock 状态
+    return;  // 跳过下方的 toolDoneCompat.handleSessionIdle()
+  }
+  // 父 session 的 idle → 正常走 ToolDoneCompat 逻辑
+  const decision = this.toolDoneCompat.handleSessionIdle({ ... });
+  ...
 }
 ```
 
@@ -331,12 +443,14 @@ StreamMessage msg = StreamMessage.builder()
     .build();
 ```
 
-### 3. Subtask 生命周期消息
+### 3. Subtask 生命周期：由父 session 的 ToolPart{tool:"task"} 驱动
 
-当 Plugin 转发带 `parentID` 的 `session.created` 和子 session 的 `session.idle` 事件时，skill-server 生成特殊消息：
+SubtaskBlock 的创建和完成不依赖 `session.created` / `session.idle`，而是由父 session 中 `ToolPart{tool:"task"}` 的状态变化驱动：
 
-- 子 session 创建 → `STEP_START` 消息（附带 subagentSessionId、subagentName、subagentPrompt、subagentStatus=running）
-- 子 session 完成 → `STEP_DONE` 消息（附带 subagentSessionId、subagentStatus=completed）
+- **②** `ToolPart{tool:"task", status:"running", metadata:{sessionId:"child-123"}}` → skill-server 识别 `tool=task`，从 metadata 提取子 sessionId，生成 `TOOL_UPDATE` 消息并附带 subagentSessionId、subagentName → miniapp 创建 SubtaskBlock
+- **⑭** `ToolPart{tool:"task", status:"completed"}` → skill-server 生成 `TOOL_UPDATE` 消息，subagentStatus=completed → miniapp 更新 SubtaskBlock 为已完成
+
+子 session 内部的事件（text、tool、permission、question）通过 Plugin 映射重写后，正常推送到 miniapp 并归入对应 SubtaskBlock。
 
 ### 4. 持久化：扁平存储
 
@@ -485,3 +599,6 @@ const handleSubagentMessage = useCallback((msg: StreamMessage) => {
 | 用户刷新 miniapp | 历史消息从 MySQL 加载，按 subagent_session_id 分组还原 |
 | permission/question 未回复时刷新 | 持久化中记录 status（pending），刷新后重新展示等待回复的卡片 |
 | subagent 执行中断/错误 | 收到子 session 的 `session.error` 事件 → 更新 SubtaskBlock 状态为 error |
+| 子 session idle 误触父 session tool_done | Plugin 中子 session 的 `session.idle` 跳过 ToolDoneCompat，不进入父 session 的完成逻辑 |
+| ToolPart{tool:"task"} 的 permission（步骤③） | 这是父 session 上下文的 permission，正常处理，不属于 subagent 冒泡 |
+| SubtaskPart（用户通过 @ 触发） | 作为 user message 的 part 正常处理，后续 ToolPart{tool:"task"} 驱动 SubtaskBlock |

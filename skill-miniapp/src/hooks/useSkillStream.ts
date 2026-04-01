@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Message, MessageRole, StreamMessage, StreamMessageType } from '../protocol/types';
+import type { Message, MessagePart, MessageRole, StreamMessage, StreamMessageType } from '../protocol/types';
 import { StreamAssembler } from '../protocol/StreamAssembler';
 import { normalizeHistoryMessage, normalizeHistoryMessages } from '../protocol/history';
 import * as api from '../utils/api';
@@ -23,6 +23,7 @@ const WS_BASE_URL =
     : (typeof window !== 'undefined'
       ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
       : 'ws://localhost:8082');
+const STREAM_HEARTBEAT_INTERVAL_MS = 25_000;
 
 function getReconnectDelay(attempt: number): number {
   return Math.min(1000 * Math.pow(2, attempt), 30_000);
@@ -245,6 +246,66 @@ function normalizeStreamingPart(raw: Record<string, unknown>): StreamMessage | n
   }
 }
 
+function streamMessageToSubPart(msg: StreamMessage): MessagePart | null {
+  switch (msg.type) {
+    case 'text.delta':
+    case 'text.done':
+      return {
+        partId: msg.partId ?? `text-${Date.now()}`,
+        type: 'text',
+        content: msg.content ?? '',
+        isStreaming: msg.type === 'text.delta',
+      };
+    case 'thinking.delta':
+    case 'thinking.done':
+      return {
+        partId: msg.partId ?? `thinking-${Date.now()}`,
+        type: 'thinking',
+        content: msg.content ?? '',
+        isStreaming: msg.type === 'thinking.delta',
+      };
+    case 'tool.update':
+      return {
+        partId: msg.partId ?? msg.toolCallId ?? `tool-${Date.now()}`,
+        type: 'tool',
+        content: '',
+        isStreaming: false,
+        toolName: msg.toolName,
+        toolCallId: msg.toolCallId,
+        toolStatus: msg.status as MessagePart['toolStatus'],
+        toolInput: msg.input,
+        toolOutput: msg.output,
+        toolTitle: msg.title,
+      };
+    case 'permission.ask':
+      return {
+        partId: msg.partId ?? msg.permissionId ?? `perm-${Date.now()}`,
+        type: 'permission',
+        content: msg.title ?? '',
+        isStreaming: false,
+        permissionId: msg.permissionId,
+        permType: msg.permType,
+        subagentSessionId: msg.subagentSessionId,
+        subagentName: msg.subagentName,
+      };
+    case 'question':
+      return {
+        partId: msg.partId ?? msg.toolCallId ?? `q-${Date.now()}`,
+        type: 'question',
+        content: '',
+        isStreaming: false,
+        toolCallId: msg.toolCallId,
+        header: msg.header,
+        question: msg.question,
+        options: msg.options,
+        subagentSessionId: msg.subagentSessionId,
+        subagentName: msg.subagentName,
+      };
+    default:
+      return null;
+  }
+}
+
 function normalizeIncomingStreamMessage(raw: Record<string, unknown>): StreamMessage {
   const welinkSessionId = normalizeWelinkSessionId(raw.welinkSessionId);
 
@@ -268,12 +329,40 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const historyRequestRef = useRef(0);
   const assemblersRef = useRef(new Map<string, StreamAssembler>());
   const activeMessageIdsRef = useRef(new Set<string>());
   const knownUserMessageIdsRef = useRef(new Set<string>());
   const sessionIdRef = useRef<string | null>(sessionId);
   const onSessionTitleUpdateRef = useRef(options?.onSessionTitleUpdate);
+
+  const clearHeartbeatTimer = useCallback(() => {
+    if (heartbeatTimerRef.current) {
+      clearInterval(heartbeatTimerRef.current);
+      heartbeatTimerRef.current = null;
+    }
+  }, []);
+
+  const sendHeartbeat = useCallback((ws?: WebSocket | null) => {
+    const socket = ws ?? wsRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    try {
+      socket.send(JSON.stringify({ action: 'ping', timestamp: new Date().toISOString() }));
+    } catch {
+      // Best-effort keepalive only.
+    }
+  }, []);
+
+  const startHeartbeat = useCallback((ws: WebSocket) => {
+    clearHeartbeatTimer();
+    heartbeatTimerRef.current = setInterval(() => {
+      sendHeartbeat(ws);
+    }, STREAM_HEARTBEAT_INTERVAL_MS);
+  }, [clearHeartbeatTimer, sendHeartbeat]);
 
   const requestResume = useCallback(() => {
     const ws = wsRef.current;
@@ -454,9 +543,116 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
     }));
   }, [finalizeAllStreamingMessages]);
 
+  const handleSubagentMessage = useCallback(
+    (msg: StreamMessage) => {
+      const { subagentSessionId, subagentName, type } = msg;
+      if (!subagentSessionId) return;
+
+      const messageId = msg.messageId ?? msg.sourceMessageId;
+      if (!messageId) return;
+
+      // 确保 subtask part 存在
+      setMessages((prev) =>
+        prev.map((message) => {
+          if (String(message.id) !== String(messageId)) return message;
+          const parts = message.parts ?? [];
+          const hasSubtask = parts.some(
+            (p) => p.type === 'subtask' && p.subagentSessionId === subagentSessionId,
+          );
+          if (!hasSubtask) {
+            return {
+              ...message,
+              parts: [
+                ...parts,
+                {
+                  partId: `subtask-${subagentSessionId}`,
+                  type: 'subtask' as const,
+                  content: '',
+                  isStreaming: true,
+                  subagentSessionId,
+                  subagentName: subagentName ?? 'Subagent',
+                  subagentPrompt: msg.content ?? '',
+                  subagentStatus: 'running' as const,
+                  subParts: [],
+                },
+              ],
+            };
+          }
+          return message;
+        }),
+      );
+
+      // 将消息内容追加到 subtask block 的 subParts 中
+      const subPart = streamMessageToSubPart(msg);
+      if (subPart) {
+        setMessages((prev) =>
+          prev.map((message) => {
+            if (String(message.id) !== String(messageId)) return message;
+            return {
+              ...message,
+              parts: (message.parts ?? []).map((p) => {
+                if (p.type !== 'subtask' || p.subagentSessionId !== subagentSessionId) return p;
+                // 对于 text 类型的 delta，合并到最后一个 text subPart
+                if ((msg.type === 'text.delta' || msg.type === 'thinking.delta') && p.subParts?.length) {
+                  const lastPart = p.subParts[p.subParts.length - 1];
+                  if (lastPart.type === subPart.type && lastPart.isStreaming) {
+                    return {
+                      ...p,
+                      subParts: [
+                        ...p.subParts.slice(0, -1),
+                        { ...lastPart, content: lastPart.content + (subPart.content ?? '') },
+                      ],
+                    };
+                  }
+                }
+                return {
+                  ...p,
+                  subParts: [...(p.subParts ?? []), subPart],
+                };
+              }),
+            };
+          }),
+        );
+      }
+
+      // 更新 subtask 状态
+      if (msg.type === 'session.status' && msg.sessionStatus) {
+        const newStatus = msg.sessionStatus === 'idle' || msg.sessionStatus === 'completed'
+          ? 'completed' : msg.sessionStatus === 'error' ? 'error' : undefined;
+        if (newStatus) {
+          setMessages((prev) =>
+            prev.map((message) => {
+              if (String(message.id) !== String(messageId)) return message;
+              return {
+                ...message,
+                parts: (message.parts ?? []).map((p) =>
+                  p.type === 'subtask' && p.subagentSessionId === subagentSessionId
+                    ? { ...p, subagentStatus: newStatus, isStreaming: false }
+                    : p,
+                ),
+              };
+            }),
+          );
+        }
+      }
+
+      // permission/question 冒泡到主对话流
+      if (type === 'permission.ask' || type === 'question') {
+        applyStreamedMessage(msg);
+      }
+    },
+    [applyStreamedMessage, setMessages],
+  );
+
   const handleStreamMessage = useCallback((msg: StreamMessage) => {
     const currentSessionId = sessionIdRef.current;
     if (msg.welinkSessionId && (!currentSessionId || String(msg.welinkSessionId) !== String(currentSessionId))) {
+      return;
+    }
+
+    // Subagent 消息分发
+    if (msg.subagentSessionId) {
+      handleSubagentMessage(msg);
       return;
     }
 
@@ -604,7 +800,7 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
       default:
         break;
     }
-  }, [applyStreamedMessage, finalizeAllStreamingMessages, resetStreamingState, restoreStreamingMessage]);
+  }, [applyStreamedMessage, handleSubagentMessage, finalizeAllStreamingMessages, resetStreamingState, restoreStreamingMessage]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -653,6 +849,7 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
       reconnectAttemptRef.current = 0;
       setError(null);
       setSocketReady(true);
+      startHeartbeat(ws);
       requestResume();
     };
 
@@ -672,11 +869,12 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
     };
 
     ws.onclose = () => {
+      clearHeartbeatTimer();
       wsRef.current = null;
       setSocketReady(false);
       scheduleReconnect();
     };
-  }, [handleStreamMessage, requestResume]);
+  }, [clearHeartbeatTimer, handleStreamMessage, requestResume, startHeartbeat]);
 
   const scheduleReconnect = useCallback(() => {
     if (reconnectTimerRef.current) {
@@ -696,6 +894,7 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
 
     return () => {
       setSocketReady(false);
+      clearHeartbeatTimer();
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -707,7 +906,7 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
         wsRef.current = null;
       }
     };
-  }, [connect]);
+  }, [clearHeartbeatTimer, connect]);
 
   const sendMessageFn = useCallback(
     async (text: string, options?: { toolCallId?: string }) => {

@@ -7,6 +7,7 @@ import { ToolCard } from './ToolCard';
 import { ThinkingBlock } from './ThinkingBlock';
 import { QuestionCard } from './QuestionCard';
 import { PermissionCard } from './PermissionCard';
+import { SubtaskBlock } from './SubtaskBlock';
 import type { Message, MessagePart } from '../protocol/types';
 
 interface MessageBubbleProps {
@@ -74,6 +75,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             onDecision={onPermissionDecision}
           />
         );
+
+      case 'subtask':
+        return <SubtaskBlock key={part.partId} part={part} />;
 
       case 'file':
         return (

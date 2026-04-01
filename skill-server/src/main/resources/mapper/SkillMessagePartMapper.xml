@@ -25,9 +25,11 @@
         <result property="tokensIn"     column="tokens_in"/>
         <result property="tokensOut"    column="tokens_out"/>
         <result property="cost"         column="cost"/>
-        <result property="finishReason" column="finish_reason"/>
-        <result property="createdAt"    column="created_at"/>
-        <result property="updatedAt"    column="updated_at"/>
+        <result property="finishReason"      column="finish_reason"/>
+        <result property="subagentSessionId" column="subagent_session_id"/>
+        <result property="subagentName"      column="subagent_name"/>
+        <result property="createdAt"         column="created_at"/>
+        <result property="updatedAt"         column="updated_at"/>
     </resultMap>
 
     <sql id="allColumns">
@@ -35,6 +37,7 @@
         content, tool_name, tool_call_id, tool_status, tool_input, tool_output, tool_error, tool_title,
         file_name, file_url, file_mime,
         tokens_in, tokens_out, cost, finish_reason,
+        subagent_session_id, subagent_name,
         created_at, updated_at
     </sql>
 
@@ -44,12 +47,14 @@
              content, tool_name, tool_call_id, tool_status, tool_input, tool_output, tool_error, tool_title,
              file_name, file_url, file_mime,
              tokens_in, tokens_out, cost, finish_reason,
+             subagent_session_id, subagent_name,
              created_at, updated_at)
         VALUES
             (#{id}, #{messageId}, #{sessionId}, #{partId}, #{seq}, #{partType},
              #{content}, #{toolName}, #{toolCallId}, #{toolStatus}, #{toolInput}, #{toolOutput}, #{toolError}, #{toolTitle},
              #{fileName}, #{fileUrl}, #{fileMime},
              #{tokensIn}, #{tokensOut}, #{cost}, #{finishReason},
+             #{subagentSessionId}, #{subagentName},
              NOW(), NOW())
     </insert>
 
@@ -60,12 +65,14 @@
              content, tool_name, tool_call_id, tool_status, tool_input, tool_output, tool_error, tool_title,
              file_name, file_url, file_mime,
              tokens_in, tokens_out, cost, finish_reason,
+             subagent_session_id, subagent_name,
              created_at, updated_at)
         VALUES
             (#{id}, #{messageId}, #{sessionId}, #{partId}, #{seq}, #{partType},
              #{content}, #{toolName}, #{toolCallId}, #{toolStatus}, #{toolInput}, #{toolOutput}, #{toolError}, #{toolTitle},
              #{fileName}, #{fileUrl}, #{fileMime},
              #{tokensIn}, #{tokensOut}, #{cost}, #{finishReason},
+             #{subagentSessionId}, #{subagentName},
              NOW(), NOW())
         ON DUPLICATE KEY UPDATE
             content     = COALESCE(VALUES(content), content),
@@ -80,6 +87,8 @@
             tokens_out  = COALESCE(VALUES(tokens_out), tokens_out),
             cost        = COALESCE(VALUES(cost), cost),
             finish_reason = COALESCE(VALUES(finish_reason), finish_reason),
+            subagent_session_id = COALESCE(VALUES(subagent_session_id), subagent_session_id),
+            subagent_name = COALESCE(VALUES(subagent_name), subagent_name),
             updated_at  = NOW()
     </insert>
 

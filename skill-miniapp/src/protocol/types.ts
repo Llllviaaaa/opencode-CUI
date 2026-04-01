@@ -78,6 +78,9 @@ export interface StreamMessage {
   fileUrl?: string;
   fileMime?: string;
 
+  subagentSessionId?: string;
+  subagentName?: string;
+
   messages?: Array<Record<string, unknown>>;
   parts?: Array<Record<string, unknown>>;
 }
@@ -85,7 +88,7 @@ export interface StreamMessage {
 export interface MessagePart {
   partId: string;
   partSeq?: number;
-  type: 'text' | 'thinking' | 'tool' | 'question' | 'permission' | 'file';
+  type: 'text' | 'thinking' | 'tool' | 'question' | 'permission' | 'file' | 'subtask';
   content: string;
   isStreaming: boolean;
 
@@ -109,6 +112,13 @@ export interface MessagePart {
   fileName?: string;
   fileUrl?: string;
   fileMime?: string;
+
+  // Subtask (subagent) 专用字段
+  subagentSessionId?: string;
+  subagentName?: string;
+  subagentPrompt?: string;
+  subagentStatus?: 'running' | 'completed' | 'error';
+  subParts?: MessagePart[];
 }
 
 export interface Message {

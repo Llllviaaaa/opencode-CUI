@@ -3,7 +3,7 @@ import type { MessagePart } from '../protocol/types';
 
 interface PermissionCardProps {
   part: MessagePart;
-  onDecision?: (permissionId: string, response: 'once' | 'always' | 'reject') => void;
+  onDecision?: (permissionId: string, response: 'once' | 'always' | 'reject', subagentSessionId?: string) => void;
 }
 
 const permTypeLabels: Record<string, string> = {
@@ -30,7 +30,7 @@ export const PermissionCard: React.FC<PermissionCardProps> = ({
     }
     setResolved(true);
     if (part.permissionId) {
-      onDecision?.(part.permissionId, response);
+      onDecision?.(part.permissionId, response, part.subagentSessionId);
     }
   };
 
@@ -41,6 +41,9 @@ export const PermissionCard: React.FC<PermissionCardProps> = ({
       <div className="permission-card__header">
         <span className="permission-card__icon">!</span>
         <span className="permission-card__type">{typeLabel}</span>
+        {part.subagentName && (
+          <span className="permission-card__source">[{part.subagentName}]</span>
+        )}
       </div>
 
       <div className="permission-card__info">

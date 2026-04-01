@@ -203,6 +203,31 @@ class SkillStreamHandlerTest {
         }
 
         @Test
+        @DisplayName("ping action acts as keepalive without replaying state")
+        void pingDoesNotReplayCurrentState() throws Exception {
+                WebSocketSession session = mockSession("/ws/skill/stream", "userId=10001");
+                SkillSession activeSession = new SkillSession();
+                activeSession.setId(42L);
+                activeSession.setUserId("10001");
+                when(snapshotService.getActiveSessionsForUser("10001")).thenReturn(List.of(activeSession));
+                when(snapshotService.buildSnapshot(eq("42"), any(Long.class))).thenReturn(
+                                StreamMessage.builder().type(StreamMessage.Types.SNAPSHOT).seq(1L)
+                                                .sessionId("42").messages(List.of()).build());
+                when(snapshotService.buildStreamingState(eq("42"), any(Long.class))).thenReturn(
+                                StreamMessage.builder().type(StreamMessage.Types.STREAMING).seq(2L)
+                                                .sessionId("42").sessionStatus("idle").build());
+
+                handler.afterConnectionEstablished(session);
+                reset(session);
+                when(session.getAttributes()).thenReturn(new HashMap<>(java.util.Map.of("userId", "10001")));
+                when(session.isOpen()).thenReturn(true);
+
+                handler.handleMessage(session, new TextMessage("{\"action\":\"ping\"}"));
+
+                verify(session, never()).sendMessage(any(TextMessage.class));
+        }
+
+        @Test
         @DisplayName("streaming payload exposes aggregated protocol parts instead of raw event types")
         void streamingPayloadUsesAggregatedProtocolParts() throws Exception {
                 WebSocketSession session = mockSession("/ws/skill/stream", "userId=10001");

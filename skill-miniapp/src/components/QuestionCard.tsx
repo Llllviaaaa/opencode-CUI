@@ -3,7 +3,7 @@ import type { MessagePart } from '../protocol/types';
 
 interface QuestionCardProps {
     part: MessagePart;
-    onAnswer?: (answer: string, toolCallId?: string) => void;
+    onAnswer?: (answer: string, toolCallId?: string, subagentSessionId?: string) => void;
 }
 
 export const QuestionCard: React.FC<QuestionCardProps> = ({ part, onAnswer }) => {
@@ -30,7 +30,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ part, onAnswer }) =>
         if (answered) return;
         setAnswered(true);
         setSelectedAnswer(label);
-        onAnswer?.(label, part.toolCallId);
+        onAnswer?.(label, part.toolCallId, part.subagentSessionId);
     };
 
     const handleSubmit = () => {
@@ -39,7 +39,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ part, onAnswer }) =>
         setAnswered(true);
         setCustomInput(answer);
         setSelectedAnswer(answer);
-        onAnswer?.(answer, part.toolCallId);
+        onAnswer?.(answer, part.toolCallId, part.subagentSessionId);
     };
 
     return (
@@ -48,6 +48,9 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ part, onAnswer }) =>
                 <div className="question-card__header">{part.header}</div>
             )}
             <div className="question-card__question">
+                {part.subagentName && (
+                    <span className="question-card__source">[{part.subagentName}]</span>
+                )}
                 <span className="question-card__icon">?</span>
                 {part.question ?? part.content}
             </div>

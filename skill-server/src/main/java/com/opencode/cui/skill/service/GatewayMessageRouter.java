@@ -399,6 +399,13 @@ public class GatewayMessageRouter {
             return;
         }
 
+        // 注入 subagent 字段（Plugin 层映射重写后附加的）
+        JsonNode subagentNode = node.path("subagentSessionId");
+        if (!subagentNode.isMissingNode() && !subagentNode.isNull()) {
+            msg.setSubagentSessionId(subagentNode.asText());
+            msg.setSubagentName(node.path("subagentName").asText(null));
+        }
+
         if (completedSessions.getIfPresent(sessionId) != null
                 && !StreamMessage.Types.QUESTION.equals(msg.getType())
                 && !StreamMessage.Types.PERMISSION_ASK.equals(msg.getType())
@@ -718,6 +725,14 @@ public class GatewayMessageRouter {
         log.info("handlePermissionRequest: sessionId={}", sessionId);
 
         StreamMessage msg = translator.translatePermissionFromGateway(node);
+
+        // 注入 subagent 字段
+        JsonNode subagentNode = node.path("subagentSessionId");
+        if (!subagentNode.isMissingNode() && !subagentNode.isNull()) {
+            msg.setSubagentSessionId(subagentNode.asText());
+            msg.setSubagentName(node.path("subagentName").asText(null));
+        }
+
         SkillSession session = resolveSession(sessionId);
         if (session != null && !isMiniappSession(session)) {
             if (session.getId() != null && msg.getPermission() != null) {

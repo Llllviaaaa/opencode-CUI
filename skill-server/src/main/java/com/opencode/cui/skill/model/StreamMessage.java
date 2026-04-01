@@ -59,6 +59,10 @@ public class StreamMessage {
     private List<Object> messages;
     private List<Object> parts;
 
+    // ===== Subagent 字段 =====
+    private String subagentSessionId;
+    private String subagentName;
+
     // ==================== 嵌套分组 ====================
 
     @JsonUnwrapped

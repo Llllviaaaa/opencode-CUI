@@ -93,6 +93,14 @@ public class SkillMessagePart {
     /** 结束原因 */
     private String finishReason;
 
+    // ==================== subagent 字段 ====================
+
+    /** subagent 会话 ID */
+    private String subagentSessionId;
+
+    /** subagent 名称 */
+    private String subagentName;
+
     /** 创建时间 */
     private LocalDateTime createdAt;
 

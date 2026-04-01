@@ -179,10 +179,14 @@ public class SkillMessageController {
         String payload;
         if (request.getToolCallId() != null && !request.getToolCallId().isBlank()) {
             action = GatewayActions.QUESTION_REPLY;
+            // 使用子 session 真实 ID（如果是 subagent 的 question reply）
+            String targetToolSessionId = request.getSubagentSessionId() != null
+                    ? request.getSubagentSessionId()
+                    : session.getToolSessionId();
             payload = PayloadBuilder.buildPayload(objectMapper, Map.of(
                     "answer", request.getContent(),
                     "toolCallId", request.getToolCallId(),
-                    "toolSessionId", session.getToolSessionId()));
+                    "toolSessionId", targetToolSessionId));
         } else {
             action = GatewayActions.CHAT;
             payload = PayloadBuilder.buildPayload(objectMapper, Map.of(
@@ -357,10 +361,15 @@ public class SkillMessageController {
             return ResponseEntity.ok(ApiResponse.error(500, "No toolSessionId available"));
         }
 
+        // 使用子 session 真实 ID（如果是 subagent 的 permission）
+        String targetToolSessionId = request.getSubagentSessionId() != null
+                ? request.getSubagentSessionId()
+                : session.getToolSessionId();
+
         String payload = PayloadBuilder.buildPayload(objectMapper, Map.of(
                 "permissionId", permId,
                 "response", request.getResponse(),
-                "toolSessionId", session.getToolSessionId()));
+                "toolSessionId", targetToolSessionId));
 
         // 向 AI-Gateway 发送 permission_reply invoke 命令
         gatewayRelayService.sendInvokeToGateway(
@@ -396,6 +405,8 @@ public class SkillMessageController {
         private String content;
         /** 可选：存在时路由到 question_reply 而非 chat */
         private String toolCallId;
+        /** 可选：subagent 的真实 toolSessionId，用于将 question reply 路由到正确的子会话 */
+        private String subagentSessionId;
     }
 
     /** 发送到 IM 请求体。 */
@@ -410,5 +421,7 @@ public class SkillMessageController {
     public static class PermissionReplyRequest {
         /** 合法值："once"、"always"、"reject" */
         private String response;
+        /** 可选：subagent 的真实 toolSessionId，用于将 permission reply 路由到正确的子会话 */
+        private String subagentSessionId;
     }
 }

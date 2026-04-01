@@ -145,6 +145,8 @@ public class MessagePersistenceService {
                 .seq(resolvePartSeq(sessionId, active.dbId(), msg))
                 .partType(partType)
                 .content(msg.getContent())
+                .subagentSessionId(msg.getSubagentSessionId())
+                .subagentName(msg.getSubagentName())
                 .build();
 
         partRepository.upsert(part);
@@ -196,6 +198,8 @@ public class MessagePersistenceService {
                 .toolOutput(tool != null ? tool.getOutput() : null)
                 .toolError(msg.getError())
                 .toolTitle(msg.getTitle())
+                .subagentSessionId(msg.getSubagentSessionId())
+                .subagentName(msg.getSubagentName())
                 .build();
 
         partRepository.upsert(part);
@@ -236,6 +240,8 @@ public class MessagePersistenceService {
                 .toolStatus(msg.getStatus())
                 .toolInput(metadataJson)
                 .toolOutput(permission != null ? permission.getResponse() : null)
+                .subagentSessionId(msg.getSubagentSessionId())
+                .subagentName(msg.getSubagentName())
                 .build();
 
         partRepository.upsert(part);
@@ -261,6 +267,8 @@ public class MessagePersistenceService {
                 .fileName(f != null ? f.getFileName() : null)
                 .fileUrl(f != null ? f.getFileUrl() : null)
                 .fileMime(f != null ? f.getFileMime() : null)
+                .subagentSessionId(msg.getSubagentSessionId())
+                .subagentName(msg.getSubagentName())
                 .build();
 
         partRepository.upsert(part);
@@ -306,6 +314,8 @@ public class MessagePersistenceService {
                 .tokensOut(stats.tokensOut())
                 .cost(cost)
                 .finishReason(u != null ? u.getReason() : null)
+                .subagentSessionId(msg.getSubagentSessionId())
+                .subagentName(msg.getSubagentName())
                 .build();
 
         partRepository.upsert(part);

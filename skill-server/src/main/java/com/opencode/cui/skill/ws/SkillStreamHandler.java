@@ -15,6 +15,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
@@ -42,6 +43,8 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 public class SkillStreamHandler extends TextWebSocketHandler {
 
     private static final String ATTR_USER_ID = "userId";
+    private static final String ACTION_RESUME = "resume";
+    private static final String ACTION_PING = "ping";
 
     private final ObjectMapper objectMapper;
     private final SkillSessionService sessionService;
@@ -102,16 +105,21 @@ public class SkillStreamHandler extends TextWebSocketHandler {
         try {
             JsonNode node = objectMapper.readTree(message.getPayload());
             String action = node.path("action").asText(null);
-            if (!"resume".equals(action)) {
-                log.debug("Unknown client action on stream endpoint: wsId={}, action={}",
-                        session.getId(), action);
+            if (ACTION_RESUME.equals(action)) {
+                String userId = (String) session.getAttributes().get(ATTR_USER_ID);
+                if (userId != null) {
+                    sendInitialStreamingState(session, userId);
+                }
                 return;
             }
 
-            String userId = (String) session.getAttributes().get(ATTR_USER_ID);
-            if (userId != null) {
-                sendInitialStreamingState(session, userId);
+            if (ACTION_PING.equals(action)) {
+                log.debug("Received stream heartbeat: wsId={}", session.getId());
+                return;
             }
+
+            log.debug("Unknown client action on stream endpoint: wsId={}, action={}",
+                    session.getId(), action);
         } catch (Exception e) {
             log.warn("Failed to parse client message on stream endpoint: wsId={}, error={}",
                     session.getId(), e.getMessage());
@@ -126,8 +134,14 @@ public class SkillStreamHandler extends TextWebSocketHandler {
 
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
-        log.error("Skill stream transport error: wsId={}, error={}",
-                session.getId(), exception.getMessage(), exception);
+        String error = describeTransportError(exception);
+        if (isAbnormalDisconnect(exception)) {
+            log.warn("Skill stream transport disconnected unexpectedly: wsId={}, error={}",
+                    session.getId(), error);
+        } else {
+            log.error("Skill stream transport error: wsId={}, error={}",
+                    session.getId(), error, exception);
+        }
         unregisterSubscriber(session);
     }
 
@@ -408,6 +422,21 @@ public class SkillStreamHandler extends TextWebSocketHandler {
             }
         }
         return null;
+    }
+
+    private boolean isAbnormalDisconnect(Throwable exception) {
+        return exception instanceof EOFException;
+    }
+
+    private String describeTransportError(Throwable exception) {
+        if (exception == null) {
+            return "unknown";
+        }
+        String message = exception.getMessage();
+        if (message != null && !message.isBlank()) {
+            return message;
+        }
+        return exception.getClass().getSimpleName();
     }
 
 }
