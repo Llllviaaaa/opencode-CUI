@@ -28,6 +28,7 @@ const App: React.FC = () => {
     createSession,
     switchSession,
     updateSessionStatus,
+    updateSessionTitle,
   } = useSkillSession();
 
   const activeSessionId = currentSession?.id ?? null;
@@ -40,7 +41,9 @@ const App: React.FC = () => {
     sendMessage,
     replyPermission,
     error: streamError,
-  } = useSkillStream(activeSessionId);
+  } = useSkillStream(activeSessionId, {
+    onSessionTitleUpdate: updateSessionTitle,
+  });
 
   // When streaming starts, update session status to 'active' in sidebar
   useEffect(() => {

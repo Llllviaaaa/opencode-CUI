@@ -254,7 +254,11 @@ function normalizeIncomingStreamMessage(raw: Record<string, unknown>): StreamMes
   };
 }
 
-export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
+export interface UseSkillStreamOptions {
+  onSessionTitleUpdate?: (sessionId: string, title: string) => void;
+}
+
+export function useSkillStream(sessionId: string | null, options?: UseSkillStreamOptions): UseSkillStreamReturn {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>('unknown');
@@ -269,6 +273,7 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   const activeMessageIdsRef = useRef(new Set<string>());
   const knownUserMessageIdsRef = useRef(new Set<string>());
   const sessionIdRef = useRef<string | null>(sessionId);
+  const onSessionTitleUpdateRef = useRef(options?.onSessionTitleUpdate);
 
   const requestResume = useCallback(() => {
     const ws = wsRef.current;
@@ -287,6 +292,10 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
+
+  useEffect(() => {
+    onSessionTitleUpdateRef.current = options?.onSessionTitleUpdate;
+  }, [options?.onSessionTitleUpdate]);
 
   useEffect(() => {
     knownUserMessageIdsRef.current = new Set(
@@ -543,6 +552,9 @@ export function useSkillStream(sessionId: string | null): UseSkillStreamReturn {
         break;
 
       case 'session.title':
+        if (msg.title && onSessionTitleUpdateRef.current && sessionIdRef.current) {
+          onSessionTitleUpdateRef.current(sessionIdRef.current, msg.title);
+        }
         break;
 
       case 'agent.online':

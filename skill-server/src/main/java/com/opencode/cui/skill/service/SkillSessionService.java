@@ -174,6 +174,20 @@ public class SkillSessionService {
         return session;
     }
 
+    /** 仅当会话标题为空时，回填 AI 生成的标题。 */
+    @Transactional
+    public boolean updateTitleIfEmpty(Long sessionId, String title) {
+        if (sessionId == null || title == null || title.isBlank()) {
+            return false;
+        }
+        int updated = sessionRepository.updateTitleIfEmpty(sessionId, title);
+        if (updated > 0) {
+            log.info("Backfilled session title: id={}, title={}", sessionId, title);
+            return true;
+        }
+        return false;
+    }
+
     /**
      * 激活 IDLE 会话（IDLE → ACTIVE）。
      * 当 IDLE 会话收到成功的 tool_event 时调用。

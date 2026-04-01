@@ -125,6 +125,7 @@ export const SkillMain: React.FC<SkillMainProps> = ({
     error: sessionError,
     createSession,
     switchSession,
+    updateSessionTitle,
     // closeSession is available for future use (FR-5.3)
   } = useSkillSession();
 
@@ -146,7 +147,9 @@ export const SkillMain: React.FC<SkillMainProps> = ({
     sendMessage,
     replyPermission,
     error: streamError,
-  } = useSkillStream(activeSessionId);
+  } = useSkillStream(activeSessionId, {
+    onSessionTitleUpdate: updateSessionTitle,
+  });
 
   // Send to IM
   const {

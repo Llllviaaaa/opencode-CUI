@@ -188,6 +188,12 @@
         WHERE id = #{id}
     </update>
 
+    <update id="updateTitleIfEmpty">
+        UPDATE skill_session
+        SET title = #{title}, last_active_at = NOW()
+        WHERE id = #{id} AND (title IS NULL OR title = '')
+    </update>
+
     <update id="activateSession">
         UPDATE skill_session
         SET status = 'ACTIVE', last_active_at = NOW()
