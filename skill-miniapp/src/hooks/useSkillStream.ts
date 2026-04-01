@@ -681,15 +681,15 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
         }
       }
 
-      // permission.reply: 审批完成后移除 bubble + SubtaskBlock 内的 permission
-      // 让流式效果与刷新后一致（刷新后 permission 不显示）
+      // permission.reply: OpenCode 已处理（包括 auto-resolve 的）
+      // 移除对应 bubble + SubtaskBlock 内的 permission
       if (type === 'permission.reply') {
-        const bubbleKey = msg.permissionId ?? '';
-        const bubbleId = `bubble-${subagentSessionId}-${bubbleKey}`;
-        console.log('[DEBUG] subagent permission.reply:', { bubbleId, permissionId: msg.permissionId, subagentSessionId });
+        const replyPermId = msg.permissionId;
         setMessages((prev) => {
-          // 1. 移除 bubble 消息
-          const filtered = prev.filter((m) => m.id !== bubbleId);
+          // 1. 移除匹配的 bubble
+          const filtered = replyPermId
+            ? prev.filter((m) => !(m.id.startsWith('bubble-') && m.id.endsWith(`-${replyPermId}`)))
+            : prev;
           // 2. 从 SubtaskBlock 内移除已处理的 permission subPart
           return filtered.map((message) => {
             if (message.id !== virtualMessageId) return message;
@@ -700,7 +700,7 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
                 return {
                   ...p,
                   subParts: (p.subParts ?? []).filter(
-                    (sp) => !(sp.type === 'permission' && sp.permissionId === msg.permissionId),
+                    (sp) => !(sp.type === 'permission' && sp.permissionId === replyPermId),
                   ),
                 };
               }),
@@ -1028,6 +1028,13 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
     async (permissionId: string, response: 'once' | 'always' | 'reject', subagentSessionId?: string) => {
       if (!sessionId) {
         return;
+      }
+
+      // 立即移除 subagent 的 permission bubble（乐观更新，点击即消失）
+      if (permissionId) {
+        setMessages((prev) => prev.filter(
+          (m) => !(m.id.startsWith('bubble-') && m.id.endsWith(`-${permissionId}`)),
+        ));
       }
 
       setError(null);
