@@ -899,32 +899,20 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
         break;
 
       case 'streaming': {
-        // 将 streaming parts 当作历史消息处理（复用 mergeSubagentPartsAcrossMessages 等逻辑）
-        const streamParts = Array.isArray(msg.parts) ? msg.parts : [];
-        if (streamParts.length > 0) {
-          const normalized = normalizeHistoryMessages([{
-            id: msg.messageId,
-            role: msg.role ?? 'assistant',
-            parts: streamParts,
-            contentType: 'markdown',
-          }]);
-          if (normalized.length > 0) {
-            setMessages((prev) => {
-              let next = [...prev];
-              for (const nm of normalized) {
-                next = upsertMessage(next, {
-                  ...nm,
-                  isStreaming: msg.sessionStatus !== 'idle',
-                });
-              }
-              return next;
-            });
-            if (msg.sessionStatus !== 'idle') {
-              setIsStreaming(true);
-            }
-          }
-        } else if (msg.sessionStatus === 'idle') {
+        // Snapshot（先到达）已包含完整的历史状态。
+        // Streaming 只用于标记会话是否仍在流式中，不创建新消息（避免与 snapshot 重复）。
+        if (msg.sessionStatus === 'idle' || msg.sessionStatus === 'completed') {
           finalizeAllStreamingMessages();
+        } else if (Array.isArray(msg.parts) && msg.parts.length > 0) {
+          // 会话仍在流式中：标记最后一条 assistant 消息为 streaming
+          setIsStreaming(true);
+          setMessages((prev) => {
+            const lastAssistant = [...prev].reverse().find((m) => m.role === 'assistant');
+            if (!lastAssistant) return prev;
+            return prev.map((m) =>
+              m.id === lastAssistant.id ? { ...m, isStreaming: true } : m,
+            );
+          });
         }
         break;
       }
