@@ -386,6 +386,7 @@ public class SkillMessageController {
                         .permissionId(permId)
                         .response(request.getResponse())
                         .build())
+                .subagentSessionId(request.getSubagentSessionId())
                 .build();
         gatewayRelayService.publishProtocolMessage(sessionId, replyMessage);
 
