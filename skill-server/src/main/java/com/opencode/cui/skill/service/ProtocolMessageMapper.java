@@ -196,6 +196,9 @@ public final class ProtocolMessageMapper {
             }
         }
 
+        builder.subagentSessionId(message.getSubagentSessionId())
+                .subagentName(message.getSubagentName());
+
         return builder.build();
     }
 

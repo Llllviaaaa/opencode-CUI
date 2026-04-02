@@ -211,6 +211,8 @@ public class StreamBufferService {
                 .partId(msg.getPartId())
                 .partSeq(msg.getPartSeq())
                 .content(msg.getContent())
+                .subagentSessionId(msg.getSubagentSessionId())
+                .subagentName(msg.getSubagentName())
                 .build();
         try {
             String json = objectMapper.writeValueAsString(part);

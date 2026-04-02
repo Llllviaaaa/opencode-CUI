@@ -496,11 +496,6 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
       .map((part) => normalizeStreamingPart(part))
       .filter((part): part is StreamMessage => part !== null);
 
-    const messageId = msg.messageId
-      ?? partMessages[0]?.messageId
-      ?? partMessages[0]?.sourceMessageId
-      ?? genId('stream');
-
     if (partMessages.length === 0) {
       if (msg.sessionStatus === 'idle') {
         finalizeAllStreamingMessages();
@@ -508,39 +503,103 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
       return;
     }
 
-    const role = normalizeRole(msg.role ?? partMessages[0]?.role);
-    if (role === 'user' || knownUserMessageIdsRef.current.has(messageId)) {
-      return;
+    // 分离 subagent parts 和主会话 parts
+    const subagentParts = partMessages.filter((p) => p.subagentSessionId);
+    const mainParts = partMessages.filter((p) => !p.subagentSessionId);
+
+    // subagent parts: 按 subagentSessionId 分组，构建虚拟 SubtaskBlock 消息
+    if (subagentParts.length > 0) {
+      const grouped = new Map<string, { name: string; parts: StreamMessage[] }>();
+      for (const sp of subagentParts) {
+        const sid = sp.subagentSessionId!;
+        let entry = grouped.get(sid);
+        if (!entry) {
+          entry = { name: sp.subagentName ?? 'Subagent', parts: [] };
+          grouped.set(sid, entry);
+        }
+        entry.parts.push(sp);
+      }
+      setMessages((prev) => {
+        let next = [...prev];
+        for (const [sid, entry] of grouped) {
+          const vmId = `subtask-${sid}`;
+          if (next.some((m) => m.id === vmId)) continue;
+          const subParts = entry.parts
+            .map((sp) => streamMessageToSubPart(sp))
+            .filter((sp): sp is MessagePart => sp !== null);
+          next = [
+            ...next,
+            {
+              id: vmId,
+              role: 'assistant' as const,
+              content: '',
+              contentType: 'plain' as const,
+              timestamp: Date.now(),
+              isStreaming: msg.sessionStatus !== 'idle',
+              parts: [{
+                partId: vmId,
+                type: 'subtask' as const,
+                content: '',
+                isStreaming: msg.sessionStatus !== 'idle',
+                subagentSessionId: sid,
+                subagentName: entry.name,
+                subagentPrompt: '',
+                subagentStatus: msg.sessionStatus === 'idle' ? 'completed' as const : 'running' as const,
+                subParts,
+              }],
+            },
+          ];
+        }
+        return next;
+      });
     }
 
-    const assembler = new StreamAssembler();
-    partMessages.forEach((part) => assembler.handleMessage({
-      ...part,
-      messageId,
-      role: part.role ?? msg.role ?? 'assistant',
-      messageSeq: part.messageSeq ?? msg.messageSeq,
-    }));
-    assemblersRef.current.set(messageId, assembler);
+    // 主会话 parts 走原有 assembler 路径
+    if (mainParts.length > 0) {
+      const messageId = msg.messageId
+        ?? mainParts[0]?.messageId
+        ?? mainParts[0]?.sourceMessageId
+        ?? genId('stream');
 
-    if (msg.sessionStatus !== 'idle') {
-      activeMessageIdsRef.current.add(messageId);
+      const role = normalizeRole(msg.role ?? mainParts[0]?.role);
+      if (role === 'user' || knownUserMessageIdsRef.current.has(messageId)) {
+        return;
+      }
+
+      const assembler = new StreamAssembler();
+      mainParts.forEach((part) => assembler.handleMessage({
+        ...part,
+        messageId,
+        role: part.role ?? msg.role ?? 'assistant',
+        messageSeq: part.messageSeq ?? msg.messageSeq,
+      }));
+      assemblersRef.current.set(messageId, assembler);
+
+      if (msg.sessionStatus !== 'idle') {
+        activeMessageIdsRef.current.add(messageId);
+        setIsStreaming(true);
+      }
+
+      const content = assembler.getText();
+      const parts = assembler.getParts();
+      const timestamp = normalizeTimestamp(msg.emittedAt ?? mainParts[0]?.emittedAt);
+
+      setMessages((prev) => upsertMessage(prev, {
+        id: messageId,
+        role,
+        content,
+        contentType: contentTypeForRole(role),
+        timestamp,
+        messageSeq: msg.messageSeq ?? mainParts[0]?.messageSeq,
+        isStreaming: msg.sessionStatus !== 'idle',
+        parts: parts.length > 0 ? [...parts] : undefined,
+      }));
+    }
+
+    // 如果只有 subagent parts 且 session 仍在流式中
+    if (mainParts.length === 0 && msg.sessionStatus !== 'idle') {
       setIsStreaming(true);
     }
-
-    const content = assembler.getText();
-    const parts = assembler.getParts();
-    const timestamp = normalizeTimestamp(msg.emittedAt ?? partMessages[0]?.emittedAt);
-
-    setMessages((prev) => upsertMessage(prev, {
-      id: messageId,
-      role,
-      content,
-      contentType: contentTypeForRole(role),
-      timestamp,
-      messageSeq: msg.messageSeq ?? partMessages[0]?.messageSeq,
-      isStreaming: msg.sessionStatus !== 'idle',
-      parts: parts.length > 0 ? [...parts] : undefined,
-    }));
   }, [finalizeAllStreamingMessages]);
 
   const handleSubagentMessage = useCallback(
