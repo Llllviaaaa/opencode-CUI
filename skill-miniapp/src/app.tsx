@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SessionSidebar } from './components/SessionSidebar';
 import { ConversationView } from './components/ConversationView';
 import { MessageInput } from './components/MessageInput';
@@ -6,10 +6,8 @@ import { AgentSelector } from './components/AgentSelector';
 import { useSkillSession } from './hooks/useSkillSession';
 import { useSkillStream } from './hooks/useSkillStream';
 import { useAgentSelector } from './hooks/useAgentSelector';
+import { MINIAPP_SESSION_DOMAIN, MINIAPP_SESSION_TYPE } from './constants/session';
 import './index.css';
-
-const SKILL_DEFINITION_ID = 1;
-const DEFAULT_USER_ID = '1'; // Test user
 
 const agentStatusConfig: Record<string, { className: string; label: string }> = {
   online: { className: 'online', label: 'Online' },
@@ -20,6 +18,7 @@ const agentStatusConfig: Record<string, { className: string; label: string }> = 
 const App: React.FC = () => {
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const conversationContainerRef = useRef<HTMLDivElement | null>(null);
+  const pendingInitialMessageRef = useRef<string | null>(null);
 
   const {
     sessions,
@@ -28,7 +27,9 @@ const App: React.FC = () => {
     error: sessionError,
     createSession,
     switchSession,
-  } = useSkillSession(DEFAULT_USER_ID);
+    updateSessionStatus,
+    updateSessionTitle,
+  } = useSkillSession();
 
   const activeSessionId = currentSession?.id ?? null;
 
@@ -36,40 +37,62 @@ const App: React.FC = () => {
     messages,
     isStreaming,
     agentStatus,
+    socketReady,
     sendMessage,
+    replyPermission,
     error: streamError,
-  } = useSkillStream(activeSessionId);
+  } = useSkillStream(activeSessionId, {
+    onSessionTitleUpdate: updateSessionTitle,
+  });
+
+  // When streaming starts, update session status to 'active' in sidebar
+  useEffect(() => {
+    if (isStreaming && activeSessionId) {
+      updateSessionStatus(activeSessionId, 'active');
+    }
+  }, [isStreaming, activeSessionId, updateSessionStatus]);
 
   const {
     agents,
     selectedAgent,
     selectAgent,
     loading: agentsLoading,
-  } = useAgentSelector(DEFAULT_USER_ID);
+  } = useAgentSelector();
 
   const handleNewSession = useCallback(async () => {
     if (!selectedAgent) return;
     await createSession({
-      skillDefinitionId: SKILL_DEFINITION_ID,
-      userId: 1,
-      agentId: selectedAgent.id,
+      ak: selectedAgent.ak,
       title: `Session ${new Date().toLocaleString()}`,
+      businessSessionDomain: MINIAPP_SESSION_DOMAIN,
+      businessSessionType: MINIAPP_SESSION_TYPE,
     });
   }, [createSession, selectedAgent]);
+
+  useEffect(() => {
+    if (!activeSessionId || !socketReady || !pendingInitialMessageRef.current) {
+      return;
+    }
+
+    const text = pendingInitialMessageRef.current;
+    pendingInitialMessageRef.current = null;
+    void sendMessage(text);
+  }, [activeSessionId, socketReady, sendMessage]);
 
   const handleSendMessage = useCallback(
     async (text: string) => {
       if (!selectedAgent) return;
 
       if (!activeSessionId) {
+        pendingInitialMessageRef.current = text;
         const session = await createSession({
-          skillDefinitionId: SKILL_DEFINITION_ID,
-          userId: 1,
-          agentId: selectedAgent.id,
+          ak: selectedAgent.ak,
           title: text.slice(0, 50),
+          businessSessionDomain: MINIAPP_SESSION_DOMAIN,
+          businessSessionType: MINIAPP_SESSION_TYPE,
         });
-        if (session) {
-          setTimeout(() => void sendMessage(text), 100);
+        if (!session) {
+          pendingInitialMessageRef.current = null;
         }
         return;
       }
@@ -78,8 +101,36 @@ const App: React.FC = () => {
     [activeSessionId, createSession, sendMessage, selectedAgent],
   );
 
+  const handleQuestionAnswer = useCallback(
+    (answer: string, toolCallId?: string) => {
+      if (!activeSessionId) {
+        void handleSendMessage(answer);
+        return;
+      }
+      void sendMessage(answer, toolCallId ? { toolCallId } : undefined);
+    },
+    [activeSessionId, handleSendMessage, sendMessage],
+  );
+
+  const handlePermissionDecision = useCallback(
+    (permissionId: string, response: 'once' | 'always' | 'reject', subagentSessionId?: string) => {
+      void replyPermission(permissionId, response, subagentSessionId);
+    },
+    [replyPermission],
+  );
+
   const displayError = sessionError ?? streamError;
-  const statusCfg = agentStatusConfig[agentStatus] ?? agentStatusConfig.unknown;
+  const resolvedAgentStatus =
+    !socketReady
+      ? 'unknown'
+      : agentStatus !== 'unknown'
+        ? agentStatus
+        : selectedAgent
+          ? 'online'
+          : agentsLoading
+            ? 'unknown'
+            : 'offline';
+  const statusCfg = agentStatusConfig[resolvedAgentStatus] ?? agentStatusConfig.unknown;
   const inputDisabled = isStreaming || !selectedAgent;
 
   return (
@@ -115,7 +166,12 @@ const App: React.FC = () => {
         )}
         <div className="main-content">
           <div ref={conversationContainerRef} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <ConversationView messages={messages} loading={sessionsLoading} />
+            <ConversationView
+              messages={messages}
+              loading={sessionsLoading}
+              onQuestionAnswer={handleQuestionAnswer}
+              onPermissionDecision={handlePermissionDecision}
+            />
           </div>
           <AgentSelector
             agents={agents}

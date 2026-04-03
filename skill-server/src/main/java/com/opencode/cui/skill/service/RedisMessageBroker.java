@@ -1,8 +1,5 @@
 package com.opencode.cui.skill.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
@@ -14,7 +11,6 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
@@ -22,11 +18,8 @@ import java.util.function.Consumer;
  *
  * Channel patterns:
  * - agent:{agentId} - messages to specific agent
- * - session:{sessionId} - messages to specific session
- *
- * Sequence tracking:
- * - Each session maintains a sequence number for message ordering
- * - Sequence numbers are included in published messages
+ * - user-stream:{userId} - realtime messages to all instances holding the
+ * user's stream link
  */
 @Slf4j
 @Service
@@ -34,20 +27,14 @@ public class RedisMessageBroker {
 
     private final StringRedisTemplate redisTemplate;
     private final RedisMessageListenerContainer listenerContainer;
-    private final ObjectMapper objectMapper;
-
-    /** Track sequence numbers per session */
-    private final Map<String, AtomicLong> sessionSequences = new ConcurrentHashMap<>();
 
     /** Track active subscriptions for cleanup */
     private final Map<String, MessageListener> activeListeners = new ConcurrentHashMap<>();
 
     public RedisMessageBroker(StringRedisTemplate redisTemplate,
-            RedisMessageListenerContainer listenerContainer,
-            ObjectMapper objectMapper) {
+            RedisMessageListenerContainer listenerContainer) {
         this.redisTemplate = redisTemplate;
         this.listenerContainer = listenerContainer;
-        this.objectMapper = objectMapper;
     }
 
     /**
@@ -58,24 +45,12 @@ public class RedisMessageBroker {
      */
     public void publishToAgent(String agentId, String message) {
         String channel = "agent:" + agentId;
-        publishMessage(channel, message, null);
+        publishMessage(channel, message);
     }
 
-    /**
-     * Publish a message to a session channel with sequence number.
-     *
-     * @param sessionId the target session ID
-     * @param message   the message to publish (as JSON string)
-     */
-    public void publishToSession(String sessionId, String message) {
-        String channel = "session:" + sessionId;
-
-        // Get and increment sequence number for this session
-        AtomicLong sequence = sessionSequences.computeIfAbsent(
-                sessionId, k -> new AtomicLong(0));
-        long seqNum = sequence.incrementAndGet();
-
-        publishMessage(channel, message, seqNum);
+    public void publishToUser(String userId, String message) {
+        String channel = "user-stream:" + userId;
+        publishMessage(channel, message);
     }
 
     /**
@@ -89,14 +64,8 @@ public class RedisMessageBroker {
         subscribe(channel, handler);
     }
 
-    /**
-     * Subscribe to a session channel.
-     *
-     * @param sessionId the session ID to subscribe to
-     * @param handler   callback to handle received messages (JSON string)
-     */
-    public void subscribeToSession(String sessionId, Consumer<String> handler) {
-        String channel = "session:" + sessionId;
+    public void subscribeToUser(String userId, Consumer<String> handler) {
+        String channel = "user-stream:" + userId;
         subscribe(channel, handler);
     }
 
@@ -110,89 +79,31 @@ public class RedisMessageBroker {
         unsubscribe(channel);
     }
 
-    /**
-     * Unsubscribe from a session channel.
-     *
-     * @param sessionId the session ID to unsubscribe from
-     */
-    public void unsubscribeFromSession(String sessionId) {
-        String channel = "session:" + sessionId;
-        unsubscribe(channel);
-
-        // Clean up sequence tracker
-        sessionSequences.remove(sessionId);
-    }
-
-    // ==================== invoke_relay (v1 protocol) ====================
-
-    /**
-     * Publish an invoke message to the invoke_relay channel for a specific agent.
-     * Used when this Skill instance has no direct Gateway WS connection,
-     * so the message is relayed through Redis to a Skill instance that does.
-     *
-     * @param agentId the target agent ID
-     * @param message the invoke message (JSON string)
-     */
-    public void publishInvokeRelay(String agentId, String message) {
-        String channel = "invoke_relay:" + agentId;
-        publishMessage(channel, message, null);
-    }
-
-    /**
-     * Subscribe to invoke_relay channels for a specific agent.
-     * Called by Skill instances that have a Gateway WS connection,
-     * so they can relay invoke messages on behalf of other instances.
-     *
-     * @param agentId the agent ID to subscribe to
-     * @param handler callback to handle received invoke messages
-     */
-    public void subscribeInvokeRelay(String agentId, Consumer<String> handler) {
-        String channel = "invoke_relay:" + agentId;
-        subscribe(channel, handler);
-    }
-
-    /**
-     * Unsubscribe from invoke_relay channel for a specific agent.
-     *
-     * @param agentId the agent ID to unsubscribe from
-     */
-    public void unsubscribeInvokeRelay(String agentId) {
-        String channel = "invoke_relay:" + agentId;
+    public void unsubscribeFromUser(String userId) {
+        String channel = "user-stream:" + userId;
         unsubscribe(channel);
     }
 
     // ========== Internal methods ==========
 
-    private void publishMessage(String channel, String message, Long sequenceNumber) {
+    private void publishMessage(String channel, String message) {
         try {
-            // Add sequence number if provided
-            String enriched = message;
-            if (sequenceNumber != null) {
-                JsonNode node = objectMapper.readTree(message);
-                if (node.isObject()) {
-                    ((com.fasterxml.jackson.databind.node.ObjectNode) node)
-                            .put("sequenceNumber", sequenceNumber);
-                    enriched = objectMapper.writeValueAsString(node);
-                }
-            }
-
-            redisTemplate.convertAndSend(channel, enriched);
-
-            log.debug("Published to Redis channel {}: seq={}", channel, sequenceNumber);
-        } catch (JsonProcessingException e) {
-            log.error("Failed to process message for channel {}: {}", channel, e.getMessage(), e);
+            redisTemplate.convertAndSend(channel, message);
+            log.info("Published to Redis channel {}", channel);
         } catch (Exception e) {
             log.error("Failed to publish to Redis channel {}: {}", channel, e.getMessage(), e);
         }
     }
 
     private void subscribe(String channel, Consumer<String> handler) {
+        unsubscribe(channel);
+
         MessageListener listener = (Message message, byte[] pattern) -> {
             try {
                 String json = new String(message.getBody(), StandardCharsets.UTF_8);
                 handler.accept(json);
 
-                log.debug("Received from Redis channel {}", channel);
+                log.info("Received from Redis channel {}", channel);
             } catch (Exception e) {
                 log.error("Failed to process message from channel {}: {}",
                         channel, e.getMessage(), e);
@@ -213,11 +124,89 @@ public class RedisMessageBroker {
         }
     }
 
-    /**
-     * Get the current sequence number for a session (for testing/monitoring).
-     */
-    public long getSessionSequence(String sessionId) {
-        AtomicLong sequence = sessionSequences.get(sessionId);
-        return sequence != null ? sequence.get() : 0;
+    public boolean isUserSubscribed(String userId) {
+        String channel = "user-stream:" + userId;
+        return activeListeners.containsKey(channel);
     }
+
+    // ==================== SS relay pub/sub (Task 2.6) ====================
+
+    private static final String SS_RELAY_CHANNEL_PREFIX = "ss:relay:";
+
+    /**
+     * Subscribe to this instance's SS relay channel.
+     * Messages relayed from other SS instances arrive here.
+     *
+     * @param instanceId the local SS instance ID
+     * @param handler    callback to handle received relay messages (JSON string)
+     */
+    public void subscribeToSsRelay(String instanceId, Consumer<String> handler) {
+        String channel = SS_RELAY_CHANNEL_PREFIX + instanceId;
+        subscribe(channel, handler);
+    }
+
+    /**
+     * Publish a message to the target SS instance's relay channel.
+     * Uses Redis PUBLISH which returns the number of subscribers that received the
+     * message.
+     *
+     * @param targetInstanceId the target SS instance ID
+     * @param message          the message to relay (JSON string)
+     * @return number of subscribers that received the message; 0 means nobody is
+     *         listening
+     */
+    public long publishToSsRelay(String targetInstanceId, String message) {
+        String channel = SS_RELAY_CHANNEL_PREFIX + targetInstanceId;
+        try {
+            Long receivers = redisTemplate.convertAndSend(channel, message);
+            log.info("Published to SS relay channel: target={}, receivers={}", targetInstanceId, receivers);
+            return receivers != null ? receivers : 0;
+        } catch (Exception e) {
+            log.error("Failed to publish to SS relay channel: target={}, error={}",
+                    targetInstanceId, e.getMessage(), e);
+            return 0;
+        }
+    }
+
+    /**
+     * Unsubscribe from this instance's SS relay channel.
+     *
+     * @param instanceId the local SS instance ID
+     */
+    public void unsubscribeFromSsRelay(String instanceId) {
+        String channel = SS_RELAY_CHANNEL_PREFIX + instanceId;
+        unsubscribe(channel);
+    }
+
+    // ==================== conn:ak 查询（v3 新增） ====================
+
+    /**
+     * 查询 AK 连接在哪个 Gateway 实例上。
+     *
+     * @return gatewayInstanceId，不存在返回 null
+     */
+    public String getConnAk(String ak) {
+        if (ak == null || ak.isBlank()) {
+            return null;
+        }
+        return redisTemplate.opsForValue().get("conn:ak:" + ak);
+    }
+
+    // ==================== 跨实例消息序号（Task 2.8） ====================
+
+    private static final String STREAM_SEQ_KEY_PREFIX = "ss:stream-seq:";
+
+    /**
+     * 获取指定会话的下一个跨实例传输序号（Redis INCR）。
+     * 多 SS 实例共享同一序号空间，确保消息在前端按正确顺序渲染。
+     *
+     * @param welinkSessionId 会话 ID
+     * @return 递增后的序号（从 1 开始）
+     */
+    public long nextStreamSeq(String welinkSessionId) {
+        String key = STREAM_SEQ_KEY_PREFIX + welinkSessionId;
+        Long seq = redisTemplate.opsForValue().increment(key);
+        return seq != null ? seq : 1L;
+    }
+
 }

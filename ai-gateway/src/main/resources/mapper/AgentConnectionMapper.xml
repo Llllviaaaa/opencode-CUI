@@ -9,6 +9,7 @@
         <result property="userId"      column="user_id"/>
         <result property="akId"        column="ak_id"/>
         <result property="deviceName"  column="device_name"/>
+        <result property="macAddress"  column="mac_address"/>
         <result property="os"          column="os"/>
         <result property="toolType"    column="tool_type"/>
         <result property="toolVersion" column="tool_version"/>
@@ -51,17 +52,48 @@
           AND last_seen_at &lt; #{threshold}
     </update>
 
-    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+    <insert id="insert">
         INSERT INTO agent_connection
-            (user_id, ak_id, device_name, os, tool_type, tool_version, status, last_seen_at, created_at)
+            (id, user_id, ak_id, device_name, mac_address, os, tool_type, tool_version, status, last_seen_at, created_at)
         VALUES
-            (#{userId}, #{akId}, #{deviceName}, #{os}, #{toolType}, #{toolVersion},
+            (#{id}, #{userId}, #{akId}, #{deviceName}, #{macAddress}, #{os}, #{toolType}, #{toolVersion},
              #{status}, #{lastSeenAt}, #{createdAt})
     </insert>
 
     <select id="findById" resultMap="AgentConnectionResultMap">
         SELECT * FROM agent_connection WHERE id = #{id}
     </select>
+
+    <select id="findLatestByAkId" resultMap="AgentConnectionResultMap">
+        SELECT * FROM agent_connection
+        WHERE ak_id = #{akId}
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+    </select>
+
+    <select id="findOnlineByAkId" resultMap="AgentConnectionResultMap">
+        SELECT * FROM agent_connection
+        WHERE ak_id = #{akId}
+          AND status = 'ONLINE'
+    </select>
+
+    <select id="findByAkIdAndToolType" resultMap="AgentConnectionResultMap">
+        SELECT * FROM agent_connection
+        WHERE ak_id = #{akId}
+          AND tool_type = #{toolType}
+        LIMIT 1
+    </select>
+
+    <update id="updateAgentInfo">
+        UPDATE agent_connection
+        SET status = #{status},
+            device_name = #{deviceName},
+            mac_address = #{macAddress},
+            os = #{os},
+            tool_version = #{toolVersion},
+            last_seen_at = #{lastSeenAt}
+        WHERE id = #{id}
+    </update>
 
     <update id="updateStatus">
         UPDATE agent_connection SET status = #{status} WHERE id = #{id}

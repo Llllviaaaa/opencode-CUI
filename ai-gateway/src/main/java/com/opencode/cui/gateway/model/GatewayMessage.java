@@ -1,256 +1,367 @@
 package com.opencode.cui.gateway.model;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.JsonNode;
-import lombok.Data;
-import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.UUID;
 
 /**
- * Gateway WebSocket message protocol.
+ * Gateway WebSocket 消息协议。
  *
- * Upstream (PCAgent -> Gateway):
- * register, heartbeat, tool_event, tool_done, tool_error, session_created
+ * <p>
+ * 本类作为所有消息类型的统一载体（flat DTO），通过 {@code type} 字段区分语义。
+ * 不同消息类型使用不同的字段子集，未使用的字段序列化时为 null（JsonInclude.NON_NULL）。
+ * </p>
  *
- * Downstream (Gateway -> PCAgent):
- * invoke, status_query
+ * <h3>消息类型与字段映射矩阵</h3>
+ * 
+ * <pre>
+ * Type                | 使用字段
+ * --------------------|----------------------------------------------
+ * REGISTER            | deviceName, macAddress, os, toolType, toolVersion
+ * REGISTER_OK         | (无额外字段)
+ * REGISTER_REJECTED   | reason
+ * HEARTBEAT           | (无额外字段)
+ * INVOKE              | ak, welinkSessionId, action, payload, userId, source
+ * TOOL_EVENT          | toolSessionId, event
+ * TOOL_DONE           | toolSessionId, usage
+ * TOOL_ERROR          | toolSessionId, error
+ * SESSION_CREATED     | welinkSessionId, toolSessionId
+ * AGENT_ONLINE        | ak, toolType, toolVersion
+ * AGENT_OFFLINE       | ak
+ * STATUS_QUERY        | (无额外字段)
+ * STATUS_RESPONSE     | opencodeOnline
+ * PERMISSION_REQUEST  | (透传到 Skill Server)
+ * ROUTE_CONFIRM       | toolSessionId, welinkSessionId, source
+ * ROUTE_REJECT        | toolSessionId, source
+ * </pre>
  *
- * Internal (Gateway <-> Skill Server):
- * tool_event, tool_done, tool_error, agent_online, agent_offline,
- * session_created, invoke
- *
- * Protocol Evolution:
- * - Legacy format: flat fields (type, sessionId, event, etc.)
- * - Envelope format: envelope + type + payload (unified protocol)
+ * <h3>路由字段说明</h3>
+ * <ul>
+ * <li>{@code ak} — Agent AK，消息路由的主键</li>
+ * <li>{@code welinkSessionId} — Skill 侧会话 ID</li>
+ * <li>{@code toolSessionId} — OpenCode 侧会话 ID</li>
+ * <li>{@code userId} / {@code source} — 服务端注入的路由上下文，下行时剥离</li>
+ * <li>{@code traceId} — 跨服务追踪 ID</li>
+ * </ul>
  */
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
+@Builder(toBuilder = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class GatewayMessage {
 
-    /** Unified protocol envelope (optional, for envelope-aware clients) */
-    private MessageEnvelope.EnvelopeMetadata envelope;
+    // ==================== 消息类型常量 ====================
 
-    /** Message type discriminator */
+    /**
+     * 消息类型常量集合。
+     * 所有 type 字段的合法值都定义在此，避免跨文件的魔法字符串。
+     */
+    public interface Type {
+        String REGISTER = "register";
+        String REGISTER_OK = "register_ok";
+        String REGISTER_REJECTED = "register_rejected";
+        String HEARTBEAT = "heartbeat";
+        String INVOKE = "invoke";
+        String TOOL_EVENT = "tool_event";
+        String TOOL_DONE = "tool_done";
+        String TOOL_ERROR = "tool_error";
+        String SESSION_CREATED = "session_created";
+        String AGENT_ONLINE = "agent_online";
+        String AGENT_OFFLINE = "agent_offline";
+        String STATUS_QUERY = "status_query";
+        String STATUS_RESPONSE = "status_response";
+        String PERMISSION_REQUEST = "permission_request";
+        String ROUTE_CONFIRM = "route_confirm";
+        String ROUTE_REJECT = "route_reject";
+    }
+
+    // ==================== 通用字段 ====================
+
+    /** 消息类型标识，取值见 {@link Type} 常量 */
     private String type;
 
-    /** Agent connection ID (used in Gateway <-> Skill Server communication) */
+    /** 遗留/内部数据库标识符；协议路由已改用 ak */
     private String agentId;
 
-    /** Session identifier */
-    private String sessionId;
+    /** Agent 的应用密钥（AK），用于消息路由 */
+    private String ak;
 
-    /** Action for invoke messages: chat, create_session, close_session */
+    /** Skill 侧会话 ID（String 类型，防止 JS 精度丢失） */
+    private String welinkSessionId;
+
+    /** 用户 ID（服务端注入，用于路由信任） */
+    private String userId;
+
+    /** 上游来源服务标识 */
+    private String source;
+
+    /** 跨服务追踪 ID，用于链路可观测性 */
+    private String traceId;
+
+    // ==================== Invoke 字段 ====================
+
+    /** Invoke 动作类型：chat、create_session、close_session 等 */
     private String action;
 
-    /** Payload for invoke or register messages */
+    /** Invoke 或 Register 消息的载荷数据 */
     private JsonNode payload;
 
-    /** OpenCode raw event (transparent relay) */
+    // ==================== Tool 事件字段 ====================
+
+    /** OpenCode 原始事件（透传中继） */
     private JsonNode event;
 
-    /** Error description */
+    /** 错误描述信息 */
     private String error;
 
-    /** Token usage information */
+    /** Token 用量信息 */
     private JsonNode usage;
 
-    /** Sequence number for message ordering (multi-instance coordination) */
+    // ==================== Subagent 字段 ====================
+
+    /** 子 session ID（Plugin 映射重写后附加） */
+    private String subagentSessionId;
+
+    /** 子 agent 名称（Plugin 映射重写后附加） */
+    private String subagentName;
+
+    // ==================== 多实例协调字段 ====================
+
+    /** 消息序号，用于多实例间的消息排序 */
     private Long sequenceNumber;
 
-    // --- Register message fields ---
+    /** Gateway 实例 ID（内部路由用，发送给 Agent 前剥离） */
+    private String gatewayInstanceId;
+
+    // ==================== Register 消息字段 ====================
+
     private String deviceName;
+    private String macAddress;
     private String os;
     private String toolType;
     private String toolVersion;
 
-    // --- Session created field ---
-    private String toolSessionId;
+    /** 注册拒绝原因 */
+    private String reason;
 
-    // --- Session created: full session details (transparent relay to Skill Server)
-    // ---
+    // ==================== Session/Status 字段 ====================
+
+    private String toolSessionId;
     private JsonNode session;
 
-    // --- Status response fields ---
+    /** OpenCode 是否在线（status_response 消息使用） */
     private Boolean opencodeOnline;
 
-    // ========== Static factory methods ==========
+    // ==================== 类型判断便利方法 ====================
 
-    /** PCAgent -> Gateway: register device */
-    public static GatewayMessage register(String deviceName, String os,
-            String toolType, String toolVersion) {
+    /**
+     * 判断消息类型是否匹配。
+     *
+     * @param expected 预期的消息类型
+     * @return 类型匹配返回 true
+     */
+    public boolean isType(String expected) {
+        return expected != null && expected.equals(this.type);
+    }
+
+    // ==================== 静态工厂方法 ====================
+
+    /** 创建 REGISTER（Agent 注册）消息 */
+    public static GatewayMessage register(String deviceName, String macAddress,
+            String os, String toolType, String toolVersion) {
         return GatewayMessage.builder()
-                .type("register")
+                .type(Type.REGISTER)
                 .deviceName(deviceName)
+                .macAddress(macAddress)
                 .os(os)
                 .toolType(toolType)
                 .toolVersion(toolVersion)
                 .build();
     }
 
-    /** PCAgent -> Gateway: heartbeat */
-    public static GatewayMessage heartbeat() {
+    /** 创建 REGISTER_OK（注册成功确认）消息 */
+    public static GatewayMessage registerOk() {
         return GatewayMessage.builder()
-                .type("heartbeat")
+                .type(Type.REGISTER_OK)
                 .build();
     }
 
-    /** PCAgent -> Gateway: OpenCode tool event (transparent relay) */
-    public static GatewayMessage toolEvent(String sessionId, JsonNode event) {
+    /** 创建 REGISTER_REJECTED（注册被拒）消息 */
+    public static GatewayMessage registerRejected(String reason) {
         return GatewayMessage.builder()
-                .type("tool_event")
-                .sessionId(sessionId)
+                .type(Type.REGISTER_REJECTED)
+                .reason(reason)
+                .build();
+    }
+
+    /** 创建 HEARTBEAT（心跳）消息 */
+    public static GatewayMessage heartbeat() {
+        return GatewayMessage.builder()
+                .type(Type.HEARTBEAT)
+                .build();
+    }
+
+    /** 创建 TOOL_EVENT（工具事件流）消息 */
+    public static GatewayMessage toolEvent(String toolSessionId, JsonNode event) {
+        return GatewayMessage.builder()
+                .type(Type.TOOL_EVENT)
+                .toolSessionId(toolSessionId)
                 .event(event)
                 .build();
     }
 
-    /** PCAgent -> Gateway: tool execution completed */
-    public static GatewayMessage toolDone(String sessionId, JsonNode usage) {
+    /** 创建 TOOL_DONE（工具执行完成）消息 */
+    public static GatewayMessage toolDone(String toolSessionId, JsonNode usage) {
         return GatewayMessage.builder()
-                .type("tool_done")
-                .sessionId(sessionId)
+                .type(Type.TOOL_DONE)
+                .toolSessionId(toolSessionId)
                 .usage(usage)
                 .build();
     }
 
-    /** PCAgent -> Gateway: tool execution error */
-    public static GatewayMessage toolError(String sessionId, String error) {
+    /** 创建 TOOL_ERROR（工具执行错误）消息 */
+    public static GatewayMessage toolError(String toolSessionId, String error) {
         return GatewayMessage.builder()
-                .type("tool_error")
-                .sessionId(sessionId)
+                .type(Type.TOOL_ERROR)
+                .toolSessionId(toolSessionId)
                 .error(error)
                 .build();
     }
 
-    /** PCAgent -> Gateway: session created on OpenCode side */
-    public static GatewayMessage sessionCreated(String toolSessionId) {
+    /** 创建 SESSION_CREATED（会话创建完成）消息 */
+    public static GatewayMessage sessionCreated(String welinkSessionId, String toolSessionId) {
         return GatewayMessage.builder()
-                .type("session_created")
+                .type(Type.SESSION_CREATED)
+                .welinkSessionId(welinkSessionId)
                 .toolSessionId(toolSessionId)
                 .build();
     }
 
-    /** Gateway -> Skill Server: agent came online */
-    public static GatewayMessage agentOnline(String agentId, String toolType, String toolVersion) {
+    /** 创建 AGENT_ONLINE（Agent 上线通知）消息 */
+    public static GatewayMessage agentOnline(String ak, String toolType, String toolVersion) {
         return GatewayMessage.builder()
-                .type("agent_online")
-                .agentId(agentId)
+                .type(Type.AGENT_ONLINE)
+                .ak(ak)
                 .toolType(toolType)
                 .toolVersion(toolVersion)
                 .build();
     }
 
-    /** Gateway -> Skill Server: agent went offline */
-    public static GatewayMessage agentOffline(String agentId) {
+    /** 创建 AGENT_OFFLINE（Agent 离线通知）消息 */
+    public static GatewayMessage agentOffline(String ak) {
         return GatewayMessage.builder()
-                .type("agent_offline")
-                .agentId(agentId)
+                .type(Type.AGENT_OFFLINE)
+                .ak(ak)
                 .build();
     }
 
-    /** Skill Server -> Gateway -> PCAgent: invoke an action */
-    public static GatewayMessage invoke(String agentId, String sessionId,
+    /** 创建 INVOKE（调用指令）消息 */
+    public static GatewayMessage invoke(String ak, String welinkSessionId,
             String action, JsonNode payload) {
         return GatewayMessage.builder()
-                .type("invoke")
-                .agentId(agentId)
-                .sessionId(sessionId)
+                .type(Type.INVOKE)
+                .ak(ak)
+                .welinkSessionId(welinkSessionId)
                 .action(action)
                 .payload(payload)
                 .build();
     }
 
-    /** Gateway -> PCAgent: query agent status */
+    /** 创建 STATUS_QUERY（状态查询）消息 */
     public static GatewayMessage statusQuery() {
         return GatewayMessage.builder()
-                .type("status_query")
+                .type(Type.STATUS_QUERY)
                 .build();
     }
 
-    /**
-     * Attach agentId to an existing message (for relay to Skill Server).
-     * Returns a new instance with agentId set.
-     */
+    // ==================== 不可变转换方法 ====================
+
+    /** 复制消息并设置 agentId */
     public GatewayMessage withAgentId(String agentId) {
-        GatewayMessage copy = GatewayMessage.builder()
-                .envelope(this.envelope)
-                .type(this.type)
+        return this.toBuilder()
                 .agentId(agentId)
-                .sessionId(this.sessionId)
-                .action(this.action)
-                .payload(this.payload)
-                .event(this.event)
-                .error(this.error)
-                .usage(this.usage)
-                .sequenceNumber(this.sequenceNumber)
-                .deviceName(this.deviceName)
-                .os(this.os)
-                .toolType(this.toolType)
-                .toolVersion(this.toolVersion)
-                .toolSessionId(this.toolSessionId)
-                .session(this.session)
-                .opencodeOnline(this.opencodeOnline)
                 .build();
-        return copy;
     }
 
-    /**
-     * Attach sequence number to an existing message (for multi-instance
-     * coordination).
-     * Returns a new instance with sequenceNumber set.
-     */
+    /** 复制消息并设置 ak */
+    public GatewayMessage withAk(String ak) {
+        return this.toBuilder()
+                .ak(ak)
+                .build();
+    }
+
+    /** 复制消息并设置序号 */
     public GatewayMessage withSequenceNumber(Long sequenceNumber) {
-        GatewayMessage copy = GatewayMessage.builder()
-                .envelope(this.envelope)
-                .type(this.type)
-                .agentId(this.agentId)
-                .sessionId(this.sessionId)
-                .action(this.action)
-                .payload(this.payload)
-                .event(this.event)
-                .error(this.error)
-                .usage(this.usage)
+        return this.toBuilder()
                 .sequenceNumber(sequenceNumber)
-                .deviceName(this.deviceName)
-                .os(this.os)
-                .toolType(this.toolType)
-                .toolVersion(this.toolVersion)
-                .toolSessionId(this.toolSessionId)
-                .session(this.session)
-                .opencodeOnline(this.opencodeOnline)
                 .build();
-        return copy;
+    }
+
+    /** 复制消息并设置 userId */
+    public GatewayMessage withUserId(String userId) {
+        return this.toBuilder()
+                .userId(userId)
+                .build();
+    }
+
+    /** 复制消息并设置来源标识 */
+    public GatewayMessage withSource(String source) {
+        return this.toBuilder()
+                .source(source)
+                .build();
+    }
+
+    /** 复制消息并设置 traceId */
+    public GatewayMessage withTraceId(String traceId) {
+        return this.toBuilder()
+                .traceId(traceId)
+                .build();
+    }
+
+    /** 复制消息并清除 userId（下行时剥离服务端上下文） */
+    public GatewayMessage withoutUserId() {
+        return this.toBuilder()
+                .userId(null)
+                .build();
+    }
+
+    /** 复制消息并清除 source */
+    public GatewayMessage withoutSource() {
+        return this.toBuilder()
+                .source(null)
+                .build();
+    }
+
+    /** 复制消息并设置 Gateway 实例 ID */
+    public GatewayMessage withGatewayInstanceId(String gatewayInstanceId) {
+        return this.toBuilder()
+                .gatewayInstanceId(gatewayInstanceId)
+                .build();
+    }
+
+    /** 复制消息并清除所有路由上下文（userId/source/gatewayInstanceId），用于下发给 Agent */
+    public GatewayMessage withoutRoutingContext() {
+        return this.toBuilder()
+                .userId(null)
+                .source(null)
+                .gatewayInstanceId(null)
+                .build();
     }
 
     /**
-     * Check if this message has a valid envelope.
+     * 确保消息拥有 traceId，若缺失则生成 UUID。
+     * 集中管理 traceId 生成逻辑，避免各 Service 中重复实现。
      */
-    @JsonIgnore
-    public boolean hasEnvelope() {
-        return envelope != null && envelope.getVersion() != null;
-    }
-
-    /**
-     * Get envelope or return a default with minimal metadata.
-     */
-    @JsonIgnore
-    public MessageEnvelope.EnvelopeMetadata getEnvelopeOrDefault() {
-        if (hasEnvelope()) {
-            return envelope;
+    public GatewayMessage ensureTraceId() {
+        if (this.traceId != null && !this.traceId.isBlank()) {
+            return this;
         }
-        return MessageEnvelope.EnvelopeMetadata.builder()
-                .version("0.0.0")
-                .messageId("unknown")
-                .timestamp("")
-                .source("UNKNOWN")
-                .agentId(agentId != null ? agentId : "unknown")
-                .sessionId(sessionId)
-                .sequenceNumber(sequenceNumber != null ? sequenceNumber : 0L)
-                .sequenceScope("agent")
-                .build();
+        return this.withTraceId(UUID.randomUUID().toString());
     }
 }

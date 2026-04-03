@@ -7,12 +7,13 @@ import { ToolCard } from './ToolCard';
 import { ThinkingBlock } from './ThinkingBlock';
 import { QuestionCard } from './QuestionCard';
 import { PermissionCard } from './PermissionCard';
+import { SubtaskBlock } from './SubtaskBlock';
 import type { Message, MessagePart } from '../protocol/types';
 
 interface MessageBubbleProps {
   message: Message;
-  onQuestionAnswer?: (answer: string) => void;
-  onPermissionDecision?: (permissionId: string, allow: boolean) => void;
+  onQuestionAnswer?: (answer: string, toolCallId?: string) => void;
+  onPermissionDecision?: (permissionId: string, response: 'once' | 'always' | 'reject', subagentSessionId?: string) => void;
 }
 
 const roleLabels: Record<string, string> = {
@@ -72,6 +73,16 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             key={part.partId}
             part={part}
             onDecision={onPermissionDecision}
+          />
+        );
+
+      case 'subtask':
+        return (
+          <SubtaskBlock
+            key={part.partId}
+            part={part}
+            onPermissionDecision={onPermissionDecision}
+            onQuestionAnswer={onQuestionAnswer}
           />
         );
 

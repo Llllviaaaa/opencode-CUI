@@ -7,21 +7,26 @@
     <resultMap id="SkillSessionResultMap" type="com.opencode.cui.skill.model.SkillSession">
         <id     property="id"                column="id"/>
         <result property="userId"            column="user_id"/>
-        <result property="skillDefinitionId" column="skill_definition_id"/>
-        <result property="agentId"           column="agent_id"/>
+        <result property="ak"                column="ak"/>
         <result property="toolSessionId"     column="tool_session_id"/>
         <result property="title"             column="title"/>
         <result property="status"            column="status"
                 typeHandler="org.apache.ibatis.type.EnumTypeHandler"
                 javaType="com.opencode.cui.skill.model.SkillSession$Status"/>
-        <result property="imChatId"          column="im_chat_id"/>
+        <result property="businessSessionDomain" column="business_session_domain"/>
+        <result property="businessSessionType"   column="business_session_type"/>
+        <result property="businessSessionId"     column="business_session_id"/>
+        <result property="assistantAccount"      column="assistant_account"/>
         <result property="createdAt"         column="created_at"/>
         <result property="lastActiveAt"      column="last_active_at"/>
     </resultMap>
 
     <sql id="selectAllColumns">
-        SELECT id, user_id, skill_definition_id, agent_id, tool_session_id,
-               title, status, im_chat_id, created_at, last_active_at
+        SELECT id, user_id, ak, tool_session_id,
+               title, status,
+               business_session_domain, business_session_type,
+               business_session_id, assistant_account,
+               created_at, last_active_at
         FROM skill_session
     </sql>
 
@@ -48,6 +53,13 @@
         LIMIT #{limit} OFFSET #{offset}
     </select>
 
+    <select id="findActiveByUserId" resultMap="SkillSessionResultMap">
+        <include refid="selectAllColumns"/>
+        WHERE user_id = #{userId}
+          AND status = 'ACTIVE'
+        ORDER BY last_active_at DESC
+    </select>
+
     <select id="countByUserId" resultType="long">
         SELECT COUNT(*) FROM skill_session WHERE user_id = #{userId}
     </select>
@@ -61,9 +73,23 @@
           </foreach>
     </select>
 
-    <select id="findByAgentId" resultMap="SkillSessionResultMap">
+    <select id="findByAk" resultMap="SkillSessionResultMap">
         <include refid="selectAllColumns"/>
-        WHERE agent_id = #{agentId}
+        WHERE ak = #{ak}
+    </select>
+
+    <select id="findByToolSessionId" resultMap="SkillSessionResultMap">
+        <include refid="selectAllColumns"/>
+        WHERE tool_session_id = #{toolSessionId}
+    </select>
+
+    <select id="findByBusinessSession" resultMap="SkillSessionResultMap">
+        <include refid="selectAllColumns"/>
+        WHERE business_session_domain = #{businessSessionDomain}
+          AND business_session_type = #{businessSessionType}
+          AND business_session_id = #{businessSessionId}
+          AND ak = #{ak}
+        LIMIT 1
     </select>
 
     <select id="findByStatus" resultMap="SkillSessionResultMap">
@@ -71,12 +97,70 @@
         WHERE status = #{status}
     </select>
 
-    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+    <select id="findByUserIdFiltered" resultMap="SkillSessionResultMap">
+        <include refid="selectAllColumns"/>
+        WHERE user_id = #{userId}
+        <if test="ak != null and ak != ''">
+            AND ak = #{ak}
+        </if>
+        <if test="businessSessionDomain != null and businessSessionDomain != ''">
+            AND business_session_domain = #{businessSessionDomain}
+        </if>
+        <if test="businessSessionType != null and businessSessionType != ''">
+            AND business_session_type = #{businessSessionType}
+        </if>
+        <if test="businessSessionId != null and businessSessionId != ''">
+            AND business_session_id = #{businessSessionId}
+        </if>
+        <if test="assistantAccount != null and assistantAccount != ''">
+            AND assistant_account = #{assistantAccount}
+        </if>
+        <if test="statuses != null and statuses.size() > 0">
+            AND status IN
+            <foreach item="s" collection="statuses" open="(" separator="," close=")">
+                #{s}
+            </foreach>
+        </if>
+        ORDER BY last_active_at DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countByUserIdFiltered" resultType="long">
+        SELECT COUNT(*) FROM skill_session
+        WHERE user_id = #{userId}
+        <if test="ak != null and ak != ''">
+            AND ak = #{ak}
+        </if>
+        <if test="businessSessionDomain != null and businessSessionDomain != ''">
+            AND business_session_domain = #{businessSessionDomain}
+        </if>
+        <if test="businessSessionType != null and businessSessionType != ''">
+            AND business_session_type = #{businessSessionType}
+        </if>
+        <if test="businessSessionId != null and businessSessionId != ''">
+            AND business_session_id = #{businessSessionId}
+        </if>
+        <if test="assistantAccount != null and assistantAccount != ''">
+            AND assistant_account = #{assistantAccount}
+        </if>
+        <if test="statuses != null and statuses.size() > 0">
+            AND status IN
+            <foreach item="s" collection="statuses" open="(" separator="," close=")">
+                #{s}
+            </foreach>
+        </if>
+    </select>
+    <insert id="insert">
         INSERT INTO skill_session
-            (user_id, skill_definition_id, agent_id, tool_session_id, title, status, im_chat_id, created_at, last_active_at)
+            (id, user_id, ak, tool_session_id, title, status,
+             business_session_domain, business_session_type,
+             business_session_id, assistant_account,
+             created_at, last_active_at)
         VALUES
-            (#{userId}, #{skillDefinitionId}, #{agentId}, #{toolSessionId}, #{title},
-             #{status}, #{imChatId}, NOW(), NOW())
+            (#{id}, #{userId}, #{ak}, #{toolSessionId}, #{title},
+             #{status}, #{businessSessionDomain}, #{businessSessionType},
+             #{businessSessionId}, #{assistantAccount},
+             NOW(), NOW())
     </insert>
 
     <update id="updateStatus">
@@ -98,11 +182,35 @@
         WHERE id = #{id}
     </update>
 
-    <update id="updateAgentId">
+    <update id="updateAk">
         UPDATE skill_session
-        SET agent_id = #{agentId}
+        SET ak = #{ak}
         WHERE id = #{id}
     </update>
+
+    <update id="updateTitle">
+        UPDATE skill_session
+        SET title = #{title}, last_active_at = NOW()
+        WHERE id = #{id} AND NOT (title <![CDATA[<=>]]> #{title})
+    </update>
+
+    <update id="activateSession">
+        UPDATE skill_session
+        SET status = 'ACTIVE', last_active_at = NOW()
+        WHERE id = #{id} AND status = 'IDLE'
+    </update>
+
+    <update id="clearToolSessionId">
+        UPDATE skill_session
+        SET tool_session_id = NULL, last_active_at = NOW()
+        WHERE id = #{id}
+    </update>
+
+    <select id="findIdleSessionIds" resultType="long">
+        SELECT id FROM skill_session
+        WHERE status = 'ACTIVE'
+          AND last_active_at &lt; #{cutoff}
+    </select>
 
     <update id="markIdleSessions">
         UPDATE skill_session

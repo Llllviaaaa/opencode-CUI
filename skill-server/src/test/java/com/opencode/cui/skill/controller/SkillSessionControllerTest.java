@@ -1,8 +1,11 @@
 package com.opencode.cui.skill.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.service.GatewayRelayService;
+import com.opencode.cui.skill.service.ProtocolException;
+import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillSessionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -11,14 +14,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import org.mockito.ArgumentCaptor;
 
 /**
- * Unit tests for SkillSessionController (plain Mockito, no Spring context).
+ * SkillSessionController 单元测试（纯 Mockito，不加载 Spring 上下文）。
  */
 @ExtendWith(MockitoExtension.class)
 class SkillSessionControllerTest {
@@ -27,41 +30,51 @@ class SkillSessionControllerTest {
     private SkillSessionService sessionService;
     @Mock
     private GatewayRelayService gatewayRelayService;
+    @Mock
+    private SessionAccessControlService accessControlService;
 
     private SkillSessionController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new SkillSessionController(sessionService, gatewayRelayService, new ObjectMapper());
+        controller = new SkillSessionController(sessionService, gatewayRelayService, accessControlService,
+                new ObjectMapper());
     }
 
     @Test
-    @DisplayName("createSession returns 201 CREATED")
-    void createSession201() {
+    @DisplayName("createSession returns 200 OK")
+    void createSession200() {
         SkillSession session = new SkillSession();
         session.setId(1L);
         session.setStatus(SkillSession.Status.ACTIVE);
-        when(sessionService.createSession(any(), any(), any(), any(), any())).thenReturn(session);
+        when(accessControlService.requireUserId("1")).thenReturn("1");
+        when(sessionService.createSession(any(), any(), any(), any(), any(), any(), any())).thenReturn(session);
 
         var request = new SkillSessionController.CreateSessionRequest();
-        request.setUserId(1L);
-        request.setSkillDefinitionId(2L);
-        request.setAgentId(3L);
+        request.setAk("3");
         request.setTitle("Test");
 
-        ResponseEntity<SkillSession> response = controller.createSession(request);
-        assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        var response = controller.createSession("1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
+        assertEquals(0, response.getBody().getCode());
+        assertNotNull(response.getBody().getData());
+        ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
+        assertEquals("3", cmdCaptor.getValue().ak());
+        assertEquals("create_session", cmdCaptor.getValue().action());
+        assertTrue(cmdCaptor.getValue().payload().contains("Test"));
     }
 
     @Test
-    @DisplayName("createSession returns 400 when userId is null")
+    @DisplayName("createSession throws ProtocolException when userId is null")
     void createSessionBadRequest() {
         var request = new SkillSessionController.CreateSessionRequest();
-        // userId is null
+        when(accessControlService.requireUserId(null)).thenThrow(new ProtocolException(400, "userId is required"));
 
-        ResponseEntity<SkillSession> response = controller.createSession(request);
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        ProtocolException ex = assertThrows(ProtocolException.class,
+                () -> controller.createSession(null, request));
+        assertEquals(400, ex.getCode());
     }
 
     @Test
@@ -69,20 +82,20 @@ class SkillSessionControllerTest {
     void getSession200() {
         SkillSession session = new SkillSession();
         session.setId(42L);
-        when(sessionService.getSession(42L)).thenReturn(session);
+        when(accessControlService.requireSessionAccess(42L, "1")).thenReturn(session);
 
-        ResponseEntity<SkillSession> response = controller.getSession(42L);
+        var response = controller.getSession("1", "42");
         assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertEquals(42L, response.getBody().getId());
+        assertEquals(42L, response.getBody().getData().getId());
     }
 
     @Test
-    @DisplayName("getSession returns 404 when not found")
+    @DisplayName("getSession throws when not found")
     void getSession404() {
-        when(sessionService.getSession(999L)).thenThrow(new IllegalArgumentException("Not found"));
+        when(accessControlService.requireSessionAccess(999L, "1")).thenThrow(new IllegalArgumentException("Not found"));
 
-        ResponseEntity<SkillSession> response = controller.getSession(999L);
-        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+        assertThrows(IllegalArgumentException.class,
+                () -> controller.getSession("1", "999"));
     }
 
     @Test
@@ -91,11 +104,13 @@ class SkillSessionControllerTest {
         SkillSession session = new SkillSession();
         session.setId(42L);
         session.setStatus(SkillSession.Status.ACTIVE);
-        when(sessionService.getSession(42L)).thenReturn(session);
+        when(accessControlService.requireSessionAccess(42L, "1")).thenReturn(session);
 
-        var response = controller.closeSession(42L);
+        var response = controller.closeSession("1", "42");
         assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals("42", response.getBody().getData().get("welinkSessionId"));
         verify(sessionService).closeSession(42L);
+        verify(gatewayRelayService, never()).publishProtocolMessage(anyString(), any());
     }
 
     @Test
@@ -103,11 +118,47 @@ class SkillSessionControllerTest {
     void closeSessionSendsGatewayInvoke() {
         SkillSession session = new SkillSession();
         session.setId(42L);
-        session.setAgentId(99L);
+        session.setAk("99");
+        session.setUserId("1");
         session.setToolSessionId("ts-abc");
-        when(sessionService.getSession(42L)).thenReturn(session);
+        when(accessControlService.requireSessionAccess(42L, "1")).thenReturn(session);
 
-        controller.closeSession(42L);
-        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("42"), eq("close_session"), any());
+        controller.closeSession("1", "42");
+        ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
+        assertEquals("99", cmdCaptor.getValue().ak());
+        assertEquals("close_session", cmdCaptor.getValue().action());
+    }
+
+    @Test
+    @DisplayName("abortSession returns 200 and sends abort_session invoke")
+    void abortSession200() {
+        SkillSession session = new SkillSession();
+        session.setId(42L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("ts-abc");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(42L, "1")).thenReturn(session);
+
+        var response = controller.abortSession("1", "42");
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals("aborted", response.getBody().getData().get("status"));
+        assertEquals("42", response.getBody().getData().get("welinkSessionId"));
+        ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
+        assertEquals("99", cmdCaptor.getValue().ak());
+        assertEquals("abort_session", cmdCaptor.getValue().action());
+        verify(sessionService, never()).closeSession(anyLong());
+        verify(gatewayRelayService, never()).publishProtocolMessage(anyString(), any());
+    }
+
+    @Test
+    @DisplayName("abortSession throws when session not found")
+    void abortSession404() {
+        when(accessControlService.requireSessionAccess(999L, "1")).thenThrow(new IllegalArgumentException("Not found"));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> controller.abortSession("1", "999"));
     }
 }

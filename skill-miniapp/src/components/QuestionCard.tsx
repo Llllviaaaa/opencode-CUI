@@ -1,25 +1,45 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { MessagePart } from '../protocol/types';
 
 interface QuestionCardProps {
     part: MessagePart;
-    onAnswer?: (answer: string) => void;
+    onAnswer?: (answer: string, toolCallId?: string, subagentSessionId?: string) => void;
 }
 
 export const QuestionCard: React.FC<QuestionCardProps> = ({ part, onAnswer }) => {
+    const optionLabels = part.options?.map((opt) => opt.label) ?? [];
     const [customInput, setCustomInput] = useState('');
-    const [answered, setAnswered] = useState(part.answered ?? false);
+    const [selectedAnswer, setSelectedAnswer] = useState(part.toolOutput ?? undefined);
+    const [answered, setAnswered] = useState(
+        Boolean(part.answered || part.toolStatus === 'completed' || part.toolStatus === 'error'),
+    );
 
-    const handleSelect = (option: string) => {
+    useEffect(() => {
+        setAnswered(Boolean(part.answered || part.toolStatus === 'completed' || part.toolStatus === 'error'));
+    }, [part.answered, part.partId, part.toolStatus]);
+
+    useEffect(() => {
+        const output = part.toolOutput;
+        setSelectedAnswer(output ?? undefined);
+        if (typeof output === 'string' && !optionLabels.includes(output)) {
+            setCustomInput(output);
+        }
+    }, [optionLabels, part.partId, part.toolOutput]);
+
+    const handleSelect = (label: string) => {
         if (answered) return;
         setAnswered(true);
-        onAnswer?.(option);
+        setSelectedAnswer(label);
+        onAnswer?.(label, part.toolCallId, part.subagentSessionId);
     };
 
     const handleSubmit = () => {
         if (answered || !customInput.trim()) return;
+        const answer = customInput.trim();
         setAnswered(true);
-        onAnswer?.(customInput.trim());
+        setCustomInput(answer);
+        setSelectedAnswer(answer);
+        onAnswer?.(answer, part.toolCallId, part.subagentSessionId);
     };
 
     return (
@@ -28,9 +48,16 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ part, onAnswer }) =>
                 <div className="question-card__header">{part.header}</div>
             )}
             <div className="question-card__question">
-                <span className="question-card__icon">❓</span>
+                {part.subagentName && (
+                    <span className="question-card__source">[{part.subagentName}]</span>
+                )}
+                <span className="question-card__icon">?</span>
                 {part.question ?? part.content}
             </div>
+
+            {answered && selectedAnswer && (
+                <div className="question-card__status">已选择：{selectedAnswer}</div>
+            )}
 
             {part.options && part.options.length > 0 && (
                 <div className="question-card__options">
@@ -38,24 +65,26 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ part, onAnswer }) =>
                         <button
                             key={i}
                             className="question-card__option"
-                            onClick={() => handleSelect(opt)}
+                            onClick={() => handleSelect(opt.label)}
                             disabled={answered}
                         >
-                            {opt}
+                            <span className="question-card__option-label">{opt.label}</span>
+                            {opt.description && (
+                                <span className="question-card__option-desc">{opt.description}</span>
+                            )}
                         </button>
                     ))}
                 </div>
             )}
 
             <div className="question-card__input-group">
-                <input
-                    type="text"
+                <textarea
                     className="question-card__input"
                     placeholder="输入自定义回答..."
                     value={customInput}
                     onChange={(e) => setCustomInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
                     disabled={answered}
+                    rows={3}
                 />
                 <button
                     className="question-card__submit"
@@ -66,8 +95,8 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ part, onAnswer }) =>
                 </button>
             </div>
 
-            {answered && (
-                <div className="question-card__status">✅ 已回答</div>
+            {answered && !selectedAnswer && (
+                <div className="question-card__status">已回答</div>
             )}
         </div>
     );

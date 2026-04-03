@@ -13,24 +13,30 @@ import org.springframework.web.client.RestTemplate;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * IM 消息发送服务。
+ * 通过平台 REST API 向 IM 聊天发送文本消息。
+ */
 @Slf4j
 @Service
 public class ImMessageService {
 
     private final RestTemplate restTemplate;
+    /** IM 平台 API 根地址 */
     private final String imApiUrl;
 
-    public ImMessageService(@Value("${skill.im.api-url}") String imApiUrl) {
-        this.restTemplate = new RestTemplate();
+    public ImMessageService(RestTemplate restTemplate,
+            @Value("${skill.im.api-url}") String imApiUrl) {
+        this.restTemplate = restTemplate;
         this.imApiUrl = imApiUrl;
     }
 
     /**
-     * Send a message to an IM chat via the platform API.
+     * 向 IM 聊天发送文本消息。
      *
-     * @param chatId  the IM chat identifier
-     * @param content the text content to send
-     * @return true if the message was sent successfully
+     * @param chatId  IM 会话标识
+     * @param content 文本内容
+     * @return 发送成功返回 true
      */
     public boolean sendMessage(String chatId, String content) {
         if (chatId == null || chatId.isBlank()) {
@@ -55,17 +61,18 @@ public class ImMessageService {
         HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
 
         try {
-            ResponseEntity<String> response = restTemplate.postForEntity(sendUrl, request, String.class);
+            ResponseEntity<String> response = com.opencode.cui.skill.logging.LogTimer.timed(
+                    log, "ImMessage.send(chatId=" + chatId + ")",
+                    () -> restTemplate.postForEntity(sendUrl, request, String.class));
             if (response.getStatusCode().is2xxSuccessful()) {
                 log.info("IM message sent successfully: chatId={}, contentLength={}", chatId, content.length());
                 return true;
             } else {
-                log.error("IM message send failed: chatId={}, status={}, body={}",
-                        chatId, response.getStatusCode(), response.getBody());
+                log.error("IM message send failed: chatId={}, status={}", chatId, response.getStatusCode());
                 return false;
             }
         } catch (RestClientException e) {
-            log.error("IM message send error: chatId={}, error={}", chatId, e.getMessage(), e);
+            log.error("IM message send error: chatId={}, error={}", chatId, e.getMessage());
             return false;
         }
     }

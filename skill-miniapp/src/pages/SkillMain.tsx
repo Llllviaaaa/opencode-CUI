@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SessionSidebar } from '../components/SessionSidebar';
 import { ConversationView } from '../components/ConversationView';
 import { MessageInput } from '../components/MessageInput';
@@ -8,18 +8,17 @@ import { useSkillSession } from '../hooks/useSkillSession';
 import { useSkillStream } from '../hooks/useSkillStream';
 import { useSendToIm } from '../hooks/useSendToIm';
 import { useAgentSelector } from '../hooks/useAgentSelector';
+import { MINIAPP_SESSION_DOMAIN, MINIAPP_SESSION_TYPE } from '../constants/session';
 
 interface SkillMainProps {
   onCollapse: () => void;
-  /** Current user ID for session filtering. */
-  userId: string;
   /** Pre-selected session ID (e.g. from the initial SKILL trigger flow). */
   initialSessionId?: string | null;
   /** IM chat ID for the "send to IM" feature. */
   imChatId?: string;
 }
 
-const SKILL_DEFINITION_ID = 1; // OpenCode skill definition
+
 
 const styles: Record<string, React.CSSProperties> = {
   overlay: {
@@ -111,12 +110,12 @@ const agentStatusConfig: Record<
 
 export const SkillMain: React.FC<SkillMainProps> = ({
   onCollapse,
-  userId,
   initialSessionId,
   imChatId = '',
 }) => {
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const conversationContainerRef = useRef<HTMLDivElement | null>(null);
+  const pendingInitialMessageRef = useRef<string | null>(null);
 
   // Session management
   const {
@@ -126,8 +125,9 @@ export const SkillMain: React.FC<SkillMainProps> = ({
     error: sessionError,
     createSession,
     switchSession,
+    updateSessionTitle,
     // closeSession is available for future use (FR-5.3)
-  } = useSkillSession(userId);
+  } = useSkillSession();
 
   // Determine active session ID (prefer current session, fall back to initial)
   const activeSessionId = currentSession?.id ?? initialSessionId ?? null;
@@ -142,11 +142,14 @@ export const SkillMain: React.FC<SkillMainProps> = ({
   // Streaming
   const {
     messages,
-    isStreaming,
     agentStatus,
+    socketReady,
     sendMessage,
+    replyPermission,
     error: streamError,
-  } = useSkillStream(activeSessionId);
+  } = useSkillStream(activeSessionId, {
+    onSessionTitleUpdate: updateSessionTitle,
+  });
 
   // Send to IM
   const {
@@ -162,32 +165,44 @@ export const SkillMain: React.FC<SkillMainProps> = ({
     selectedAgent,
     selectAgent,
     loading: agentsLoading,
-  } = useAgentSelector(userId);
+  } = useAgentSelector();
 
   const handleNewSession = useCallback(async () => {
     if (!selectedAgent) return;
     await createSession({
-      skillDefinitionId: SKILL_DEFINITION_ID,
-      agentId: selectedAgent.id,
+      ak: selectedAgent.ak,
       title: `Session ${new Date().toLocaleString()}`,
-      imChatId,
+      businessSessionDomain: MINIAPP_SESSION_DOMAIN,
+      businessSessionType: MINIAPP_SESSION_TYPE,
+      businessSessionId: imChatId || undefined,
     });
   }, [createSession, imChatId, selectedAgent]);
+
+  useEffect(() => {
+    if (!activeSessionId || !socketReady || !pendingInitialMessageRef.current) {
+      return;
+    }
+
+    const text = pendingInitialMessageRef.current;
+    pendingInitialMessageRef.current = null;
+    void sendMessage(text);
+  }, [activeSessionId, socketReady, sendMessage]);
 
   const handleSendMessage = useCallback(
     async (text: string) => {
       if (!selectedAgent) return;
       // Auto-create a session if none exists
       if (!activeSessionId) {
+        pendingInitialMessageRef.current = text;
         const session = await createSession({
-          skillDefinitionId: SKILL_DEFINITION_ID,
-          agentId: selectedAgent.id,
+          ak: selectedAgent.ak,
           title: text.slice(0, 50),
-          imChatId,
+          businessSessionDomain: MINIAPP_SESSION_DOMAIN,
+          businessSessionType: MINIAPP_SESSION_TYPE,
+          businessSessionId: imChatId || undefined,
         });
-        if (session) {
-          // The hook will reconnect with the new session; send after a tick
-          setTimeout(() => void sendMessage(text), 100);
+        if (!session) {
+          pendingInitialMessageRef.current = null;
         }
         return;
       }
@@ -203,8 +218,36 @@ export const SkillMain: React.FC<SkillMainProps> = ({
     [sendToIm, imChatId],
   );
 
+  const handleQuestionAnswer = useCallback(
+    (answer: string, toolCallId?: string) => {
+      if (!activeSessionId) {
+        void handleSendMessage(answer);
+        return;
+      }
+      void sendMessage(answer, toolCallId ? { toolCallId } : undefined);
+    },
+    [activeSessionId, handleSendMessage, sendMessage],
+  );
+
+  const handlePermissionDecision = useCallback(
+    (permissionId: string, response: 'once' | 'always' | 'reject', subagentSessionId?: string) => {
+      void replyPermission(permissionId, response, subagentSessionId);
+    },
+    [replyPermission],
+  );
+
   const displayError = sessionError ?? streamError ?? imError;
-  const statusCfg = agentStatusConfig[agentStatus] ?? agentStatusConfig.unknown;
+  const resolvedAgentStatus =
+    !socketReady
+      ? 'unknown'
+      : agentStatus !== 'unknown'
+        ? agentStatus
+        : selectedAgent
+          ? 'online'
+          : agentsLoading
+            ? 'unknown'
+            : 'offline';
+  const statusCfg = agentStatusConfig[resolvedAgentStatus] ?? agentStatusConfig.unknown;
 
   return (
     <div style={styles.overlay}>
@@ -255,6 +298,8 @@ export const SkillMain: React.FC<SkillMainProps> = ({
             <ConversationView
               messages={messages}
               loading={sessionsLoading}
+              onQuestionAnswer={handleQuestionAnswer}
+              onPermissionDecision={handlePermissionDecision}
             />
           </div>
           <AgentSelector
@@ -265,7 +310,7 @@ export const SkillMain: React.FC<SkillMainProps> = ({
           />
           <MessageInput
             onSend={handleSendMessage}
-            disabled={isStreaming || !selectedAgent}
+            disabled={!selectedAgent}
             placeholder={
               !selectedAgent
                 ? '请先选择 Agent...'

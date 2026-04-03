@@ -1,4 +1,5 @@
-import type { Session, Message } from '../protocol/types';
+import type { Session, Message, MessageHistoryPage } from '../protocol/types';
+import { ensureDevUserIdCookie } from './devAuth';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -37,6 +38,7 @@ async function request<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
+  ensureDevUserIdCookie();
   const url = `${baseURL}${path}`;
 
   const headers: Record<string, string> = {
@@ -44,7 +46,11 @@ async function request<T>(
     ...(options.headers as Record<string, string> | undefined),
   };
 
-  const res = await fetch(url, { ...options, headers });
+  const res = await fetch(url, {
+    credentials: options.credentials ?? 'include',
+    ...options,
+    headers,
+  });
 
   if (!res.ok) {
     let body: unknown;
@@ -53,7 +59,16 @@ async function request<T>(
     } catch {
       /* ignore parse errors */
     }
-    throw new ApiError(res.status, res.statusText, body);
+
+    const errorText =
+      body !== null &&
+        typeof body === 'object' &&
+        'errormsg' in body &&
+        typeof body.errormsg === 'string'
+        ? body.errormsg
+        : res.statusText;
+
+    throw new ApiError(res.status, errorText, body);
   }
 
   // 204 No Content
@@ -61,7 +76,22 @@ async function request<T>(
     return undefined as T;
   }
 
-  return res.json() as Promise<T>;
+  const json = await res.json();
+
+  // Auto-unwrap ApiResponse wrapper: { code, errormsg, data }
+  if (
+    json !== null &&
+    typeof json === 'object' &&
+    'code' in json &&
+    'data' in json
+  ) {
+    if (json.code !== 0) {
+      throw new ApiError(res.status, json.errormsg ?? 'Unknown error', json);
+    }
+    return json.data as T;
+  }
+
+  return json as T;
 }
 
 // ---------------------------------------------------------------------------
@@ -88,8 +118,9 @@ export function getDefinitions(): Promise<SkillDefinition[]> {
 // ---------------------------------------------------------------------------
 
 export interface AgentInfo {
-  id: number;
-  userId: number;
+  id: string;
+  userId?: string;
+  ak: string;
   deviceName: string;
   os: string;
   toolType: string;
@@ -97,9 +128,48 @@ export interface AgentInfo {
   status: string;
 }
 
-/** GET /api/skill/agents?userId={userId} */
-export function getOnlineAgents(userId: string): Promise<AgentInfo[]> {
-  return request<AgentInfo[]>(`/api/skill/agents?userId=${userId}`);
+interface RawAgentInfo {
+  id?: string | number | null;
+  userId?: string | number | null;
+  akId?: string | null;
+  ak?: string | null;
+  deviceName?: string | null;
+  os?: string | null;
+  toolType?: string | null;
+  toolVersion?: string | null;
+  status?: string | null;
+}
+
+function normalizeAgent(raw: RawAgentInfo): AgentInfo | null {
+  const ak = raw.ak?.trim() || raw.akId?.trim() || '';
+  if (!ak) {
+    return null;
+  }
+
+  const normalizedUserId =
+    raw.userId == null || raw.userId === ''
+      ? undefined
+      : String(raw.userId);
+
+  return {
+    id: raw.id != null ? String(raw.id) : ak,
+    userId: normalizedUserId,
+    ak,
+    deviceName: raw.deviceName?.trim() || ak,
+    os: raw.os?.trim() || 'UNKNOWN',
+    toolType: raw.toolType?.trim() || 'UNKNOWN',
+    toolVersion: raw.toolVersion?.trim() || '',
+    status: raw.status?.trim() || 'UNKNOWN',
+  };
+}
+
+/** GET /api/skill/agents */
+export function getOnlineAgents(): Promise<AgentInfo[]> {
+  return request<RawAgentInfo[]>('/api/skill/agents').then((agents) =>
+    agents
+      .map((agent) => normalizeAgent(agent))
+      .filter((agent): agent is AgentInfo => agent !== null),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -107,11 +177,12 @@ export function getOnlineAgents(userId: string): Promise<AgentInfo[]> {
 // ---------------------------------------------------------------------------
 
 export interface CreateSessionParams {
-  userId?: number;
-  skillDefinitionId: number;
-  agentId: number;
+  ak: string;
   title?: string;
-  imChatId?: string;
+  businessSessionDomain?: string;
+  businessSessionType?: string;
+  businessSessionId?: string;
+  assistantAccount?: string;
 }
 
 interface PaginatedResponse<T> {
@@ -122,32 +193,78 @@ interface PaginatedResponse<T> {
   size: number;
 }
 
+interface BackendSession {
+  welinkSessionId?: string | number | null;
+  userId?: string | null;
+  ak?: string | null;
+  title?: string | null;
+  businessSessionDomain?: string | null;
+  businessSessionType?: string | null;
+  businessSessionId?: string | null;
+  assistantAccount?: string | null;
+  status?: string | null;
+  toolSessionId?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+function normalizeSessionStatus(status: string | null | undefined): Session['status'] {
+  switch (status?.toUpperCase()) {
+    case 'ACTIVE':
+      return 'active';
+    case 'CLOSED':
+      return 'closed';
+    default:
+      return 'idle';
+  }
+}
+
+function normalizeSession(raw: BackendSession): Session {
+  const createdAt = raw.createdAt ?? new Date().toISOString();
+  return {
+    id: raw.welinkSessionId != null ? String(raw.welinkSessionId) : '0',
+    userId: raw.userId ?? undefined,
+    ak: raw.ak ?? undefined,
+    title: raw.title ?? '',
+    businessSessionDomain: raw.businessSessionDomain ?? undefined,
+    businessSessionType: raw.businessSessionType ?? undefined,
+    businessSessionId: raw.businessSessionId ?? undefined,
+    assistantAccount: raw.assistantAccount ?? undefined,
+    status: normalizeSessionStatus(raw.status),
+    toolSessionId: raw.toolSessionId ?? undefined,
+    createdAt,
+    updatedAt: raw.updatedAt ?? createdAt,
+  };
+}
+
 /** POST /api/skill/sessions */
 export function createSession(params: CreateSessionParams): Promise<Session> {
-  return request<Session>('/api/skill/sessions', {
+  return request<BackendSession>('/api/skill/sessions', {
     method: 'POST',
     body: JSON.stringify(params),
-  });
+  }).then(normalizeSession);
 }
 
 /** GET /api/skill/sessions */
 export function getSessions(
-  userId: string,
   page = 0,
   size = 20,
 ): Promise<PaginatedResponse<Session>> {
-  return request<PaginatedResponse<Session>>(
-    `/api/skill/sessions?userId=${userId}&page=${page}&size=${size}`,
-  );
+  return request<PaginatedResponse<BackendSession>>(
+    `/api/skill/sessions?page=${page}&size=${size}`,
+  ).then((pageResult) => ({
+    ...pageResult,
+    content: pageResult.content.map(normalizeSession),
+  }));
 }
 
 /** GET /api/skill/sessions/{id} */
-export function getSession(id: string): Promise<Session> {
-  return request<Session>(`/api/skill/sessions/${id}`);
+export function getSession(id: string | number): Promise<Session> {
+  return request<BackendSession>(`/api/skill/sessions/${id}`).then(normalizeSession);
 }
 
 /** DELETE /api/skill/sessions/{id} */
-export function closeSession(id: string): Promise<void> {
+export function closeSession(id: string | number): Promise<void> {
   return request<void>(`/api/skill/sessions/${id}`, { method: 'DELETE' });
 }
 
@@ -157,23 +274,55 @@ export function closeSession(id: string): Promise<void> {
 
 /** POST /api/skill/sessions/{id}/messages */
 export function sendMessage(
-  sessionId: string,
+  sessionId: string | number,
   content: string,
+  toolCallId?: string,
 ): Promise<Message> {
   return request<Message>(`/api/skill/sessions/${sessionId}/messages`, {
     method: 'POST',
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(toolCallId ? { content, toolCallId } : { content }),
   });
 }
 
 /** GET /api/skill/sessions/{id}/messages */
 export function getMessages(
-  sessionId: string,
+  sessionId: string | number,
   page = 0,
   size = 50,
 ): Promise<PaginatedResponse<Message>> {
   return request<PaginatedResponse<Message>>(
     `/api/skill/sessions/${sessionId}/messages?page=${page}&size=${size}`,
+  );
+}
+
+/** GET /api/skill/sessions/{id}/messages/history */
+export function getMessageHistory(
+  sessionId: string | number,
+  size = 50,
+  beforeSeq?: number,
+): Promise<MessageHistoryPage<Message>> {
+  const query = new URLSearchParams({ size: String(size) });
+  if (beforeSeq != null) {
+    query.set('beforeSeq', String(beforeSeq));
+  }
+  return request<MessageHistoryPage<Message>>(
+    `/api/skill/sessions/${sessionId}/messages/history?${query.toString()}`,
+  );
+}
+
+/** POST /api/skill/sessions/{id}/permissions/{permId} */
+export function replyPermission(
+  sessionId: string | number,
+  permissionId: string,
+  response: 'once' | 'always' | 'reject',
+  subagentSessionId?: string,
+): Promise<{ welinkSessionId: string; permissionId: string; response: string }> {
+  return request<{ welinkSessionId: string; permissionId: string; response: string }>(
+    `/api/skill/sessions/${sessionId}/permissions/${permissionId}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ response, subagentSessionId }),
+    },
   );
 }
 
@@ -183,7 +332,7 @@ export function getMessages(
 
 /** POST /api/skill/sessions/{id}/send-to-im */
 export function sendToIm(
-  sessionId: string,
+  sessionId: string | number,
   content: string,
   chatId: string,
 ): Promise<void> {

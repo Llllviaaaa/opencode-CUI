@@ -8,6 +8,15 @@ target/
 build/
 dist/
 node_modules/
+!.planning/
+.planning/*
+!.planning/PROJECT.md
+!.planning/REQUIREMENTS.md
+!.planning/ROADMAP.md
+!.planning/STATE.md
+!.planning/config.json
+!.planning/phases/
+!.planning/phases/**
 
 # OS
 .DS_Store
@@ -15,6 +24,7 @@ Thumbs.db
 
 # Claude Code / OMC internal state
 .claude/
+.opencode/
 .omc/
 
 # Environment
@@ -23,3 +33,13 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Agent config
+.agent/
+.agents/
+CLAUDE.md
+AGENTS.md
+documents/.obsidian/
+.ace-tool/
+.trellis/
+.gstack/

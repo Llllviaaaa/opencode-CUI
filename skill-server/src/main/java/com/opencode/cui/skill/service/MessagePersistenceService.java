@@ -10,242 +10,423 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
 /**
- * Persists streaming messages to the database.
- * <p>
- * Strategy: Only persist FINAL states, not intermediate deltas.
- * <ul>
- * <li>text.done / thinking.done → persist full content</li>
- * <li>tool.update (completed/error) → persist final tool state</li>
- * <li>question (running) → persist question (needs user response)</li>
- * <li>file → persist immediately</li>
- * <li>step.done → update message-level token stats</li>
- * <li>text.delta / thinking.delta → SKIP (intermediate)</li>
- * <li>tool.update (pending/running) → SKIP (intermediate)</li>
- * </ul>
+ * 流式消息持久化服务。
+ * 负责将 AI Gateway 返回的流式消息（文本、工具调用、权限、文件等）持久化到数据库。
+ * 
+ * InboundController 直接使用的方法：
+ * - {@link #finalizeActiveAssistantTurn} — 结束当前助手回复轮次
  */
 @Slf4j
 @Service
 public class MessagePersistenceService {
 
-    private final SkillMessageService messageService;
-    private final SkillMessagePartRepository partRepository;
-    private final ObjectMapper objectMapper;
-
-    /**
-     * Tracks the current assistant message ID per session.
-     * When a new assistant turn starts (first part), we create a message row.
-     * Subsequent parts in the same turn attach to the same message ID.
-     */
-    private final ConcurrentHashMap<Long, Long> activeMessageIds = new ConcurrentHashMap<>();
+    private final SkillMessageService messageService; // 消息 CRUD 服务
+    private final SkillMessagePartRepository partRepository; // 消息片段持久化仓库
+    private final ObjectMapper objectMapper; // JSON 序列化
+    private final SnowflakeIdGenerator snowflakeIdGenerator; // 分布式 ID 生成器
+    private final ActiveMessageTracker tracker; // 活跃消息状态追踪器
 
     public MessagePersistenceService(SkillMessageService messageService,
             SkillMessagePartRepository partRepository,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            SnowflakeIdGenerator snowflakeIdGenerator,
+            ActiveMessageTracker tracker) {
         this.messageService = messageService;
         this.partRepository = partRepository;
         this.objectMapper = objectMapper;
+        this.snowflakeIdGenerator = snowflakeIdGenerator;
+        this.tracker = tracker;
+    }
+
+    /** 为流式消息准备消息上下文（解析或创建活跃消息引用） */
+    @Transactional
+    public void prepareMessageContext(Long sessionId, StreamMessage msg) {
+        if (msg == null || msg.getType() == null || !requiresMessageContext(msg)) {
+            return;
+        }
+        tracker.resolveActiveMessage(sessionId, msg);
     }
 
     /**
-     * Persist a StreamMessage if it represents a final state.
-     * Called from GatewayRelayService after broadcasting.
-     *
-     * @param sessionId the skill session ID
-     * @param msg       the translated StreamMessage
+     * 当流式消息到达终态时，持久化到数据库。
+     * 根据消息类型分发到不同的持久化方法。
      */
     @Transactional
     public void persistIfFinal(Long sessionId, StreamMessage msg) {
-        if (msg == null || msg.getType() == null)
+        if (msg == null || msg.getType() == null) {
             return;
+        }
 
-        switch (msg.getType()) {
-            case StreamMessage.Types.TEXT_DONE -> persistTextPart(sessionId, msg, "text");
-            case StreamMessage.Types.THINKING_DONE -> persistTextPart(sessionId, msg, "reasoning");
-            case StreamMessage.Types.TOOL_UPDATE -> persistToolPartIfFinal(sessionId, msg);
-            case StreamMessage.Types.QUESTION -> persistToolPart(sessionId, msg);
-            case StreamMessage.Types.FILE -> persistFilePart(sessionId, msg);
-            case StreamMessage.Types.STEP_DONE -> persistStepDone(sessionId, msg);
-            case StreamMessage.Types.SESSION_STATUS -> handleSessionStatus(sessionId, msg);
-            default -> {
-                // text.delta, thinking.delta, step.start, etc. → skip persistence
+        ActiveMessageTracker.ActiveMessageRef active = requiresMessageContext(msg)
+                ? tracker.resolveActiveMessage(sessionId, msg)
+                : null;
+
+        boolean refreshed = switch (msg.getType()) {
+            case StreamMessage.Types.TEXT_DONE -> persistTextPart(sessionId, msg, "text", active);
+            case StreamMessage.Types.THINKING_DONE -> persistTextPart(sessionId, msg, "reasoning", active);
+            case StreamMessage.Types.TOOL_UPDATE -> persistToolPartIfFinal(sessionId, msg, active);
+            case StreamMessage.Types.QUESTION -> persistToolPart(sessionId, msg, active);
+            case StreamMessage.Types.PERMISSION_ASK, StreamMessage.Types.PERMISSION_REPLY ->
+                persistPermissionPart(sessionId, msg, active);
+            case StreamMessage.Types.FILE -> persistFilePart(sessionId, msg, active);
+            case StreamMessage.Types.STEP_DONE -> persistStepDone(sessionId, msg, active);
+            case StreamMessage.Types.SESSION_STATUS -> {
+                handleSessionStatus(sessionId, msg);
+                yield false;
             }
+            default -> false;
+        };
+        if (refreshed) {
+            messageService.scheduleLatestHistoryRefreshAfterCommit(sessionId);
         }
     }
 
-    /**
-     * Get or create the active assistant message for a session.
-     */
-    private Long getOrCreateMessageId(Long sessionId) {
-        return activeMessageIds.computeIfAbsent(sessionId, sid -> {
-            SkillMessage message = messageService.saveMessage(
-                    sid,
-                    SkillMessage.Role.ASSISTANT,
-                    "", // content will be updated later or left empty
-                    SkillMessage.ContentType.MARKDOWN,
-                    null);
-            log.debug("Created new assistant message for session {}: messageId={}", sid, message.getId());
-            return message.getId();
-        });
+    // ==================== 助手消息轮次跟踪方法（委派给 ActiveMessageTracker）====================
+
+    /** 清除会话的活跃消息状态 */
+    public void clearSession(Long sessionId) {
+        tracker.clearSession(sessionId);
     }
 
-    /**
-     * Persist a completed text or reasoning part.
-     */
-    private void persistTextPart(Long sessionId, StreamMessage msg, String partType) {
-        Long messageId = getOrCreateMessageId(sessionId);
-        int nextSeq = partRepository.findMaxSeqByMessageId(messageId) + 1;
+
+    @Transactional(readOnly = true)
+    public StreamMessage synthesizePermissionReplyFromToolOutcome(Long sessionId, StreamMessage msg) {
+        String inferredResponse = inferPermissionResponseFromToolOutcome(msg);
+        if (inferredResponse == null) {
+            return null;
+        }
+
+        SkillMessagePart pendingPart = partRepository.findLatestPendingPermissionPart(sessionId);
+        if (pendingPart == null) {
+            return null;
+        }
+
+        SkillMessage ownerMessage = messageService.findById(pendingPart.getMessageId());
+        String protocolMessageId = ownerMessage != null ? ownerMessage.getMessageId() : null;
+
+        return StreamMessage.builder()
+                .type(StreamMessage.Types.PERMISSION_REPLY)
+                .messageId(protocolMessageId)
+                .sourceMessageId(protocolMessageId)
+                .partId(pendingPart.getPartId())
+                .partSeq(pendingPart.getSeq())
+                .role("assistant")
+                .status("completed")
+                .title(pendingPart.getContent())
+                .permission(StreamMessage.PermissionInfo.builder()
+                        .permissionId(pendingPart.getToolCallId())
+                        .permType(pendingPart.getToolName())
+                        .response(inferredResponse)
+                        .build())
+                .build();
+    }
+
+    /** 结束当前活跃的助手回复轮次（在 ImInboundController 中发送新消息前调用） */
+    @Transactional
+    public void finalizeActiveAssistantTurn(Long sessionId) {
+        tracker.finalizeActiveAssistantTurn(sessionId);
+        messageService.scheduleLatestHistoryRefreshAfterCommit(sessionId);
+    }
+
+    // ==================== 持久化逻辑 ====================
+
+    private boolean persistTextPart(Long sessionId, StreamMessage msg, String partType,
+            ActiveMessageTracker.ActiveMessageRef active) {
+        if (active == null) {
+            return false;
+        }
 
         SkillMessagePart part = SkillMessagePart.builder()
-                .messageId(messageId)
+                .id(snowflakeIdGenerator.nextId())
+                .messageId(active.dbId())
                 .sessionId(sessionId)
-                .partId(msg.getPartId() != null ? msg.getPartId() : partType + "-" + nextSeq)
-                .seq(nextSeq)
+                .partId(msg.getPartId() != null ? msg.getPartId() : partType + "-" + active.messageSeq())
+                .seq(resolvePartSeq(sessionId, active.dbId(), msg))
                 .partType(partType)
                 .content(msg.getContent())
+                .subagentSessionId(msg.getSubagentSessionId())
+                .subagentName(msg.getSubagentName())
                 .build();
 
         partRepository.upsert(part);
-        log.debug("Persisted {} part: sessionId={}, partId={}", partType, sessionId, part.getPartId());
+        log.debug("Persisted {} part: sessionId={}, protocolId={}, partId={}",
+                partType, sessionId, active.protocolMessageId(), part.getPartId());
+
+        if ("text".equals(partType)) {
+            syncMessageContent(active);
+        }
+        return true;
     }
 
-    /**
-     * Persist a tool part only if it's in a final state (completed or error).
-     */
-    private void persistToolPartIfFinal(Long sessionId, StreamMessage msg) {
+    private boolean persistToolPartIfFinal(Long sessionId, StreamMessage msg,
+            ActiveMessageTracker.ActiveMessageRef active) {
         String status = msg.getStatus();
         if ("completed".equals(status) || "error".equals(status)) {
-            persistToolPart(sessionId, msg);
+            return persistToolPart(sessionId, msg, active);
         }
-        // pending / running → skip
+        return false;
     }
 
-    /**
-     * Persist a tool part (any status — used for question and final tool states).
-     */
-    private void persistToolPart(Long sessionId, StreamMessage msg) {
-        Long messageId = getOrCreateMessageId(sessionId);
-        int nextSeq = partRepository.findMaxSeqByMessageId(messageId) + 1;
+    private boolean persistToolPart(Long sessionId, StreamMessage msg,
+            ActiveMessageTracker.ActiveMessageRef active) {
+        if (active == null) {
+            return false;
+        }
 
         String inputJson = null;
-        if (msg.getInput() != null) {
+        var tool = msg.getTool();
+        if (tool != null && tool.getInput() != null) {
             try {
-                inputJson = objectMapper.writeValueAsString(msg.getInput());
+                inputJson = objectMapper.writeValueAsString(tool.getInput());
             } catch (JsonProcessingException e) {
                 log.warn("Failed to serialize tool input: {}", e.getMessage());
             }
         }
 
         SkillMessagePart part = SkillMessagePart.builder()
-                .messageId(messageId)
+                .id(snowflakeIdGenerator.nextId())
+                .messageId(active.dbId())
                 .sessionId(sessionId)
-                .partId(msg.getPartId() != null ? msg.getPartId() : "tool-" + nextSeq)
-                .seq(nextSeq)
+                .partId(msg.getPartId() != null ? msg.getPartId() : "tool-" + active.messageSeq())
+                .seq(resolvePartSeq(sessionId, active.dbId(), msg))
                 .partType("tool")
-                .toolName(msg.getToolName())
-                .toolCallId(msg.getToolCallId())
+                .toolName(tool != null ? tool.getToolName() : null)
+                .toolCallId(tool != null ? tool.getToolCallId() : null)
                 .toolStatus(msg.getStatus())
                 .toolInput(inputJson)
-                .toolOutput(msg.getOutput())
+                .toolOutput(tool != null ? tool.getOutput() : null)
                 .toolError(msg.getError())
                 .toolTitle(msg.getTitle())
+                .subagentSessionId(msg.getSubagentSessionId())
+                .subagentName(msg.getSubagentName())
                 .build();
 
         partRepository.upsert(part);
-        log.debug("Persisted tool part: sessionId={}, tool={}, status={}",
-                sessionId, msg.getToolName(), msg.getStatus());
+        log.debug("Persisted tool part: sessionId={}, protocolId={}, tool={}, status={}",
+                sessionId, active.protocolMessageId(),
+                tool != null ? tool.getToolName() : null, msg.getStatus());
+        return true;
     }
 
-    /**
-     * Persist a file part.
-     */
-    private void persistFilePart(Long sessionId, StreamMessage msg) {
-        Long messageId = getOrCreateMessageId(sessionId);
-        int nextSeq = partRepository.findMaxSeqByMessageId(messageId) + 1;
-
-        String mime = "";
-        if (msg.getMetadata() instanceof Map<?, ?> meta) {
-            Object mimeVal = meta.get("mime");
-            if (mimeVal != null)
-                mime = mimeVal.toString();
+    private boolean persistPermissionPart(Long sessionId, StreamMessage msg,
+            ActiveMessageTracker.ActiveMessageRef active) {
+        // permission.reply 没有 active message 时（常见于 subagent 权限回复），
+        // 直接按 permissionId 更新已有 permission part 的 status 和 response
+        if (active == null && StreamMessage.Types.PERMISSION_REPLY.equals(msg.getType())) {
+            return updatePermissionReplyByPermissionId(sessionId, msg);
+        }
+        if (active == null) {
+            return false;
         }
 
-        SkillMessagePart part = SkillMessagePart.builder()
-                .messageId(messageId)
-                .sessionId(sessionId)
-                .partId(msg.getPartId() != null ? msg.getPartId() : "file-" + nextSeq)
-                .seq(nextSeq)
-                .partType("file")
-                .fileName(msg.getTitle())
-                .fileUrl(msg.getContent())
-                .fileMime(mime)
-                .build();
-
-        partRepository.upsert(part);
-        log.debug("Persisted file part: sessionId={}, file={}", sessionId, msg.getTitle());
-    }
-
-    /**
-     * Persist step completion with token/cost stats.
-     * Also updates the parent message's aggregate stats.
-     */
-    private void persistStepDone(Long sessionId, StreamMessage msg) {
-        Long messageId = getOrCreateMessageId(sessionId);
-        int nextSeq = partRepository.findMaxSeqByMessageId(messageId) + 1;
-
-        Integer tokensIn = null;
-        Integer tokensOut = null;
-        if (msg.getTokens() != null) {
-            Object inVal = msg.getTokens().get("input");
-            Object outVal = msg.getTokens().get("output");
-            if (inVal instanceof Number n)
-                tokensIn = n.intValue();
-            if (outVal instanceof Number n)
-                tokensOut = n.intValue();
-        }
-
-        SkillMessagePart part = SkillMessagePart.builder()
-                .messageId(messageId)
-                .sessionId(sessionId)
-                .partId("step-done-" + nextSeq)
-                .seq(nextSeq)
-                .partType("step-finish")
-                .tokensIn(tokensIn)
-                .tokensOut(tokensOut)
-                .cost(msg.getCost())
-                .finishReason(msg.getReason())
-                .build();
-
-        partRepository.insert(part);
-
-        // Update message-level stats
-        messageService.updateMessageStats(messageId, tokensIn, tokensOut, msg.getCost());
-        log.debug("Persisted step.done: sessionId={}, tokensIn={}, tokensOut={}, cost={}",
-                sessionId, tokensIn, tokensOut, msg.getCost());
-    }
-
-    /**
-     * Handle session status changes.
-     * When session goes idle, finalize the current message and clear the active ID.
-     */
-    private void handleSessionStatus(Long sessionId, StreamMessage msg) {
-        if ("idle".equals(msg.getSessionStatus())) {
-            Long messageId = activeMessageIds.remove(sessionId);
-            if (messageId != null) {
-                messageService.markMessageFinished(messageId);
-                log.debug("Finalized assistant message: sessionId={}, messageId={}", sessionId, messageId);
+        String metadataJson = null;
+        var permission = msg.getPermission();
+        if (permission != null && permission.getMetadata() != null) {
+            try {
+                metadataJson = objectMapper.writeValueAsString(permission.getMetadata());
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to serialize permission metadata: {}", e.getMessage());
             }
         }
+
+        String permissionId = permission != null ? permission.getPermissionId() : null;
+        SkillMessagePart part = SkillMessagePart.builder()
+                .id(snowflakeIdGenerator.nextId())
+                .messageId(active.dbId())
+                .sessionId(sessionId)
+                .partId(msg.getPartId() != null ? msg.getPartId()
+                        : permissionId != null ? permissionId : "permission-" + active.messageSeq())
+                .seq(resolvePartSeq(sessionId, active.dbId(), msg))
+                .partType("permission")
+                .content(msg.getTitle() != null ? msg.getTitle() : msg.getContent())
+                .toolName(permission != null ? permission.getPermType() : null)
+                .toolCallId(permissionId)
+                .toolStatus(msg.getStatus())
+                .toolInput(metadataJson)
+                .toolOutput(permission != null ? permission.getResponse() : null)
+                .subagentSessionId(msg.getSubagentSessionId())
+                .subagentName(msg.getSubagentName())
+                .build();
+
+        partRepository.upsert(part);
+        log.debug("Persisted permission part: sessionId={}, protocolId={}, permissionId={}, type={}",
+                sessionId, active.protocolMessageId(), permissionId, msg.getType());
+        return true;
     }
 
     /**
-     * Clear the active message tracking for a session.
-     * Called when a session is closed or reset.
+     * 通过 permissionId 直接更新已有 permission part 的 status 和 response。
+     * 用于 subagent 的 permission.reply，此时无法通过 ActiveMessageTracker 找到关联的消息。
      */
-    public void clearSession(Long sessionId) {
-        activeMessageIds.remove(sessionId);
+    private boolean updatePermissionReplyByPermissionId(Long sessionId, StreamMessage msg) {
+        var permission = msg.getPermission();
+        if (permission == null || permission.getPermissionId() == null) {
+            return false;
+        }
+        String permissionId = permission.getPermissionId();
+        String response = permission.getResponse();
+        String status = msg.getStatus() != null ? msg.getStatus() : "completed";
+
+        // 通过 (session_id, part_id) 查找已有的 permission.ask part
+        // partId 在 persistPermissionPart 中设为 permissionId
+        SkillMessagePart existing = partRepository.findByPartId(sessionId, permissionId);
+        if (existing == null) {
+            log.debug("No existing permission part to update: sessionId={}, permissionId={}", sessionId, permissionId);
+            return false;
+        }
+
+        existing.setToolStatus(status);
+        existing.setToolOutput(response);
+        existing.setUpdatedAt(null); // 让 SQL 使用 NOW()
+        partRepository.upsert(existing);
+        log.info("Updated permission reply by permissionId: sessionId={}, permissionId={}, response={}",
+                sessionId, permissionId, response);
+        return true;
+    }
+
+    private boolean persistFilePart(Long sessionId, StreamMessage msg,
+            ActiveMessageTracker.ActiveMessageRef active) {
+        if (active == null) {
+            return false;
+        }
+
+        var f = msg.getFile();
+        SkillMessagePart part = SkillMessagePart.builder()
+                .id(snowflakeIdGenerator.nextId())
+                .messageId(active.dbId())
+                .sessionId(sessionId)
+                .partId(msg.getPartId() != null ? msg.getPartId() : "file-" + active.messageSeq())
+                .seq(resolvePartSeq(sessionId, active.dbId(), msg))
+                .partType("file")
+                .fileName(f != null ? f.getFileName() : null)
+                .fileUrl(f != null ? f.getFileUrl() : null)
+                .fileMime(f != null ? f.getFileMime() : null)
+                .subagentSessionId(msg.getSubagentSessionId())
+                .subagentName(msg.getSubagentName())
+                .build();
+
+        partRepository.upsert(part);
+        log.debug("Persisted file part: sessionId={}, protocolId={}, file={}",
+                sessionId, active.protocolMessageId(),
+                f != null ? f.getFileName() : null);
+        return true;
+    }
+
+    private record UsageStats(Integer tokensIn, Integer tokensOut) {
+    }
+
+    private UsageStats extractUsageStats(StreamMessage msg) {
+        var u = msg.getUsage();
+        if (u == null || u.getTokens() == null) {
+            return new UsageStats(null, null);
+        }
+        Object inVal = u.getTokens().get("input");
+        Object outVal = u.getTokens().get("output");
+        Integer tokensIn = (inVal instanceof Number n) ? n.intValue() : null;
+        Integer tokensOut = (outVal instanceof Number n) ? n.intValue() : null;
+        return new UsageStats(tokensIn, tokensOut);
+    }
+
+    private boolean persistStepDone(Long sessionId, StreamMessage msg,
+            ActiveMessageTracker.ActiveMessageRef active) {
+        if (active == null) {
+            return false;
+        }
+
+        var u = msg.getUsage();
+        UsageStats stats = extractUsageStats(msg);
+        int partSeq = resolvePartSeq(sessionId, active.dbId(), msg);
+        Double cost = u != null ? u.getCost() : null;
+        SkillMessagePart part = SkillMessagePart.builder()
+                .id(snowflakeIdGenerator.nextId())
+                .messageId(active.dbId())
+                .sessionId(sessionId)
+                .partId(msg.getPartId() != null ? msg.getPartId() : "step-done-" + active.dbId() + "-" + partSeq)
+                .seq(partSeq)
+                .partType("step-finish")
+                .tokensIn(stats.tokensIn())
+                .tokensOut(stats.tokensOut())
+                .cost(cost)
+                .finishReason(u != null ? u.getReason() : null)
+                .subagentSessionId(msg.getSubagentSessionId())
+                .subagentName(msg.getSubagentName())
+                .build();
+
+        partRepository.upsert(part);
+        messageService.updateMessageStats(active.dbId(), stats.tokensIn(), stats.tokensOut(), cost);
+        log.debug("Persisted step.done: sessionId={}, protocolId={}, tokensIn={}, tokensOut={}, cost={}",
+                sessionId, active.protocolMessageId(), stats.tokensIn(), stats.tokensOut(), cost);
+        return true;
+    }
+
+    private void handleSessionStatus(Long sessionId, StreamMessage msg) {
+        if (!"idle".equals(msg.getSessionStatus()) && !"completed".equals(msg.getSessionStatus())) {
+            return;
+        }
+        tracker.removeAndFinalize(sessionId);
+    }
+
+    // ==================== Internal Helpers ====================
+
+    private int resolvePartSeq(Long sessionId, Long messageDbId, StreamMessage msg) {
+        if (msg.getPartId() != null && !msg.getPartId().isBlank()) {
+            SkillMessagePart existing = partRepository.findByPartId(sessionId, msg.getPartId());
+            if (existing != null && existing.getSeq() != null) {
+                return existing.getSeq();
+            }
+        }
+
+        if (msg.getPartSeq() != null && msg.getPartSeq() > 0) {
+            return msg.getPartSeq();
+        }
+
+        return partRepository.findMaxSeqByMessageId(messageDbId) + 1;
+    }
+
+    private void syncMessageContent(ActiveMessageTracker.ActiveMessageRef active) {
+        String content = partRepository.findConcatenatedTextByMessageId(active.dbId());
+        messageService.updateMessageContent(active.dbId(), content != null ? content : "");
+    }
+
+    private boolean requiresMessageContext(StreamMessage msg) {
+        return switch (msg.getType()) {
+            case StreamMessage.Types.TEXT_DELTA,
+                    StreamMessage.Types.TEXT_DONE,
+                    StreamMessage.Types.THINKING_DELTA,
+                    StreamMessage.Types.THINKING_DONE,
+                    StreamMessage.Types.TOOL_UPDATE,
+                    StreamMessage.Types.QUESTION,
+                    StreamMessage.Types.FILE,
+                    StreamMessage.Types.STEP_START,
+                    StreamMessage.Types.STEP_DONE,
+                    StreamMessage.Types.PERMISSION_ASK,
+                    StreamMessage.Types.PERMISSION_REPLY ->
+                true;
+            default -> false;
+        };
+    }
+
+    private String inferPermissionResponseFromToolOutcome(StreamMessage msg) {
+        if (msg == null || !StreamMessage.Types.TOOL_UPDATE.equals(msg.getType())) {
+            return null;
+        }
+        if ("completed".equals(msg.getStatus())) {
+            // OpenCode sometimes executes the gated tool directly after approval
+            // without emitting a separate permission.reply event. In that case we
+            // infer a one-time approval from the successful tool completion.
+            return "once";
+        }
+        if (!"error".equals(msg.getStatus())) {
+            return null;
+        }
+        String error = msg.getError();
+        if (error == null || error.isBlank()) {
+            return null;
+        }
+        if (error.contains("The user rejected permission to use this specific tool call.")) {
+            return "reject";
+        }
+        return null;
     }
 }

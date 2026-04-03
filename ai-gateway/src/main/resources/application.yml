@@ -6,10 +6,10 @@ spring:
     name: ai-gateway
 
   datasource:
-    url: jdbc:mariadb://localhost:3306/ai_gateway?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_AI_GATEWAY_DB:ai_gateway}?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf-8&allowPublicKeyRetrieval=true
     username: root
-    password: ${DB_PASSWORD:root}
-    driver-class-name: org.mariadb.jdbc.Driver
+    password: Root@123456
+    driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 20
       minimum-idle: 5
@@ -18,9 +18,10 @@ spring:
 
   data:
     redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
-      password: ${REDIS_PASSWORD:}
+      host: localhost
+      port: 6379
+      database: 0
+      password: 
       timeout: 3000ms
       lettuce:
         pool:
@@ -36,12 +37,30 @@ mybatis:
 
 # Gateway custom configuration
 gateway:
-  # Skill Server WebSocket endpoint
-  skill-server:
-    ws-url: ${SKILL_SERVER_WS_URL:ws://localhost:8082/ws/internal/gateway}
-    internal-token: ${SKILL_SERVER_INTERNAL_TOKEN:sk-intl-9f2a7d3e4b1c}
-    reconnect-initial-delay-ms: 1000
-    reconnect-max-delay-ms: 30000
+  instance-id: ${GATEWAY_INSTANCE_ID:${HOSTNAME:gateway-local}}
+  snowflake:
+    epoch-ms: ${GATEWAY_SNOWFLAKE_EPOCH_MS:1735689600000}
+    service-code: ${GATEWAY_SNOWFLAKE_SERVICE_CODE:2}
+    worker-id: ${GATEWAY_SNOWFLAKE_WORKER_ID:1}
+    service-bits: ${GATEWAY_SNOWFLAKE_SERVICE_BITS:4}
+    worker-bits: ${GATEWAY_SNOWFLAKE_WORKER_BITS:10}
+    sequence-bits: ${GATEWAY_SNOWFLAKE_SEQUENCE_BITS:12}
+    clock-backwards-strategy: ${GATEWAY_SNOWFLAKE_CLOCK_BACKWARDS_STRATEGY:WAIT}
+    max-backward-ms: ${GATEWAY_SNOWFLAKE_MAX_BACKWARD_MS:5}
+
+  relay:
+    # TTL for the gw:pending:{ak} downlink buffer queue (Phase 1.6)
+    pending-ttl-seconds: ${GATEWAY_PENDING_TTL_SECONDS:60}
+
+  # Legacy relay fallback: 兼容不带 instanceId 的旧版 Source 服务
+  # 生产环境全量升级后设为 false 以禁用旧版路由
+  legacy-relay:
+    enabled: ${GATEWAY_LEGACY_RELAY_ENABLED:true}
+
+  skill-relay:
+    owner-heartbeat-interval-seconds: 10
+    owner-ttl-seconds: 30
+    session-route-ttl-seconds: 1800
 
   # Agent heartbeat timeout
   agent:
@@ -50,10 +69,41 @@ gateway:
 
   # AK/SK auth
   auth:
+    # 验签模式: gateway=本地HMAC-SHA256验签(ak_sk_credential表), remote=外部API验签
+    mode: ${AUTH_MODE:gateway}
     timestamp-tolerance-seconds: 300
     nonce-ttl-seconds: 300
+    identity-api:
+      base-url: ${IDENTITY_API_BASE_URL:}
+      bearer-token: ${IDENTITY_API_BEARER_TOKEN:}
+      timeout-ms: ${IDENTITY_API_TIMEOUT_MS:3000}
+    # 认证缓存
+    identity-cache:
+      l1-ttl-seconds: ${AUTH_CACHE_L1_TTL:300}
+      l1-max-size: ${AUTH_CACHE_L1_MAX_SIZE:10000}
+      l2-ttl-seconds: ${AUTH_CACHE_L2_TTL:3600}
+
+  # Internal HTTP API for Skill Server to discover GW instances (new routing design)
+  internal-api:
+    enabled: ${GATEWAY_INTERNAL_API_ENABLED:true}
+
+  websocket:
+    max-text-message-buffer-size-bytes: 1048576
+
+skill:
+  gateway:
+    internal-token: ${SKILL_SERVER_INTERNAL_TOKEN:changeme}
+
+opencode:
+  logging:
+    base-dir: ${OPENCODE_LOG_DIR:D:/02_Lab/Logs}
+    file: ${AI_GATEWAY_LOG_FILE:${opencode.logging.base-dir}/ai-gateway/ai-gateway.log}
+    archive-dir: ${AI_GATEWAY_LOG_ARCHIVE_DIR:${opencode.logging.base-dir}/ai-gateway/archive}
 
 logging:
+  file:
+    name: ${opencode.logging.file}
   level:
-    com.opencode.cui.gateway: DEBUG
+    com.opencode.cui.gateway: INFO
     org.springframework.web.socket: INFO
+  # pattern 和 rollingpolicy 已迁移到 logback-spring.xml

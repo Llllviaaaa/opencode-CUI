@@ -25,9 +25,11 @@
         <result property="tokensIn"     column="tokens_in"/>
         <result property="tokensOut"    column="tokens_out"/>
         <result property="cost"         column="cost"/>
-        <result property="finishReason" column="finish_reason"/>
-        <result property="createdAt"    column="created_at"/>
-        <result property="updatedAt"    column="updated_at"/>
+        <result property="finishReason"      column="finish_reason"/>
+        <result property="subagentSessionId" column="subagent_session_id"/>
+        <result property="subagentName"      column="subagent_name"/>
+        <result property="createdAt"         column="created_at"/>
+        <result property="updatedAt"         column="updated_at"/>
     </resultMap>
 
     <sql id="allColumns">
@@ -35,41 +37,49 @@
         content, tool_name, tool_call_id, tool_status, tool_input, tool_output, tool_error, tool_title,
         file_name, file_url, file_mime,
         tokens_in, tokens_out, cost, finish_reason,
+        subagent_session_id, subagent_name,
         created_at, updated_at
     </sql>
 
-    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+    <insert id="insert">
         INSERT INTO skill_message_part
-            (message_id, session_id, part_id, seq, part_type,
+            (id, message_id, session_id, part_id, seq, part_type,
              content, tool_name, tool_call_id, tool_status, tool_input, tool_output, tool_error, tool_title,
              file_name, file_url, file_mime,
              tokens_in, tokens_out, cost, finish_reason,
+             subagent_session_id, subagent_name,
              created_at, updated_at)
         VALUES
-            (#{messageId}, #{sessionId}, #{partId}, #{seq}, #{partType},
+            (#{id}, #{messageId}, #{sessionId}, #{partId}, #{seq}, #{partType},
              #{content}, #{toolName}, #{toolCallId}, #{toolStatus}, #{toolInput}, #{toolOutput}, #{toolError}, #{toolTitle},
              #{fileName}, #{fileUrl}, #{fileMime},
              #{tokensIn}, #{tokensOut}, #{cost}, #{finishReason},
+             #{subagentSessionId}, #{subagentName},
              NOW(), NOW())
     </insert>
 
     <!-- Upsert: insert or update by (session_id, part_id) unique key -->
     <insert id="upsert">
         INSERT INTO skill_message_part
-            (message_id, session_id, part_id, seq, part_type,
+            (id, message_id, session_id, part_id, seq, part_type,
              content, tool_name, tool_call_id, tool_status, tool_input, tool_output, tool_error, tool_title,
              file_name, file_url, file_mime,
              tokens_in, tokens_out, cost, finish_reason,
+             subagent_session_id, subagent_name,
              created_at, updated_at)
         VALUES
-            (#{messageId}, #{sessionId}, #{partId}, #{seq}, #{partType},
+            (#{id}, #{messageId}, #{sessionId}, #{partId}, #{seq}, #{partType},
              #{content}, #{toolName}, #{toolCallId}, #{toolStatus}, #{toolInput}, #{toolOutput}, #{toolError}, #{toolTitle},
              #{fileName}, #{fileUrl}, #{fileMime},
              #{tokensIn}, #{tokensOut}, #{cost}, #{finishReason},
+             #{subagentSessionId}, #{subagentName},
              NOW(), NOW())
         ON DUPLICATE KEY UPDATE
             content     = COALESCE(VALUES(content), content),
+            tool_name   = COALESCE(VALUES(tool_name), tool_name),
+            tool_call_id = COALESCE(VALUES(tool_call_id), tool_call_id),
             tool_status = COALESCE(VALUES(tool_status), tool_status),
+            tool_input  = COALESCE(VALUES(tool_input), tool_input),
             tool_output = COALESCE(VALUES(tool_output), tool_output),
             tool_error  = COALESCE(VALUES(tool_error), tool_error),
             tool_title  = COALESCE(VALUES(tool_title), tool_title),
@@ -77,6 +87,8 @@
             tokens_out  = COALESCE(VALUES(tokens_out), tokens_out),
             cost        = COALESCE(VALUES(cost), cost),
             finish_reason = COALESCE(VALUES(finish_reason), finish_reason),
+            subagent_session_id = COALESCE(VALUES(subagent_session_id), subagent_session_id),
+            subagent_name = COALESCE(VALUES(subagent_name), subagent_name),
             updated_at  = NOW()
     </insert>
 
@@ -86,6 +98,16 @@
         WHERE session_id = #{sessionId} AND part_id = #{partId}
     </select>
 
+    <select id="findLatestPendingPermissionPart" resultMap="SkillMessagePartResultMap">
+        SELECT <include refid="allColumns"/>
+        FROM skill_message_part
+        WHERE session_id = #{sessionId}
+          AND part_type = 'permission'
+          AND (tool_output IS NULL OR tool_output = '')
+        ORDER BY updated_at DESC, seq DESC
+        LIMIT 1
+    </select>
+
     <select id="findByMessageId" resultMap="SkillMessagePartResultMap">
         SELECT <include refid="allColumns"/>
         FROM skill_message_part
@@ -93,8 +115,24 @@
         ORDER BY seq ASC
     </select>
 
+    <select id="findByMessageIds" resultMap="SkillMessagePartResultMap">
+        SELECT <include refid="allColumns"/>
+        FROM skill_message_part
+        WHERE message_id IN
+        <foreach collection="messageIds" item="messageId" open="(" separator="," close=")">
+            #{messageId}
+        </foreach>
+        ORDER BY message_id ASC, seq ASC
+    </select>
+
     <select id="findMaxSeqByMessageId" resultType="int">
         SELECT COALESCE(MAX(seq), 0) FROM skill_message_part WHERE message_id = #{messageId}
+    </select>
+
+    <select id="findConcatenatedTextByMessageId" resultType="string">
+        SELECT GROUP_CONCAT(content ORDER BY seq SEPARATOR '')
+        FROM skill_message_part
+        WHERE message_id = #{messageId} AND part_type = 'text' AND content IS NOT NULL
     </select>
 
     <delete id="deleteByMessageId">

@@ -11,9 +11,11 @@ export interface UseSkillSessionReturn {
   loadSessions: () => Promise<void>;
   switchSession: (sessionId: string) => void;
   closeSession: (sessionId: string) => Promise<void>;
+  updateSessionStatus: (sessionId: string, status: Session['status']) => void;
+  updateSessionTitle: (sessionId: string, title: string) => void;
 }
 
-export function useSkillSession(userId: string): UseSkillSessionReturn {
+export function useSkillSession(): UseSkillSessionReturn {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(false);
@@ -21,11 +23,10 @@ export function useSkillSession(userId: string): UseSkillSessionReturn {
   const creatingRef = useRef(false);
 
   const loadSessions = useCallback(async () => {
-    if (!userId) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await api.getSessions(userId, 0, 100);
+      const res = await api.getSessions(0, 100);
       setSessions(res.content);
     } catch (err) {
       const message =
@@ -34,7 +35,7 @@ export function useSkillSession(userId: string): UseSkillSessionReturn {
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, []);
 
   const createSession = useCallback(
     async (params: api.CreateSessionParams): Promise<Session | null> => {
@@ -84,6 +85,31 @@ export function useSkillSession(userId: string): UseSkillSessionReturn {
     [currentSession],
   );
 
+  const updateSessionStatus = useCallback(
+    (sessionId: string, status: Session['status']) => {
+      setSessions((prev) =>
+        prev.map((s) => (s.id === sessionId ? { ...s, status } : s)),
+      );
+      setCurrentSession((prev) =>
+        prev && prev.id === sessionId ? { ...prev, status } : prev,
+      );
+    },
+    [],
+  );
+
+  const updateSessionTitle = useCallback(
+    (sessionId: string, title: string) => {
+      if (!title) return;
+      setSessions((prev) =>
+        prev.map((s) => (s.id === sessionId && s.title !== title ? { ...s, title } : s)),
+      );
+      setCurrentSession((prev) =>
+        prev && prev.id === sessionId && prev.title !== title ? { ...prev, title } : prev,
+      );
+    },
+    [],
+  );
+
   // Auto-load sessions on mount
   useEffect(() => {
     void loadSessions();
@@ -98,5 +124,7 @@ export function useSkillSession(userId: string): UseSkillSessionReturn {
     loadSessions,
     switchSession,
     closeSession: closeSessionFn,
+    updateSessionStatus,
+    updateSessionTitle,
   };
 }

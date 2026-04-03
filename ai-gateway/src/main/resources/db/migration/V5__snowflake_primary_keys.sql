@@ -1,0 +1,5 @@
+ALTER TABLE agent_connection
+  MODIFY COLUMN id BIGINT NOT NULL;
+
+ALTER TABLE ak_sk_credential
+  MODIFY COLUMN id BIGINT NOT NULL;

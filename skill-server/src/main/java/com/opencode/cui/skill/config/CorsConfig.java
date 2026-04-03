@@ -1,28 +1,38 @@
 package com.opencode.cui.skill.config;
 
-import org.springframework.context.annotation.Bean;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.web.cors.CorsConfiguration;
-import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
-import org.springframework.web.filter.CorsFilter;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 /**
- * Global CORS configuration for REST API endpoints.
- * Allows cross-origin requests from the Skill Miniapp dev server.
+ * 全局 CORS 跨域配置。
+ * 允许来自 Skill MiniApp 开发服务器的跨域请求。
+ *
+ * <p>
+ * 生产环境请通过 {@code skill.cors.allowed-origins} 和
+ * {@code skill.cors.allowed-methods}
+ * 配置具体的域名和方法列表，避免使用通配符 {@code *}。
+ * </p>
  */
 @Configuration
-public class CorsConfig {
+public class CorsConfig implements WebMvcConfigurer {
 
-    @Bean
-    public CorsFilter corsFilter() {
-        CorsConfiguration config = new CorsConfiguration();
-        config.setAllowCredentials(false);
-        config.addAllowedOriginPattern("*");
-        config.addAllowedHeader("*");
-        config.addAllowedMethod("*");
+    /** 允许的跨域来源，默认 * */
+    @Value("${skill.cors.allowed-origins:*}")
+    private String[] allowedOrigins;
 
-        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/api/**", config);
-        return new CorsFilter(source);
+    /** 允许的 HTTP 方法 */
+    @Value("${skill.cors.allowed-methods:GET,POST,PUT,DELETE,OPTIONS}")
+    private String[] allowedMethods;
+
+    @Override
+    public void addCorsMappings(CorsRegistry registry) {
+        registry.addMapping("/**")
+                .allowedOrigins(allowedOrigins)
+                .allowedMethods(allowedMethods)
+                .allowedHeaders("*")
+                .allowCredentials(false)
+                .maxAge(3600);
     }
 }

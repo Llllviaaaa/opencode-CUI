@@ -1,11 +1,20 @@
 package com.opencode.cui.skill.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.model.MessageHistoryResult;
 import com.opencode.cui.skill.model.PageResult;
+import com.opencode.cui.skill.model.ProtocolMessageView;
+import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillMessage;
 import com.opencode.cui.skill.model.SkillSession;
+import com.opencode.cui.skill.config.AssistantIdProperties;
+import com.opencode.cui.skill.model.AgentSummary;
+import com.opencode.cui.skill.model.StreamMessage;
+import com.opencode.cui.skill.service.GatewayApiClient;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.ImMessageService;
+import com.opencode.cui.skill.service.GatewayMessageRouter;
+import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillMessageService;
 import com.opencode.cui.skill.service.SkillSessionService;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,14 +27,15 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.lenient;
+import org.mockito.ArgumentCaptor;
 
 /**
- * Unit tests for SkillMessageController (plain Mockito, no Spring context).
+ * SkillMessageController 单元测试（纯 Mockito，不加载 Spring 上下文）。
  */
 @ExtendWith(MockitoExtension.class)
 class SkillMessageControllerTest {
@@ -37,36 +47,87 @@ class SkillMessageControllerTest {
     @Mock
     private GatewayRelayService gatewayRelayService;
     @Mock
+    private GatewayApiClient gatewayApiClient;
+    @Mock
     private ImMessageService imMessageService;
+    @Mock
+    private SessionAccessControlService accessControlService;
+    @Mock
+    private GatewayMessageRouter messageRouter;
 
+    private AssistantIdProperties assistantIdProperties;
     private SkillMessageController controller;
 
     @BeforeEach
     void setUp() {
+        assistantIdProperties = new AssistantIdProperties();
+        assistantIdProperties.setEnabled(true);
+        assistantIdProperties.setTargetToolType("assistant");
         controller = new SkillMessageController(
                 messageService, sessionService, gatewayRelayService,
-                imMessageService, new ObjectMapper());
+                gatewayApiClient, assistantIdProperties, imMessageService, new ObjectMapper(),
+                accessControlService, messageRouter);
+        // 默认 Agent 在线，离线场景在专用测试中覆盖
+        lenient().when(gatewayApiClient.getAgentByAk(any()))
+                .thenReturn(AgentSummary.builder().ak("99").toolType("assistant").build());
     }
 
     @Test
-    @DisplayName("sendMessage returns 201 and invokes AI gateway")
-    void sendMessage201() {
+    @DisplayName("sendMessage returns 200 and invokes AI gateway")
+    void sendMessage200() {
         SkillSession session = new SkillSession();
         session.setId(1L);
-        session.setAgentId(99L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
         session.setStatus(SkillSession.Status.ACTIVE);
-        when(sessionService.getSession(1L)).thenReturn(session);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
 
         SkillMessage msg = SkillMessage.builder()
-                .id(1L).role(SkillMessage.Role.USER).content("Hello").build();
+                .id(1L).sessionId(1L).role(SkillMessage.Role.USER).content("Hello").build();
         when(messageService.saveUserMessage(eq(1L), eq("Hello"))).thenReturn(msg);
 
         var request = new SkillMessageController.SendMessageRequest();
         request.setContent("Hello");
 
-        ResponseEntity<?> response = controller.sendMessage(1L, request);
-        assertEquals(HttpStatus.CREATED, response.getStatusCode());
-        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("chat"), any());
+        ResponseEntity<?> response = controller.sendMessage("1", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        var body = (com.opencode.cui.skill.model.ApiResponse<ProtocolMessageView>) response.getBody();
+        assertNotNull(body);
+        assertEquals("1", body.getData().getWelinkSessionId());
+        assertEquals("user", body.getData().getRole());
+        ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
+        assertEquals("99", cmdCaptor.getValue().ak());
+        assertEquals("1", cmdCaptor.getValue().userId());
+        assertEquals("1", cmdCaptor.getValue().sessionId());
+        assertEquals("chat", cmdCaptor.getValue().action());
+    }
+
+    @Test
+    @DisplayName("sendMessage with toolCallId routes to question_reply")
+    void sendMessageWithToolCallIdSendsQuestionReply() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+
+        SkillMessage msg = SkillMessage.builder()
+                .id(2L).sessionId(1L).role(SkillMessage.Role.USER).content("yes").build();
+        when(messageService.saveUserMessage(eq(1L), eq("yes"))).thenReturn(msg);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("yes");
+        request.setToolCallId("tc-001");
+
+        ResponseEntity<?> response = controller.sendMessage("1", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
+        assertEquals("question_reply", cmdCaptor.getValue().action());
     }
 
     @Test
@@ -75,8 +136,9 @@ class SkillMessageControllerTest {
         var request = new SkillMessageController.SendMessageRequest();
         request.setContent("");
 
-        ResponseEntity<?> response = controller.sendMessage(1L, request);
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        ResponseEntity<?> response = controller.sendMessage("1", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(400, ((com.opencode.cui.skill.model.ApiResponse<?>) response.getBody()).getCode());
     }
 
     @Test
@@ -85,54 +147,127 @@ class SkillMessageControllerTest {
         SkillSession session = new SkillSession();
         session.setId(1L);
         session.setStatus(SkillSession.Status.CLOSED);
-        when(sessionService.getSession(1L)).thenReturn(session);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
 
         var request = new SkillMessageController.SendMessageRequest();
         request.setContent("Hello");
 
-        ResponseEntity<?> response = controller.sendMessage(1L, request);
-        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        ResponseEntity<?> response = controller.sendMessage("1", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(409, ((com.opencode.cui.skill.model.ApiResponse<?>) response.getBody()).getCode());
     }
 
     @Test
     @DisplayName("getMessageHistory returns 200")
     void getMessages200() {
-        when(sessionService.getSession(1L)).thenReturn(new SkillSession());
-        when(messageService.getMessageHistory(1L, 0, 50))
-                .thenReturn(new PageResult<>(List.of(), 0, 0, 50));
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(new SkillSession());
+        ProtocolMessageView view = new ProtocolMessageView();
+        view.setWelinkSessionId("1");
+        view.setRole("assistant");
+        view.setContentType("markdown");
+        view.setParts(List.of());
+        when(messageService.getMessageHistoryWithParts(1L, 0, 50))
+                .thenReturn(new PageResult<>(List.of(view), 1, 0, 50));
 
-        ResponseEntity<PageResult<SkillMessage>> response =
-                controller.getMessages(1L, 0, 50);
+        var response = controller.getMessages("1", "1", 0, 50);
         assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals("1", response.getBody().getData().getContent().get(0).getWelinkSessionId());
+        assertEquals("assistant", response.getBody().getData().getContent().get(0).getRole());
+        assertEquals("markdown", response.getBody().getData().getContent().get(0).getContentType());
     }
 
     @Test
-    @DisplayName("replyPermission returns 200 with success")
-    void permissionReply200() {
+    @DisplayName("getCursorMessageHistory returns 200")
+    void getCursorMessages200() {
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(new SkillSession());
+        ProtocolMessageView view = new ProtocolMessageView();
+        view.setWelinkSessionId("1");
+        view.setRole("assistant");
+        view.setContentType("markdown");
+        view.setParts(List.of());
+        when(messageService.getCursorMessageHistoryWithParts(1L, null, 50))
+                .thenReturn(MessageHistoryResult.<ProtocolMessageView>builder()
+                        .content(List.of(view))
+                        .size(50)
+                        .hasMore(false)
+                        .build());
+
+        var response = controller.getCursorMessages("1", "1", null, 50);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals("1", response.getBody().getData().getContent().get(0).getWelinkSessionId());
+        assertEquals("assistant", response.getBody().getData().getContent().get(0).getRole());
+        assertEquals("markdown", response.getBody().getData().getContent().get(0).getContentType());
+    }
+
+    @Test
+    @DisplayName("getMessageHistory returns 400 when size exceeds limit")
+    void getMessagesRejectsOversizedRequest() {
+        var response = controller.getMessages("1", "1", 0, 201);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(400, response.getBody().getCode());
+        verifyNoInteractions(accessControlService, messageService);
+    }
+
+    @Test
+    @DisplayName("getCursorMessageHistory returns 400 when size exceeds limit")
+    void getCursorMessagesRejectsOversizedRequest() {
+        var response = controller.getCursorMessages("1", "1", null, 201);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(400, response.getBody().getCode());
+        verifyNoInteractions(accessControlService, messageService);
+    }
+
+    @Test
+    @DisplayName("replyPermission returns 200 with once response")
+    void permissionReplyOnce200() {
         SkillSession session = new SkillSession();
         session.setId(1L);
-        session.setAgentId(99L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
         session.setStatus(SkillSession.Status.ACTIVE);
-        when(sessionService.getSession(1L)).thenReturn(session);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
 
         var request = new SkillMessageController.PermissionReplyRequest();
-        request.setApproved(true);
+        request.setResponse("once");
 
-        ResponseEntity<Map<String, Object>> response = controller.replyPermission(1L, "p-abc", request);
+        var response = controller.replyPermission("1", "1", "p-abc", request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertEquals(true, response.getBody().get("success"));
-        assertEquals("p-abc", response.getBody().get("permissionId"));
-        verify(gatewayRelayService).sendInvokeToGateway(eq("99"), eq("1"), eq("permission_reply"), any());
+        assertEquals("1", response.getBody().getData().get("welinkSessionId"));
+        assertEquals("p-abc", response.getBody().getData().get("permissionId"));
+        assertEquals("once", response.getBody().getData().get("response"));
+        ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
+        assertEquals("permission_reply", cmdCaptor.getValue().action());
+        verify(gatewayRelayService).publishProtocolMessage(eq("1"), any());
     }
 
     @Test
-    @DisplayName("replyPermission returns 400 when approved is null")
-    void permissionReplyMissingApproved400() {
+    @DisplayName("replyPermission returns 400 when response is null")
+    void permissionReplyMissingResponse400() {
         var request = new SkillMessageController.PermissionReplyRequest();
-        // approved is null
+        // response is null
 
-        ResponseEntity<Map<String, Object>> response = controller.replyPermission(1L, "p-abc", request);
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        var response = controller.replyPermission("1", "1", "p-abc", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(400, response.getBody().getCode());
+    }
+
+    @Test
+    @DisplayName("replyPermission returns 400 for invalid response value")
+    void permissionReplyInvalidResponse400() {
+        var request = new SkillMessageController.PermissionReplyRequest();
+        request.setResponse("invalid");
+
+        var response = controller.replyPermission("1", "1", "p-abc", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(400, response.getBody().getCode());
     }
 
     @Test
@@ -141,13 +276,14 @@ class SkillMessageControllerTest {
         SkillSession session = new SkillSession();
         session.setId(1L);
         session.setStatus(SkillSession.Status.CLOSED);
-        when(sessionService.getSession(1L)).thenReturn(session);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
 
         var request = new SkillMessageController.PermissionReplyRequest();
-        request.setApproved(true);
+        request.setResponse("once");
 
-        ResponseEntity<Map<String, Object>> response = controller.replyPermission(1L, "p-abc", request);
-        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        var response = controller.replyPermission("1", "1", "p-abc", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(409, response.getBody().getCode());
     }
 
     @Test
@@ -155,15 +291,47 @@ class SkillMessageControllerTest {
     void sendToIm200() {
         SkillSession session = new SkillSession();
         session.setId(1L);
-        session.setImChatId("chat-123");
-        when(sessionService.getSession(1L)).thenReturn(session);
+        session.setBusinessSessionId("chat-123");
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
         when(imMessageService.sendMessage("chat-123", "Hello IM")).thenReturn(true);
 
         var request = new SkillMessageController.SendToImRequest();
         request.setContent("Hello IM");
 
-        ResponseEntity<Map<String, Object>> response = controller.sendToIm(1L, request);
+        var response = controller.sendToIm("1", "1", request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertEquals(true, response.getBody().get("success"));
+        assertEquals(true, response.getBody().getData().get("success"));
+    }
+
+    @Test
+    @DisplayName("sendMessage broadcasts error via WebSocket and saves system message when agent is offline")
+    void sendMessageAgentOfflineBroadcastsError() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+        when(gatewayApiClient.getAgentByAk("99")).thenReturn(null); // Agent 离线
+
+        SkillMessage msg = SkillMessage.builder()
+                .id(1L).sessionId(1L).role(SkillMessage.Role.USER).content("Hello").build();
+        when(messageService.saveUserMessage(eq(1L), eq("Hello"))).thenReturn(msg);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("Hello");
+
+        ResponseEntity<?> response = controller.sendMessage("1", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+
+        // 验证保存了系统错误消息
+        verify(messageService).saveSystemMessage(eq(1L), contains("任务下发失败"));
+        // 验证通过 WebSocket 广播了错误
+        ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+        verify(gatewayRelayService).publishProtocolMessage(eq("1"), msgCaptor.capture());
+        assertEquals(StreamMessage.Types.ERROR, msgCaptor.getValue().getType());
+        // 验证没有调用 Gateway 发送 invoke
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
     }
 }

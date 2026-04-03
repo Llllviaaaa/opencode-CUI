@@ -13,14 +13,17 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * Agent lifecycle management: registration, heartbeat, online/offline
- * transitions.
+ * Agent 生命周期管理服务：注册、心跳、上线/下线状态转换。
  *
- * Key behaviors:
- * - Same AK + same toolType -> kick old connection (only one active connection
- * per AK+toolType)
- * - Heartbeat updates last_seen_at
- * - Scheduled task marks stale agents offline
+ * <p>
+ * 核心行为：
+ * </p>
+ * <ul>
+ * <li>相同 AK + 相同 toolType → 复用已有记录（身份持久化）</li>
+ * <li>调用 register 之前应先检查是否存在重复的活跃连接</li>
+ * <li>心跳更新 last_seen_at</li>
+ * <li>定时任务检测超时 Agent 并标记为离线</li>
+ * </ul>
  */
 @Slf4j
 @Service
@@ -28,44 +31,57 @@ public class AgentRegistryService {
 
     private final AgentConnectionRepository repository;
     private final EventRelayService eventRelayService;
+    private final SnowflakeIdGenerator snowflakeIdGenerator;
 
     @Value("${gateway.agent.heartbeat-timeout-seconds:90}")
     private int heartbeatTimeoutSeconds;
 
     public AgentRegistryService(AgentConnectionRepository repository,
-            EventRelayService eventRelayService) {
+            EventRelayService eventRelayService,
+            SnowflakeIdGenerator snowflakeIdGenerator) {
         this.repository = repository;
         this.eventRelayService = eventRelayService;
+        this.snowflakeIdGenerator = snowflakeIdGenerator;
     }
 
     /**
-     * Register a new agent connection. If an existing ONLINE connection with the
-     * same AK and toolType exists, it will be kicked (marked offline) first.
+     * 注册 Agent 连接。相同 AK + toolType 复用已有记录（身份持久化），否则创建新记录。
+     * 调用此方法之前应先检查是否存在重复的活跃连接。
      *
-     * @return the newly created AgentConnection (with generated id)
+     * @return AgentConnection（复用或新建）
      */
     @Transactional
-    public AgentConnection register(Long userId, String akId, String deviceName,
-            String os, String toolType, String toolVersion) {
-        // Kick old connection with same AK + toolType
-        AgentConnection existing = repository
-                .findByAkIdAndToolTypeAndStatus(akId, toolType, AgentStatus.ONLINE);
-        if (existing != null) {
-            log.info("Kicking old agent connection: id={}, ak={}, toolType={}",
-                    existing.getId(), akId, toolType);
-            repository.updateStatus(existing.getId(), AgentStatus.OFFLINE);
+    public AgentConnection register(String userId, String akId, String deviceName,
+            String macAddress, String os, String toolType, String toolVersion) {
+        String effectiveToolType = toolType != null ? toolType : "channel";
 
-            // Close the old WebSocket session and notify Skill Server
-            eventRelayService.removeAgentSession(String.valueOf(existing.getId()));
+        // 查找相同 AK + toolType 的已有记录（任意状态）
+        AgentConnection existing = repository.findByAkIdAndToolType(akId, effectiveToolType);
+
+        if (existing != null) {
+            // 复用已有记录：更新为 ONLINE 并刷新元数据
+            existing.setStatus(AgentStatus.ONLINE);
+            existing.setDeviceName(deviceName);
+            existing.setMacAddress(macAddress);
+            existing.setOs(os);
+            existing.setToolVersion(toolVersion);
+            existing.setLastSeenAt(LocalDateTime.now());
+            repository.updateAgentInfo(existing);
+
+            log.info("Agent re-registered (reused): id={}, ak={}, device={}, tool={}/{}",
+                    existing.getId(), akId, deviceName, effectiveToolType, toolVersion);
+            return existing;
         }
 
-        // Create new connection record
+        // 首次注册：创建新记录
         AgentConnection agent = AgentConnection.builder()
+                .id(snowflakeIdGenerator.nextId())
                 .userId(userId)
                 .akId(akId)
                 .deviceName(deviceName)
+                .macAddress(macAddress)
                 .os(os)
-                .toolType(toolType != null ? toolType : "OPENCODE")
+                .toolType(effectiveToolType)
                 .toolVersion(toolVersion)
                 .status(AgentStatus.ONLINE)
                 .lastSeenAt(LocalDateTime.now())
@@ -73,54 +89,53 @@ public class AgentRegistryService {
                 .build();
         repository.insert(agent);
 
-        log.info("Agent registered: id={}, userId={}, ak={}, device={}, os={}, tool={}/{}",
-                agent.getId(), userId, akId, deviceName, os, toolType, toolVersion);
+        log.info("Agent registered (new): id={}, userId={}, ak={}, device={}, tool={}/{}",
+                agent.getId(), userId, akId, deviceName, effectiveToolType, toolVersion);
         return agent;
     }
 
-    /**
-     * Update heartbeat timestamp for an agent.
-     */
+    /** 更新 Agent 心跳时间戳。 */
     @Transactional
     public void heartbeat(Long agentId) {
         repository.updateLastSeenAt(agentId, LocalDateTime.now());
         log.debug("Heartbeat received: agentId={}", agentId);
     }
 
-    /**
-     * Mark an agent as offline.
-     */
+    /** 将 Agent 标记为离线。 */
     @Transactional
     public void markOffline(Long agentId) {
         repository.updateStatus(agentId, AgentStatus.OFFLINE);
         log.info("Agent marked offline: agentId={}", agentId);
     }
 
-    /**
-     * Find all online agents.
-     */
+    /** 查询所有在线 Agent。 */
     public List<AgentConnection> findOnlineAgents() {
         return repository.findByStatus(AgentStatus.ONLINE);
     }
 
-    /**
-     * Find all online agents for a specific user.
-     */
-    public List<AgentConnection> findOnlineByUserId(Long userId) {
+    /** 查询指定用户的所有在线 Agent。 */
+    public List<AgentConnection> findOnlineByUserId(String userId) {
         return repository.findByUserIdAndStatus(userId, AgentStatus.ONLINE);
     }
 
-    /**
-     * Get agent by ID.
-     */
+    /** 按 ID 查询 Agent。 */
     public AgentConnection findById(Long agentId) {
         return repository.findById(agentId);
     }
 
+    /** 获取指定 AK 最近的连接记录。 */
+    public AgentConnection findLatestByAk(String ak) {
+        return repository.findLatestByAkId(ak);
+    }
+
+    /** 获取指定 AK 的在线连接记录列表（仅 status=ONLINE）。 */
+    public List<AgentConnection> findOnlineByAk(String ak) {
+        return repository.findOnlineByAkId(ak);
+    }
+
     /**
-     * Scheduled task: check for timed-out agents and mark them offline.
-     * Runs at the interval configured by
-     * gateway.agent.heartbeat-check-interval-seconds.
+     * 定时任务：检测心跳超时的 Agent 并标记为离线。
+     * 执行间隔由 gateway.agent.heartbeat-check-interval-seconds 配置。
      */
     @Scheduled(fixedDelayString = "${gateway.agent.heartbeat-check-interval-seconds:30}000")
     @Transactional
@@ -132,10 +147,10 @@ public class AgentRegistryService {
             log.info("Found {} stale agents, marking offline", staleAgents.size());
             for (AgentConnection agent : staleAgents) {
                 repository.updateStatus(agent.getId(), AgentStatus.OFFLINE);
-                // Remove WebSocket session and notify Skill Server
-                eventRelayService.removeAgentSession(String.valueOf(agent.getId()));
-                log.info("Stale agent marked offline: agentId={}, lastSeen={}",
-                        agent.getId(), agent.getLastSeenAt());
+                // 使用 akId 清理 WebSocket 会话（agentSessions 以 ak 为 key）
+                eventRelayService.removeAgentSession(agent.getAkId());
+                log.info("Stale agent marked offline: agentId={}, ak={}, lastSeen={}",
+                        agent.getId(), agent.getAkId(), agent.getLastSeenAt());
             }
         }
     }

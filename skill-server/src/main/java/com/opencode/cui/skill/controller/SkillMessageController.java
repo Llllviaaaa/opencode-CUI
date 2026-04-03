@@ -1,18 +1,32 @@
 package com.opencode.cui.skill.controller;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.model.ApiResponse;
+import com.opencode.cui.skill.model.MessageHistoryResult;
 import com.opencode.cui.skill.model.PageResult;
+import com.opencode.cui.skill.model.ProtocolMessageView;
+import com.opencode.cui.skill.model.InvokeCommand;
+import com.opencode.cui.skill.service.GatewayActions;
 import com.opencode.cui.skill.model.SkillMessage;
+import com.opencode.cui.skill.model.AgentSummary;
 import com.opencode.cui.skill.model.SkillSession;
+import com.opencode.cui.skill.model.StreamMessage;
+import com.opencode.cui.skill.config.AssistantIdProperties;
+import com.opencode.cui.skill.service.GatewayApiClient;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.ImMessageService;
+
+import com.opencode.cui.skill.service.ProtocolUtils;
+import com.opencode.cui.skill.service.PayloadBuilder;
+import com.opencode.cui.skill.service.ProtocolMessageMapper;
+import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillMessageService;
+import com.opencode.cui.skill.service.GatewayMessageRouter;
 import com.opencode.cui.skill.service.SkillSessionService;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,248 +35,394 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
+/**
+ * 消息操作控制器。
+ * 提供发送消息、查询历史、转发到 IM、权限回复等接口，
+ * 操作均基于指定的 session 上下文。
+ */
 @Slf4j
 @RestController
 @RequestMapping("/api/skill/sessions/{sessionId}")
 public class SkillMessageController {
 
+    /** 合法的权限响应值集合 */
+    private static final Set<String> VALID_PERMISSION_RESPONSES = Set.of("once", "always", "reject");
+    private static final int MAX_HISTORY_PAGE_SIZE = 200;
+    /** Agent 离线提示消息 */
+    private static final String AGENT_OFFLINE_MESSAGE = "任务下发失败，请检查助理是否离线，确保助理在线后重试";
+
     private final SkillMessageService messageService;
     private final SkillSessionService sessionService;
     private final GatewayRelayService gatewayRelayService;
+    private final GatewayApiClient gatewayApiClient;
+    private final AssistantIdProperties assistantIdProperties;
     private final ImMessageService imMessageService;
     private final ObjectMapper objectMapper;
+    private final SessionAccessControlService accessControlService;
+    private final GatewayMessageRouter messageRouter;
 
     public SkillMessageController(SkillMessageService messageService,
             SkillSessionService sessionService,
             GatewayRelayService gatewayRelayService,
+            GatewayApiClient gatewayApiClient,
+            AssistantIdProperties assistantIdProperties,
             ImMessageService imMessageService,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            SessionAccessControlService accessControlService,
+            GatewayMessageRouter messageRouter) {
         this.messageService = messageService;
         this.sessionService = sessionService;
         this.gatewayRelayService = gatewayRelayService;
+        this.gatewayApiClient = gatewayApiClient;
+        this.assistantIdProperties = assistantIdProperties;
         this.imMessageService = imMessageService;
         this.objectMapper = objectMapper;
+        this.accessControlService = accessControlService;
+        this.messageRouter = messageRouter;
     }
 
     /**
      * POST /api/skill/sessions/{sessionId}/messages
-     * Send a user message. Persists the message and triggers AI invocation via
-     * AI-Gateway.
+     * 发送用户消息。持久化消息并通过 AI-Gateway 触发 AI 调用。
      */
     @PostMapping("/messages")
-    public ResponseEntity<SkillMessage> sendMessage(
-            @PathVariable Long sessionId,
+    public ResponseEntity<ApiResponse<ProtocolMessageView>> sendMessage(
+            @CookieValue(value = "userId", required = false) String userIdCookie,
+            @PathVariable String sessionId,
             @RequestBody SendMessageRequest request) {
 
         if (request.getContent() == null || request.getContent().isBlank()) {
-            return ResponseEntity.badRequest().build();
+            return ResponseEntity.ok(ApiResponse.error(400, "Content is required"));
         }
 
-        // Verify session exists and is not closed
-        SkillSession session;
-        try {
-            session = sessionService.getSession(sessionId);
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
+        Long numericSessionId = ProtocolUtils.parseSessionId(sessionId);
+        if (numericSessionId == null) {
+            return ResponseEntity.ok(ApiResponse.error(400, "Invalid session ID"));
         }
+
+        log.info("[ENTRY] SkillMessageController.sendMessage: sessionId={}, contentLength={}", sessionId,
+                request.getContent() != null ? request.getContent().length() : 0);
+        long start = System.nanoTime();
+
+        SkillSession session = accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
 
         if (session.getStatus() == SkillSession.Status.CLOSED) {
-            return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(null);
+            return ResponseEntity.ok(ApiResponse.error(409, "Session is closed"));
         }
 
-        // Persist user message
-        SkillMessage message = messageService.saveUserMessage(sessionId, request.getContent());
+        // 持久化用户消息
+        SkillMessage message = messageService.saveUserMessage(numericSessionId, request.getContent());
 
-        // Send chat invoke to AI-Gateway to trigger OpenCode processing
-        if (session.getAgentId() != null) {
-            if (session.getToolSessionId() == null) {
-                log.warn("Session {} has no toolSessionId, cannot invoke AI", sessionId);
-                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                        .body(message);
+        // 广播用户消息到同会话所有 WebSocket 连接（纯广播，不持久化——消息已由 saveUserMessage 入库）
+        messageRouter.broadcastStreamMessage(
+                sessionId, session.getUserId(),
+                StreamMessage.userMessage(
+                        message.getMessageId(),
+                        message.getSeq(),
+                        message.getContent(),
+                        sessionId));
+
+        // 路由到 AI-Gateway
+        routeToGateway(session, sessionId, numericSessionId, request);
+
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        log.info("[EXIT] SkillMessageController.sendMessage: sessionId={}, ak={}, durationMs={}", sessionId,
+                session.getAk(), elapsedMs);
+        return ResponseEntity.ok(ApiResponse.ok(ProtocolMessageMapper.toProtocolMessage(
+                message, List.of(), objectMapper)));
+    }
+
+    /**
+     * 根据会话状态和请求类型将用户消息路由到 AI-Gateway。
+     */
+    private void routeToGateway(SkillSession session, String sessionId,
+            Long numericSessionId, SendMessageRequest request) {
+        if (session.getAk() == null) {
+            log.warn("[SKIP] SkillMessageController.routeToGateway: reason=no_agent, sessionId={}", sessionId);
+            return;
+        }
+
+        // Agent 在线检查：开关开启时，先判断 toolType 是否为目标值，是目标值且离线时通知客户端
+        if (assistantIdProperties.isEnabled()) {
+            AgentSummary agent = gatewayApiClient.getAgentByAk(session.getAk());
+            if (agent == null) {
+                // Agent 离线：保存系统错误消息 + WebSocket 广播
+                log.warn("[SKIP] SkillMessageController.routeToGateway: reason=agent_offline, sessionId={}, ak={}",
+                        sessionId, session.getAk());
+                try {
+                    messageService.saveSystemMessage(numericSessionId, AGENT_OFFLINE_MESSAGE);
+                } catch (Exception e) {
+                    log.error("Failed to persist agent_offline message for session {}: {}", sessionId, e.getMessage());
+                }
+                gatewayRelayService.publishProtocolMessage(sessionId, StreamMessage.builder()
+                        .type(StreamMessage.Types.ERROR)
+                        .error(AGENT_OFFLINE_MESSAGE)
+                        .build());
+                return;
             }
-            String payload = buildChatPayload(request.getContent(), session.getToolSessionId());
-            gatewayRelayService.sendInvokeToGateway(
-                    session.getAgentId().toString(),
-                    sessionId.toString(),
-                    "chat",
-                    payload);
-        } else {
-            log.warn("No agent associated with session {}, cannot invoke AI", sessionId);
+            // Agent 在线但 toolType 不匹配目标值：跳过 assistantId 相关逻辑，正常发送
         }
 
-        return ResponseEntity.status(HttpStatus.CREATED).body(message);
+        if (session.getToolSessionId() == null) {
+            log.info(
+                    "[SKIP] SkillMessageController.routeToGateway: reason=no_toolSessionId, sessionId={}, triggering rebuild",
+                    sessionId);
+            gatewayRelayService.rebuildToolSession(sessionId, session, request.getContent());
+            return;
+        }
+
+        String action;
+        String payload;
+        if (request.getToolCallId() != null && !request.getToolCallId().isBlank()) {
+            action = GatewayActions.QUESTION_REPLY;
+            // 使用子 session 真实 ID（如果是 subagent 的 question reply）
+            String targetToolSessionId = request.getSubagentSessionId() != null
+                    ? request.getSubagentSessionId()
+                    : session.getToolSessionId();
+            payload = PayloadBuilder.buildPayload(objectMapper, Map.of(
+                    "answer", request.getContent(),
+                    "toolCallId", request.getToolCallId(),
+                    "toolSessionId", targetToolSessionId));
+        } else {
+            action = GatewayActions.CHAT;
+            payload = PayloadBuilder.buildPayload(objectMapper, Map.of(
+                    "text", request.getContent(),
+                    "toolSessionId", session.getToolSessionId()));
+        }
+
+        log.info("SkillMessageController.routeToGateway: sessionId={}, action={}, ak={}",
+                sessionId, action, session.getAk());
+        gatewayRelayService.sendInvokeToGateway(
+                new InvokeCommand(session.getAk(), session.getUserId(), sessionId, action, payload));
     }
 
     /**
      * GET /api/skill/sessions/{sessionId}/messages
-     * Get message history with pagination.
+     * 分页查询消息历史。
      */
     @GetMapping("/messages")
-    public ResponseEntity<PageResult<SkillMessage>> getMessages(
-            @PathVariable Long sessionId,
+    public ResponseEntity<ApiResponse<PageResult<ProtocolMessageView>>> getMessages(
+            @CookieValue(value = "userId", required = false) String userIdCookie,
+            @PathVariable String sessionId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
-
-        // Verify session exists
-        try {
-            sessionService.getSession(sessionId);
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
+        if (size <= 0 || size > MAX_HISTORY_PAGE_SIZE) {
+            return ResponseEntity.ok(ApiResponse.error(400, "Size must be between 1 and " + MAX_HISTORY_PAGE_SIZE));
         }
 
-        PageResult<SkillMessage> messages = messageService.getMessageHistory(sessionId, page, size);
-        return ResponseEntity.ok(messages);
+        Long numericSessionId = ProtocolUtils.parseSessionId(sessionId);
+        if (numericSessionId == null) {
+            return ResponseEntity.ok(ApiResponse.error(400, "Invalid session ID"));
+        }
+
+        log.info("[ENTRY] SkillMessageController.getMessages: sessionId={}, page={}, size={}",
+                sessionId, page, size);
+        long start = System.nanoTime();
+
+        accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
+
+        PageResult<ProtocolMessageView> result = messageService.getMessageHistoryWithParts(
+                numericSessionId, page, size);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        log.info("[EXIT] SkillMessageController.getMessages: sessionId={}, page={}, size={}, items={}, durationMs={}",
+                sessionId, page, size, result.getContent() != null ? result.getContent().size() : 0, elapsedMs);
+        return ResponseEntity.ok(ApiResponse.ok(result));
+    }
+
+    @GetMapping("/messages/history")
+    public ResponseEntity<ApiResponse<MessageHistoryResult<ProtocolMessageView>>> getCursorMessages(
+            @CookieValue(value = "userId", required = false) String userIdCookie,
+            @PathVariable String sessionId,
+            @RequestParam(required = false) Integer beforeSeq,
+            @RequestParam(defaultValue = "50") int size) {
+        if (size <= 0 || size > MAX_HISTORY_PAGE_SIZE) {
+            return ResponseEntity.ok(ApiResponse.error(400, "Size must be between 1 and " + MAX_HISTORY_PAGE_SIZE));
+        }
+
+        Long numericSessionId = ProtocolUtils.parseSessionId(sessionId);
+        if (numericSessionId == null) {
+            return ResponseEntity.ok(ApiResponse.error(400, "Invalid session ID"));
+        }
+
+        log.info("[ENTRY] SkillMessageController.getCursorMessages: sessionId={}, beforeSeq={}, size={}",
+                sessionId, beforeSeq, size);
+        long start = System.nanoTime();
+
+        accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
+
+        MessageHistoryResult<ProtocolMessageView> result = messageService.getCursorMessageHistoryWithParts(
+                numericSessionId, beforeSeq, size);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        log.info(
+                "[EXIT] SkillMessageController.getCursorMessages: sessionId={}, beforeSeq={}, size={}, items={}, hasMore={}, durationMs={}",
+                sessionId,
+                beforeSeq,
+                size,
+                result.getContent() != null ? result.getContent().size() : 0,
+                result.getHasMore(),
+                elapsedMs);
+        return ResponseEntity.ok(ApiResponse.ok(result));
     }
 
     /**
      * POST /api/skill/sessions/{sessionId}/send-to-im
-     * Send selected text content to the IM chat associated with this session.
+     * 将选定的文本内容发送到当前会话关联的 IM 聊天。
      */
     @PostMapping("/send-to-im")
-    public ResponseEntity<Map<String, Object>> sendToIm(
-            @PathVariable Long sessionId,
+    public ResponseEntity<ApiResponse<Map<String, Object>>> sendToIm(
+            @CookieValue(value = "userId", required = false) String userIdCookie,
+            @PathVariable String sessionId,
             @RequestBody SendToImRequest request) {
 
         if (request.getContent() == null || request.getContent().isBlank()) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("success", false, "error", "Content is required"));
+            return ResponseEntity.ok(ApiResponse.error(400, "Content is required"));
         }
 
-        // Determine the IM chatId: from request or from session
+        Long numericSessionId = ProtocolUtils.parseSessionId(sessionId);
+        if (numericSessionId == null) {
+            return ResponseEntity.ok(ApiResponse.error(400, "Invalid session ID"));
+        }
+
+        long start = System.nanoTime();
+        log.info("[ENTRY] SkillMessageController.sendToIm: sessionId={}, contentLength={}",
+                sessionId, request.getContent().length());
+
+        SkillSession session;
+        session = accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
+
         String chatId = request.getChatId();
         if (chatId == null || chatId.isBlank()) {
-            try {
-                SkillSession session = sessionService.getSession(sessionId);
-                chatId = session.getImChatId();
-            } catch (IllegalArgumentException e) {
-                return ResponseEntity.notFound().build();
-            }
+            chatId = session.getBusinessSessionId();
         }
 
         if (chatId == null || chatId.isBlank()) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("success", false, "error", "No IM chat ID associated with this session"));
+            return ResponseEntity.ok(ApiResponse.error(400, "No IM chat ID associated with this session"));
         }
 
         boolean success = imMessageService.sendMessage(chatId, request.getContent());
 
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
         if (success) {
-            log.info("Sent content to IM: sessionId={}, chatId={}, contentLength={}",
-                    sessionId, chatId, request.getContent().length());
-            return ResponseEntity.ok(Map.of("success", true));
+            log.info("[EXIT] SkillMessageController.sendToIm: sessionId={}, chatId={}, contentLength={}, durationMs={}",
+                    sessionId, chatId, request.getContent().length(), elapsedMs);
+            return ResponseEntity.ok(ApiResponse.ok(Map.of("success", true)));
         } else {
-            log.error("Failed to send content to IM: sessionId={}, chatId={}", sessionId, chatId);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("success", false, "error", "Failed to send message to IM"));
+            log.error("[ERROR] SkillMessageController.sendToIm: sessionId={}, chatId={}, durationMs={}",
+                    sessionId, chatId, elapsedMs);
+            return ResponseEntity.ok(ApiResponse.error(500, "Failed to send message to IM"));
         }
     }
 
     /**
      * POST /api/skill/sessions/{sessionId}/permissions/{permId}
-     * Reply to a permission request (approve or reject).
-     * Routes the reply to AI-Gateway �?PCAgent �?OpenCode for execution.
+     * 回复权限请求。合法响应值："once"、"always"、"reject"。
+     * 将回复路由到 AI-Gateway → PCAgent → OpenCode 执行。
      */
     @PostMapping("/permissions/{permId}")
-    public ResponseEntity<Map<String, Object>> replyPermission(
-            @PathVariable Long sessionId,
+    public ResponseEntity<ApiResponse<Map<String, Object>>> replyPermission(
+            @CookieValue(value = "userId", required = false) String userIdCookie,
+            @PathVariable String sessionId,
             @PathVariable String permId,
             @RequestBody PermissionReplyRequest request) {
 
-        if (request.getApproved() == null) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("success", false, "error", "Field 'approved' is required"));
+        if (request.getResponse() == null || request.getResponse().isBlank()) {
+            return ResponseEntity.ok(ApiResponse.error(400, "Field 'response' is required"));
+        }
+        if (!VALID_PERMISSION_RESPONSES.contains(request.getResponse())) {
+            return ResponseEntity.ok(
+                    ApiResponse.error(400, "Invalid response value. Must be one of: once, always, reject"));
         }
 
-        // Verify session exists and is not closed
-        SkillSession session;
-        try {
-            session = sessionService.getSession(sessionId);
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
+        Long numericSessionId = ProtocolUtils.parseSessionId(sessionId);
+        if (numericSessionId == null) {
+            return ResponseEntity.ok(ApiResponse.error(400, "Invalid session ID"));
         }
+
+        long start = System.nanoTime();
+        log.info("[ENTRY] SkillMessageController.replyPermission: sessionId={}, permId={}, response={}",
+                sessionId, permId, request.getResponse());
+
+        SkillSession session;
+        session = accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
 
         if (session.getStatus() == SkillSession.Status.CLOSED) {
-            return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(Map.of("success", false, "error", "Session is closed"));
+            return ResponseEntity.ok(ApiResponse.error(409, "Session is closed"));
         }
 
-        if (session.getAgentId() == null) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("success", false, "error", "No agent associated with this session"));
+        if (session.getAk() == null) {
+            return ResponseEntity.ok(ApiResponse.error(400, "No agent associated with this session"));
         }
 
-        // Build permission_reply payload
-        String payload = buildPermissionReplyPayload(permId, request.getApproved(),
-                session.getToolSessionId());
+        if (session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
+            return ResponseEntity.ok(ApiResponse.error(500, "No toolSessionId available"));
+        }
 
-        // Send permission_reply invoke to AI-Gateway
-        gatewayRelayService.sendInvokeToGateway(
-                session.getAgentId().toString(),
-                sessionId.toString(),
-                "permission_reply",
-                payload);
+        // 使用子 session 真实 ID（如果是 subagent 的 permission）
+        String targetToolSessionId = request.getSubagentSessionId() != null
+                ? request.getSubagentSessionId()
+                : session.getToolSessionId();
 
-        log.info("Permission reply sent: sessionId={}, permId={}, approved={}",
-                sessionId, permId, request.getApproved());
-
-        return ResponseEntity.ok(Map.of(
-                "success", true,
+        String payload = PayloadBuilder.buildPayload(objectMapper, Map.of(
                 "permissionId", permId,
-                "approved", request.getApproved()));
+                "response", request.getResponse(),
+                "toolSessionId", targetToolSessionId));
+
+        // 向 AI-Gateway 发送 permission_reply invoke 命令
+        gatewayRelayService.sendInvokeToGateway(
+                new InvokeCommand(session.getAk(),
+                        session.getUserId(),
+                        sessionId,
+                        GatewayActions.PERMISSION_REPLY,
+                        payload));
+
+        StreamMessage replyMessage = StreamMessage.builder()
+                .type(StreamMessage.Types.PERMISSION_REPLY)
+                .role("assistant")
+                .permission(StreamMessage.PermissionInfo.builder()
+                        .permissionId(permId)
+                        .response(request.getResponse())
+                        .build())
+                .subagentSessionId(request.getSubagentSessionId())
+                .build();
+        gatewayRelayService.publishProtocolMessage(sessionId, replyMessage);
+
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        log.info("[EXIT] SkillMessageController.replyPermission: sessionId={}, permId={}, response={}, durationMs={}",
+                sessionId, permId, request.getResponse(), elapsedMs);
+
+        return ResponseEntity.ok(ApiResponse.ok(Map.of(
+                "welinkSessionId", sessionId,
+                "permissionId", permId,
+                "response", request.getResponse())));
     }
 
-    /**
-     * Build the JSON payload for a chat invoke command.
-     */
-    private String buildChatPayload(String text, String toolSessionId) {
-        var node = objectMapper.createObjectNode();
-        node.put("text", text);
-        if (toolSessionId != null) {
-            node.put("toolSessionId", toolSessionId);
-        }
-        try {
-            return objectMapper.writeValueAsString(node);
-        } catch (JsonProcessingException e) {
-            log.error("Failed to serialize chat payload", e);
-            return "{}";
-        }
-    }
-
-    /**
-     * Build the JSON payload for a permission_reply invoke command.
-     */
-    private String buildPermissionReplyPayload(String permissionId, boolean approved,
-            String toolSessionId) {
-        var node = objectMapper.createObjectNode();
-        node.put("permissionId", permissionId);
-        node.put("approved", approved);
-        if (toolSessionId != null) {
-            node.put("toolSessionId", toolSessionId);
-        }
-        try {
-            return objectMapper.writeValueAsString(node);
-        } catch (JsonProcessingException e) {
-            log.error("Failed to serialize permission reply payload", e);
-            return "{}";
-        }
-    }
-
+    /** 发送消息请求体。 */
     @Data
     public static class SendMessageRequest {
         private String content;
+        /** 可选：存在时路由到 question_reply 而非 chat */
+        private String toolCallId;
+        /** 可选：subagent 的真实 toolSessionId，用于将 question reply 路由到正确的子会话 */
+        private String subagentSessionId;
     }
 
+    /** 发送到 IM 请求体。 */
     @Data
     public static class SendToImRequest {
         private String content;
         private String chatId;
     }
 
+    /** 权限回复请求体。 */
     @Data
     public static class PermissionReplyRequest {
-        private Boolean approved;
+        /** 合法值："once"、"always"、"reject" */
+        private String response;
+        /** 可选：subagent 的真实 toolSessionId，用于将 permission reply 路由到正确的子会话 */
+        private String subagentSessionId;
     }
 }

@@ -1012,27 +1012,48 @@ body {
 
 .question-card__options {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 6px;
     margin-bottom: 8px;
 }
 
 .question-card__option {
-    padding: 5px 14px;
-    border-radius: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 8px 14px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--border-primary);
     background-color: var(--bg-surface);
     color: var(--text-primary);
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 500;
     cursor: pointer;
     transition: all 0.15s;
     font-family: inherit;
+    text-align: left;
+    width: 100%;
+}
+
+.question-card__option-label {
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.question-card__option-desc {
+    font-weight: 400;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
 }
 
 .question-card__option:hover:not(:disabled) {
     border-color: var(--accent);
     background-color: var(--bg-active);
+}
+
+.question-card__option:hover:not(:disabled) .question-card__option-label {
     color: var(--accent);
 }
 
@@ -1044,6 +1065,7 @@ body {
 .question-card__input-group {
     display: flex;
     gap: 6px;
+    align-items: flex-start;
 }
 
 .question-card__input {
@@ -1057,6 +1079,10 @@ body {
     font-family: inherit;
     outline: none;
     transition: border-color 0.15s;
+    resize: vertical;
+    min-height: 72px;
+    line-height: 1.5;
+    white-space: pre-wrap;
 }
 
 .question-card__input:focus {
@@ -1187,4 +1213,99 @@ body {
 .permission-card__status {
     font-size: 12px;
     color: var(--text-muted);
+}
+
+/* ===== SubtaskBlock ===== */
+.subtask-block {
+    border-left: 3px solid var(--border-primary, #30363d);
+    margin: 8px 0;
+    border-radius: 8px;
+    background: var(--bg-tertiary, #1c2128);
+    overflow: hidden;
+}
+.subtask-block--running { border-left-color: var(--accent, #58a6ff); }
+.subtask-block--completed { border-left-color: var(--success, #3fb950); }
+.subtask-block--error { border-left-color: var(--danger, #f85149); }
+
+.subtask-block__header {
+    padding: 10px 14px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    user-select: none;
+}
+.subtask-block__header:hover { background: rgba(255, 255, 255, 0.03); }
+
+.subtask-block__title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 500;
+}
+.subtask-block__icon { font-size: 14px; }
+.subtask-block__agent-name { color: var(--text-primary, #e6edf3); }
+
+.subtask-block__status-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+}
+.subtask-block__status-dot--running {
+    background: var(--accent, #58a6ff);
+    animation: subtask-pulse 1.5s ease-in-out infinite;
+}
+.subtask-block__status-dot--completed { background: var(--success, #3fb950); }
+.subtask-block__status-dot--error { background: var(--danger, #f85149); }
+
+@keyframes subtask-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.subtask-block__status-label { font-size: 12px; color: var(--text-secondary, #8b949e); }
+
+.subtask-block__meta {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--text-secondary, #8b949e);
+}
+.subtask-block__prompt-preview {
+    font-style: italic; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; max-width: 300px;
+}
+.subtask-block__tool-count { color: var(--text-muted, #6e7681); }
+.subtask-block__toggle {
+    font-size: 11px; color: var(--text-secondary, #8b949e);
+    align-self: flex-end; margin-top: -20px;
+}
+
+.subtask-block__content {
+    padding: 8px 14px 14px;
+    border-top: 1px solid var(--border-primary, #30363d);
+    display: flex; flex-direction: column; gap: 8px;
+}
+.subtask-block__text {
+    font-size: 13px; line-height: 1.5;
+    color: var(--text-primary, #e6edf3); white-space: pre-wrap;
+}
+
+/* Pending interaction badge */
+.subtask-block__pending-badge {
+    font-size: 11px;
+    color: #fff;
+    background: var(--danger, #f85149);
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-weight: 500;
+    animation: subtask-pulse 1.5s ease-in-out infinite;
+}
+
+/* Permission/Question source label */
+.permission-card__source,
+.question-card__source {
+    font-size: 12px;
+    color: var(--text-secondary, #8b949e);
+    margin-bottom: 4px;
+    font-weight: 500;
 }
