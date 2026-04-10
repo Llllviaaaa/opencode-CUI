@@ -276,9 +276,10 @@ def test_e2e_sysconfig_crud():
         "status": 1,
         "sortOrder": 0
     })
-    if resp.status_code == 200:
+    resp_json = resp.json()
+    if resp.status_code == 200 and resp_json.get("code", resp_json.get("id")) is not None:
         ok("SC-01", "创建配置成功")
-        config_id = resp.json().get("id")
+        config_id = resp_json.get("data", resp_json).get("id") if isinstance(resp_json.get("data"), dict) else resp_json.get("id")
     else:
         fail("SC-01", "创建配置", f"status={resp.status_code}, body={resp.text}")
         return
@@ -286,7 +287,8 @@ def test_e2e_sysconfig_crud():
     # List
     resp2 = requests.get(f"{SS_URL}/api/admin/configs", params={"type": "cloud_request_strategy"})
     if resp2.status_code == 200:
-        configs = resp2.json()
+        resp2_json = resp2.json()
+        configs = resp2_json.get("data", resp2_json) if isinstance(resp2_json, dict) else resp2_json
         found = any(c["configKey"] == "e2e_test_app" for c in configs)
         if found:
             ok("SC-02", "查询列表包含新建配置")
@@ -484,6 +486,7 @@ def test_e2e_05_push_validation():
     print("\n[E2E-05] IM 推送校验")
 
     reset_mock()
+    time.sleep(0.5)  # 确保上一轮异步消息处理完
 
     # topicId 不存在
     requests.post(f"{GW_URL}/api/gateway/cloud/im-push", json={

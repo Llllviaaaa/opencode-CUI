@@ -77,6 +77,31 @@ def get_assistant_info():
         }), 200  # 上游接口业务错误也返回 200
 
 
+# ========== 1b. 助手账号解析 API ==========
+
+# assistantAccount → {ak, ownerWelinkId} 映射
+ASSISTANT_ACCOUNT_MAP = {
+    "test-business-ak": {"ak": "test-business-ak", "ownerWelinkId": "owner-001"},
+    "test-personal-ak": {"ak": "test-personal-ak", "ownerWelinkId": "owner-002"},
+}
+
+@app.route('/assistant-api/integration/v4-1/we-crew/instance/query', methods=['GET'])
+def resolve_assistant_account():
+    account = request.args.get('partnerAccount')
+    print(f"[助手解析] 查询: partnerAccount={account}")
+
+    info = ASSISTANT_ACCOUNT_MAP.get(account)
+    if info:
+        return jsonify({
+            "data": {
+                "appKey": info["ak"],
+                "ownerWelinkId": info["ownerWelinkId"]
+            }
+        })
+    else:
+        return jsonify({"data": None}), 200
+
+
 # ========== 2. 云端 Agent SSE 接口 ==========
 
 @app.route('/api/v1/chat', methods=['POST'])

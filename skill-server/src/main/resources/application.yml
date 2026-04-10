@@ -67,7 +67,7 @@ skill:
     inbound-token: ${IM_INBOUND_TOKEN:e2e-test-token}
     reply-state-ttl-minutes: 30
   assistant:
-    resolve-url: ${ASSISTANT_RESOLVE_URL:http://localhost:8080/assistant-api/integration/v4-1/we-crew/instance/query}
+    resolve-url: ${ASSISTANT_RESOLVE_URL:http://localhost:9999/assistant-api/integration/v4-1/we-crew/instance/query}
     resolve-token: ${ASSISTANT_RESOLVE_TOKEN:}
     cache-ttl-minutes: 30
   context:
