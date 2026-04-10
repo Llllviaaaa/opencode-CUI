@@ -13,6 +13,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -52,7 +53,7 @@ class SkillRelayServiceTest {
     @BeforeEach
     void setUp() {
         routingTable = new UpstreamRoutingTable(100000, 30);
-        service = new SkillRelayService(redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, legacyStrategy);
+        service = new SkillRelayService(redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, legacyStrategy, List.of());
     }
 
     private static Map<String, Object> mutableAttrs(String source, String instanceId) {

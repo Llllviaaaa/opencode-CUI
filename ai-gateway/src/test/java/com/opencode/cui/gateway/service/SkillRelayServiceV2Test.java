@@ -15,6 +15,7 @@ import org.springframework.web.socket.WebSocketSession;
 
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -64,7 +65,7 @@ class SkillRelayServiceV2Test {
     @BeforeEach
     void setUp() {
         routingTable = new UpstreamRoutingTable(100000, 30);
-        service = new SkillRelayService(redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, legacyStrategy);
+        service = new SkillRelayService(redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, legacyStrategy, List.of());
         service.setEventRelayService(eventRelayService);
     }
 
