@@ -93,6 +93,12 @@ gateway:
   websocket:
     max-text-message-buffer-size-bytes: 1048576
 
+  # 云端路由信息查询
+  cloud-route:
+    api-url: ${CLOUD_ROUTE_API_URL:}
+    bearer-token: ${CLOUD_ROUTE_BEARER_TOKEN:}
+    cache-ttl-seconds: ${CLOUD_ROUTE_CACHE_TTL_SECONDS:300}
+
 skill:
   gateway:
     internal-token: ${SKILL_SERVER_INTERNAL_TOKEN:changeme}
