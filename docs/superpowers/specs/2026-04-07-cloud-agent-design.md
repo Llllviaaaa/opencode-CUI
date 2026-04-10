@@ -925,20 +925,20 @@ public class CloudProtocolClient {
 ```json
 {
   "assistantAccount": "assistant-bot-001",
-  "sessionType": "direct",
-  "sessionId": "im-session-12345",
-  "content": "您好，这是定时推送的消息内容",
-  "msgType": "text"
+  "sendUserAccount": "c30051824",
+  "imGroupId": null,
+  "topicId": "1001214",
+  "content": "您好，这是定时推送的消息内容"
 }
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| assistantAccount | String | ✅ | 助手账号（用于确定以哪个助手身份发送） |
-| sessionType | String | ✅ | `"direct"` / `"group"` |
-| sessionId | String | ✅ | IM 侧的会话 ID（群 ID 或单聊 ID） |
-| content | String | ✅ | 推送的文本内容（可含自定义 Markdown 协议） |
-| msgType | String | ✅ | 消息类型，当前固定 `"text"` |
+| assistantAccount | String | ✅ | 以哪个助手身份发送 |
+| sendUserAccount | String | ✅ | 目标用户账号 |
+| imGroupId | String | | 群 ID。有值 → 群聊推送；null → 单聊推送 |
+| topicId | String | ✅ | 会话主题 ID（= toolSessionId），用于 GW 路由 |
+| content | String | ✅ | 文本内容（可含自定义 Markdown 协议） |
 
 **认证**：云端调用此接口时由 GW 的 `CloudAuthService` 验证身份（复用 authType 策略）。
 
@@ -955,11 +955,12 @@ public class CloudPushController {
     public ResponseEntity<Void> imPush(@RequestBody ImPushRequest request) {
         GatewayMessage msg = new GatewayMessage();
         msg.setType("im_push");
+        msg.setToolSessionId(request.getTopicId());  // 用于路由到对应 SS 实例
         msg.setPayload(objectMapper.valueToTree(request));
         msg.setTraceId(UUID.randomUUID().toString());
 
-        // 通过现有 WS 通道发给 SS
-        skillRelayService.broadcastToSkill(msg);
+        // 通过现有上行路由（基于 toolSessionId）精确投递到对应 SS 实例
+        skillRelayService.relayToSkill(msg);
         return ResponseEntity.ok().build();
     }
 }
@@ -981,12 +982,18 @@ case "im_push" -> handleImPush(message);
 private void handleImPush(GatewayMessage message) {
     JsonNode payload = message.getPayload();
     String assistantAccount = payload.path("assistantAccount").asText();
-    String sessionType = payload.path("sessionType").asText();
-    String sessionId = payload.path("sessionId").asText();
+    String sendUserAccount = payload.path("sendUserAccount").asText();
+    String imGroupId = payload.path("imGroupId").asText(null);
     String content = payload.path("content").asText();
 
-    // 直接调用 IM 出站接口发送，不走会话管理
-    imOutboundService.sendMessage(assistantAccount, sessionType, sessionId, content);
+    // 根据 imGroupId 判断单聊/群聊，调用 IM 出站接口
+    if (imGroupId != null) {
+        // 群聊推送
+        imOutboundService.sendGroupMessage(assistantAccount, imGroupId, content);
+    } else {
+        // 单聊推送
+        imOutboundService.sendDirectMessage(assistantAccount, sendUserAccount, content);
+    }
 }
 ```
 

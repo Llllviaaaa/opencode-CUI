@@ -1166,20 +1166,20 @@ Content-Type: application/json
 ```json
 {
   "assistantAccount": "assistant-bot-001",
-  "sessionType": "direct",
-  "sessionId": "im-session-12345",
-  "content": "您好，这是定时推送的消息内容",
-  "msgType": "text"
+  "sendUserAccount": "c30051824",
+  "imGroupId": null,
+  "topicId": "1001214",
+  "content": "您好，这是定时推送的消息内容"
 }
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| assistantAccount | String | ✅ | 助手账号（以哪个助手身份发送） |
-| sessionType | String | ✅ | `"direct"`（单聊）/ `"group"`（群聊） |
-| sessionId | String | ✅ | IM 侧的会话 ID |
-| content | String | ✅ | 推送文本内容（可含自定义 Markdown 协议） |
-| msgType | String | ✅ | 消息类型，当前固定 `"text"` |
+| assistantAccount | String | ✅ | 以哪个助手身份发送 |
+| sendUserAccount | String | ✅ | 目标用户账号 |
+| imGroupId | String | | 群 ID。有值 → 群聊推送；null → 单聊推送 |
+| topicId | String | ✅ | 会话主题 ID（= toolSessionId），用于 GW 路由到对应 SS 实例 |
+| content | String | ✅ | 文本内容（可含自定义 Markdown 协议） |
 
 **响应**：
 
@@ -1194,24 +1194,26 @@ GW 收到推送请求后，构建 `GatewayMessage(type="im_push")` 通过现有 
 ```json
 {
   "type": "im_push",
+  "toolSessionId": "1001214",
   "traceId": "trace-uuid-xxx",
   "payload": {
     "assistantAccount": "assistant-bot-001",
-    "sessionType": "direct",
-    "sessionId": "im-session-12345",
-    "content": "您好，这是定时推送的消息内容",
-    "msgType": "text"
+    "sendUserAccount": "c30051824",
+    "imGroupId": null,
+    "content": "您好，这是定时推送的消息内容"
   }
 }
 ```
 
 ### 9.4 SS 处理
 
-SS 收到 `im_push` 后直接调用 IM 出站接口发送消息：
-- **不走会话管理**（不创建/查找 SkillSession）
+SS 收到 `im_push` 后：
+- 根据 `assistantAccount` + `sendUserAccount` / `imGroupId` 确定 IM 发送目标
+- 直接调用 IM 出站接口发送消息
 - **不走事件翻译**（不经过 Translator）
 - **不推送到 MiniApp 前端**
-- 纯透传：收到 → 发到 IM
+
+> GW 通过 `toolSessionId`（= topicId）使用现有上行路由机制（`gw:route:{toolSessionId}`）精确投递到拥有该会话的 SS 实例。
 
 ---
 
