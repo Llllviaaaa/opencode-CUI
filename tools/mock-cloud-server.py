@@ -39,6 +39,16 @@ ASSISTANT_INFO = {
 # IM 消息记录
 im_messages = []
 
+# SSE 请求记录
+sse_requests = []
+
+# 开关控制（用于模拟故障）
+switches = {
+    "upstream_api_enabled": True,   # 上游 API 是否可用
+    "sse_enabled": True,            # 云端 SSE 是否可用
+    "sse_return_429": False,        # SSE 是否返回 429
+}
+
 
 # ========== 1. 上游助手信息 API ==========
 
@@ -46,6 +56,10 @@ im_messages = []
 def get_assistant_info():
     ak = request.args.get('ak')
     print(f"[上游API] 查询助手信息: ak={ak}")
+
+    if not switches["upstream_api_enabled"]:
+        print(f"[上游API] 已禁用，返回 503")
+        return jsonify({"error": "service unavailable"}), 503
 
     info = ASSISTANT_INFO.get(ak)
     if info:
@@ -73,6 +87,23 @@ def cloud_chat():
     assistant_account = body.get('assistantAccount', '')
 
     print(f"[云端SSE] 收到请求: topicId={topic_id}, content={content}")
+
+    # 记录请求
+    sse_requests.append({
+        "topicId": topic_id,
+        "content": content,
+        "assistantAccount": assistant_account,
+        "body": body,
+        "time": time.time()
+    })
+
+    if not switches["sse_enabled"]:
+        print(f"[云端SSE] 已禁用，返回 503")
+        return jsonify({"error": "service unavailable"}), 503
+
+    if switches["sse_return_429"]:
+        print(f"[云端SSE] 返回 429 限流")
+        return jsonify({"error": "rate limited"}), 429
 
     def generate_sse():
         ts = topic_id
@@ -207,7 +238,7 @@ def im_group_chat():
 
 @app.route('/mock/im-messages', methods=['GET'])
 def get_im_messages():
-    """查看所有收到的 IM 消息（测试验证用）"""
+    """查看所有收到的 IM 消息"""
     return jsonify(im_messages)
 
 
@@ -218,16 +249,49 @@ def clear_im_messages():
     return jsonify({"message": "cleared"})
 
 
+@app.route('/mock/sse-requests', methods=['GET'])
+def get_sse_requests():
+    """查看所有收到的 SSE 请求"""
+    return jsonify(sse_requests)
+
+
+@app.route('/mock/sse-requests', methods=['DELETE'])
+def clear_sse_requests():
+    """清空 SSE 请求记录"""
+    sse_requests.clear()
+    return jsonify({"message": "cleared"})
+
+
+@app.route('/mock/switches', methods=['GET'])
+def get_switches():
+    """查看开关状态"""
+    return jsonify(switches)
+
+
+@app.route('/mock/switches', methods=['PUT'])
+def set_switches():
+    """设置开关（用于模拟故障）"""
+    body = request.get_json()
+    for k, v in body.items():
+        if k in switches:
+            switches[k] = v
+            print(f"[开关] {k} = {v}")
+    return jsonify(switches)
+
+
+@app.route('/mock/switches', methods=['DELETE'])
+def reset_switches():
+    """重置所有开关为默认值"""
+    switches["upstream_api_enabled"] = True
+    switches["sse_enabled"] = True
+    switches["sse_return_429"] = False
+    print("[开关] 全部重置")
+    return jsonify(switches)
+
+
 @app.route('/mock/health', methods=['GET'])
 def health():
-    return jsonify({"status": "ok", "services": [
-        "上游助手信息 API: GET /appstore/wecodeapi/open/ak/info?ak=xxx",
-        "云端 SSE: POST /api/v1/chat",
-        "IM 单聊: POST /v1/welinkim/im-service/chat/app-user-chat",
-        "IM 群聊: POST /v1/welinkim/im-service/chat/app-group-chat",
-        "IM 消息查看: GET /mock/im-messages",
-        "IM 消息清空: DELETE /mock/im-messages",
-    ]})
+    return jsonify({"status": "ok", "switches": switches})
 
 
 # ========== SSE 辅助函数 ==========
@@ -249,14 +313,14 @@ if __name__ == '__main__':
     print("  IM 单聊:   POST http://localhost:9999/v1/welinkim/im-service/chat/app-user-chat")
     print("  IM 群聊:   POST http://localhost:9999/v1/welinkim/im-service/chat/app-group-chat")
     print()
-    print("测试用 AK：")
-    print("  业务助手: test-business-ak (identityType=3)")
-    print("  个人助手: test-personal-ak (identityType=2)")
-    print()
-    print("辅助接口：")
-    print("  GET    http://localhost:9999/mock/health")
-    print("  GET    http://localhost:9999/mock/im-messages")
-    print("  DELETE http://localhost:9999/mock/im-messages")
+    print("控制接口：")
+    print("  GET    /mock/switches        查看开关")
+    print("  PUT    /mock/switches        设置开关 (upstream_api_enabled, sse_enabled, sse_return_429)")
+    print("  DELETE /mock/switches        重置开关")
+    print("  GET    /mock/sse-requests    查看 SSE 请求记录")
+    print("  DELETE /mock/sse-requests    清空 SSE 请求记录")
+    print("  GET    /mock/im-messages     查看 IM 消息")
+    print("  DELETE /mock/im-messages     清空 IM 消息")
     print()
     print("=" * 60)
     app.run(host='0.0.0.0', port=9999, debug=True)
