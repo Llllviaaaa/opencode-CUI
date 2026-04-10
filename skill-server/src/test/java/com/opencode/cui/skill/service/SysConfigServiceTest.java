@@ -1,6 +1,6 @@
 package com.opencode.cui.skill.service;
 
-import com.opencode.cui.skill.mapper.SysConfigMapper;
+import com.opencode.cui.skill.repository.SysConfigMapper;
 import com.opencode.cui.skill.model.SysConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

@@ -33,6 +33,7 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public SseProtocolStrategy(CloudAuthService cloudAuthService, ObjectMapper objectMapper) {
         this(cloudAuthService, objectMapper,
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build());

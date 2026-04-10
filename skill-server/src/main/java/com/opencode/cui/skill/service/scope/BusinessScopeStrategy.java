@@ -53,9 +53,13 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
         // 从 command payload 提取 content
         String content = extractContent(command.payload());
 
+        // 从 command payload 提取 toolSessionId 作为 topicId
+        String toolSessionId = extractField(command.payload(), "toolSessionId");
+
         CloudRequestContext context = CloudRequestContext.builder()
                 .content(content)
                 .contentType("text")
+                .topicId(toolSessionId)
                 .build();
 
         ObjectNode cloudRequest = cloudRequestBuilder.buildCloudRequest(appId, context);
@@ -102,6 +106,20 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
     }
 
     // ------------------------------------------------------------------ private
+
+    private String extractField(String payload, String fieldName) {
+        if (payload == null || payload.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(payload);
+            JsonNode field = node.path(fieldName);
+            return field.isMissingNode() || field.isNull() ? null : field.asText();
+        } catch (JsonProcessingException e) {
+            log.debug("Failed to parse payload for field extraction: field={}, error={}", fieldName, e.getMessage());
+            return null;
+        }
+    }
 
     private String extractContent(String payload) {
         if (payload == null || payload.isBlank()) {

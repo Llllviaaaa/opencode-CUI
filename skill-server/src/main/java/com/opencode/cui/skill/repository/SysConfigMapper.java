@@ -1,4 +1,4 @@
-package com.opencode.cui.skill.mapper;
+package com.opencode.cui.skill.repository;
 
 import com.opencode.cui.skill.model.SysConfig;
 import org.apache.ibatis.annotations.Mapper;
