@@ -16,11 +16,15 @@ import com.opencode.cui.gateway.ws.AsyncSessionSender;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
+import com.opencode.cui.gateway.service.cloud.InvokeRouteStrategy;
+
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -55,6 +59,9 @@ public class SkillRelayService {
 
     /** 旧版路由策略（兼容不带 instanceId 的 Source 服务） */
     private final LegacySkillRelayStrategy legacyStrategy;
+
+    /** Invoke 路由策略 Map：scope → strategy */
+    private final Map<String, InvokeRouteStrategy> routeStrategyMap;
 
     /**
      * [Mesh] Source 实例连接池：source_type → { ssInstanceId → { sessionId → WebSocketSession } }
@@ -122,12 +129,18 @@ public class SkillRelayService {
             ObjectMapper objectMapper,
             @Value("${gateway.instance-id:${HOSTNAME:gateway-local}}") String gatewayInstanceId,
             UpstreamRoutingTable routingTable,
-            LegacySkillRelayStrategy legacyStrategy) {
+            LegacySkillRelayStrategy legacyStrategy,
+            List<InvokeRouteStrategy> invokeRouteStrategies) {
         this.redisMessageBroker = redisMessageBroker;
         this.objectMapper = objectMapper;
         this.gatewayInstanceId = gatewayInstanceId;
         this.routingTable = routingTable;
         this.legacyStrategy = legacyStrategy;
+        Map<String, InvokeRouteStrategy> strategyMap = new HashMap<>();
+        for (InvokeRouteStrategy s : invokeRouteStrategies) {
+            strategyMap.put(s.getScope(), s);
+        }
+        this.routeStrategyMap = strategyMap;
     }
 
     /**
@@ -670,6 +683,16 @@ public class SkillRelayService {
         if (isLegacySession(session)) {
             legacyStrategy.handleInvokeFromSkill(session, message);
             return;
+        }
+
+        // 业务助手走云端路由策略，个人助手保持现有逻辑
+        String scope = Optional.ofNullable(message.getAssistantScope()).orElse("personal");
+        if ("business".equals(scope)) {
+            InvokeRouteStrategy strategy = routeStrategyMap.get("business");
+            if (strategy != null) {
+                strategy.route(message);
+                return;
+            }
         }
 
         GatewayMessage tracedMessage = message.ensureTraceId();
