@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -190,6 +191,22 @@ public class RedisMessageBroker {
             return null;
         }
         return redisTemplate.opsForValue().get("conn:ak:" + ak);
+    }
+
+    // ==================== toolSessionId → sessionId 缓存 ====================
+
+    private static final String TOOL_SESSION_PREFIX = "ss:tool-session:";
+    private static final long TOOL_SESSION_TTL_HOURS = 24;
+
+    public String getToolSessionMapping(String toolSessionId) {
+        return redisTemplate.opsForValue().get(TOOL_SESSION_PREFIX + toolSessionId);
+    }
+
+    public void setToolSessionMapping(String toolSessionId, String sessionId) {
+        redisTemplate.opsForValue().set(
+                TOOL_SESSION_PREFIX + toolSessionId,
+                sessionId,
+                TOOL_SESSION_TTL_HOURS, TimeUnit.HOURS);
     }
 
     // ==================== 跨实例消息序号（Task 2.8） ====================

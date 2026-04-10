@@ -802,14 +802,28 @@ public class GatewayMessageRouter {
         String toolSessionId = node.path("toolSessionId").asText(null);
         if (toolSessionId != null) {
             try {
+                // 优先查 Redis 缓存
+                String cachedSessionId = redisMessageBroker.getToolSessionMapping(toolSessionId);
+                if (cachedSessionId != null) {
+                    RouteResponseSender sender = routeResponseSender;
+                    if (sender != null) {
+                        sender.sendRouteConfirm(toolSessionId, cachedSessionId);
+                    }
+                    return cachedSessionId;
+                }
+
+                // 缓存未命中，查 DB
                 SkillSession session = sessionService.findByToolSessionId(toolSessionId);
                 if (session != null) {
+                    String resolvedSessionId = session.getId().toString();
+                    // 写入 Redis 缓存
+                    redisMessageBroker.setToolSessionMapping(toolSessionId, resolvedSessionId);
                     // 找到归属 session → 回复 route_confirm
                     RouteResponseSender sender = routeResponseSender;
                     if (sender != null) {
-                        sender.sendRouteConfirm(toolSessionId, session.getId().toString());
+                        sender.sendRouteConfirm(toolSessionId, resolvedSessionId);
                     }
-                    return session.getId().toString();
+                    return resolvedSessionId;
                 }
                 // 未找到 → 回复 route_reject
                 log.warn("Upstream message session not found: type={}, toolSessionId={}, reason=session_not_found",
