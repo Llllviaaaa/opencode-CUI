@@ -62,9 +62,9 @@ skill:
     reconnect-max-delay-ms: 30000
   im:
     # IM platform API base URL for sending messages
-    api-url: ${IM_API_URL:http://localhost:8080/api/im}
+    api-url: ${IM_API_URL:http://localhost:9999}
     token: ${IM_TOKEN:}
-    inbound-token: ${IM_INBOUND_TOKEN:}
+    inbound-token: ${IM_INBOUND_TOKEN:e2e-test-token}
     reply-state-ttl-minutes: 30
   assistant:
     resolve-url: ${ASSISTANT_RESOLVE_URL:http://localhost:8080/assistant-api/integration/v4-1/we-crew/instance/query}
@@ -93,6 +93,10 @@ skill:
     auto-create-timeout-seconds: ${SKILL_SESSION_AUTO_CREATE_TIMEOUT_SECONDS:30}
     rebuild-max-attempts: ${SKILL_SESSION_REBUILD_MAX_ATTEMPTS:3}
     rebuild-cooldown-seconds: ${SKILL_SESSION_REBUILD_COOLDOWN_SECONDS:30}
+  assistant-info:
+    api-url: ${ASSISTANT_INFO_API_URL:http://localhost:9999/appstore/wecodeapi/open/ak/info}
+    api-token: ${ASSISTANT_INFO_API_TOKEN:}
+    cache-ttl-seconds: ${ASSISTANT_INFO_CACHE_TTL_SECONDS:300}
   assistant-id:
     enabled: ${SKILL_ASSISTANT_ID_ENABLED:true}
     target-tool-type: ${SKILL_ASSISTANT_ID_TARGET_TOOL_TYPE:assistant}

@@ -21,7 +21,7 @@ import os
 MOCK_URL = os.environ.get("MOCK_URL", "http://localhost:9999")
 SS_URL = os.environ.get("SS_URL", "http://localhost:8082")
 GW_URL = os.environ.get("GW_URL", "http://localhost:8081")
-IM_INBOUND_TOKEN = os.environ.get("IM_INBOUND_TOKEN", "")
+IM_INBOUND_TOKEN = os.environ.get("IM_INBOUND_TOKEN", "e2e-test-token")
 
 passed = 0
 failed = 0
