@@ -1393,16 +1393,30 @@ case "im_push" -> handleImPush(message);
 private void handleImPush(GatewayMessage message) {
     JsonNode payload = message.getPayload();
     String assistantAccount = payload.path("assistantAccount").asText();
-    String sessionType = payload.path("sessionType").asText();
-    String sessionId = payload.path("sessionId").asText();
+    String sendUserAccount = payload.path("sendUserAccount").asText();
+    String imGroupId = payload.path("imGroupId").asText(null);
+    String topicId = message.getToolSessionId();
     String content = payload.path("content").asText();
-    String msgType = payload.path("msgType").asText("text");
 
-    log.info("Handling im_push: assistantAccount={}, sessionType={}, sessionId={}, traceId={}",
-            assistantAccount, sessionType, sessionId, message.getTraceId());
+    // 校验 topicId 对应的会话确实属于该 assistantAccount
+    SkillSession session = sessionService.findByToolSessionId(topicId);
+    if (session == null) {
+        log.warn("im_push ignored: no session found for topicId={}", topicId);
+        return;
+    }
+    String resolvedAccount = assistantAccountResolverService.resolveAccount(session.getAk());
+    if (!assistantAccount.equals(resolvedAccount)) {
+        log.warn("im_push rejected: assistantAccount mismatch, request={}, resolved={}",
+                assistantAccount, resolvedAccount);
+        return;
+    }
 
-    // 直接调用 IM 出站接口发送，不走会话管理
-    imOutboundService.sendMessage(assistantAccount, sessionType, sessionId, content);
+    // 根据 imGroupId 判断单聊/群聊
+    if (imGroupId != null) {
+        imOutboundService.sendGroupMessage(assistantAccount, imGroupId, content);
+    } else {
+        imOutboundService.sendDirectMessage(assistantAccount, sendUserAccount, content);
+    }
 }
 ```
 
@@ -1422,194 +1436,9 @@ git commit -m "feat(skill): handle im_push message for cloud IM push"
 
 ---
 
-## Phase 6: 云端 Question/Permission 旁路回复（P2）
+## Phase 6: 配置 + 集成测试
 
-> 本 Phase 为 P2 优先级，首期可跳过。首期要求云端避免返回 question/permission 事件。
-
-### Task 17: GW SSE 连接映射管理
-
-**Files:**
-- Modify: `ai-gateway/src/main/java/com/opencode/cui/gateway/service/CloudAgentService.java`
-
-- [ ] **Step 1: 新增 SSE 连接映射**
-
-在 `CloudAgentService` 中维护 `topicId → SSE 连接上下文` 的映射：
-
-```java
-// topicId → 活跃的 SSE 连接上下文（用于旁路回复时定位连接）
-private final ConcurrentHashMap<String, ActiveSseConnection> activeSseConnections = new ConcurrentHashMap<>();
-
-@Data
-private static class ActiveSseConnection {
-    private final String ak;
-    private final String endpoint;
-    private final String appId;
-    private final String authType;
-    private final Instant createdAt;
-}
-```
-
-- [ ] **Step 2: 在 handleInvoke(chat) 时注册连接映射**
-
-```java
-// chat invoke 建立 SSE 连接时
-String topicId = invokeMessage.getPayload().path("cloudRequest").path("topicId").asText();
-activeSseConnections.put(topicId, new ActiveSseConnection(ak, routeInfo.getEndpoint(), routeInfo.getAppId(), routeInfo.getAuthType(), Instant.now()));
-
-// SSE 结束（tool_done/tool_error）时清理
-activeSseConnections.remove(topicId);
-```
-
-- [ ] **Step 3: 编译验证**
-
-Run: `cd ai-gateway && mvn compile`
-Expected: BUILD SUCCESS
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add ai-gateway/src/main/java/com/opencode/cui/gateway/service/CloudAgentService.java
-git commit -m "feat(gateway): add SSE connection mapping for sideband reply"
-```
-
----
-
-### Task 18: GW 旁路回复路由
-
-**Files:**
-- Modify: `ai-gateway/src/main/java/com/opencode/cui/gateway/service/CloudAgentService.java`
-- Modify: `ai-gateway/src/main/java/com/opencode/cui/gateway/service/cloud/BusinessInvokeRouteStrategy.java`
-
-- [ ] **Step 1: CloudAgentService 新增 handleReply 方法**
-
-```java
-public void handleReply(GatewayMessage invokeMessage) {
-    String action = invokeMessage.getAction();
-    JsonNode payload = invokeMessage.getPayload();
-    String topicId = payload.path("toolSessionId").asText();
-
-    // 从连接映射获取云端信息
-    ActiveSseConnection conn = activeSseConnections.get(topicId);
-    if (conn == null) {
-        log.warn("No active SSE connection for topicId={}, cannot send reply", topicId);
-        GatewayMessage errorMsg = buildCloudError(invokeMessage,
-                new RuntimeException("No active SSE connection for reply"));
-        skillRelayService.relayToSkill(errorMsg);
-        return;
-    }
-
-    // 构建旁路 REST 请求体
-    ObjectNode replyBody = objectMapper.createObjectNode();
-    replyBody.put("type", action); // "question_reply" / "permission_reply"
-    replyBody.put("topicId", topicId);
-
-    if ("question_reply".equals(action)) {
-        replyBody.put("toolCallId", payload.path("toolCallId").asText());
-        replyBody.put("answer", payload.path("answer").asText());
-    } else if ("permission_reply".equals(action)) {
-        replyBody.put("permissionId", payload.path("permissionId").asText());
-        replyBody.put("response", payload.path("response").asText());
-    }
-
-    // 调云端旁路 REST 接口
-    String replyEndpoint = conn.getEndpoint() + "/reply";
-    try {
-        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                .uri(URI.create(replyEndpoint))
-                .header("Content-Type", "application/json")
-                .header("X-Trace-Id", invokeMessage.getTraceId())
-                .header("X-App-Id", conn.getAppId())
-                .POST(HttpRequest.BodyPublishers.ofString(
-                        objectMapper.writeValueAsString(replyBody)));
-
-        cloudAuthService.applyAuth(requestBuilder, conn.getAppId(), conn.getAuthType());
-
-        HttpResponse<String> response = httpClient.send(
-                requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
-
-        if (response.statusCode() != 200) {
-            log.error("Cloud reply endpoint returned {}: {}", response.statusCode(), response.body());
-        }
-    } catch (Exception e) {
-        log.error("Failed to send reply to cloud for topicId={}", topicId, e);
-    }
-    // 不需要处理响应 —— 后续事件通过原有 SSE 连接回来
-}
-```
-
-- [ ] **Step 2: BusinessInvokeRouteStrategy 增加 action 路由**
-
-```java
-@Override
-public void route(GatewayMessage message) {
-    String action = message.getAction();
-    if ("question_reply".equals(action) || "permission_reply".equals(action)) {
-        cloudAgentService.handleReply(message);
-    } else {
-        cloudAgentService.handleInvoke(message);
-    }
-}
-```
-
-- [ ] **Step 3: 编译验证**
-
-Run: `cd ai-gateway && mvn compile`
-Expected: BUILD SUCCESS
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add ai-gateway/src/main/java/com/opencode/cui/gateway/service/CloudAgentService.java \
-  ai-gateway/src/main/java/com/opencode/cui/gateway/service/cloud/BusinessInvokeRouteStrategy.java
-git commit -m "feat(gateway): add sideband reply routing for question/permission"
-```
-
----
-
-### Task 19: SS 侧 question_reply/permission_reply invoke 构建
-
-**Files:**
-- Modify: `skill-server/src/main/java/com/opencode/cui/skill/service/scope/BusinessScopeStrategy.java`
-
-- [ ] **Step 1: BusinessScopeStrategy.buildInvoke 支持 reply action**
-
-```java
-@Override
-public GatewayMessage buildInvoke(InvokeCommand command, AssistantInfo info) {
-    GatewayMessage msg = buildInvokeMessage(command);
-    msg.setAssistantScope("business");
-
-    String action = command.getAction();
-    if ("question_reply".equals(action) || "permission_reply".equals(action)) {
-        // reply 不需要 cloudRequest，payload 直接透传（answer/toolCallId 或 permissionId/response）
-        return msg;
-    }
-
-    // chat：构建 cloudRequest
-    ObjectNode cloudRequest = cloudRequestBuilder.buildCloudRequest(
-            info.getAppId(), buildCloudRequestContext(command));
-    msg.getPayload().set("cloudRequest", cloudRequest);
-    return msg;
-}
-```
-
-- [ ] **Step 2: 编译验证**
-
-Run: `cd skill-server && mvn compile`
-Expected: BUILD SUCCESS
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add skill-server/src/main/java/com/opencode/cui/skill/service/scope/BusinessScopeStrategy.java
-git commit -m "feat(skill): support question_reply/permission_reply in BusinessScopeStrategy"
-```
-
----
-
-## Phase 7: 配置 + 集成测试
-
-### Task 20: 端到端集成验证
+### Task 17: 端到端集成验证
 
 - [ ] **Step 1: 确保配置完整**
 
@@ -1659,23 +1488,14 @@ curl -X POST http://localhost:8080/api/admin/configs \
 ```bash
 curl -X POST http://localhost:8081/api/gateway/cloud/im-push \
   -H "Content-Type: application/json" \
-  -d '{"assistantAccount":"assistant-bot-001","sessionType":"direct","sessionId":"im-123","content":"定时推送测试","msgType":"text"}'
+  -d '{"assistantAccount":"assistant-bot-001","sendUserAccount":"c30051824","imGroupId":null,"topicId":"cloud-1001214","content":"定时推送测试"}'
 ```
 2. 验证 IM 出站收到消息
-3. 推送群聊消息，验证同样正常
-4. 验证推送不走会话管理（不创建 SkillSession）
+3. 推送群聊消息（imGroupId 有值），验证同样正常
+4. 验证 topicId 与 assistantAccount 不匹配时被拒绝
+5. 验证首次推送（无路由映射）时优雅失败
 
-- [ ] **Step 8: Question/Permission 旁路回复测试（P2）**
-
-> 如果 Phase 6 已实现，执行以下测试：
-
-1. 模拟云端 SSE 返回 question 事件，验证前端展示问题卡片
-2. 用户回答，验证 SS 发 invoke(action=question_reply) → GW 调旁路 REST
-3. 验证云端收到回复后继续在同一 SSE 推送后续事件
-4. 模拟 permission.ask + permission_reply 同样流程
-5. 测试 SSE 连接超时场景
-
-- [ ] **Step 9: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git commit -m "test: cloud agent end-to-end integration verification"
