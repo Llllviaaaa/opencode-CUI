@@ -8,6 +8,7 @@ import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.config.AssistantIdProperties;
 import com.opencode.cui.skill.service.AssistantAccountResolverService;
+import com.opencode.cui.skill.service.AssistantInfoService;
 import com.opencode.cui.skill.service.ContextInjectionService;
 import com.opencode.cui.skill.service.GatewayActions;
 import com.opencode.cui.skill.service.GatewayApiClient;
@@ -17,6 +18,8 @@ import com.opencode.cui.skill.service.ImSessionManager;
 import com.opencode.cui.skill.service.PayloadBuilder;
 import com.opencode.cui.skill.service.SessionRebuildService;
 import com.opencode.cui.skill.service.SkillMessageService;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
+import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -55,6 +58,8 @@ public class ImInboundController {
     private final SkillMessageService messageService; // 消息持久化服务：保存用户/助手消息到数据库
     private final SessionRebuildService rebuildService; // 会话重建服务：预缓存消息供 session 重建后重发
     private final ObjectMapper objectMapper; // JSON 序列化工具
+    private final AssistantInfoService assistantInfoService; // 助手信息查询服务
+    private final AssistantScopeDispatcher scopeDispatcher; // 助手作用域调度器
 
     public ImInboundController(
             AssistantAccountResolverService resolverService,
@@ -66,7 +71,9 @@ public class ImInboundController {
             GatewayRelayService gatewayRelayService,
             SkillMessageService messageService,
             SessionRebuildService rebuildService,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            AssistantInfoService assistantInfoService,
+            AssistantScopeDispatcher scopeDispatcher) {
         this.resolverService = resolverService;
         this.assistantIdProperties = assistantIdProperties;
         this.gatewayApiClient = gatewayApiClient;
@@ -77,6 +84,8 @@ public class ImInboundController {
         this.messageService = messageService;
         this.rebuildService = rebuildService;
         this.objectMapper = objectMapper;
+        this.assistantInfoService = assistantInfoService;
+        this.scopeDispatcher = scopeDispatcher;
     }
 
     /**
@@ -117,8 +126,10 @@ public class ImInboundController {
         log.info("ImInboundController.receiveMessage: resolved assistant={}, ak={}, ownerWelinkId={}",
                 request.assistantAccount(), ak, ownerWelinkId);
 
-        // ========== 第 3.5 步：Agent 在线检查（开关控制，先判断 toolType） ==========
-        if (assistantIdProperties.isEnabled()) {
+        // ========== 第 3.5 步：Agent 在线检查（开关控制，业务助手跳过） ==========
+        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
+                assistantInfoService.getCachedScope(ak));
+        if (assistantIdProperties.isEnabled() && scopeStrategy.requiresOnlineCheck()) {
             if (gatewayApiClient.getAgentByAk(ak) == null) {
                 log.warn("[SKIP] ImInboundController.receiveMessage: reason=agent_offline, ak={}, sessionType={}, sessionId={}",
                         ak, request.sessionType(), request.sessionId());

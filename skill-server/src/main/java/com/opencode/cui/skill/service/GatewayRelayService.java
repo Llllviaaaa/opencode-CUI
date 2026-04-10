@@ -5,9 +5,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.skill.logging.MdcHelper;
+import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
+import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -39,18 +42,24 @@ public class GatewayRelayService {
     private final SessionRebuildService rebuildService;
     private final RedisMessageBroker redisMessageBroker;
     private final AssistantIdResolverService assistantIdResolverService;
+    private final AssistantInfoService assistantInfoService;
+    private final AssistantScopeDispatcher scopeDispatcher;
     private volatile GatewayRelayTarget gatewayRelayTarget;
 
     public GatewayRelayService(ObjectMapper objectMapper,
             GatewayMessageRouter messageRouter,
             SessionRebuildService rebuildService,
             RedisMessageBroker redisMessageBroker,
-            AssistantIdResolverService assistantIdResolverService) {
+            AssistantIdResolverService assistantIdResolverService,
+            AssistantInfoService assistantInfoService,
+            AssistantScopeDispatcher scopeDispatcher) {
         this.objectMapper = objectMapper;
         this.messageRouter = messageRouter;
         this.rebuildService = rebuildService;
         this.redisMessageBroker = redisMessageBroker;
         this.assistantIdResolverService = assistantIdResolverService;
+        this.assistantInfoService = assistantInfoService;
+        this.scopeDispatcher = scopeDispatcher;
 
         // 向 MessageRouter 注入下行发送能力，避免循环依赖
         messageRouter.setDownstreamSender(this::sendInvokeToGateway);
@@ -90,9 +99,23 @@ public class GatewayRelayService {
             messageRouter.clearCompletionMark(command.sessionId());
         }
 
-        String messageText = buildInvokeMessage(command);
-        if (messageText == null) {
-            return;
+        // 根据助手类型（scope）选择构建策略
+        String messageText;
+        AssistantInfo info = assistantInfoService.getAssistantInfo(command.ak());
+        if (info != null && info.isBusiness()) {
+            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(info.getAssistantScope());
+            messageText = strategy.buildInvoke(command, info);
+            if (messageText == null) {
+                log.warn("[SKIP] GatewayRelayService.sendInvokeToGateway: reason=strategy_build_null, ak={}, scope=business",
+                        command.ak());
+                return;
+            }
+        } else {
+            // personal 策略（默认）：使用原有构建逻辑
+            messageText = buildInvokeMessage(command);
+            if (messageText == null) {
+                return;
+            }
         }
 
         GatewayRelayTarget relayTarget = gatewayRelayTarget;

@@ -16,6 +16,7 @@ import com.opencode.cui.skill.service.GatewayApiClient;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.ImMessageService;
 
+import com.opencode.cui.skill.service.AssistantInfoService;
 import com.opencode.cui.skill.service.ProtocolUtils;
 import com.opencode.cui.skill.service.PayloadBuilder;
 import com.opencode.cui.skill.service.ProtocolMessageMapper;
@@ -23,6 +24,8 @@ import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillMessageService;
 import com.opencode.cui.skill.service.GatewayMessageRouter;
 import com.opencode.cui.skill.service.SkillSessionService;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
+import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -64,6 +67,8 @@ public class SkillMessageController {
     private final ObjectMapper objectMapper;
     private final SessionAccessControlService accessControlService;
     private final GatewayMessageRouter messageRouter;
+    private final AssistantInfoService assistantInfoService;
+    private final AssistantScopeDispatcher scopeDispatcher;
 
     public SkillMessageController(SkillMessageService messageService,
             SkillSessionService sessionService,
@@ -73,7 +78,9 @@ public class SkillMessageController {
             ImMessageService imMessageService,
             ObjectMapper objectMapper,
             SessionAccessControlService accessControlService,
-            GatewayMessageRouter messageRouter) {
+            GatewayMessageRouter messageRouter,
+            AssistantInfoService assistantInfoService,
+            AssistantScopeDispatcher scopeDispatcher) {
         this.messageService = messageService;
         this.sessionService = sessionService;
         this.gatewayRelayService = gatewayRelayService;
@@ -83,6 +90,8 @@ public class SkillMessageController {
         this.objectMapper = objectMapper;
         this.accessControlService = accessControlService;
         this.messageRouter = messageRouter;
+        this.assistantInfoService = assistantInfoService;
+        this.scopeDispatcher = scopeDispatcher;
     }
 
     /**
@@ -146,8 +155,10 @@ public class SkillMessageController {
             return;
         }
 
-        // Agent 在线检查：开关开启时，先判断 toolType 是否为目标值，是目标值且离线时通知客户端
-        if (assistantIdProperties.isEnabled()) {
+        // Agent 在线检查：开关开启时，业务助手跳过检查
+        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
+                assistantInfoService.getCachedScope(session.getAk()));
+        if (assistantIdProperties.isEnabled() && scopeStrategy.requiresOnlineCheck()) {
             AgentSummary agent = gatewayApiClient.getAgentByAk(session.getAk());
             if (agent == null) {
                 // Agent 离线：保存系统错误消息 + WebSocket 广播

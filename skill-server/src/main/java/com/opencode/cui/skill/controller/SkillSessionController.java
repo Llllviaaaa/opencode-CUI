@@ -5,6 +5,7 @@ import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.ApiResponse;
 import com.opencode.cui.skill.model.PageResult;
 import com.opencode.cui.skill.model.SkillSession;
+import com.opencode.cui.skill.service.AssistantInfoService;
 import com.opencode.cui.skill.service.GatewayActions;
 import com.opencode.cui.skill.service.GatewayRelayService;
 
@@ -12,6 +13,8 @@ import com.opencode.cui.skill.service.PayloadBuilder;
 import com.opencode.cui.skill.service.ProtocolUtils;
 import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillSessionService;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
+import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -41,15 +44,21 @@ public class SkillSessionController {
     private final GatewayRelayService gatewayRelayService;
     private final SessionAccessControlService accessControlService;
     private final ObjectMapper objectMapper;
+    private final AssistantInfoService assistantInfoService;
+    private final AssistantScopeDispatcher scopeDispatcher;
 
     public SkillSessionController(SkillSessionService sessionService,
             GatewayRelayService gatewayRelayService,
             SessionAccessControlService accessControlService,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            AssistantInfoService assistantInfoService,
+            AssistantScopeDispatcher scopeDispatcher) {
         this.sessionService = sessionService;
         this.gatewayRelayService = gatewayRelayService;
         this.accessControlService = accessControlService;
         this.objectMapper = objectMapper;
+        this.assistantInfoService = assistantInfoService;
+        this.scopeDispatcher = scopeDispatcher;
     }
 
     /**
@@ -74,15 +83,27 @@ public class SkillSessionController {
                 request.getAssistantAccount());
 
         if (request.getAk() != null) {
-            gatewayRelayService.sendInvokeToGateway(
-                    new InvokeCommand(request.getAk(),
-                            resolvedUserId,
-                            session.getId().toString(),
-                            GatewayActions.CREATE_SESSION,
-                            PayloadBuilder.buildPayload(objectMapper,
-                                    request.getTitle() != null && !request.getTitle().isBlank()
-                                            ? Map.of("title", request.getTitle())
-                                            : Map.of())));
+            // 根据助手类型决定 toolSession 创建方式
+            String scope = assistantInfoService.getCachedScope(request.getAk());
+            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(scope);
+            String generatedToolSessionId = strategy.generateToolSessionId();
+            if (generatedToolSessionId != null) {
+                // 业务助手：本地预生成 toolSessionId，跳过 Gateway create_session
+                sessionService.updateToolSessionId(session.getId(), generatedToolSessionId);
+                log.info("Business assistant: toolSessionId pre-generated, sessionId={}, toolSessionId={}",
+                        session.getId(), generatedToolSessionId);
+            } else {
+                // 个人助手：向 Gateway 发送 create_session
+                gatewayRelayService.sendInvokeToGateway(
+                        new InvokeCommand(request.getAk(),
+                                resolvedUserId,
+                                session.getId().toString(),
+                                GatewayActions.CREATE_SESSION,
+                                PayloadBuilder.buildPayload(objectMapper,
+                                        request.getTitle() != null && !request.getTitle().isBlank()
+                                                ? Map.of("title", request.getTitle())
+                                                : Map.of())));
+            }
         }
 
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;

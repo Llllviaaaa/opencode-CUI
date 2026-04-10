@@ -10,6 +10,8 @@ import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.logging.MdcHelper;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
+import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -62,6 +64,8 @@ public class GatewayMessageRouter {
     private final SessionRebuildService rebuildService;
     private final ImInteractionStateService interactionStateService;
     private final ImOutboundService imOutboundService;
+    private final AssistantInfoService assistantInfoService;
+    private final AssistantScopeDispatcher scopeDispatcher;
     /** 已完成会话的短期缓存，用于抑制 tool_done 后的残余事件 */
     private final Cache<String, Instant> completedSessions = Caffeine.newBuilder()
             .expireAfterWrite(Duration.ofSeconds(5))
@@ -119,6 +123,13 @@ public class GatewayMessageRouter {
     /** Owner 被判定为死亡的超时阈值（秒） */
     private final int ownerDeadThresholdSeconds;
 
+    /** 业务助手 IM 场景需过滤的云端扩展事件类型集合 */
+    private static final Set<String> BUSINESS_IM_FILTERED_TYPES = Set.of(
+            StreamMessage.Types.PLANNING_DELTA, StreamMessage.Types.PLANNING_DONE,
+            StreamMessage.Types.THINKING_DELTA, StreamMessage.Types.THINKING_DONE,
+            StreamMessage.Types.SEARCHING, StreamMessage.Types.SEARCH_RESULT,
+            StreamMessage.Types.REFERENCE, StreamMessage.Types.ASK_MORE);
+
     public GatewayMessageRouter(ObjectMapper objectMapper,
             SkillMessageService messageService,
             SkillSessionService sessionService,
@@ -131,6 +142,8 @@ public class GatewayMessageRouter {
             ImOutboundService imOutboundService,
             SessionRouteService sessionRouteService,
             SkillInstanceRegistry skillInstanceRegistry,
+            AssistantInfoService assistantInfoService,
+            AssistantScopeDispatcher scopeDispatcher,
             @Value("${skill.relay.owner-dead-threshold-seconds:120}") int ownerDeadThresholdSeconds) {
         this.objectMapper = objectMapper;
         this.messageService = messageService;
@@ -144,6 +157,8 @@ public class GatewayMessageRouter {
         this.imOutboundService = imOutboundService;
         this.sessionRouteService = sessionRouteService;
         this.skillInstanceRegistry = skillInstanceRegistry;
+        this.assistantInfoService = assistantInfoService;
+        this.scopeDispatcher = scopeDispatcher;
         this.instanceId = skillInstanceRegistry.getInstanceId();
         this.ownerDeadThresholdSeconds = ownerDeadThresholdSeconds;
     }
@@ -324,7 +339,7 @@ public class GatewayMessageRouter {
      */
     private void dispatchLocally(String type, String sessionId, String ak, String userId, JsonNode node) {
         switch (type) {
-            case "tool_event" -> handleToolEvent(sessionId, userId, node);
+            case "tool_event" -> handleToolEvent(sessionId, ak, userId, node);
             case "tool_done" -> handleToolDone(sessionId, userId, node);
             case "tool_error" -> handleToolError(sessionId, userId, node);
             case "agent_online" -> handleAgentOnline(ak, userId, node);
@@ -384,7 +399,7 @@ public class GatewayMessageRouter {
     }
 
     /** 处理 tool_event：翻译事件、区分用户/助手消息、检测上下文溢出。 */
-    private void handleToolEvent(String sessionId, String userId, JsonNode node) {
+    private void handleToolEvent(String sessionId, String ak, String userId, JsonNode node) {
         if (sessionId == null) {
             log.warn("tool_event missing sessionId, agentId={}, raw keys={}",
                     node.path("agentId").asText(null), node.fieldNames());
@@ -394,8 +409,14 @@ public class GatewayMessageRouter {
         log.info("handleToolEvent: sessionId={}", sessionId);
         activateIdleSession(sessionId, userId);
         SkillSession session = resolveSession(sessionId);
-        StreamMessage msg = translateEvent(node, sessionId);
+
+        // 根据助手类型（scope）选择事件翻译策略
+        String resolvedAk = ak != null ? ak : node.path("ak").asText(node.path("agentId").asText(null));
+        String scope = assistantInfoService.getCachedScope(resolvedAk);
+        AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(scope);
+        StreamMessage msg = strategy.translateEvent(node.get("event"), sessionId);
         if (msg == null) {
+            log.debug("Event ignored by strategy translator for session {}, scope={}", sessionId, scope);
             return;
         }
 
@@ -504,6 +525,16 @@ public class GatewayMessageRouter {
 
     /** 处理 IM 渠道的助手消息（同步交互状态 + 出站转发 + 持久化）。 */
     private void handleImAssistantMessage(SkillSession session, StreamMessage msg, Long numericId) {
+        // 业务助手 IM 场景：过滤云端扩展事件（planning、thinking、searching 等）
+        String sessionAk = session.getAk();
+        if (sessionAk != null) {
+            String sessionScope = assistantInfoService.getCachedScope(sessionAk);
+            if ("business".equals(sessionScope) && BUSINESS_IM_FILTERED_TYPES.contains(msg.getType())) {
+                log.debug("Filtering business IM extended event: sessionId={}, type={}", session.getId(), msg.getType());
+                return;
+            }
+        }
+
         syncPendingImInteraction(session, msg);
         String outboundText = buildImText(msg);
         if (outboundText != null && !outboundText.isBlank()) {
