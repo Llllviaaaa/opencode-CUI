@@ -267,6 +267,16 @@ def test_e2e_sysconfig_crud():
     """E2E-SysConfig: 管理接口 CRUD"""
     print("\n[E2E-SysConfig] 管理接口 CRUD")
 
+    # 清理上次残留数据
+    resp_list = requests.get(f"{SS_URL}/api/admin/configs", params={"type": "cloud_request_strategy"})
+    if resp_list.status_code == 200:
+        resp_json = resp_list.json()
+        configs = resp_json.get("data", resp_json) if isinstance(resp_json, dict) else resp_json
+        if isinstance(configs, list):
+            for c in configs:
+                if c.get("configKey") == "e2e_test_app":
+                    requests.delete(f"{SS_URL}/api/admin/configs/{c['id']}")
+
     # Create
     resp = requests.post(f"{SS_URL}/api/admin/configs", json={
         "configType": "cloud_request_strategy",

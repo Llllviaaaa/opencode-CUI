@@ -81,8 +81,8 @@ def get_assistant_info():
 
 # assistantAccount → {ak, ownerWelinkId} 映射
 ASSISTANT_ACCOUNT_MAP = {
-    "test-business-ak": {"ak": "test-business-ak", "ownerWelinkId": "owner-001"},
-    "test-personal-ak": {"ak": "test-personal-ak", "ownerWelinkId": "owner-002"},
+    "test-business-ak": {"ak": "test-business-ak", "ownerWelinkId": "900001"},
+    "test-personal-ak": {"ak": "test-personal-ak", "ownerWelinkId": "900002"},
 }
 
 @app.route('/assistant-api/integration/v4-1/we-crew/instance/query', methods=['GET'])
