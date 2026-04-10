@@ -346,6 +346,7 @@ public class GatewayMessageRouter {
             case "agent_offline" -> handleAgentOffline(ak, userId);
             case "session_created" -> handleSessionCreated(ak, userId, node);
             case "permission_request" -> handlePermissionRequest(sessionId, userId, node);
+            case "im_push" -> handleImPush(sessionId, node);
             default -> log.warn("[SKIP] GatewayMessageRouter.route: reason=unknown_type, type={}", type);
         }
     }
@@ -786,6 +787,68 @@ public class GatewayMessageRouter {
     }
 
     /**
+     * 处理云端 IM 推送消息（im_push）。
+     *
+     * <p>从 payload 中解析 assistantAccount、userAccount、imGroupId、content，
+     * 通过 topicId（即 toolSessionId）查找 session，验证 assistantAccount 匹配后，
+     * 根据 imGroupId 是否有值判断群聊或单聊，调用 IM 出站服务发送消息。</p>
+     *
+     * @param sessionId 由 topicId 反查得到的 welinkSessionId
+     * @param node      原始 GatewayMessage JSON 节点（含 toolSessionId 和 payload）
+     */
+    private void handleImPush(String sessionId, JsonNode node) {
+        log.info("[ENTRY] handleImPush: sessionId={}", sessionId);
+
+        // 从顶层节点获取 topicId（即 toolSessionId）
+        String topicId = node.path("toolSessionId").asText(null);
+
+        // 从 payload 中解析请求字段
+        JsonNode payload = node.path("payload");
+        String assistantAccount = payload.path("assistantAccount").asText(null);
+        String userAccount = payload.path("userAccount").asText(null);
+        String imGroupId = payload.path("imGroupId").asText(null);
+        String content = payload.path("content").asText(null);
+
+        if (content == null || content.isBlank()) {
+            log.warn("[SKIP] handleImPush: reason=blank_content, topicId={}", topicId);
+            return;
+        }
+
+        if (assistantAccount == null || assistantAccount.isBlank()) {
+            log.warn("[SKIP] handleImPush: reason=blank_assistantAccount, topicId={}", topicId);
+            return;
+        }
+
+        // 通过 sessionId 查 session，验证 assistantAccount 是否匹配
+        if (sessionId != null) {
+            Long numericId = ProtocolUtils.parseSessionId(sessionId);
+            if (numericId != null) {
+                SkillSession session = sessionService.findByIdSafe(numericId);
+                if (session != null && session.getAssistantAccount() != null
+                        && !session.getAssistantAccount().equals(assistantAccount)) {
+                    log.warn("[SKIP] handleImPush: reason=assistant_account_mismatch, sessionId={}, expected={}, actual={}",
+                            sessionId, session.getAssistantAccount(), assistantAccount);
+                    return;
+                }
+            }
+        }
+
+        // 根据 imGroupId 决定单聊 / 群聊
+        boolean isGroup = imGroupId != null && !imGroupId.isBlank();
+        String sessionType = isGroup ? SkillSession.SESSION_TYPE_GROUP : SkillSession.SESSION_TYPE_DIRECT;
+        String imSessionId = isGroup ? imGroupId : userAccount;
+
+        if (imSessionId == null || imSessionId.isBlank()) {
+            log.warn("[SKIP] handleImPush: reason=blank_im_session_id, topicId={}, isGroup={}", topicId, isGroup);
+            return;
+        }
+
+        boolean sent = imOutboundService.sendTextToIm(sessionType, imSessionId, content, assistantAccount);
+        log.info("[EXIT] handleImPush: topicId={}, sessionType={}, imSessionId={}, sent={}",
+                topicId, sessionType, imSessionId, sent);
+    }
+
+    /**
      * 广播 StreamMessage 到前端。
      * 自动填充 sessionId、emittedAt、消息上下文后通过 Redis 发布。
      */
@@ -884,7 +947,7 @@ public class GatewayMessageRouter {
     /** 判断消息类型是否需要会话亲和性（需要 sessionId 才能处理）。 */
     private boolean requiresSessionAffinity(String messageType) {
         return switch (messageType) {
-            case "tool_event", "tool_done", "tool_error", "permission_request" -> true;
+            case "tool_event", "tool_done", "tool_error", "permission_request", "im_push" -> true;
             default -> false;
         };
     }
