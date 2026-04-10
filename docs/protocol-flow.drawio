@@ -1,0 +1,437 @@
+<mxfile host="app.diagrams.net" modified="2026-04-09" agent="Claude" version="24.0.0">
+  <diagram name="1. createSession" id="create-session">
+    <mxGraphModel dx="2400" dy="2400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="createSession 链路协议" style="text;fontSize=20;fontStyle=5;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="500" y="-40" width="350" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="n1" value="MiniApp" style="rounded=1;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="20" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" value="Skill Server (SS)" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="360" y="20" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n3" value="Gateway (GW)" style="rounded=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="700" y="20" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n4" value="Plugin" style="rounded=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="20" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n5" value="OpenCode" style="rounded=1;whiteSpace=wrap;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="20" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="ar12" value="HTTP POST →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;" edge="1" parent="1" source="n1" target="n2" />
+        <mxCell id="ar23" value="WebSocket →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;" edge="1" parent="1" source="n2" target="n3" />
+        <mxCell id="ar34" value="WebSocket B3 →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;" edge="1" parent="1" source="n3" target="n4" />
+        <mxCell id="ar45" value="SDK →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;" edge="1" parent="1" source="n4" target="n5" />
+        <mxCell id="al21" value="← HTTP Response" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n2" target="n1" />
+        <mxCell id="al32" value="← WebSocket" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n3" target="n2" />
+        <mxCell id="al43" value="← WebSocket B3" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n4" target="n3" />
+        <mxCell id="al54" value="← SDK response" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n5" target="n4" />
+
+        <mxCell id="c1o_l" value="出" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="10" y="100" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c1o" value="POST /api/skill/sessions&#xa;{&#xa;  &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;  &quot;title&quot;: &quot;新对话&quot;,&#xa;  &quot;businessSessionDomain&quot;: &quot;default&quot;,&#xa;  &quot;businessSessionType&quot;: &quot;chat&quot;,&#xa;  &quot;businessSessionId&quot;: null,&#xa;  &quot;assistantAccount&quot;: &quot;bot_001&quot;&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="10" y="125" width="250" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="c1i_l" value="入" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="10" y="310" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c1i" value="HTTP 200:&#xa;{&#xa;  &quot;code&quot;: 0,&#xa;  &quot;data&quot;: {&#xa;    &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;    &quot;userId&quot;: &quot;user_001&quot;,&#xa;    &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;    &quot;title&quot;: &quot;新对话&quot;,&#xa;    &quot;status&quot;: &quot;active&quot;,&#xa;    &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;createdAt&quot;: &quot;2026-04-09T10:00:00Z&quot;,&#xa;    &quot;updatedAt&quot;: &quot;2026-04-09T10:00:00Z&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="10" y="335" width="250" height="260" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c2o_l" value="出 (到GW)" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="310" y="100" width="80" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c2o" value="WebSocket /ws/skill:&#xa;{&#xa;  &quot;type&quot;: &quot;invoke&quot;,&#xa;  &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;  &quot;source&quot;: &quot;skill-server&quot;,&#xa;  &quot;userId&quot;: &quot;user_001&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;traceId&quot;: &quot;trace-uuid-001&quot;,&#xa;  &quot;action&quot;: &quot;create_session&quot;,&#xa;  &quot;payload&quot;: {&#xa;    &quot;title&quot;: &quot;新对话&quot;,&#xa;    &quot;assistantId&quot;: &quot;asst_001&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="310" y="125" width="260" height="260" as="geometry" />
+        </mxCell>
+        <mxCell id="c2i_l" value="入 (从GW)" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="310" y="400" width="80" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c2i" value="GatewayMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;session_created&quot;,&#xa;  &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;  &quot;userId&quot;: &quot;user_001&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;traceId&quot;: &quot;trace-uuid-001&quot;&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="310" y="425" width="260" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="c2o2_l" value="出 (到MiniApp)" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="310" y="610" width="110" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c2o2" value="HTTP 200:&#xa;{&#xa;  &quot;code&quot;: 0,&#xa;  &quot;data&quot;: {&#xa;    &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;    &quot;userId&quot;: &quot;user_001&quot;,&#xa;    &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;    &quot;title&quot;: &quot;新对话&quot;,&#xa;    &quot;status&quot;: &quot;active&quot;,&#xa;    &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;createdAt&quot;: &quot;2026-04-09T10:00:00Z&quot;,&#xa;    &quot;updatedAt&quot;: &quot;2026-04-09T10:00:00Z&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="310" y="635" width="260" height="260" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c3o_l" value="出 (到Plugin)" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="650" y="100" width="100" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c3o" value="InvokeMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;invoke&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;action&quot;: &quot;create_session&quot;,&#xa;  &quot;payload&quot;: {&#xa;    &quot;title&quot;: &quot;新对话&quot;,&#xa;    &quot;assistantId&quot;: &quot;asst_001&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="650" y="125" width="260" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="c3i_l" value="入 (从Plugin)" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="650" y="330" width="100" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c3i" value="UpstreamMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;session_created&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;session&quot;: {&#xa;    &quot;sessionId&quot;: &quot;ses_xyz789&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="650" y="355" width="260" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="c3o2_l" value="出 (到SS)" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="650" y="540" width="80" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c3o2" value="GatewayMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;session_created&quot;,&#xa;  &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;  &quot;userId&quot;: &quot;user_001&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;traceId&quot;: &quot;trace-uuid-001&quot;&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="650" y="565" width="260" height="170" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c4i_l" value="入 (从GW)" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="990" y="100" width="80" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c4i" value="InvokeMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;invoke&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;action&quot;: &quot;create_session&quot;,&#xa;  &quot;payload&quot;: {&#xa;    &quot;title&quot;: &quot;新对话&quot;,&#xa;    &quot;assistantId&quot;: &quot;asst_001&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="990" y="125" width="240" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="c4o_l" value="出 (到OpenCode)" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="990" y="330" width="120" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c4o" value="SDK 调用:&#xa;client.session.create({&#xa;  &quot;title&quot;: &quot;新对话&quot;,&#xa;  &quot;directory&quot;: &quot;/workspace&quot;&#xa;})" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="990" y="355" width="240" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="c4i2_l" value="入 (从OpenCode)" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="990" y="480" width="120" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c4i2" value="SDK 返回:&#xa;{&#xa;  &quot;id&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;title&quot;: &quot;新对话&quot;,&#xa;  &quot;directory&quot;: &quot;/workspace&quot;,&#xa;  &quot;createdAt&quot;: &quot;2026-04-09T10:00:00Z&quot;&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="990" y="505" width="240" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="c4o2_l" value="出 (到GW)" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="990" y="660" width="80" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c4o2" value="UpstreamMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;session_created&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;session&quot;: {&#xa;    &quot;sessionId&quot;: &quot;ses_xyz789&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="990" y="685" width="240" height="170" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c5i_l" value="入" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="100" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c5i" value="SDK 调用:&#xa;session.create({&#xa;  &quot;title&quot;: &quot;新对话&quot;,&#xa;  &quot;directory&quot;: &quot;/workspace&quot;&#xa;})" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="125" width="230" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="c5o_l" value="出" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="250" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c5o" value="SDK 返回:&#xa;{&#xa;  &quot;id&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;title&quot;: &quot;新对话&quot;,&#xa;  &quot;directory&quot;: &quot;/workspace&quot;,&#xa;  &quot;createdAt&quot;: &quot;2026-04-09T10:00:00Z&quot;&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="275" width="230" height="140" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram name="2. chat" id="chat">
+    <mxGraphModel dx="2400" dy="3200" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="chat 链路协议 (响应: think / text / tool)" style="text;fontSize=20;fontStyle=5;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="440" y="-40" width="460" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="n1" value="MiniApp" style="rounded=1;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="20" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" value="Skill Server (SS)" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="360" y="20" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n3" value="Gateway (GW)" style="rounded=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="700" y="20" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n4" value="Plugin" style="rounded=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="20" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n5" value="OpenCode" style="rounded=1;whiteSpace=wrap;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="20" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="ar12" value="HTTP POST →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;" edge="1" parent="1" source="n1" target="n2" />
+        <mxCell id="ar23" value="WebSocket →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;" edge="1" parent="1" source="n2" target="n3" />
+        <mxCell id="ar34" value="WebSocket B3 →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;" edge="1" parent="1" source="n3" target="n4" />
+        <mxCell id="ar45" value="SDK →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;" edge="1" parent="1" source="n4" target="n5" />
+        <mxCell id="al21" value="← WebSocket Stream" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n2" target="n1" />
+        <mxCell id="al32" value="← WebSocket" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n3" target="n2" />
+        <mxCell id="al43" value="← WebSocket B3" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n4" target="n3" />
+        <mxCell id="al54" value="← SDK events" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n5" target="n4" />
+
+        <mxCell id="c1o_l" value="出" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="10" y="100" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c1o" value="POST /api/skill/sessions/{id}/messages&#xa;{&#xa;  &quot;content&quot;: &quot;帮我写个函数&quot;,&#xa;  &quot;toolCallId&quot;: null&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="10" y="125" width="260" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="c1i_l" value="入 (WebSocket /ws/skill/stream)" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="10" y="240" width="220" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c1i" value="① thinking.delta:&#xa;{ &quot;type&quot;: &quot;thinking.delta&quot;,&#xa;  &quot;seq&quot;: 1, &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;emittedAt&quot;: &quot;2026-04-09T10:01:00Z&quot;,&#xa;  &quot;messageId&quot;: &quot;msg_002&quot;, &quot;role&quot;: &quot;assistant&quot;,&#xa;  &quot;partId&quot;: &quot;prt_001&quot;,&#xa;  &quot;content&quot;: &quot;让我分析这个需求&quot; }&#xa;&#xa;② text.delta:&#xa;{ &quot;type&quot;: &quot;text.delta&quot;,&#xa;  &quot;seq&quot;: 2, &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;emittedAt&quot;: &quot;2026-04-09T10:01:01Z&quot;,&#xa;  &quot;messageId&quot;: &quot;msg_002&quot;, &quot;role&quot;: &quot;assistant&quot;,&#xa;  &quot;partId&quot;: &quot;prt_002&quot;,&#xa;  &quot;content&quot;: &quot;好的，我来写一个&quot; }&#xa;&#xa;③ tool.update (running):&#xa;{ &quot;type&quot;: &quot;tool.update&quot;,&#xa;  &quot;seq&quot;: 3, &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;messageId&quot;: &quot;msg_002&quot;, &quot;partId&quot;: &quot;prt_003&quot;,&#xa;  &quot;status&quot;: &quot;running&quot;,&#xa;  &quot;toolName&quot;: &quot;Write&quot;, &quot;toolCallId&quot;: &quot;call_abc&quot;,&#xa;  &quot;input&quot;: { &quot;file_path&quot;: &quot;/src/utils.ts&quot; },&#xa;  &quot;output&quot;: null }&#xa;&#xa;④ tool.update (completed):&#xa;{ &quot;type&quot;: &quot;tool.update&quot;,&#xa;  &quot;seq&quot;: 4, &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;messageId&quot;: &quot;msg_002&quot;, &quot;partId&quot;: &quot;prt_003&quot;,&#xa;  &quot;status&quot;: &quot;completed&quot;,&#xa;  &quot;toolName&quot;: &quot;Write&quot;, &quot;toolCallId&quot;: &quot;call_abc&quot;,&#xa;  &quot;output&quot;: &quot;File written&quot; }&#xa;&#xa;⑤ text.done:&#xa;{ &quot;type&quot;: &quot;text.done&quot;, &quot;seq&quot;: 5,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;partId&quot;: &quot;prt_002&quot;,&#xa;  &quot;content&quot;: &quot;完整的回复文本&quot; }&#xa;&#xa;⑥ step.done:&#xa;{ &quot;type&quot;: &quot;step.done&quot;, &quot;seq&quot;: 6,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;tokens&quot;: { &quot;input&quot;: 1500, &quot;output&quot;: 800,&#xa;    &quot;reasoning&quot;: 200 },&#xa;  &quot;cost&quot;: 0.003, &quot;reason&quot;: &quot;end_turn&quot; }" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="10" y="265" width="290" height="850" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c2o_l" value="出 (到GW)" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="310" y="100" width="80" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c2o" value="WebSocket /ws/skill:&#xa;{&#xa;  &quot;type&quot;: &quot;invoke&quot;,&#xa;  &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;  &quot;source&quot;: &quot;skill-server&quot;,&#xa;  &quot;userId&quot;: &quot;user_001&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;traceId&quot;: &quot;trace-uuid-002&quot;,&#xa;  &quot;action&quot;: &quot;chat&quot;,&#xa;  &quot;payload&quot;: {&#xa;    &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;text&quot;: &quot;帮我写个函数&quot;,&#xa;    &quot;assistantId&quot;: &quot;asst_001&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="310" y="125" width="260" height="270" as="geometry" />
+        </mxCell>
+        <mxCell id="c2i_l" value="入 (从GW, 多条)" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="310" y="410" width="130" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c2i" value="GatewayMessage tool_event (逐条):&#xa;{&#xa;  &quot;type&quot;: &quot;tool_event&quot;,&#xa;  &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;  &quot;userId&quot;: &quot;user_001&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;traceId&quot;: &quot;trace-uuid-002&quot;,&#xa;  &quot;event&quot;: {&#xa;    &quot;type&quot;: &quot;message.part.delta&quot;,&#xa;    &quot;properties&quot;: {&#xa;      &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;      &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;      &quot;partID&quot;: &quot;prt_002&quot;,&#xa;      &quot;delta&quot;: &quot;好的，我来写一个&quot;&#xa;    }&#xa;  }&#xa;}&#xa;&#xa;GatewayMessage tool_done (最终):&#xa;{&#xa;  &quot;type&quot;: &quot;tool_done&quot;,&#xa;  &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;usage&quot;: { &quot;input&quot;: 1500, &quot;output&quot;: 800 }&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="310" y="435" width="280" height="490" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c3o_l" value="出 (到Plugin)" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="650" y="100" width="100" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c3o" value="InvokeMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;invoke&quot;,&#xa;  &quot;action&quot;: &quot;chat&quot;,&#xa;  &quot;payload&quot;: {&#xa;    &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;text&quot;: &quot;帮我写个函数&quot;,&#xa;    &quot;assistantId&quot;: &quot;asst_001&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="650" y="125" width="260" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="c3i_l" value="入 (从Plugin, 多条)" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="650" y="330" width="140" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c3i" value="ToolEventMessage (逐条):&#xa;{&#xa;  &quot;type&quot;: &quot;tool_event&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;event&quot;: {&#xa;    &quot;type&quot;: &quot;message.part.delta&quot;,&#xa;    &quot;properties&quot;: {&#xa;      &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;      &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;      &quot;partID&quot;: &quot;prt_002&quot;,&#xa;      &quot;delta&quot;: &quot;好的，我来写一个&quot;&#xa;    }&#xa;  }&#xa;}&#xa;&#xa;ToolDoneMessage (最终):&#xa;{&#xa;  &quot;type&quot;: &quot;tool_done&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;usage&quot;: { &quot;input&quot;: 1500, &quot;output&quot;: 800 }&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="650" y="355" width="280" height="400" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c4i_l" value="入 (从GW)" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="990" y="100" width="80" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c4i" value="InvokeMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;invoke&quot;,&#xa;  &quot;action&quot;: &quot;chat&quot;,&#xa;  &quot;payload&quot;: {&#xa;    &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;text&quot;: &quot;帮我写个函数&quot;,&#xa;    &quot;assistantId&quot;: &quot;asst_001&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="990" y="125" width="240" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="c4o_l" value="出 (到OpenCode)" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="990" y="330" width="120" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c4o" value="步骤1: 校验 session&#xa;client.session.get({&#xa;  path: { id: &quot;ses_xyz789&quot; }&#xa;})&#xa;&#xa;步骤2: 发送 prompt&#xa;client.session.prompt({&#xa;  path: { id: &quot;ses_xyz789&quot; },&#xa;  body: {&#xa;    parts: [{&#xa;      type: &quot;text&quot;,&#xa;      text: &quot;帮我写个函数&quot;&#xa;    }]&#xa;  }&#xa;})" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="990" y="355" width="240" height="280" as="geometry" />
+        </mxCell>
+        <mxCell id="c4i2_l" value="入 (从OpenCode, 流式)" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="990" y="650" width="160" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c4i2" value="① message.part.updated (thinking):&#xa;{ &quot;type&quot;: &quot;message.part.updated&quot;,&#xa;  &quot;properties&quot;: { &quot;part&quot;: {&#xa;    &quot;id&quot;: &quot;prt_001&quot;,&#xa;    &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;    &quot;type&quot;: &quot;thinking&quot;,&#xa;    &quot;text&quot;: &quot;让我分析这个需求&quot;,&#xa;    &quot;status&quot;: &quot;running&quot; } } }&#xa;&#xa;② message.part.delta (text):&#xa;{ &quot;type&quot;: &quot;message.part.delta&quot;,&#xa;  &quot;properties&quot;: {&#xa;    &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;    &quot;partID&quot;: &quot;prt_002&quot;,&#xa;    &quot;delta&quot;: &quot;好的，我来写一个&quot; } }&#xa;&#xa;③ message.part.updated (tool):&#xa;{ &quot;type&quot;: &quot;message.part.updated&quot;,&#xa;  &quot;properties&quot;: { &quot;part&quot;: {&#xa;    &quot;id&quot;: &quot;prt_003&quot;,&#xa;    &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;    &quot;type&quot;: &quot;tool&quot;,&#xa;    &quot;toolName&quot;: &quot;Write&quot;,&#xa;    &quot;toolCallId&quot;: &quot;call_abc&quot;,&#xa;    &quot;status&quot;: &quot;completed&quot;,&#xa;    &quot;input&quot;: {&#xa;      &quot;file_path&quot;: &quot;/src/utils.ts&quot;,&#xa;      &quot;content&quot;: &quot;export function add(){}&quot;&#xa;    },&#xa;    &quot;output&quot;: &quot;File written&quot; } } }&#xa;&#xa;④ session.idle:&#xa;{ &quot;type&quot;: &quot;session.idle&quot;,&#xa;  &quot;properties&quot;: {&#xa;    &quot;sessionID&quot;: &quot;ses_xyz789&quot; } }" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="990" y="675" width="280" height="700" as="geometry" />
+        </mxCell>
+        <mxCell id="c4o2_l" value="出 (到GW, 多条)" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="990" y="1390" width="130" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c4o2" value="ToolEventMessage (逐条):&#xa;{&#xa;  &quot;type&quot;: &quot;tool_event&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;event&quot;: {&#xa;    &quot;type&quot;: &quot;message.part.delta&quot;,&#xa;    &quot;properties&quot;: {&#xa;      &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;      &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;      &quot;partID&quot;: &quot;prt_002&quot;,&#xa;      &quot;delta&quot;: &quot;好的，我来写一个&quot;&#xa;    }&#xa;  }&#xa;}&#xa;&#xa;ToolDoneMessage (最终):&#xa;{&#xa;  &quot;type&quot;: &quot;tool_done&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;usage&quot;: { &quot;input&quot;: 1500, &quot;output&quot;: 800 }&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="990" y="1415" width="280" height="390" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c5i_l" value="入" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="100" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c5i" value="SDK 调用:&#xa;session.prompt({&#xa;  path: { id: &quot;ses_xyz789&quot; },&#xa;  body: {&#xa;    parts: [{&#xa;      type: &quot;text&quot;,&#xa;      text: &quot;帮我写个函数&quot;&#xa;    }]&#xa;  }&#xa;})" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="125" width="230" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="c5o_l" value="出 (流式事件)" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="330" width="110" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c5o" value="(同 Plugin 入的 OpenCode 事件)&#xa;&#xa;message.part.updated (thinking)&#xa;message.part.delta (text)&#xa;message.part.updated (tool)&#xa;session.idle&#xa;&#xa;事件透传给 Plugin" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="355" width="230" height="160" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram name="3. permission" id="permission">
+    <mxGraphModel dx="2400" dy="2800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="permission 链路协议 (OpenCode请求权限 ← → 用户回复 →)" style="text;fontSize=20;fontStyle=5;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="360" y="-40" width="600" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="n1" value="MiniApp" style="rounded=1;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="20" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" value="Skill Server (SS)" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="360" y="20" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n3" value="Gateway (GW)" style="rounded=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="700" y="20" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n4" value="Plugin" style="rounded=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="20" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n5" value="OpenCode" style="rounded=1;whiteSpace=wrap;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="20" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="pa54" value="← permission.asked" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;" edge="1" parent="1" source="n5" target="n4" />
+        <mxCell id="pa43" value="← tool_event" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;" edge="1" parent="1" source="n4" target="n3" />
+        <mxCell id="pa32" value="← WebSocket event" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;" edge="1" parent="1" source="n3" target="n2" />
+        <mxCell id="pa21" value="← WebSocket: permission.ask" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;" edge="1" parent="1" source="n2" target="n1" />
+        <mxCell id="pr12" value="HTTP POST →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n1" target="n2" />
+        <mxCell id="pr23" value="WebSocket invoke →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n2" target="n3" />
+        <mxCell id="pr34" value="WebSocket B3 →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n3" target="n4" />
+        <mxCell id="pr45" value="HTTP API →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n4" target="n5" />
+
+        <mxCell id="c1i_l" value="入 (收到权限请求)" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="10" y="100" width="140" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c1i" value="WebSocket StreamMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;permission.ask&quot;,&#xa;  &quot;seq&quot;: 6,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;emittedAt&quot;: &quot;2026-04-09T10:02:00Z&quot;,&#xa;  &quot;permissionId&quot;: &quot;perm_456&quot;,&#xa;  &quot;permType&quot;: &quot;exec&quot;,&#xa;  &quot;content&quot;: &quot;Run command&quot;,&#xa;  &quot;metadata&quot;: {&#xa;    &quot;command&quot;: &quot;npm install lodash&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="10" y="125" width="260" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="c1o_l" value="出 (用户回复)" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="10" y="370" width="100" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c1o" value="POST /api/skill/sessions/{id}&#xa;     /permissions/{permissionId}&#xa;{&#xa;  &quot;response&quot;: &quot;always&quot;,&#xa;  &quot;subagentSessionId&quot;: null&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="10" y="395" width="260" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c2i_l" value="入" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="310" y="100" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c2i" value="阶段1 从GW (WebSocket):&#xa;{&#xa;  &quot;type&quot;: &quot;tool_event&quot;,&#xa;  &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;  &quot;userId&quot;: &quot;user_001&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;traceId&quot;: &quot;trace-uuid-003&quot;,&#xa;  &quot;event&quot;: {&#xa;    &quot;type&quot;: &quot;permission.asked&quot;,&#xa;    &quot;properties&quot;: {&#xa;      &quot;id&quot;: &quot;perm_456&quot;,&#xa;      &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;      &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;      &quot;type&quot;: &quot;exec&quot;,&#xa;      &quot;title&quot;: &quot;Run command&quot;,&#xa;      &quot;metadata&quot;: {&#xa;        &quot;command&quot;: &quot;npm install lodash&quot;&#xa;      }&#xa;    }&#xa;  }&#xa;}&#xa;&#xa;阶段2 从MiniApp (HTTP):&#xa;POST .../permissions/perm_456&#xa;{ &quot;response&quot;: &quot;always&quot;,&#xa;  &quot;subagentSessionId&quot;: null }" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="310" y="125" width="260" height="510" as="geometry" />
+        </mxCell>
+        <mxCell id="c2o_l" value="出" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="310" y="650" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c2o" value="阶段1 到MiniApp (WebSocket):&#xa;StreamMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;permission.ask&quot;,&#xa;  &quot;seq&quot;: 6,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;emittedAt&quot;: &quot;2026-04-09T10:02:00Z&quot;,&#xa;  &quot;permissionId&quot;: &quot;perm_456&quot;,&#xa;  &quot;permType&quot;: &quot;exec&quot;,&#xa;  &quot;content&quot;: &quot;Run command&quot;,&#xa;  &quot;metadata&quot;: {&#xa;    &quot;command&quot;: &quot;npm install lodash&quot;&#xa;  }&#xa;}&#xa;&#xa;阶段2 到GW (WebSocket):&#xa;{&#xa;  &quot;type&quot;: &quot;invoke&quot;,&#xa;  &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;  &quot;source&quot;: &quot;skill-server&quot;,&#xa;  &quot;userId&quot;: &quot;user_001&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;traceId&quot;: &quot;trace-uuid-004&quot;,&#xa;  &quot;action&quot;: &quot;permission_reply&quot;,&#xa;  &quot;payload&quot;: {&#xa;    &quot;permissionId&quot;: &quot;perm_456&quot;,&#xa;    &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;response&quot;: &quot;always&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="310" y="675" width="260" height="530" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c3i_l" value="入" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="650" y="100" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c3i" value="阶段1 从Plugin (WebSocket B3):&#xa;ToolEventMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;tool_event&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;event&quot;: {&#xa;    &quot;type&quot;: &quot;permission.asked&quot;,&#xa;    &quot;properties&quot;: {&#xa;      &quot;id&quot;: &quot;perm_456&quot;,&#xa;      &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;      &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;      &quot;type&quot;: &quot;exec&quot;,&#xa;      &quot;title&quot;: &quot;Run command&quot;,&#xa;      &quot;metadata&quot;: {&#xa;        &quot;command&quot;: &quot;npm install lodash&quot;&#xa;      }&#xa;    }&#xa;  }&#xa;}&#xa;&#xa;阶段2 从SS (WebSocket):&#xa;{&#xa;  &quot;type&quot;: &quot;invoke&quot;,&#xa;  &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;  &quot;source&quot;: &quot;skill-server&quot;,&#xa;  &quot;action&quot;: &quot;permission_reply&quot;,&#xa;  &quot;payload&quot;: {&#xa;    &quot;permissionId&quot;: &quot;perm_456&quot;,&#xa;    &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;response&quot;: &quot;always&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="650" y="125" width="260" height="560" as="geometry" />
+        </mxCell>
+        <mxCell id="c3o_l" value="出" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="650" y="700" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c3o" value="阶段1 到SS (WebSocket):&#xa;GatewayMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;tool_event&quot;,&#xa;  &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;  &quot;userId&quot;: &quot;user_001&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;traceId&quot;: &quot;trace-uuid-003&quot;,&#xa;  &quot;event&quot;: {&#xa;    &quot;type&quot;: &quot;permission.asked&quot;,&#xa;    &quot;properties&quot;: {&#xa;      &quot;id&quot;: &quot;perm_456&quot;,&#xa;      &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;      &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;      &quot;type&quot;: &quot;exec&quot;,&#xa;      &quot;title&quot;: &quot;Run command&quot;,&#xa;      &quot;metadata&quot;: {&#xa;        &quot;command&quot;: &quot;npm install lodash&quot;&#xa;      }&#xa;    }&#xa;  }&#xa;}&#xa;&#xa;阶段2 到Plugin (WebSocket B3):&#xa;InvokeMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;invoke&quot;,&#xa;  &quot;action&quot;: &quot;permission_reply&quot;,&#xa;  &quot;payload&quot;: {&#xa;    &quot;permissionId&quot;: &quot;perm_456&quot;,&#xa;    &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;response&quot;: &quot;always&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="650" y="725" width="260" height="560" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c4i_l" value="入" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="990" y="100" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c4i" value="阶段1 从OpenCode (SDK事件):&#xa;{&#xa;  &quot;type&quot;: &quot;permission.asked&quot;,&#xa;  &quot;properties&quot;: {&#xa;    &quot;id&quot;: &quot;perm_456&quot;,&#xa;    &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;    &quot;type&quot;: &quot;exec&quot;,&#xa;    &quot;title&quot;: &quot;Run command&quot;,&#xa;    &quot;metadata&quot;: {&#xa;      &quot;command&quot;: &quot;npm install lodash&quot;&#xa;    }&#xa;  }&#xa;}&#xa;&#xa;阶段2 从GW (WebSocket B3):&#xa;InvokeMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;invoke&quot;,&#xa;  &quot;action&quot;: &quot;permission_reply&quot;,&#xa;  &quot;payload&quot;: {&#xa;    &quot;permissionId&quot;: &quot;perm_456&quot;,&#xa;    &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;response&quot;: &quot;always&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="990" y="125" width="260" height="460" as="geometry" />
+        </mxCell>
+        <mxCell id="c4o_l" value="出" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="990" y="600" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c4o" value="阶段1 到GW (WebSocket B3):&#xa;ToolEventMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;tool_event&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;event&quot;: {&#xa;    &quot;type&quot;: &quot;permission.asked&quot;,&#xa;    &quot;properties&quot;: {&#xa;      &quot;id&quot;: &quot;perm_456&quot;,&#xa;      &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;      &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;      &quot;type&quot;: &quot;exec&quot;,&#xa;      &quot;title&quot;: &quot;Run command&quot;,&#xa;      &quot;metadata&quot;: {&#xa;        &quot;command&quot;: &quot;npm install lodash&quot;&#xa;      }&#xa;    }&#xa;  }&#xa;}&#xa;&#xa;阶段2 到OpenCode (HTTP API):&#xa;POST /permissions/{permId}/reply&#xa;{&#xa;  &quot;permissionId&quot;: &quot;perm_456&quot;,&#xa;  &quot;response&quot;: &quot;always&quot;&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="990" y="625" width="260" height="420" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c5o_l" value="出 (发出权限请求)" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="100" width="140" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c5o" value="SDK事件:&#xa;{&#xa;  &quot;type&quot;: &quot;permission.asked&quot;,&#xa;  &quot;properties&quot;: {&#xa;    &quot;id&quot;: &quot;perm_456&quot;,&#xa;    &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;    &quot;type&quot;: &quot;exec&quot;,&#xa;    &quot;title&quot;: &quot;Run command&quot;,&#xa;    &quot;metadata&quot;: {&#xa;      &quot;command&quot;: &quot;npm install lodash&quot;&#xa;    }&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="125" width="250" height="260" as="geometry" />
+        </mxCell>
+        <mxCell id="c5i_l" value="入 (收到回复)" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="400" width="100" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c5i" value="HTTP reply:&#xa;{&#xa;  &quot;permissionId&quot;: &quot;perm_456&quot;,&#xa;  &quot;response&quot;: &quot;always&quot;&#xa;}&#xa;&#xa;发出确认事件:&#xa;{&#xa;  &quot;type&quot;: &quot;permission.replied&quot;,&#xa;  &quot;properties&quot;: {&#xa;    &quot;id&quot;: &quot;perm_456&quot;,&#xa;    &quot;response&quot;: &quot;always&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="425" width="250" height="270" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram name="4. question" id="question">
+    <mxGraphModel dx="2400" dy="2800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="question 链路协议 (OpenCode提问 ← → 用户回答 →)" style="text;fontSize=20;fontStyle=5;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="380" y="-40" width="560" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="n1" value="MiniApp" style="rounded=1;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="20" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" value="Skill Server (SS)" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="360" y="20" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n3" value="Gateway (GW)" style="rounded=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="700" y="20" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n4" value="Plugin" style="rounded=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="20" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="n5" value="OpenCode" style="rounded=1;whiteSpace=wrap;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="20" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="qa54" value="← question.asked" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;" edge="1" parent="1" source="n5" target="n4" />
+        <mxCell id="qa43" value="← tool_event" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;" edge="1" parent="1" source="n4" target="n3" />
+        <mxCell id="qa32" value="← WebSocket event" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;" edge="1" parent="1" source="n3" target="n2" />
+        <mxCell id="qa21" value="← WebSocket: question" style="fontSize=10;fontStyle=1;strokeColor=#AE4132;strokeWidth=2;dashed=1;" edge="1" parent="1" source="n2" target="n1" />
+        <mxCell id="qr12" value="HTTP POST →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n1" target="n2" />
+        <mxCell id="qr23" value="WebSocket invoke →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n2" target="n3" />
+        <mxCell id="qr34" value="WebSocket B3 →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n3" target="n4" />
+        <mxCell id="qr45" value="HTTP API →" style="fontSize=10;fontStyle=1;strokeColor=#2D7600;strokeWidth=2;exitY=0.8;entryY=0.8;" edge="1" parent="1" source="n4" target="n5" />
+
+        <mxCell id="c1i_l" value="入 (收到提问)" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="10" y="100" width="100" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c1i" value="WebSocket StreamMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;question&quot;,&#xa;  &quot;seq&quot;: 7,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;emittedAt&quot;: &quot;2026-04-09T10:03:00Z&quot;,&#xa;  &quot;header&quot;: &quot;Framework Selection&quot;,&#xa;  &quot;question&quot;: &quot;选择框架?&quot;,&#xa;  &quot;options&quot;: [&quot;Vite&quot;, &quot;Create React App&quot;],&#xa;  &quot;toolCallId&quot;: &quot;call_def&quot;&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="10" y="125" width="260" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="c1o_l" value="出 (用户回答)" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="10" y="340" width="100" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c1o" value="POST /api/skill/sessions/{id}/messages&#xa;{&#xa;  &quot;content&quot;: &quot;Vite&quot;,&#xa;  &quot;toolCallId&quot;: &quot;call_def&quot;&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="10" y="365" width="260" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c2i_l" value="入" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="310" y="100" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c2i" value="阶段1 从GW (WebSocket):&#xa;{&#xa;  &quot;type&quot;: &quot;tool_event&quot;,&#xa;  &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;  &quot;userId&quot;: &quot;user_001&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;traceId&quot;: &quot;trace-uuid-005&quot;,&#xa;  &quot;event&quot;: {&#xa;    &quot;type&quot;: &quot;question.asked&quot;,&#xa;    &quot;properties&quot;: {&#xa;      &quot;id&quot;: &quot;question-1&quot;,&#xa;      &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;      &quot;questions&quot;: [{&#xa;        &quot;question&quot;: &quot;选择框架?&quot;,&#xa;        &quot;header&quot;: &quot;Framework Selection&quot;,&#xa;        &quot;options&quot;: [&#xa;          { &quot;label&quot;: &quot;Vite&quot; },&#xa;          { &quot;label&quot;: &quot;CRA&quot; }&#xa;        ]&#xa;      }],&#xa;      &quot;tool&quot;: {&#xa;        &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;        &quot;callID&quot;: &quot;call_def&quot;&#xa;      }&#xa;    }&#xa;  }&#xa;}&#xa;&#xa;阶段2 从MiniApp (HTTP):&#xa;POST .../messages&#xa;{ &quot;content&quot;: &quot;Vite&quot;, &quot;toolCallId&quot;: &quot;call_def&quot; }" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="310" y="125" width="260" height="570" as="geometry" />
+        </mxCell>
+        <mxCell id="c2o_l" value="出" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="310" y="710" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c2o" value="阶段1 到MiniApp (WebSocket):&#xa;StreamMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;question&quot;,&#xa;  &quot;seq&quot;: 7,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;header&quot;: &quot;Framework Selection&quot;,&#xa;  &quot;question&quot;: &quot;选择框架?&quot;,&#xa;  &quot;options&quot;: [&quot;Vite&quot;, &quot;CRA&quot;],&#xa;  &quot;toolCallId&quot;: &quot;call_def&quot;&#xa;}&#xa;&#xa;阶段2 到GW (WebSocket):&#xa;{&#xa;  &quot;type&quot;: &quot;invoke&quot;,&#xa;  &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;  &quot;source&quot;: &quot;skill-server&quot;,&#xa;  &quot;userId&quot;: &quot;user_001&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;traceId&quot;: &quot;trace-uuid-006&quot;,&#xa;  &quot;action&quot;: &quot;question_reply&quot;,&#xa;  &quot;payload&quot;: {&#xa;    &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;answer&quot;: &quot;Vite&quot;,&#xa;    &quot;toolCallId&quot;: &quot;call_def&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="310" y="735" width="260" height="470" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c3i_l" value="入" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="650" y="100" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c3i" value="阶段1 从Plugin (WebSocket B3):&#xa;ToolEventMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;tool_event&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;event&quot;: {&#xa;    &quot;type&quot;: &quot;question.asked&quot;,&#xa;    &quot;properties&quot;: {&#xa;      &quot;id&quot;: &quot;question-1&quot;,&#xa;      &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;      &quot;questions&quot;: [{&#xa;        &quot;question&quot;: &quot;选择框架?&quot;,&#xa;        &quot;header&quot;: &quot;Framework Selection&quot;,&#xa;        &quot;options&quot;: [&#xa;          { &quot;label&quot;: &quot;Vite&quot; },&#xa;          { &quot;label&quot;: &quot;CRA&quot; }&#xa;        ]&#xa;      }],&#xa;      &quot;tool&quot;: {&#xa;        &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;        &quot;callID&quot;: &quot;call_def&quot;&#xa;      }&#xa;    }&#xa;  }&#xa;}&#xa;&#xa;阶段2 从SS (WebSocket):&#xa;{&#xa;  &quot;type&quot;: &quot;invoke&quot;,&#xa;  &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;  &quot;source&quot;: &quot;skill-server&quot;,&#xa;  &quot;action&quot;: &quot;question_reply&quot;,&#xa;  &quot;payload&quot;: {&#xa;    &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;answer&quot;: &quot;Vite&quot;,&#xa;    &quot;toolCallId&quot;: &quot;call_def&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="650" y="125" width="260" height="640" as="geometry" />
+        </mxCell>
+        <mxCell id="c3o_l" value="出" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="650" y="780" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c3o" value="阶段1 到SS (WebSocket):&#xa;GatewayMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;tool_event&quot;,&#xa;  &quot;ak&quot;: &quot;app_key_123&quot;,&#xa;  &quot;userId&quot;: &quot;user_001&quot;,&#xa;  &quot;welinkSessionId&quot;: &quot;wls_abc123&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;traceId&quot;: &quot;trace-uuid-005&quot;,&#xa;  &quot;event&quot;: {&#xa;    &quot;type&quot;: &quot;question.asked&quot;,&#xa;    &quot;properties&quot;: {&#xa;      &quot;id&quot;: &quot;question-1&quot;,&#xa;      &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;      &quot;questions&quot;: [{&#xa;        &quot;question&quot;: &quot;选择框架?&quot;,&#xa;        &quot;header&quot;: &quot;Framework Selection&quot;,&#xa;        &quot;options&quot;: [&#xa;          { &quot;label&quot;: &quot;Vite&quot; },&#xa;          { &quot;label&quot;: &quot;CRA&quot; }&#xa;        ]&#xa;      }],&#xa;      &quot;tool&quot;: {&#xa;        &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;        &quot;callID&quot;: &quot;call_def&quot;&#xa;      }&#xa;    }&#xa;  }&#xa;}&#xa;&#xa;阶段2 到Plugin (WebSocket B3):&#xa;InvokeMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;invoke&quot;,&#xa;  &quot;action&quot;: &quot;question_reply&quot;,&#xa;  &quot;payload&quot;: {&#xa;    &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;answer&quot;: &quot;Vite&quot;,&#xa;    &quot;toolCallId&quot;: &quot;call_def&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="650" y="805" width="260" height="600" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c4i_l" value="入" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="990" y="100" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c4i" value="阶段1 从OpenCode (SDK事件):&#xa;{&#xa;  &quot;type&quot;: &quot;question.asked&quot;,&#xa;  &quot;properties&quot;: {&#xa;    &quot;id&quot;: &quot;question-1&quot;,&#xa;    &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;questions&quot;: [{&#xa;      &quot;question&quot;: &quot;选择框架?&quot;,&#xa;      &quot;header&quot;: &quot;Framework Selection&quot;,&#xa;      &quot;options&quot;: [&#xa;        { &quot;label&quot;: &quot;Vite&quot; },&#xa;        { &quot;label&quot;: &quot;CRA&quot; }&#xa;      ]&#xa;    }],&#xa;    &quot;tool&quot;: {&#xa;      &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;      &quot;callID&quot;: &quot;call_def&quot;&#xa;    }&#xa;  }&#xa;}&#xa;&#xa;阶段2 从GW (WebSocket B3):&#xa;InvokeMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;invoke&quot;,&#xa;  &quot;action&quot;: &quot;question_reply&quot;,&#xa;  &quot;payload&quot;: {&#xa;    &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;answer&quot;: &quot;Vite&quot;,&#xa;    &quot;toolCallId&quot;: &quot;call_def&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="990" y="125" width="260" height="520" as="geometry" />
+        </mxCell>
+        <mxCell id="c4o_l" value="出" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="990" y="660" width="30" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c4o" value="阶段1 到GW (WebSocket B3):&#xa;ToolEventMessage:&#xa;{&#xa;  &quot;type&quot;: &quot;tool_event&quot;,&#xa;  &quot;toolSessionId&quot;: &quot;ses_xyz789&quot;,&#xa;  &quot;event&quot;: {&#xa;    &quot;type&quot;: &quot;question.asked&quot;,&#xa;    &quot;properties&quot;: {&#xa;      &quot;id&quot;: &quot;question-1&quot;,&#xa;      &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;      &quot;questions&quot;: [{&#xa;        &quot;question&quot;: &quot;选择框架?&quot;,&#xa;        &quot;header&quot;: &quot;Framework Selection&quot;,&#xa;        &quot;options&quot;: [&#xa;          { &quot;label&quot;: &quot;Vite&quot; },&#xa;          { &quot;label&quot;: &quot;CRA&quot; }&#xa;        ]&#xa;      }],&#xa;      &quot;tool&quot;: {&#xa;        &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;        &quot;callID&quot;: &quot;call_def&quot;&#xa;      }&#xa;    }&#xa;  }&#xa;}&#xa;&#xa;阶段2 到OpenCode (HTTP API):&#xa;POST /questions/{questionId}/answer&#xa;{&#xa;  &quot;toolCallId&quot;: &quot;call_def&quot;,&#xa;  &quot;answer&quot;: &quot;Vite&quot;&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="990" y="685" width="260" height="490" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c5o_l" value="出 (发出提问)" style="text;fontSize=11;fontStyle=5;fillColor=#2D7600;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="100" width="110" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c5o" value="SDK事件:&#xa;{&#xa;  &quot;type&quot;: &quot;question.asked&quot;,&#xa;  &quot;properties&quot;: {&#xa;    &quot;id&quot;: &quot;question-1&quot;,&#xa;    &quot;sessionID&quot;: &quot;ses_xyz789&quot;,&#xa;    &quot;questions&quot;: [{&#xa;      &quot;question&quot;: &quot;选择框架?&quot;,&#xa;      &quot;header&quot;: &quot;Framework Selection&quot;,&#xa;      &quot;options&quot;: [&#xa;        { &quot;label&quot;: &quot;Vite&quot; },&#xa;        { &quot;label&quot;: &quot;CRA&quot; }&#xa;      ]&#xa;    }],&#xa;    &quot;tool&quot;: {&#xa;      &quot;messageID&quot;: &quot;msg_002&quot;,&#xa;      &quot;callID&quot;: &quot;call_def&quot;&#xa;    }&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#e8f5e9;strokeColor=#2D7600;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="125" width="250" height="320" as="geometry" />
+        </mxCell>
+        <mxCell id="c5i_l" value="入 (收到回答)" style="text;fontSize=11;fontStyle=5;fillColor=#AE4132;fontColor=#fff;rounded=1;spacingLeft=5;spacingRight=5;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="460" width="100" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="c5i" value="HTTP answer:&#xa;{&#xa;  &quot;toolCallId&quot;: &quot;call_def&quot;,&#xa;  &quot;answer&quot;: &quot;Vite&quot;&#xa;}&#xa;&#xa;发出确认事件:&#xa;{&#xa;  &quot;type&quot;: &quot;question.replied&quot;,&#xa;  &quot;properties&quot;: {&#xa;    &quot;id&quot;: &quot;question-1&quot;,&#xa;    &quot;answer&quot;: &quot;Vite&quot;&#xa;  }&#xa;}" style="shape=note;size=15;fillColor=#fce4ec;strokeColor=#AE4132;fontSize=10;fontFamily=Courier New;align=left;spacingLeft=8;spacingTop=5;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="485" width="250" height="270" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
