@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
+import com.opencode.cui.gateway.ws.AsyncSessionSender;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
@@ -81,6 +82,8 @@ public class SkillRelayService {
 
     @Value("${gateway.upstream-routing.broadcast-timeout-ms:200}")
     private int broadcastTimeoutMs;
+
+    private final ConcurrentHashMap<String, AsyncSessionSender> sessionSenders = new ConcurrentHashMap<>();
 
     @Value("${gateway.legacy-relay.enabled:false}")
     private boolean legacyRelayEnabled;
@@ -194,8 +197,10 @@ public class SkillRelayService {
      * 根据策略标记委托到 Mesh / Legacy。
      */
     public void removeSourceSession(WebSocketSession session) {
+        removeSessionSender(session.getId());
         if (isLegacySession(session)) {
             legacyStrategy.removeSession(session);
+            legacyStrategy.removeSessionSender(session.getId());
             return;
         }
 
@@ -964,16 +969,30 @@ public class SkillRelayService {
                 .count();
     }
 
+    private AsyncSessionSender getOrCreateSender(WebSocketSession session) {
+        return sessionSenders.computeIfAbsent(session.getId(),
+                k -> new AsyncSessionSender(session));
+    }
+
+    public void removeSessionSender(String sessionId) {
+        AsyncSessionSender sender = sessionSenders.remove(sessionId);
+        if (sender != null) {
+            sender.shutdown();
+        }
+    }
+
     private boolean sendToSession(WebSocketSession session, GatewayMessage message) {
         try {
             String json = objectMapper.writeValueAsString(message);
-            synchronized (session) {
-                session.sendMessage(new TextMessage(json));
+            AsyncSessionSender sender = getOrCreateSender(session);
+            boolean enqueued = sender.enqueue(new TextMessage(json));
+            if (enqueued) {
+                log.info("[EXIT->SS] Enqueued to skill session: linkId={}, type={}, pending={}",
+                        session.getId(), message.getType(), sender.pendingCount());
             }
-            log.info("[EXIT->SS] Sent to skill session: linkId={}, type={}", session.getId(), message.getType());
-            return true;
+            return enqueued;
         } catch (IOException e) {
-            log.error("[EXIT->SS] Failed to send to skill session: linkId={}, type={}",
+            log.error("[EXIT->SS] Failed to serialize message: linkId={}, type={}",
                     session.getId(), message.getType(), e);
             return false;
         }
@@ -992,11 +1011,10 @@ public class SkillRelayService {
     private void sendProtocolError(WebSocketSession session, String reason) {
         try {
             String json = objectMapper.writeValueAsString(GatewayMessage.registerRejected(reason));
-            synchronized (session) {
-                session.sendMessage(new TextMessage(json));
-            }
+            AsyncSessionSender sender = getOrCreateSender(session);
+            sender.enqueue(new TextMessage(json));
         } catch (IOException e) {
-            log.error("Failed to send protocol error: linkId={}, reason={}", session.getId(), reason, e);
+            log.error("Failed to serialize protocol error: linkId={}, reason={}", session.getId(), reason, e);
         }
     }
 
