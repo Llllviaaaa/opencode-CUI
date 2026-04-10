@@ -898,7 +898,105 @@ public class CloudProtocolClient {
 
 **扩展**：新增协议只需实现 `CloudProtocolStrategy` 接口，Spring 自动注册。
 
-### 4.7 不改动的部分
+### 4.7 新增：云端 IM 推送接口
+
+**背景**：云端 Agent 有定时任务推送功能，需要主动向 IM 单聊/群聊发送消息（非用户触发的对话）。
+
+**流程**：
+
+```
+云端定时任务 → GW REST 接口（POST /api/gateway/cloud/im-push）
+  → GW 构建 GatewayMessage(type="im_push")
+  → 通过现有 WS 通道（/ws/skill）发给 SS
+  → SS 调用 IM 出站接口发送消息
+```
+
+**设计选型**：GW 对外提供 REST 接口给云端调用，对内复用现有 WS 通道转发给 SS。理由：
+- 保持 GW ↔ SS 单一通信通道（WS），不引入第二种通信方式
+- 复用现有 WS 多实例路由（Redis relay）
+- GW 不需要知道 SS 的 HTTP 地址
+
+#### GW 侧：REST 接口
+
+**接口**：`POST /api/gateway/cloud/im-push`
+
+**请求体**：
+
+```json
+{
+  "assistantAccount": "assistant-bot-001",
+  "sessionType": "direct",
+  "sessionId": "im-session-12345",
+  "content": "您好，这是定时推送的消息内容",
+  "msgType": "text"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| assistantAccount | String | ✅ | 助手账号（用于确定以哪个助手身份发送） |
+| sessionType | String | ✅ | `"direct"` / `"group"` |
+| sessionId | String | ✅ | IM 侧的会话 ID（群 ID 或单聊 ID） |
+| content | String | ✅ | 推送的文本内容（可含自定义 Markdown 协议） |
+| msgType | String | ✅ | 消息类型，当前固定 `"text"` |
+
+**认证**：云端调用此接口时由 GW 的 `CloudAuthService` 验证身份（复用 authType 策略）。
+
+**GW 处理逻辑**：
+
+```java
+@RestController
+@RequestMapping("/api/gateway/cloud")
+public class CloudPushController {
+
+    private final SkillRelayService skillRelayService;
+
+    @PostMapping("/im-push")
+    public ResponseEntity<Void> imPush(@RequestBody ImPushRequest request) {
+        GatewayMessage msg = new GatewayMessage();
+        msg.setType("im_push");
+        msg.setPayload(objectMapper.valueToTree(request));
+        msg.setTraceId(UUID.randomUUID().toString());
+
+        // 通过现有 WS 通道发给 SS
+        skillRelayService.broadcastToSkill(msg);
+        return ResponseEntity.ok().build();
+    }
+}
+```
+
+#### SS 侧：处理 im_push 消息
+
+**GatewayMessage 新增类型**：在 `GatewayMessage.Type` 中新增 `im_push`。
+
+**GatewayMessageRouter 新增处理分支**：
+
+```java
+case "im_push" -> handleImPush(message);
+```
+
+**handleImPush 逻辑**：
+
+```java
+private void handleImPush(GatewayMessage message) {
+    JsonNode payload = message.getPayload();
+    String assistantAccount = payload.path("assistantAccount").asText();
+    String sessionType = payload.path("sessionType").asText();
+    String sessionId = payload.path("sessionId").asText();
+    String content = payload.path("content").asText();
+
+    // 直接调用 IM 出站接口发送，不走会话管理
+    imOutboundService.sendMessage(assistantAccount, sessionType, sessionId, content);
+}
+```
+
+**特点**：
+- 不走会话管理（不创建/查找 SkillSession）
+- 不走事件翻译（不经过 Translator）
+- 不推送到 MiniApp 前端
+- 纯透传：收到 → 发到 IM
+
+### 4.8 不改动的部分
 
 以下组件不需要改动：
 
