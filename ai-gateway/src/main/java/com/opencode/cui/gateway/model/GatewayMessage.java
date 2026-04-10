@@ -79,6 +79,7 @@ public class GatewayMessage {
         String PERMISSION_REQUEST = "permission_request";
         String ROUTE_CONFIRM = "route_confirm";
         String ROUTE_REJECT = "route_reject";
+        String IM_PUSH = "im_push";
     }
 
     // ==================== 通用字段 ====================
@@ -157,6 +158,11 @@ public class GatewayMessage {
 
     /** OpenCode 是否在线（status_response 消息使用） */
     private Boolean opencodeOnline;
+
+    // ==================== 助手作用域字段 ====================
+
+    /** 助手应用作用域标识 */
+    private String assistantScope;
 
     // ==================== 类型判断便利方法 ====================
 
