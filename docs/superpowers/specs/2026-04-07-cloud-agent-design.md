@@ -298,7 +298,7 @@ public class CloudRequestContext {
   "imGroupId": null,
   "clientLang": "zh",
   "clientType": "asst-pc",
-  "topicId": "1001214",
+  "topicId": "cloud-1001214",
   "messageId": "202411121103",
   "extParameters": {
     "isHwEmployee": false,
@@ -927,7 +927,7 @@ public class CloudProtocolClient {
   "assistantAccount": "assistant-bot-001",
   "sendUserAccount": "c30051824",
   "imGroupId": null,
-  "topicId": "1001214",
+  "topicId": "cloud-1001214",
   "content": "您好，这是定时推送的消息内容"
 }
 ```
@@ -1060,7 +1060,7 @@ private void handleImPush(GatewayMessage message) {
 
 ### 6.2 GatewayMessage（内存 DTO）
 
-新增 `assistantScope` 和 `cloudConfig` 字段，见 4.1。
+新增 `assistantScope` 字段，见 4.1。
 
 ### 6.3 StreamMessage（内存 DTO）
 

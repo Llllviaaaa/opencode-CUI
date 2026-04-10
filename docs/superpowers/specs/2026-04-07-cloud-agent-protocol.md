@@ -35,7 +35,7 @@
 | 角色 | 职责 | 不做什么 |
 |------|------|----------|
 | **Skill Server** | 业务逻辑中枢：会话管理、消息持久化、根据 appId 构建对应云端请求体、事件翻译、前端推送、IM 出站 | 不管理云端连接、不管理云端认证凭证 |
-| **Gateway** | 连接路由器：根据 `assistantScope` 路由到 PC Agent 或云端；对云端发起 HTTP POST + 读取 SSE 流；根据 `appId` + `authType` 自行获取认证凭证；透传请求体和响应，不解析业务内容 | 不理解 payload 业务含义，不做协议转换 |
+| **Gateway** | 连接路由器：根据 `assistantScope` 路由到 PC Agent 或云端；根据 `ak` 调用上游接口获取 endpoint/protocol/authType 并缓存；对云端发起 HTTP POST + 读取 SSE 流；自行获取认证凭证；透传请求体和响应，不解析业务内容 | 不理解 payload 业务含义，不做协议转换 |
 | **云端服务** | 按本协议规范适配响应格式，通过 SSE 流式返回结果 | 不管理会话生命周期（由 SS 管理） |
 
 ### 1.5 协议分段
@@ -60,10 +60,10 @@ SS → GW → 路由 ─────┼─ appId: "code-review"   → https://cr
 **对接新业务助手的步骤**：
 
 1. 上游助手管理平台注册新 appId，配置 endpoint、authType
-2. SS 增加该 appId 对应的 `cloudRequest` 构建逻辑
+2. SS 侧：默认策略够用则通过管理接口添加 appId 映射（零开发）；特殊格式则新增策略类
 3. 云端服务按本协议 P3（响应协议）适配
 4. GW 增加该 authType 的认证实现（如已有则无需改动）
-5. **GW 不需要为新 appId 做任何改动**（endpoint/authType 从 invoke 消息获取）
+5. **GW 不需要为新 appId 做任何改动**（GW 通过 ak 调上游接口获取路由信息）
 
 ---
 
@@ -130,7 +130,7 @@ SS 侧 Redis 缓存，key 为 `ss:assistant:info:{ak}`，跟随现有 assistant 
   "action": "chat",
   "assistantScope": "business",
   "payload": {
-    "toolSessionId": "ts-local-generated-789",
+    "toolSessionId": "cloud-1001214",
     "cloudRequest": {
       "type": "text",
       "content": "JDK8和JDK21有什么区别？",
@@ -139,7 +139,7 @@ SS 侧 Redis 缓存，key 为 `ss:assistant:info:{ak}`，跟随现有 assistant 
       "imGroupId": null,
       "clientLang": "zh",
       "clientType": "asst-pc",
-      "topicId": "1001214",
+      "topicId": "cloud-1001214",
       "messageId": "202411121103",
       "extParameters": {
         "isHwEmployee": false,
@@ -209,7 +209,7 @@ SS 按云端 API 规范构建，GW 不解析，直接作为 HTTP Body 发送。
 | payload.cloudRequest | 无 | 必填（完整云端请求体） |
 | payload.text | 用户消息文本 | 无（内容在 cloudRequest.content 中） |
 | payload.assistantId | 由 SS 注入 | 无（云端不需要） |
-| action | `chat` / `create_session` / `close_session` 等 | 仅 `chat` |
+| action | `chat` / `create_session` / `close_session` 等 | `chat`；P2 阶段增加 `question_reply` / `permission_reply` |
 | toolSessionId | 由 PC Agent 返回 session_created 绑定 | 由 SS 本地生成 |
 
 ---
@@ -262,7 +262,7 @@ X-App-Id: uniassistant
   "imGroupId": null,
   "clientLang": "zh",
   "clientType": "asst-pc",
-  "topicId": "1001214",
+  "topicId": "cloud-1001214",
   "messageId": "202411121103",
   "extParameters": {
     "isHwEmployee": false,
@@ -1168,7 +1168,7 @@ Content-Type: application/json
   "assistantAccount": "assistant-bot-001",
   "sendUserAccount": "c30051824",
   "imGroupId": null,
-  "topicId": "1001214",
+  "topicId": "cloud-1001214",
   "content": "您好，这是定时推送的消息内容"
 }
 ```
@@ -1302,7 +1302,7 @@ X-App-Id: {appId}
 ```json
 {
   "type": "question_reply",
-  "topicId": "1001214",
+  "topicId": "cloud-1001214",
   "toolCallId": "call-q001",
   "answer": "Yes"
 }
@@ -1313,7 +1313,7 @@ X-App-Id: {appId}
 ```json
 {
   "type": "permission_reply",
-  "topicId": "1001214",
+  "topicId": "cloud-1001214",
   "permissionId": "perm-001",
   "response": "once"
 }
