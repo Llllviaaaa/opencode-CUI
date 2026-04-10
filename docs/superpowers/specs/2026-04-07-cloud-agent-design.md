@@ -955,11 +955,12 @@ public class CloudPushController {
     public ResponseEntity<Void> imPush(@RequestBody ImPushRequest request) {
         GatewayMessage msg = new GatewayMessage();
         msg.setType("im_push");
-        msg.setToolSessionId(request.getTopicId());  // 用于路由到对应 SS 实例
+        // topicId 就是 toolSessionId（SS 构建 cloudRequest 时传给云端的）
+        msg.setToolSessionId(request.getTopicId());
         msg.setPayload(objectMapper.valueToTree(request));
         msg.setTraceId(UUID.randomUUID().toString());
 
-        // 通过现有上行路由（基于 toolSessionId）精确投递到对应 SS 实例
+        // 复用现有上行路由，基于 toolSessionId 精确投递
         skillRelayService.relayToSkill(msg);
         return ResponseEntity.ok().build();
     }
