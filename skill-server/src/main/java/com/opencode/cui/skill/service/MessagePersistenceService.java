@@ -26,17 +26,20 @@ public class MessagePersistenceService {
     private final ObjectMapper objectMapper; // JSON 序列化
     private final SnowflakeIdGenerator snowflakeIdGenerator; // 分布式 ID 生成器
     private final ActiveMessageTracker tracker; // 活跃消息状态追踪器
+    private final SkillSessionService sessionService; // 会话服务（用于延迟更新 last_active_at）
 
     public MessagePersistenceService(SkillMessageService messageService,
             SkillMessagePartRepository partRepository,
             ObjectMapper objectMapper,
             SnowflakeIdGenerator snowflakeIdGenerator,
-            ActiveMessageTracker tracker) {
+            ActiveMessageTracker tracker,
+            SkillSessionService sessionService) {
         this.messageService = messageService;
         this.partRepository = partRepository;
         this.objectMapper = objectMapper;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
         this.tracker = tracker;
+        this.sessionService = sessionService;
     }
 
     /** 为流式消息准备消息上下文（解析或创建活跃消息引用） */
@@ -362,6 +365,7 @@ public class MessagePersistenceService {
             return;
         }
         syncAllPendingContent(sessionId);
+        sessionService.touchSession(sessionId);
         tracker.removeAndFinalize(sessionId);
     }
 
