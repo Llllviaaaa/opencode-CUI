@@ -3,10 +3,12 @@ package com.opencode.cui.skill.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
+import com.opencode.cui.skill.service.AssistantInfoService;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.ProtocolException;
 import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillSessionService;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -32,13 +34,17 @@ class SkillSessionControllerTest {
     private GatewayRelayService gatewayRelayService;
     @Mock
     private SessionAccessControlService accessControlService;
+    @Mock
+    private AssistantInfoService assistantInfoService;
+    @Mock
+    private AssistantScopeDispatcher scopeDispatcher;
 
     private SkillSessionController controller;
 
     @BeforeEach
     void setUp() {
         controller = new SkillSessionController(sessionService, gatewayRelayService, accessControlService,
-                new ObjectMapper());
+                new ObjectMapper(), assistantInfoService, scopeDispatcher);
     }
 
     @Test

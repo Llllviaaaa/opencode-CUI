@@ -8,6 +8,7 @@ import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.config.AssistantIdProperties;
 import com.opencode.cui.skill.model.AgentSummary;
 import com.opencode.cui.skill.service.AssistantAccountResolverService;
+import com.opencode.cui.skill.service.AssistantInfoService;
 import com.opencode.cui.skill.service.ContextInjectionService;
 import com.opencode.cui.skill.service.GatewayApiClient;
 import com.opencode.cui.skill.service.GatewayRelayService;
@@ -15,6 +16,7 @@ import com.opencode.cui.skill.service.ImOutboundService;
 import com.opencode.cui.skill.service.ImSessionManager;
 import com.opencode.cui.skill.service.SessionRebuildService;
 import com.opencode.cui.skill.service.SkillMessageService;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -56,6 +58,10 @@ class ImInboundControllerTest {
         private SkillMessageService messageService;
         @Mock
         private SessionRebuildService rebuildService;
+        @Mock
+        private AssistantInfoService assistantInfoService;
+        @Mock
+        private AssistantScopeDispatcher scopeDispatcher;
         private AssistantIdProperties assistantIdProperties;
         private ImInboundController controller;
 
@@ -74,7 +80,9 @@ class ImInboundControllerTest {
                                 gatewayRelayService,
                                 messageService,
                                 rebuildService,
-                                new ObjectMapper());
+                                new ObjectMapper(),
+                                assistantInfoService,
+                                scopeDispatcher);
                 // 默认 Agent 在线
                 lenient().when(gatewayApiClient.getAgentByAk(any()))
                         .thenReturn(AgentSummary.builder().ak("ak-001").toolType("assistant").build());

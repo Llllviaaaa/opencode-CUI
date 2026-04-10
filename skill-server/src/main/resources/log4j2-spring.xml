@@ -13,7 +13,7 @@
                      filePattern="${ARCHIVE_DIR}/${SERVICE_NAME}.%d{yyyy-MM-dd}.%i.log.gz">
             <PatternLayout pattern="${LOG_PATTERN}" charset="UTF-8"/>
             <Policies>
-                <SizeBasedTriggeringPolicy size="20MB"/>
+                <SizeBasedTriggeringPolicy size="200MB"/>
                 <TimeBasedTriggeringPolicy interval="1"/>
             </Policies>
             <DefaultRolloverStrategy max="30">

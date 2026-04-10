@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.model.SkillSession;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
+import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -56,6 +58,12 @@ class GatewayRelayServiceTest {
         private GatewayRelayService.GatewayRelayTarget gatewayRelayTarget;
         @Mock
         private AssistantIdResolverService assistantIdResolverService;
+        @Mock
+        private AssistantInfoService assistantInfoService;
+        @Mock
+        private AssistantScopeDispatcher scopeDispatcher;
+        @Mock
+        private AssistantScopeStrategy scopeStrategy;
 
         private GatewayMessageRouter messageRouter;
         private GatewayRelayService service;
@@ -71,6 +79,8 @@ class GatewayRelayServiceTest {
                 // Make getOwnerInstance return LOCAL_INSTANCE so route() processes locally
                 org.mockito.Mockito.lenient().when(sessionRouteService.getOwnerInstance(any())).thenReturn(LOCAL_INSTANCE);
                 org.mockito.Mockito.lenient().when(skillInstanceRegistry.getInstanceId()).thenReturn(LOCAL_INSTANCE);
+                // scopeDispatcher always returns a lenient strategy to avoid NPE in tool_event handling
+                org.mockito.Mockito.lenient().when(scopeDispatcher.getStrategy(any())).thenReturn(scopeStrategy);
 
                 messageRouter = new GatewayMessageRouter(
                                 new ObjectMapper(),
@@ -85,13 +95,17 @@ class GatewayRelayServiceTest {
                                 imOutboundService,
                                 sessionRouteService,
                                 skillInstanceRegistry,
+                                assistantInfoService,
+                                scopeDispatcher,
                                 120);
                 service = new GatewayRelayService(
                                 new ObjectMapper(),
                                 messageRouter,
                                 rebuildService,
                                 redisMessageBroker,
-                                assistantIdResolverService);
+                                assistantIdResolverService,
+                                assistantInfoService,
+                                scopeDispatcher);
                 service.setGatewayRelayTarget(gatewayRelayTarget);
         }
 

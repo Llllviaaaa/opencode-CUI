@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.skill.model.StreamMessage;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
+import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -64,6 +66,10 @@ class SsRelayAndTakeoverTest {
     private SessionRouteService sessionRouteService;
     @Mock
     private SkillInstanceRegistry skillInstanceRegistry;
+    @Mock
+    private AssistantInfoService assistantInfoService;
+    @Mock
+    private AssistantScopeDispatcher scopeDispatcher;
 
     private GatewayMessageRouter router;
 
@@ -83,6 +89,8 @@ class SsRelayAndTakeoverTest {
                 imOutboundService,
                 sessionRouteService,
                 skillInstanceRegistry,
+                assistantInfoService,
+                scopeDispatcher,
                 DEAD_THRESHOLD_SECONDS);
     }
 

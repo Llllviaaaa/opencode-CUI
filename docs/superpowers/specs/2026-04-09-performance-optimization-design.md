@@ -154,15 +154,6 @@ class AsyncSessionSender {
 
 **效果**：降低单连接消息密度，减少队列积压。
 
-#### 2.3 配置 WebSocket 发送超时保护（可选）
-
-在 GatewayConfig 中为 Skill WebSocket session 配置：
-
-- `setSendTimeLimit`：单次发送最大等待时间（如 5 秒）
-- `setSendBufferSizeLimit`：发送缓冲区上限（如 1MB）
-
-防止单次慢发送无限期占用资源。
-
 ### 优化效果
 
 | 指标 | 优化前 | 优化后 |
@@ -191,7 +182,6 @@ class AsyncSessionSender {
 |------|------|------|
 | 1 | 新增 AsyncSessionSender，重构 SkillRelayService.sendToSession | 中（并发模型变更） |
 | 2 | 调大 connection-count 配置 | 低 |
-| 3 | 配置 WebSocket 发送超时保护 | 低 |
 
 ### 验证方式
 
