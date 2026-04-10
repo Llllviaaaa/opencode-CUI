@@ -1215,9 +1215,152 @@ SS 收到 `im_push` 后直接调用 IM 出站接口发送消息：
 
 ---
 
-## 10. 扩展性设计
+## 10. 云端 Question/Permission 旁路回复接口
 
-### 10.1 新增业务助手（appId）
+### 10.1 概述
+
+云端 SSE 是单向流（云端 → GW），当云端发出 `question` 或 `permission.ask` 事件后，SSE 连接保持打开等待回复。用户的回复需要通过独立的 REST 接口（旁路）发送给云端，云端收到后继续在同一 SSE 流上推送后续事件。
+
+**消息流**：
+
+```
+阶段 1：云端提问
+  云端 SSE → question/permission.ask → GW → SS → 前端展示
+  （SSE 连接保持打开，云端等待回复）
+
+阶段 2：用户回复（旁路 REST）
+  用户回答 → SS 构建回复 → SS 发 invoke(action=question_reply/permission_reply) → GW
+  → GW 调云端旁路 REST 接口发送回复
+
+阶段 3：云端继续
+  云端收到回复 → 继续在同一 SSE 流上推送后续事件 → GW → SS → 前端
+  → 最终 tool_done → SSE 结束
+```
+
+### 10.2 SS → GW（invoke 消息）
+
+复用现有 invoke 格式，`action` 为 `question_reply` 或 `permission_reply`：
+
+**question_reply**：
+
+```json
+{
+  "type": "invoke",
+  "ak": "agent-ak-123",
+  "source": "skill-server",
+  "userId": "user-001",
+  "welinkSessionId": "1234567890",
+  "traceId": "trace-uuid-xxx",
+  "action": "question_reply",
+  "assistantScope": "business",
+  "payload": {
+    "toolSessionId": "ts-789",
+    "answer": "Yes",
+    "toolCallId": "call-q001"
+  }
+}
+```
+
+**permission_reply**：
+
+```json
+{
+  "type": "invoke",
+  "ak": "agent-ak-123",
+  "source": "skill-server",
+  "userId": "user-001",
+  "welinkSessionId": "1234567890",
+  "traceId": "trace-uuid-xxx",
+  "action": "permission_reply",
+  "assistantScope": "business",
+  "payload": {
+    "toolSessionId": "ts-789",
+    "permissionId": "perm-001",
+    "response": "once"
+  }
+}
+```
+
+### 10.3 GW → 云端（旁路 REST 接口）
+
+GW 收到 `question_reply` / `permission_reply` 的 invoke 后，不走 SSE，而是调用云端的旁路 REST 接口。
+
+**接口规范**（我们定义，云端适配）：
+
+```
+POST {cloudEndpoint}/reply
+Content-Type: application/json
+{认证头由 GW 填充}
+X-Trace-Id: {traceId}
+X-App-Id: {appId}
+```
+
+**question_reply 请求体**：
+
+```json
+{
+  "type": "question_reply",
+  "topicId": "1001214",
+  "toolCallId": "call-q001",
+  "answer": "Yes"
+}
+```
+
+**permission_reply 请求体**：
+
+```json
+{
+  "type": "permission_reply",
+  "topicId": "1001214",
+  "permissionId": "perm-001",
+  "response": "once"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| type | String | ✅ | `"question_reply"` / `"permission_reply"` |
+| topicId | String | ✅ | 会话主题 ID（关联到正在等待的 SSE 连接） |
+| toolCallId | String | 条件 | question_reply 时必填，对应 question 事件的 toolCallId |
+| answer | String | 条件 | question_reply 时必填，用户的回答 |
+| permissionId | String | 条件 | permission_reply 时必填，对应 permission.ask 的 permissionId |
+| response | String | 条件 | permission_reply 时必填，`"once"` / `"always"` / `"reject"` |
+
+**响应**：
+
+```json
+{ "code": "200", "message": "success" }
+```
+
+云端收到回复后，继续在原有 SSE 连接上推送后续事件。
+
+### 10.4 GW 侧旁路路由逻辑
+
+GW 的 `CloudAgentService` 需要区分 invoke action：
+
+- `action = "chat"` → 建立新的 SSE 连接（现有逻辑）
+- `action = "question_reply"` / `"permission_reply"` → 调用云端旁路 REST 接口（不建新连接，回复发到等待中的 SSE 对应的云端会话）
+
+> **注意**：旁路 REST 是同步调用，不返回 SSE 流。后续事件仍通过原有 SSE 连接（在 `chat` invoke 时建立的）回来。GW 需要维护 `topicId → SSE 连接` 的映射，确保 SSE 连接在等待回复期间不被关闭。
+
+### 10.5 SSE 连接生命周期（含旁路回复）
+
+```
+chat invoke → 建立 SSE 连接 → 读取事件流
+  → 收到 question → 转发 SS → SSE 保持打开，GW 继续读取（此时云端暂停推送）
+  → 用户回答 → question_reply invoke → GW 调旁路 REST
+  → 云端收到回复 → 继续在同一 SSE 推送后续事件 → GW 继续读取转发
+  → 可能再次收到 question/permission → 重复上述过程
+  → 最终 tool_done → SSE 关闭 → GW 清理连接映射
+```
+
+**超时处理**：如果用户长时间不回复，SSE 连接可能超时。GW 的 `read-timeout` 配置应足够长以覆盖用户交互时间，或在收到 question/permission 后动态延长超时。
+
+---
+
+## 11. 扩展性设计
+
+### 11.1 新增业务助手（appId）
 
 | 步骤 | 责任方 | 改动 |
 |------|--------|------|
@@ -1228,7 +1371,7 @@ SS 收到 `im_push` 后直接调用 IM 出站接口发送消息：
 
 **GW 不需要为每个新 appId 做改动**——endpoint 和 authType 从 invoke 消息中动态获取。
 
-### 10.2 新增 event.type
+### 11.2 新增 event.type
 
 1. 在本协议 P3 章节注册新的 `event.type`
 2. 定义 `event.properties` 结构
@@ -1236,7 +1379,7 @@ SS 收到 `im_push` 后直接调用 IM 出站接口发送消息：
 4. 前端增加渲染支持
 5. GW 无需改动（透传）
 
-### 10.3 新增 action 类型
+### 11.3 新增 action 类型
 
 如未来业务助手需要支持 `close_session` 等：
 1. 扩展 P1 的 `action` 字段
@@ -1244,14 +1387,14 @@ SS 收到 `im_push` 后直接调用 IM 出站接口发送消息：
 3. 云端适配对应接口
 4. GW 无需改动（透传）
 
-### 10.4 新增传输协议
+### 11.4 新增传输协议
 
 如需支持 WebSocket（双向）：
 1. `cloudConfig.protocol` 设为 `"websocket"`
 2. GW 的 `CloudAgentService` 增加 WebSocket 客户端实现
 3. 请求/响应格式不变，仅传输层切换
 
-### 10.5 新增认证方式
+### 11.5 新增认证方式
 
 1. 上游 API 返回新 `authType` 值
 2. GW 实现对应认证策略

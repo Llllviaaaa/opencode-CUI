@@ -1120,20 +1120,28 @@ private void handleImPush(GatewayMessage message) {
 | 认证凭证过期 | 云端返回 401 | CloudAuthService 自动刷新凭证并重试 |
 | **云端返回 question/permission 事件** | **用户无法回复，对话中断** | **见 10.1 详细说明** |
 
-### 10.1 TODO：云端 question/permission 回复链路
+### 10.1 云端 question/permission 旁路回复
 
 **背景**：云端服务内部有两个 LLM 来源——优先走云端自己的 opencode 客户端，客户端离线时降级走云端 LLM。当云端走 opencode 客户端时，可能产生 `question` 和 `permission.ask` 事件。
 
-**当前状态**：本次设计暂不支持 question/permission 回复链路。要求云端尽量避免返回这两类事件。
+**方案**：由于 SSE 是单向流，回复通过旁路 REST 接口发送给云端。SSE 连接在等待回复期间保持打开，云端收到回复后继续在同一 SSE 流上推送后续事件。
 
-**风险**：如果云端返回了 question/permission 事件，用户在前端能看到问题/权限请求卡片，但无法回复（回复无法传回云端），导致对话中断。
+**完整协议定义**见协议文档第 10 章。
 
-**后续 TODO**：
+**关键设计点**：
 
-- [ ] 与云端团队对齐 question_reply / permission_reply 的接口形式（同 endpoint 还是独立 endpoint）
-- [ ] 扩展 invoke action 支持 `question_reply` 和 `permission_reply`
-- [ ] CloudRequestBuilder 增加回复类型的请求构建策略
-- [ ] 云端需要通过 topicId + toolCallId/permissionId 关联原始问题和回复
+1. **invoke action 扩展**：新增 `question_reply` 和 `permission_reply` action
+2. **GW 旁路路由**：`CloudAgentService` 根据 action 区分——chat 走 SSE，reply 走旁路 REST
+3. **SSE 连接映射**：GW 维护 `topicId → SSE 连接` 映射，确保回复期间连接不被关闭
+4. **超时处理**：收到 question/permission 后动态延长 SSE 读取超时
+5. **旁路 REST 端点**：`POST {cloudEndpoint}/reply`，云端适配
+
+**实现优先级**：P1（首期）先要求云端避免返回 question/permission，P2 实现旁路回复链路。
+
+**TODO**：
+
+- [ ] 与云端团队对齐旁路 REST 接口（`{endpoint}/reply`）
+- [ ] GW CloudAgentService 增加 SSE 连接映射管理
+- [ ] GW CloudAgentService 增加 question_reply/permission_reply 旁路路由
+- [ ] SS BusinessScopeStrategy.buildInvoke 支持 question_reply/permission_reply action
 - [ ] 端到端联调验证
-
-**临时措施**：SS 收到云端的 question/permission 事件时，可考虑转为提示消息（如"该助手暂不支持交互式问答"），避免用户困惑。
