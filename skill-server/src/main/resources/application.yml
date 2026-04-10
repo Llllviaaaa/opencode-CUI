@@ -112,4 +112,4 @@ logging:
   level:
     com.opencode.cui.skill: INFO
     org.springframework.web.socket: INFO
-  # pattern 和 rollingpolicy 已迁移到 logback-spring.xml
+  # pattern 和 rollingpolicy 已迁移到 log4j2-spring.xml
