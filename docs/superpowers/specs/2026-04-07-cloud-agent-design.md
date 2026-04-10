@@ -318,129 +318,242 @@ public class CloudRequestContext {
 | 未配置的 appId | 自动走 default 策略 | 否 |
 | 临时下线某个业务助手 | 调管理接口将 status 置为 0 | 否 |
 
-### 3.3 改动：GatewayRelayService
+### 3.3 新增：AssistantScopeStrategy（策略模式）
 
-**改动点**：在 `sendInvokeToGateway()` 中增加业务助手分支。
+将 SS 中所有按 `assistantScope` 分支的逻辑统一收敛到策略模式，消除散落各处的 if-else。
 
-**现有流程**：
-
-```java
-// 现有：构建 invoke 消息
-GatewayMessage msg = buildInvokeMessage(command);
-gatewayWSClient.send(msg);
-```
-
-**新增流程**：
+**策略接口**：
 
 ```java
-// 新增：查询助手类型（SS 只关心 scope 和 appId）
-AssistantInfo info = assistantInfoService.getAssistantInfo(command.getAk());
+public interface AssistantScopeStrategy {
+    String getScope();   // "business" | "personal"
 
-if ("business".equals(info.getAssistantScope())) {
-    // 业务助手：构建云端请求体，GW 自行获取路由信息
-    ObjectNode cloudRequest = cloudRequestBuilder.buildCloudRequest(
-        info.getAppId(), buildCloudRequestContext(command));
+    /** 构建 invoke 消息 */
+    GatewayMessage buildInvoke(InvokeCommand command, AssistantInfo info);
 
-    GatewayMessage msg = buildInvokeMessage(command);
-    msg.setAssistantScope("business");
-    msg.getPayload().set("cloudRequest", cloudRequest);
-    gatewayWSClient.send(msg);
-} else {
-    // 个人助手：走现有流程
-    GatewayMessage msg = buildInvokeMessage(command);
-    gatewayWSClient.send(msg);
+    /** 创建会话时生成 toolSessionId */
+    String generateToolSessionId(SkillSession session);
+
+    /** 是否需要等待 session_created 回调 */
+    boolean requiresSessionCreatedCallback();
+
+    /** 是否需要检查 Agent 在线状态 */
+    boolean requiresOnlineCheck();
+
+    /** 翻译上行事件为 StreamMessage */
+    StreamMessage translateEvent(JsonNode event, String sessionId);
 }
 ```
 
-### 3.4 改动：会话创建流程
-
-**现有流程**（个人助手）：
-1. 创建 SkillSession（toolSessionId = null）
-2. 发 invoke(action=create_session) 给 GW → PC Agent
-3. 等待 Agent 返回 session_created(toolSessionId=xxx)
-4. 绑定 toolSessionId，消费待发消息
-
-**新增流程**（业务助手）：
-1. 创建 SkillSession（**toolSessionId = SS 本地生成**）
-2. 会话直接就绪，不需要 create_session
-3. 直接发 invoke(action=chat) 给 GW
-
-**改动文件**：
-- `ImSessionManager.createSessionAsync()` —— 增加 scope 判断，business 时本地生成 toolSessionId
-- `SkillSessionController.createSession()` —— 同上
-
-**toolSessionId 生成**：使用现有的 Snowflake ID 生成器，格式为 `"cloud-{snowflakeId}"`，便于区分来源。
-
-### 3.5 改动：Agent 在线检查
-
-**现有逻辑**：IM 和 MiniApp 链路在发消息前检查 Agent 在线状态，离线则返回错误。
-
-**改动**：业务助手跳过在线检查。
-
-**改动文件**：
-- `ImInboundController` 第 121-146 行 —— 增加 scope 判断
-- `SkillMessageController.routeToGateway()` 第 150-168 行 —— 增加 scope 判断
-
-### 3.6 新增：CloudEventTranslator
-
-**职责**：翻译云端 event.type 为 StreamMessage。与现有 `OpenCodeEventTranslator` 并列，分别处理不同来源的事件。
-
-**设计**：云端协议的 event.type 直接对齐 StreamMessage.Types 命名，翻译逻辑简单：
+**个人助手策略**：
 
 ```java
+@Component
+public class PersonalScopeStrategy implements AssistantScopeStrategy {
+    private final OpenCodeEventTranslator openCodeEventTranslator;
+
+    @Override public String getScope() { return "personal"; }
+
+    @Override public GatewayMessage buildInvoke(InvokeCommand command, AssistantInfo info) {
+        // 现有逻辑：构建标准 invoke，注入 assistantId 等
+        return buildInvokeMessage(command);
+    }
+
+    @Override public String generateToolSessionId(SkillSession session) {
+        return null;  // 由 PC Agent 返回 session_created 时绑定
+    }
+
+    @Override public boolean requiresSessionCreatedCallback() { return true; }
+    @Override public boolean requiresOnlineCheck() { return true; }
+
+    @Override public StreamMessage translateEvent(JsonNode event, String sessionId) {
+        return openCodeEventTranslator.translate(event, sessionId);
+    }
+}
+```
+
+**业务助手策略**：
+
+```java
+@Component
+public class BusinessScopeStrategy implements AssistantScopeStrategy {
+    private final CloudRequestBuilder cloudRequestBuilder;
+    private final CloudEventTranslator cloudEventTranslator;
+
+    @Override public String getScope() { return "business"; }
+
+    @Override public GatewayMessage buildInvoke(InvokeCommand command, AssistantInfo info) {
+        // 构建 cloudRequest，设置 assistantScope
+        ObjectNode cloudRequest = cloudRequestBuilder.buildCloudRequest(
+            info.getAppId(), buildCloudRequestContext(command));
+        GatewayMessage msg = buildInvokeMessage(command);
+        msg.setAssistantScope("business");
+        msg.getPayload().set("cloudRequest", cloudRequest);
+        return msg;
+    }
+
+    @Override public String generateToolSessionId(SkillSession session) {
+        return "cloud-" + snowflakeIdGenerator.nextId();  // SS 本地生成
+    }
+
+    @Override public boolean requiresSessionCreatedCallback() { return false; }
+    @Override public boolean requiresOnlineCheck() { return false; }
+
+    @Override public StreamMessage translateEvent(JsonNode event, String sessionId) {
+        return cloudEventTranslator.translate(event);
+    }
+}
+```
+
+**策略调度器**：
+
+```java
+@Component
+public class AssistantScopeDispatcher {
+    private final Map<String, AssistantScopeStrategy> strategyMap;
+
+    public AssistantScopeDispatcher(List<AssistantScopeStrategy> strategies) {
+        this.strategyMap = strategies.stream()
+            .collect(Collectors.toMap(AssistantScopeStrategy::getScope, Function.identity()));
+    }
+
+    public AssistantScopeStrategy getStrategy(String scope) {
+        return strategyMap.getOrDefault(scope, strategyMap.get("personal"));
+    }
+}
+```
+
+**使用方式（消除 if-else）**：
+
+```java
+// GatewayRelayService — 构建 invoke
+AssistantInfo info = assistantInfoService.getAssistantInfo(command.getAk());
+AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(info.getAssistantScope());
+GatewayMessage msg = strategy.buildInvoke(command, info);
+gatewayWSClient.send(msg);
+
+// ImSessionManager / SkillSessionController — 创建会话
+String toolSessionId = strategy.generateToolSessionId(session);
+boolean needCallback = strategy.requiresSessionCreatedCallback();
+
+// ImInboundController / SkillMessageController — 在线检查
+if (strategy.requiresOnlineCheck()) {
+    // 检查 Agent 在线状态...
+}
+
+// GatewayMessageRouter — 事件翻译
+StreamMessage msg = strategy.translateEvent(event, sessionId);
+```
+
+### 3.4 新增：CloudEventTranslator（注册表模式）
+
+**职责**：翻译云端 event.type 为 StreamMessage。使用注册表模式替代 switch-case，新增事件类型只需注册新 Handler。
+
+**Handler 接口**：
+
+```java
+@FunctionalInterface
+public interface CloudEventHandler {
+    StreamMessage handle(JsonNode properties);
+}
+```
+
+**注册表**：
+
+```java
+@Component
 public class CloudEventTranslator {
+
+    private final Map<String, CloudEventHandler> handlers = new HashMap<>();
+
+    @PostConstruct
+    public void init() {
+        // 文本内容
+        handlers.put("text.delta", props -> StreamMessage.builder()
+            .type(Types.TEXT_DELTA)
+            .content(props.path("content").asText())
+            .role(props.path("role").asText("assistant"))
+            .build());
+        handlers.put("text.done", props -> StreamMessage.builder()
+            .type(Types.TEXT_DONE)
+            .content(props.path("content").asText())
+            .role(props.path("role").asText("assistant"))
+            .messageId(props.path("messageId").asText(null))
+            .partId(props.path("partId").asText(null))
+            .build());
+        // thinking.delta、thinking.done 同理...
+
+        // 工具执行
+        handlers.put("tool.update", props -> StreamMessage.builder()
+            .type(Types.TOOL_UPDATE)
+            .toolName(props.path("toolName").asText())
+            .toolCallId(props.path("toolCallId").asText())
+            .status(props.path("status").asText())
+            .build());
+        // step.start、step.done 同理...
+
+        // 交互
+        handlers.put("question", props -> StreamMessage.builder()
+            .type(Types.QUESTION)
+            .toolCallId(props.path("toolCallId").asText())
+            .question(props.path("question").asText())
+            .build());
+        // permission.ask、permission.reply 同理...
+
+        // 会话状态
+        handlers.put("session.status", props -> StreamMessage.sessionStatus(
+            props.path("status").asText()));
+        handlers.put("session.title", props -> StreamMessage.builder()
+            .type(Types.SESSION_TITLE)
+            .title(props.path("title").asText())
+            .build());
+        // session.error 同理...
+
+        // 文件
+        handlers.put("file", props -> StreamMessage.builder()
+            .type(Types.FILE)
+            .fileName(props.path("fileName").asText())
+            .fileUrl(props.path("fileUrl").asText())
+            .fileMime(props.path("fileMime").asText(null))
+            .build());
+
+        // 云端扩展
+        handlers.put("planning.delta", props -> StreamMessage.builder()
+            .type(Types.PLANNING_DELTA)
+            .content(props.path("content").asText())
+            .build());
+        handlers.put("planning.done", props -> StreamMessage.builder()
+            .type(Types.PLANNING_DONE)
+            .content(props.path("content").asText())
+            .build());
+        handlers.put("searching", props -> StreamMessage.builder()
+            .type(Types.SEARCHING)
+            .keywords(toStringList(props.path("keywords")))
+            .build());
+        handlers.put("search_result", props -> StreamMessage.builder()
+            .type(Types.SEARCH_RESULT)
+            .searchResults(toSearchResultList(props.path("results")))
+            .build());
+        handlers.put("reference", props -> StreamMessage.builder()
+            .type(Types.REFERENCE)
+            .references(toReferenceList(props.path("references")))
+            .build());
+        handlers.put("ask_more", props -> StreamMessage.builder()
+            .type(Types.ASK_MORE)
+            .askMoreQuestions(toStringList(props.path("questions")))
+            .build());
+    }
+
     public StreamMessage translate(JsonNode event) {
         String eventType = event.path("type").asText();
         JsonNode props = event.path("properties");
-
-        return switch (eventType) {
-            // 文本内容 — 直接映射
-            case "text.delta" -> StreamMessage.builder()
-                .type(Types.TEXT_DELTA)
-                .content(props.path("content").asText())
-                .role(props.path("role").asText("assistant"))
-                .build();
-            case "text.done" -> StreamMessage.builder()
-                .type(Types.TEXT_DONE)
-                .content(props.path("content").asText())
-                .role(props.path("role").asText("assistant"))
-                .messageId(props.path("messageId").asText(null))
-                .partId(props.path("partId").asText(null))
-                .build();
-            // thinking、tool.update、question、permission 等同理...
-
-            // 云端扩展 — 新增 StreamMessage 类型
-            case "planning.delta" -> StreamMessage.builder()
-                .type("planning.delta")
-                .content(props.path("content").asText())
-                .build();
-            // planning.done、searching、search_result、reference、ask_more 同理...
-
-            default -> null; // 未知类型忽略
-        };
+        CloudEventHandler handler = handlers.get(eventType);
+        return handler != null ? handler.handle(props) : null;
     }
 }
 ```
 
-### 3.7 改动：GatewayMessageRouter
-
-**改动点**：`handleToolEvent()` 中根据 event.type 来源选择不同的 Translator。
-
-**判断逻辑**：SS 通过 AK 查询缓存的 `assistantScope` 来判断消息来源，选择对应的 Translator：
-
-```java
-private StreamMessage translateEvent(JsonNode event, String sessionId, String ak) {
-    // 通过 AK 查询缓存的助手类型
-    String scope = assistantInfoService.getCachedScope(ak);
-
-    if ("business".equals(scope)) {
-        // 业务助手 → 云端事件，使用 CloudEventTranslator
-        return cloudEventTranslator.translate(event);
-    }
-    // 个人助手 → 本地 Agent 事件，使用 OpenCodeEventTranslator
-    return openCodeEventTranslator.translate(event, sessionId);
-}
-```
+**扩展**：新增事件类型只需在 `init()` 中注册新 handler，或通过外部 `registerHandler(type, handler)` 方法动态注册。
 
 这种方式的优点：
 - 不依赖 event.type 命名区分（`session.status` 等在两套协议中命名相同）
@@ -509,21 +622,47 @@ public class GatewayMessage {
 }
 ```
 
-### 4.2 改动：SkillRelayService
+### 4.2 改动：SkillRelayService（策略模式）
 
-**改动点**：`handleInvokeFromSkill()` 中增加路由分支。
+**改动点**：使用 `InvokeRouteStrategy` 策略模式替代 if-else 路由分支。
+
+**策略接口**：
+
+```java
+public interface InvokeRouteStrategy {
+    String getScope();   // "business" | "personal"
+    void route(GatewayMessage message);
+}
+```
+
+**策略实现**：
+
+```java
+@Component
+public class PersonalInvokeRouteStrategy implements InvokeRouteStrategy {
+    @Override public String getScope() { return "personal"; }
+    @Override public void route(GatewayMessage message) {
+        // 现有逻辑：转发给本地 PC Agent
+    }
+}
+
+@Component
+public class BusinessInvokeRouteStrategy implements InvokeRouteStrategy {
+    private final CloudAgentService cloudAgentService;
+    @Override public String getScope() { return "business"; }
+    @Override public void route(GatewayMessage message) {
+        cloudAgentService.handleInvoke(message);
+    }
+}
+```
+
+**调度**：
 
 ```java
 public void handleInvokeFromSkill(WebSocketSession session, GatewayMessage message) {
-    String scope = message.getAssistantScope();
-
-    if ("business".equals(scope)) {
-        // 业务助手 → 云端
-        cloudAgentService.handleInvoke(message);
-    } else {
-        // 个人助手 → 现有流程（转发给 PC Agent）
-        // ... 现有逻辑不变 ...
-    }
+    String scope = Optional.ofNullable(message.getAssistantScope()).orElse("personal");
+    InvokeRouteStrategy strategy = routeStrategyMap.getOrDefault(scope, personalStrategy);
+    strategy.route(message);
 }
 ```
 
