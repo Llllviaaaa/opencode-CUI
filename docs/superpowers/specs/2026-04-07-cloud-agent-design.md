@@ -925,7 +925,7 @@ public class CloudProtocolClient {
 ```json
 {
   "assistantAccount": "assistant-bot-001",
-  "sendUserAccount": "c30051824",
+  "userAccount": "c30051824",
   "imGroupId": null,
   "topicId": "cloud-1001214",
   "content": "您好，这是定时推送的消息内容"
@@ -935,7 +935,7 @@ public class CloudProtocolClient {
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | assistantAccount | String | ✅ | 以哪个助手身份发送 |
-| sendUserAccount | String | ✅ | 目标用户账号 |
+| userAccount | String | ✅ | 目标用户账号 |
 | imGroupId | String | | 群 ID。有值 → 群聊推送；null → 单聊推送 |
 | topicId | String | ✅ | 会话主题 ID（= toolSessionId），用于 GW 路由 |
 | content | String | ✅ | 文本内容（可含自定义 Markdown 协议） |
@@ -983,7 +983,7 @@ case "im_push" -> handleImPush(message);
 private void handleImPush(GatewayMessage message) {
     JsonNode payload = message.getPayload();
     String assistantAccount = payload.path("assistantAccount").asText();
-    String sendUserAccount = payload.path("sendUserAccount").asText();
+    String userAccount = payload.path("userAccount").asText();
     String imGroupId = payload.path("imGroupId").asText(null);
     String topicId = message.getToolSessionId();
     String content = payload.path("content").asText();
@@ -1006,7 +1006,7 @@ private void handleImPush(GatewayMessage message) {
     if (imGroupId != null) {
         imOutboundService.sendGroupMessage(assistantAccount, imGroupId, content);
     } else {
-        imOutboundService.sendDirectMessage(assistantAccount, sendUserAccount, content);
+        imOutboundService.sendDirectMessage(assistantAccount, userAccount, content);
     }
 }
 ```

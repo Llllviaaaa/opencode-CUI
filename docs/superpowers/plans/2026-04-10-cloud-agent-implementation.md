@@ -1393,7 +1393,7 @@ case "im_push" -> handleImPush(message);
 private void handleImPush(GatewayMessage message) {
     JsonNode payload = message.getPayload();
     String assistantAccount = payload.path("assistantAccount").asText();
-    String sendUserAccount = payload.path("sendUserAccount").asText();
+    String userAccount = payload.path("userAccount").asText();
     String imGroupId = payload.path("imGroupId").asText(null);
     String topicId = message.getToolSessionId();
     String content = payload.path("content").asText();
@@ -1415,7 +1415,7 @@ private void handleImPush(GatewayMessage message) {
     if (imGroupId != null) {
         imOutboundService.sendGroupMessage(assistantAccount, imGroupId, content);
     } else {
-        imOutboundService.sendDirectMessage(assistantAccount, sendUserAccount, content);
+        imOutboundService.sendDirectMessage(assistantAccount, userAccount, content);
     }
 }
 ```
@@ -1488,7 +1488,7 @@ curl -X POST http://localhost:8080/api/admin/configs \
 ```bash
 curl -X POST http://localhost:8081/api/gateway/cloud/im-push \
   -H "Content-Type: application/json" \
-  -d '{"assistantAccount":"assistant-bot-001","sendUserAccount":"c30051824","imGroupId":null,"topicId":"cloud-1001214","content":"定时推送测试"}'
+  -d '{"assistantAccount":"assistant-bot-001","userAccount":"c30051824","imGroupId":null,"topicId":"cloud-1001214","content":"定时推送测试"}'
 ```
 2. 验证 IM 出站收到消息
 3. 推送群聊消息（imGroupId 有值），验证同样正常

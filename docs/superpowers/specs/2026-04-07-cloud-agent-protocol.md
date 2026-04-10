@@ -1166,7 +1166,7 @@ Content-Type: application/json
 ```json
 {
   "assistantAccount": "assistant-bot-001",
-  "sendUserAccount": "c30051824",
+  "userAccount": "c30051824",
   "imGroupId": null,
   "topicId": "cloud-1001214",
   "content": "您好，这是定时推送的消息内容"
@@ -1176,7 +1176,7 @@ Content-Type: application/json
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | assistantAccount | String | ✅ | 以哪个助手身份发送 |
-| sendUserAccount | String | ✅ | 目标用户账号 |
+| userAccount | String | ✅ | 目标用户账号 |
 | imGroupId | String | | 群 ID。有值 → 群聊推送；null → 单聊推送 |
 | topicId | String | ✅ | 会话主题 ID（= toolSessionId），用于 GW 路由到对应 SS 实例 |
 | content | String | ✅ | 文本内容（可含自定义 Markdown 协议） |
@@ -1198,7 +1198,7 @@ GW 收到推送请求后，构建 `GatewayMessage(type="im_push")` 通过现有 
   "traceId": "trace-uuid-xxx",
   "payload": {
     "assistantAccount": "assistant-bot-001",
-    "sendUserAccount": "c30051824",
+    "userAccount": "c30051824",
     "imGroupId": null,
     "content": "您好，这是定时推送的消息内容"
   }
@@ -1208,7 +1208,7 @@ GW 收到推送请求后，构建 `GatewayMessage(type="im_push")` 通过现有 
 ### 9.4 SS 处理
 
 SS 收到 `im_push` 后：
-- 根据 `assistantAccount` + `sendUserAccount` / `imGroupId` 确定 IM 发送目标
+- 根据 `assistantAccount` + `userAccount` / `imGroupId` 确定 IM 发送目标
 - 直接调用 IM 出站接口发送消息
 - **不走事件翻译**（不经过 Translator）
 - **不推送到 MiniApp 前端**
