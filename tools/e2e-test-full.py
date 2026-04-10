@@ -344,6 +344,10 @@ def test_e2e_02_business_im():
     """E2E-02: 业务助手 IM 对话全链路"""
     print("\n[E2E-02] 业务助手 IM 对话")
 
+    if not IM_INBOUND_TOKEN:
+        skip("E02-*", "IM Inbound 全部跳过", "IM_INBOUND_TOKEN 未设置")
+        return
+
     reset_mock()
 
     # 通过 IM Inbound 接口发送消息
@@ -407,6 +411,10 @@ def test_e2e_02_business_im():
 def test_e2e_03_personal_regression():
     """E2E-03: 个人助手回归（不走云端）"""
     print("\n[E2E-03] 个人助手回归")
+
+    if not IM_INBOUND_TOKEN:
+        skip("E03-*", "Personal IM 跳过", "IM_INBOUND_TOKEN 未设置")
+        return
 
     reset_mock()
 
@@ -497,6 +505,10 @@ def test_e2e_06_cloud_unavailable():
     """E2E-06: 云端不可用"""
     print("\n[E2E-06] 云端不可用")
 
+    if not IM_INBOUND_TOKEN:
+        skip("E06-*", "Cloud unavailable 跳过", "IM_INBOUND_TOKEN 未设置")
+        return
+
     reset_mock()
 
     # 禁用云端 SSE
@@ -542,6 +554,10 @@ def test_e2e_06_cloud_unavailable():
 def test_e2e_07_cache_fallback():
     """E2E-07: 上游 API 不可用 + 缓存降级"""
     print("\n[E2E-07] 上游 API 缓存降级")
+
+    if not IM_INBOUND_TOKEN:
+        skip("E07-*", "Cache fallback 跳过", "IM_INBOUND_TOKEN 未设置")
+        return
 
     reset_mock()
 
@@ -606,7 +622,7 @@ def main():
     print("=" * 60)
 
     if not IM_INBOUND_TOKEN:
-        print("\nWARN: IM_INBOUND_TOKEN not set. IM Inbound tests will fail (401).")
+        print("\nWARN: IM_INBOUND_TOKEN not set. IM Inbound tests will be skipped.")
         print("  Set via: export IM_INBOUND_TOKEN=your_token")
 
     # 检查 mock 服务
