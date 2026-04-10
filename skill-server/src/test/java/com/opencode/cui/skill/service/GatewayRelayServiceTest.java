@@ -81,6 +81,11 @@ class GatewayRelayServiceTest {
                 org.mockito.Mockito.lenient().when(skillInstanceRegistry.getInstanceId()).thenReturn(LOCAL_INSTANCE);
                 // scopeDispatcher always returns a lenient strategy to avoid NPE in tool_event handling
                 org.mockito.Mockito.lenient().when(scopeDispatcher.getStrategy(any())).thenReturn(scopeStrategy);
+                // scopeStrategy.translateEvent 默认委派给 translator.translate（模拟 PersonalScopeStrategy 行为）
+                org.mockito.Mockito.lenient().when(scopeStrategy.translateEvent(any(), any()))
+                        .thenAnswer(invocation -> translator.translate(invocation.getArgument(0)));
+                // scopeStrategy.requiresOnlineCheck 默认返回 true（personal 策略行为）
+                org.mockito.Mockito.lenient().when(scopeStrategy.requiresOnlineCheck()).thenReturn(true);
 
                 messageRouter = new GatewayMessageRouter(
                                 new ObjectMapper(),
@@ -221,8 +226,8 @@ class GatewayRelayServiceTest {
         }
 
         @Test
-        @DisplayName("user text echo after tool_done is not suppressed")
-        void userTextEchoAfterToolDoneIsNotSuppressed() {
+        @DisplayName("user text echo from tool_event is silently skipped (user messages are persisted at inbound)")
+        void userTextEchoFromToolEventIsSkipped() {
                 when(translator.translate(any())).thenReturn(StreamMessage.builder()
                                 .type(StreamMessage.Types.TEXT_DONE)
                                 .role("user")
@@ -233,8 +238,10 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(
                                 "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":42,\"event\":{\"type\":\"message.part.updated\"}}");
 
-                verify(messageService).saveUserMessage(42L, "CLI user message");
-                verify(redisMessageBroker, times(2)).publishToUser(eq("user-1"), any(String.class));
+                // user 角色事件在 tool_event 中不再持久化（已由 inbound controller 保存）
+                verify(messageService, never()).saveUserMessage(any(), any());
+                // tool_done 会广播 session.status，但 user echo tool_event 不广播
+                verify(redisMessageBroker, times(1)).publishToUser(eq("user-1"), any(String.class));
         }
 
         @Test

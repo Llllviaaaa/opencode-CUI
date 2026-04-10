@@ -43,6 +43,14 @@ class SkillSessionControllerTest {
 
     @BeforeEach
     void setUp() {
+        // 默认 scopeDispatcher 返回 personal 策略（generateToolSessionId=null, requiresOnlineCheck=true）
+        com.opencode.cui.skill.service.scope.AssistantScopeStrategy personalStrategy =
+                org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
+        org.mockito.Mockito.lenient().when(personalStrategy.generateToolSessionId()).thenReturn(null);
+        org.mockito.Mockito.lenient().when(personalStrategy.requiresOnlineCheck()).thenReturn(true);
+        org.mockito.Mockito.lenient().when(scopeDispatcher.getStrategy(any())).thenReturn(personalStrategy);
+        org.mockito.Mockito.lenient().when(assistantInfoService.getCachedScope(any())).thenReturn("personal");
+
         controller = new SkillSessionController(sessionService, gatewayRelayService, accessControlService,
                 new ObjectMapper(), assistantInfoService, scopeDispatcher);
     }
