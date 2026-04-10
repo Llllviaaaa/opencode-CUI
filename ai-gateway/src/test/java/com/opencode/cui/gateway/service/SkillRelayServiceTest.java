@@ -56,6 +56,11 @@ class SkillRelayServiceTest {
         service = new SkillRelayService(redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, legacyStrategy, List.of());
     }
 
+    /** Wait for AsyncSessionSender background thread to flush the send queue. */
+    private static void awaitSend() throws InterruptedException {
+        Thread.sleep(200);
+    }
+
     private static Map<String, Object> mutableAttrs(String source, String instanceId) {
         Map<String, Object> attrs = new HashMap<>();
         attrs.put(SkillRelayService.SOURCE_ATTR, source);
@@ -132,6 +137,7 @@ class SkillRelayServiceTest {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             verify(ss1Session).sendMessage(any(TextMessage.class));
         }
     }
@@ -157,6 +163,7 @@ class SkillRelayServiceTest {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             // V2: hash-selects one connection from the source type's ring (not broadcast)
             int sendCount = 0;
             try { verify(ss1Session).sendMessage(any(TextMessage.class)); sendCount++; } catch (AssertionError ignored) {}
@@ -178,6 +185,7 @@ class SkillRelayServiceTest {
 
             service.relayToSkill(msg);
 
+            awaitSend();
             verify(ss1Session).sendMessage(any(TextMessage.class));
             verify(bpSession, never()).sendMessage(any(TextMessage.class));
         }
@@ -220,6 +228,7 @@ class SkillRelayServiceTest {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             // At least one skill-server session should receive
             int sendCount = 0;
             try { verify(ss1Session).sendMessage(any(TextMessage.class)); sendCount++; } catch (AssertionError ignored) {}
@@ -242,6 +251,7 @@ class SkillRelayServiceTest {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             verify(ss1Session).sendMessage(any(TextMessage.class));
         }
 
@@ -280,6 +290,7 @@ class SkillRelayServiceTest {
 
             service.relayToSkill(msg);
 
+            awaitSend();
             verify(ss1Session).sendMessage(any(TextMessage.class));
             verify(ss2Session, never()).sendMessage(any(TextMessage.class));
         }
@@ -321,6 +332,7 @@ class SkillRelayServiceTest {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             verify(newSession).sendMessage(any(TextMessage.class));
             verify(oldSession, never()).sendMessage(any(TextMessage.class));
         }
@@ -347,6 +359,7 @@ class SkillRelayServiceTest {
                     .toolSessionId("T1")
                     .build();
             service.relayToSkill(msg1);
+            awaitSend();
             verify(ss1Session).sendMessage(any(TextMessage.class));
             verify(bpSession, never()).sendMessage(any(TextMessage.class));
 
@@ -355,6 +368,7 @@ class SkillRelayServiceTest {
                     .toolSessionId("T3")
                     .build();
             service.relayToSkill(msg2);
+            awaitSend();
             verify(bpSession).sendMessage(any(TextMessage.class));
         }
     }

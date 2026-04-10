@@ -69,6 +69,11 @@ class SkillRelayServiceV2Test {
         service.setEventRelayService(eventRelayService);
     }
 
+    /** Wait for AsyncSessionSender background thread to flush the send queue. */
+    private static void awaitSend() throws InterruptedException {
+        Thread.sleep(200);
+    }
+
     private static Map<String, Object> mutableAttrs(String source, String instanceId) {
         Map<String, Object> attrs = new HashMap<>();
         attrs.put(SkillRelayService.SOURCE_ATTR, source);
@@ -135,6 +140,7 @@ class SkillRelayServiceV2Test {
             boolean result = service.relayToSkill(upstreamMsg);
 
             assertTrue(result);
+            awaitSend();
             // At least one session should receive the message (hash-selected)
             int sendCount = 0;
             try {
@@ -172,6 +178,7 @@ class SkillRelayServiceV2Test {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             // Both groups should receive the message (one session per group)
             verify(ss1Session).sendMessage(any(TextMessage.class));
             verify(bpSession).sendMessage(any(TextMessage.class));
@@ -192,6 +199,7 @@ class SkillRelayServiceV2Test {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             verify(ss1Session).sendMessage(any(TextMessage.class));
             verify(bpSession, never()).sendMessage(any(TextMessage.class));
         }
