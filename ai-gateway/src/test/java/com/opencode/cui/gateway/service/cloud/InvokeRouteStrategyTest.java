@@ -1,10 +1,8 @@
 package com.opencode.cui.gateway.service.cloud;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.CloudAgentService;
-import com.opencode.cui.gateway.service.SkillRelayService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -13,8 +11,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -33,6 +31,8 @@ class InvokeRouteStrategyTest {
 
     @Mock
     private CloudAgentService cloudAgentService;
+    @Mock
+    private Consumer<GatewayMessage> onRelay;
 
     private PersonalInvokeRouteStrategy personalStrategy;
     private BusinessInvokeRouteStrategy businessStrategy;
@@ -64,7 +64,7 @@ class InvokeRouteStrategyTest {
                     .build();
 
             // PersonalInvokeRouteStrategy.route 是 no-op（原有逻辑由 SkillRelayService 处理）
-            assertDoesNotThrow(() -> personalStrategy.route(msg));
+            assertDoesNotThrow(() -> personalStrategy.route(msg, onRelay));
         }
     }
 
@@ -79,7 +79,7 @@ class InvokeRouteStrategyTest {
         }
 
         @Test
-        @DisplayName("route 调用 cloudAgentService.handleInvoke")
+        @DisplayName("route 调用 cloudAgentService.handleInvoke 并透传 onRelay")
         void shouldDelegateToCloudAgentService() {
             GatewayMessage msg = GatewayMessage.builder()
                     .type(GatewayMessage.Type.INVOKE)
@@ -87,9 +87,9 @@ class InvokeRouteStrategyTest {
                     .assistantScope("business")
                     .build();
 
-            businessStrategy.route(msg);
+            businessStrategy.route(msg, onRelay);
 
-            verify(cloudAgentService).handleInvoke(msg);
+            verify(cloudAgentService).handleInvoke(msg, onRelay);
         }
     }
 
@@ -113,9 +113,9 @@ class InvokeRouteStrategyTest {
 
             String scope = bizMsg.getAssistantScope() != null ? bizMsg.getAssistantScope() : "personal";
             InvokeRouteStrategy strategy = strategyMap.getOrDefault(scope, personalStrategy);
-            strategy.route(bizMsg);
+            strategy.route(bizMsg, onRelay);
 
-            verify(cloudAgentService).handleInvoke(bizMsg);
+            verify(cloudAgentService).handleInvoke(bizMsg, onRelay);
         }
 
         @Test
@@ -134,10 +134,10 @@ class InvokeRouteStrategyTest {
 
             String scope = msg.getAssistantScope() != null ? msg.getAssistantScope() : "personal";
             InvokeRouteStrategy strategy = strategyMap.getOrDefault(scope, personalStrategy);
-            strategy.route(msg);
+            strategy.route(msg, onRelay);
 
             // personal strategy is no-op, cloudAgentService should NOT be called
-            verify(cloudAgentService, never()).handleInvoke(any());
+            verify(cloudAgentService, never()).handleInvoke(any(), any());
         }
 
         @Test
@@ -156,10 +156,10 @@ class InvokeRouteStrategyTest {
 
             String scope = msg.getAssistantScope() != null ? msg.getAssistantScope() : "personal";
             InvokeRouteStrategy strategy = strategyMap.getOrDefault(scope, personalStrategy);
-            strategy.route(msg);
+            strategy.route(msg, onRelay);
 
             // personal strategy is no-op, cloudAgentService should NOT be called
-            verify(cloudAgentService, never()).handleInvoke(any());
+            verify(cloudAgentService, never()).handleInvoke(any(), any());
         }
     }
 }

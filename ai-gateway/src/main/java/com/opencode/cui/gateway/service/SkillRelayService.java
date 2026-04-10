@@ -690,7 +690,7 @@ public class SkillRelayService {
         if ("business".equals(scope)) {
             InvokeRouteStrategy strategy = routeStrategyMap.get("business");
             if (strategy != null) {
-                strategy.route(message);
+                strategy.route(message, this::relayToSkill);
                 return;
             }
         }

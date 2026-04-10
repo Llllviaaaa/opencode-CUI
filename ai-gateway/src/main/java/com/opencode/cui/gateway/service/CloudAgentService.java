@@ -8,6 +8,8 @@ import com.opencode.cui.gateway.service.cloud.CloudProtocolClient;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.function.Consumer;
+
 /**
  * 云端 Agent 服务编排器。
  *
@@ -16,9 +18,12 @@ import org.springframework.stereotype.Service;
  *   <li>从 CloudRouteService 获取路由信息</li>
  *   <li>构建 CloudConnectionContext</li>
  *   <li>通过 CloudProtocolClient 连接云端服务</li>
- *   <li>为云端返回的事件注入路由上下文后转发到 SkillRelayService</li>
+ *   <li>为云端返回的事件注入路由上下文后通过 onRelay 回调转发</li>
  * </ol>
  * </p>
+ *
+ * <p>不再直接依赖 {@link SkillRelayService}，改由调用方传入 {@code onRelay} 回调，
+ * 以打破循环依赖：SkillRelayService → BusinessInvokeRouteStrategy → CloudAgentService。</p>
  */
 @Slf4j
 @Service
@@ -26,22 +31,20 @@ public class CloudAgentService {
 
     private final CloudRouteService cloudRouteService;
     private final CloudProtocolClient cloudProtocolClient;
-    private final SkillRelayService skillRelayService;
 
     public CloudAgentService(CloudRouteService cloudRouteService,
-                             CloudProtocolClient cloudProtocolClient,
-                             SkillRelayService skillRelayService) {
+                             CloudProtocolClient cloudProtocolClient) {
         this.cloudRouteService = cloudRouteService;
         this.cloudProtocolClient = cloudProtocolClient;
-        this.skillRelayService = skillRelayService;
     }
 
     /**
      * 处理 invoke 消息，编排云端 AI 调用流程。
      *
      * @param invokeMessage invoke 消息
+     * @param onRelay       回调：将需要转发的消息回传给调用方（通常是 SkillRelayService::relayToSkill）
      */
-    public void handleInvoke(GatewayMessage invokeMessage) {
+    public void handleInvoke(GatewayMessage invokeMessage, Consumer<GatewayMessage> onRelay) {
         String ak = invokeMessage.getAk();
         JsonNode cloudRequest = invokeMessage.getPayload().path("cloudRequest");
         String toolSessionId = invokeMessage.getPayload().path("toolSessionId").asText(null);
@@ -55,7 +58,7 @@ public class CloudAgentService {
             log.warn("[CLOUD_AGENT] Route info not found: ak={}", ak);
             GatewayMessage errorMsg = buildCloudError(invokeMessage, toolSessionId,
                     new RuntimeException("Cloud route info not found for ak: " + ak));
-            skillRelayService.relayToSkill(errorMsg);
+            onRelay.accept(errorMsg);
             return;
         }
 
@@ -79,13 +82,13 @@ public class CloudAgentService {
                     if (event.getToolSessionId() == null) {
                         event.setToolSessionId(toolSessionId);
                     }
-                    skillRelayService.relayToSkill(event);
+                    onRelay.accept(event);
                 },
                 error -> {
                     log.error("[CLOUD_AGENT] Cloud connection error: ak={}, traceId={}, error={}",
                             ak, invokeMessage.getTraceId(), error.getMessage());
                     GatewayMessage errorMsg = buildCloudError(invokeMessage, toolSessionId, error);
-                    skillRelayService.relayToSkill(errorMsg);
+                    onRelay.accept(errorMsg);
                 }
         );
     }

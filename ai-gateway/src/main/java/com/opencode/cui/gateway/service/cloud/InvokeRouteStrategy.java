@@ -2,6 +2,8 @@ package com.opencode.cui.gateway.service.cloud;
 
 import com.opencode.cui.gateway.model.GatewayMessage;
 
+import java.util.function.Consumer;
+
 /**
  * Invoke 消息路由策略接口。
  *
@@ -25,6 +27,7 @@ public interface InvokeRouteStrategy {
      * 路由 invoke 消息到对应的处理逻辑。
      *
      * @param message invoke 消息
+     * @param onRelay 回调：当需要将消息转发回 SkillRelayService 时调用
      */
-    void route(GatewayMessage message);
+    void route(GatewayMessage message, Consumer<GatewayMessage> onRelay);
 }

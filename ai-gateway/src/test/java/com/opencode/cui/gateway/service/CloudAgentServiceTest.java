@@ -26,7 +26,7 @@ import static org.mockito.Mockito.*;
  * CloudAgentService 单元测试（TDD）。
  *
  * <ul>
- *   <li>正常流程：获取路由信息、构建上下文、连接云端、注入路由上下文后转发</li>
+ *   <li>正常流程：获取路由信息、构建上下文、连接云端、注入路由上下文后通过 onRelay 转发</li>
  *   <li>路由信息获取失败：返回 tool_error</li>
  * </ul>
  */
@@ -38,7 +38,7 @@ class CloudAgentServiceTest {
     @Mock
     private CloudProtocolClient cloudProtocolClient;
     @Mock
-    private SkillRelayService skillRelayService;
+    private Consumer<GatewayMessage> onRelay;
 
     @Captor
     private ArgumentCaptor<Consumer<GatewayMessage>> onEventCaptor;
@@ -54,7 +54,7 @@ class CloudAgentServiceTest {
 
     @BeforeEach
     void setUp() {
-        cloudAgentService = new CloudAgentService(cloudRouteService, cloudProtocolClient, skillRelayService);
+        cloudAgentService = new CloudAgentService(cloudRouteService, cloudProtocolClient);
     }
 
     private GatewayMessage buildInvokeMessage() {
@@ -92,7 +92,7 @@ class CloudAgentServiceTest {
             CloudRouteInfo routeInfo = buildRouteInfo();
             when(cloudRouteService.getRouteInfo("ak-test-001")).thenReturn(routeInfo);
 
-            cloudAgentService.handleInvoke(invokeMsg);
+            cloudAgentService.handleInvoke(invokeMsg, onRelay);
 
             verify(cloudProtocolClient).connect(
                     eq("sse"),
@@ -110,13 +110,13 @@ class CloudAgentServiceTest {
         }
 
         @Test
-        @DisplayName("云端事件注入路由上下文后转发到 SkillRelayService")
+        @DisplayName("云端事件注入路由上下文后通过 onRelay 转发")
         void shouldInjectRoutingContextAndRelayEvents() {
             GatewayMessage invokeMsg = buildInvokeMessage();
             CloudRouteInfo routeInfo = buildRouteInfo();
             when(cloudRouteService.getRouteInfo("ak-test-001")).thenReturn(routeInfo);
 
-            cloudAgentService.handleInvoke(invokeMsg);
+            cloudAgentService.handleInvoke(invokeMsg, onRelay);
 
             verify(cloudProtocolClient).connect(
                     eq("sse"),
@@ -133,7 +133,7 @@ class CloudAgentServiceTest {
 
             onEventCaptor.getValue().accept(cloudEvent);
 
-            verify(skillRelayService).relayToSkill(messageCaptor.capture());
+            verify(onRelay).accept(messageCaptor.capture());
             GatewayMessage relayed = messageCaptor.getValue();
 
             assertEquals("ak-test-001", relayed.getAk());
@@ -150,7 +150,7 @@ class CloudAgentServiceTest {
             CloudRouteInfo routeInfo = buildRouteInfo();
             when(cloudRouteService.getRouteInfo("ak-test-001")).thenReturn(routeInfo);
 
-            cloudAgentService.handleInvoke(invokeMsg);
+            cloudAgentService.handleInvoke(invokeMsg, onRelay);
 
             verify(cloudProtocolClient).connect(
                     eq("sse"),
@@ -168,7 +168,7 @@ class CloudAgentServiceTest {
 
             onEventCaptor.getValue().accept(cloudEvent);
 
-            verify(skillRelayService).relayToSkill(messageCaptor.capture());
+            verify(onRelay).accept(messageCaptor.capture());
             GatewayMessage relayed = messageCaptor.getValue();
             assertEquals("cloud-tool-session-999", relayed.getToolSessionId());
         }
@@ -179,15 +179,15 @@ class CloudAgentServiceTest {
     class ErrorTests {
 
         @Test
-        @DisplayName("路由信息获取失败时返回 tool_error")
+        @DisplayName("路由信息获取失败时通过 onRelay 返回 tool_error")
         void shouldReturnToolErrorWhenRouteInfoFails() {
             GatewayMessage invokeMsg = buildInvokeMessage();
             when(cloudRouteService.getRouteInfo("ak-test-001")).thenReturn(null);
 
-            cloudAgentService.handleInvoke(invokeMsg);
+            cloudAgentService.handleInvoke(invokeMsg, onRelay);
 
             verify(cloudProtocolClient, never()).connect(any(), any(), any(), any());
-            verify(skillRelayService).relayToSkill(messageCaptor.capture());
+            verify(onRelay).accept(messageCaptor.capture());
 
             GatewayMessage errorMsg = messageCaptor.getValue();
             assertEquals(GatewayMessage.Type.TOOL_ERROR, errorMsg.getType());
@@ -199,13 +199,13 @@ class CloudAgentServiceTest {
         }
 
         @Test
-        @DisplayName("云端连接异常时 onError 构建 tool_error 转发")
+        @DisplayName("云端连接异常时 onError 通过 onRelay 构建 tool_error 转发")
         void shouldRelayToolErrorOnCloudConnectionFailure() {
             GatewayMessage invokeMsg = buildInvokeMessage();
             CloudRouteInfo routeInfo = buildRouteInfo();
             when(cloudRouteService.getRouteInfo("ak-test-001")).thenReturn(routeInfo);
 
-            cloudAgentService.handleInvoke(invokeMsg);
+            cloudAgentService.handleInvoke(invokeMsg, onRelay);
 
             verify(cloudProtocolClient).connect(
                     eq("sse"),
@@ -217,7 +217,7 @@ class CloudAgentServiceTest {
             // Simulate error
             onErrorCaptor.getValue().accept(new RuntimeException("Connection timeout"));
 
-            verify(skillRelayService).relayToSkill(messageCaptor.capture());
+            verify(onRelay).accept(messageCaptor.capture());
             GatewayMessage errorMsg = messageCaptor.getValue();
             assertEquals(GatewayMessage.Type.TOOL_ERROR, errorMsg.getType());
             assertEquals("ak-test-001", errorMsg.getAk());
