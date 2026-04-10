@@ -107,6 +107,7 @@ public class ActiveMessageTracker {
             return;
         }
 
+        messageSeqCounters.remove(active.dbId());
         messageService.markMessageFinished(active.dbId());
         log.debug("Finalized dangling assistant message before user turn: sessionId={}, messageId={}, protocolId={}",
                 sessionId, active.dbId(), active.protocolMessageId());
@@ -167,6 +168,7 @@ public class ActiveMessageTracker {
 
     private void finalizeActiveMessage(Long sessionId, ActiveMessageRef active, String reason) {
         activeMessages.remove(sessionId, active);
+        messageSeqCounters.remove(active.dbId());
         messageService.markMessageFinished(active.dbId());
         log.debug("Finalized active streamed message: sessionId={}, messageId={}, protocolId={}, reason={}",
                 sessionId, active.dbId(), active.protocolMessageId(), reason);

@@ -33,12 +33,20 @@ public class AsyncSessionSender {
     }
 
     public boolean enqueue(TextMessage message) {
+        if (!running) {
+            log.warn("[AsyncSender] Sender not running, rejecting message: linkId={}", session.getId());
+            return false;
+        }
         boolean offered = queue.offer(message);
         if (!offered) {
             log.warn("[AsyncSender] Queue full, dropping message: linkId={}, queueSize={}",
                     session.getId(), queue.size());
         }
         return offered;
+    }
+
+    public boolean isRunning() {
+        return running;
     }
 
     public void shutdown() {
@@ -69,6 +77,7 @@ public class AsyncSessionSender {
             } catch (IOException e) {
                 log.error("[AsyncSender] Send failed: linkId={}, remaining={}",
                         session.getId(), queue.size(), e);
+                running = false;
                 break;
             }
         }

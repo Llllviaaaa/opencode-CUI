@@ -153,9 +153,14 @@ public class EventRelayService {
         WebSocketSession session = skillRelayService.findLocalSourceConnection(
                 targetSourceType, targetSourceInstanceId);
         if (session != null) {
-            getOrCreateSender(session).enqueue(new TextMessage(payload));
-            log.info("[EXIT->SOURCE] Delivered to-source relay: sourceType={}, sourceInstanceId={}",
-                    targetSourceType, targetSourceInstanceId);
+            boolean enqueued = getOrCreateSender(session).enqueue(new TextMessage(payload));
+            if (!enqueued) {
+                log.warn("[EXIT->SOURCE] Failed to enqueue to-source relay: sourceType={}, sourceInstanceId={}",
+                        targetSourceType, targetSourceInstanceId);
+            } else {
+                log.info("[EXIT->SOURCE] Delivered to-source relay: sourceType={}, sourceInstanceId={}",
+                        targetSourceType, targetSourceInstanceId);
+            }
         } else {
             log.debug("No local connection for source {}/{}, discarding relay",
                     targetSourceType, targetSourceInstanceId);
@@ -267,7 +272,12 @@ public class EventRelayService {
 
         try {
             String json = objectMapper.writeValueAsString(message);
-            getOrCreateSender(session).enqueue(new TextMessage(json));
+            boolean enqueued = getOrCreateSender(session).enqueue(new TextMessage(json));
+            if (!enqueued) {
+                log.warn("[EXIT->AGENT] Failed to enqueue message for local agent (V2 direct): ak={}, type={}",
+                        ak, message.getType());
+                return false;
+            }
             log.info("[EXIT->AGENT] Sent to local agent (V2 direct): ak={}, type={}",
                     ak, message.getType());
             return true;
@@ -288,9 +298,14 @@ public class EventRelayService {
 
         try {
             String json = objectMapper.writeValueAsString(message.withoutRoutingContext());
-            getOrCreateSender(session).enqueue(new TextMessage(json));
-            log.info("[EXIT->AGENT] Sent to local agent: type={}, seq={}",
-                    message.getType(), message.getSequenceNumber());
+            boolean enqueued = getOrCreateSender(session).enqueue(new TextMessage(json));
+            if (!enqueued) {
+                log.warn("[EXIT->AGENT] Failed to enqueue message for local agent: ak={}, type={}",
+                        ak, message.getType());
+            } else {
+                log.info("[EXIT->AGENT] Sent to local agent: type={}, seq={}",
+                        message.getType(), message.getSequenceNumber());
+            }
         } catch (IOException e) {
             log.error("Failed to serialize message for local agent: ak={}, type={}",
                     ak, message.getType(), e);
