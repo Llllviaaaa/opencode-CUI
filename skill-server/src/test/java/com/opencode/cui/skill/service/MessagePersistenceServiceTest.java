@@ -31,6 +31,8 @@ class MessagePersistenceServiceTest {
         private SnowflakeIdGenerator snowflakeIdGenerator;
         @Mock
         private MessageHistoryCacheService messageHistoryCacheService;
+        @Mock
+        private SkillSessionService skillSessionService;
 
         private ActiveMessageTracker activeMessageTracker;
         private MessagePersistenceService service;
@@ -40,7 +42,7 @@ class MessagePersistenceServiceTest {
                 lenient().when(snowflakeIdGenerator.nextId()).thenReturn(501L, 502L, 503L, 504L);
                 activeMessageTracker = new ActiveMessageTracker(messageService);
                 service = new MessagePersistenceService(messageService, partRepository, new ObjectMapper(),
-                                snowflakeIdGenerator, activeMessageTracker);
+                                snowflakeIdGenerator, activeMessageTracker, skillSessionService);
         }
 
         @Test
