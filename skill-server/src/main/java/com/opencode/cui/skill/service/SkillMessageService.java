@@ -10,6 +10,7 @@ import com.opencode.cui.skill.repository.SkillMessagePartRepository;
 import com.opencode.cui.skill.repository.SkillMessageRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -42,6 +43,7 @@ public class SkillMessageService {
     private final ObjectMapper objectMapper;
     private final MessageHistoryCacheService messageHistoryCacheService;
     private final Executor messageHistoryRefreshExecutor;
+    private final ActiveMessageTracker activeMessageTracker;
 
     public SkillMessageService(SkillMessageRepository messageRepository,
             SkillMessagePartRepository partRepository,
@@ -49,7 +51,8 @@ public class SkillMessageService {
             SnowflakeIdGenerator snowflakeIdGenerator,
             ObjectMapper objectMapper,
             MessageHistoryCacheService messageHistoryCacheService,
-            @Qualifier("messageHistoryRefreshExecutor") Executor messageHistoryRefreshExecutor) {
+            @Qualifier("messageHistoryRefreshExecutor") Executor messageHistoryRefreshExecutor,
+            @Lazy ActiveMessageTracker activeMessageTracker) {
         this.messageRepository = messageRepository;
         this.partRepository = partRepository;
         this.sessionService = sessionService;
@@ -57,6 +60,7 @@ public class SkillMessageService {
         this.objectMapper = objectMapper;
         this.messageHistoryCacheService = messageHistoryCacheService;
         this.messageHistoryRefreshExecutor = messageHistoryRefreshExecutor;
+        this.activeMessageTracker = activeMessageTracker;
     }
 
     /**
@@ -65,7 +69,8 @@ public class SkillMessageService {
      */
     @Transactional
     SkillMessage saveMessage(SaveMessageCommand cmd) {
-        int nextSeq = messageRepository.findMaxSeqBySessionId(cmd.sessionId()) + 1;
+        int nextSeq = activeMessageTracker.nextMessageSeq(cmd.sessionId(),
+                () -> messageRepository.findMaxSeqBySessionId(cmd.sessionId()));
         String effectiveMessageId = cmd.messageId() != null && !cmd.messageId().isBlank()
                 ? cmd.messageId()
                 : generateMessageId(cmd.sessionId(), nextSeq);

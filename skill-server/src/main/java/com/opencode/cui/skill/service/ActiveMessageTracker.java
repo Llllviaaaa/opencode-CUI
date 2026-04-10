@@ -7,6 +7,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.IntSupplier;
 
 /**
  * Tracks active (in-flight) streamed assistant messages per session.
@@ -27,6 +29,8 @@ public class ActiveMessageTracker {
     private final SkillMessageService messageService;
 
     private final ConcurrentHashMap<Long, ActiveMessageRef> activeMessages = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, AtomicInteger> sessionSeqCounters = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, AtomicInteger> messageSeqCounters = new ConcurrentHashMap<>();
 
     public ActiveMessageTracker(SkillMessageService messageService) {
         this.messageService = messageService;
@@ -91,6 +95,7 @@ public class ActiveMessageTracker {
      */
     public void clearSession(Long sessionId) {
         activeMessages.remove(sessionId);
+        sessionSeqCounters.remove(sessionId);
     }
 
     /**
@@ -115,12 +120,41 @@ public class ActiveMessageTracker {
      */
     public ActiveMessageRef removeAndFinalize(Long sessionId) {
         ActiveMessageRef active = activeMessages.remove(sessionId);
+        sessionSeqCounters.remove(sessionId);
         if (active != null) {
+            messageSeqCounters.remove(active.dbId());
             messageService.markMessageFinished(active.dbId());
             log.debug("Finalized assistant message on session status: sessionId={}, messageId={}, protocolId={}",
                     sessionId, active.dbId(), active.protocolMessageId());
         }
         return active;
+    }
+
+    /**
+     * Get the current active message reference for a session (without creating one).
+     */
+    public ActiveMessageRef getActiveMessage(Long sessionId) {
+        return activeMessages.get(sessionId);
+    }
+
+    /**
+     * Return the next message seq for a session, using an in-memory counter
+     * initialized lazily from the DB.
+     */
+    public int nextMessageSeq(Long sessionId, IntSupplier currentMaxFromDb) {
+        AtomicInteger counter = sessionSeqCounters.computeIfAbsent(sessionId,
+                k -> new AtomicInteger(currentMaxFromDb.getAsInt()));
+        return counter.incrementAndGet();
+    }
+
+    /**
+     * Return the next part seq for a message, using an in-memory counter
+     * initialized lazily from the DB.
+     */
+    public int nextPartSeq(Long messageDbId, IntSupplier currentMaxFromDb) {
+        AtomicInteger counter = messageSeqCounters.computeIfAbsent(messageDbId,
+                k -> new AtomicInteger(currentMaxFromDb.getAsInt()));
+        return counter.incrementAndGet();
     }
 
     // ==================== Internal Helpers ====================

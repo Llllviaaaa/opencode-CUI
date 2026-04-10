@@ -153,9 +153,6 @@ public class MessagePersistenceService {
         log.debug("Persisted {} part: sessionId={}, protocolId={}, partId={}",
                 partType, sessionId, active.protocolMessageId(), part.getPartId());
 
-        if ("text".equals(partType)) {
-            syncMessageContent(active);
-        }
         return true;
     }
 
@@ -364,7 +361,15 @@ public class MessagePersistenceService {
         if (!"idle".equals(msg.getSessionStatus()) && !"completed".equals(msg.getSessionStatus())) {
             return;
         }
+        syncAllPendingContent(sessionId);
         tracker.removeAndFinalize(sessionId);
+    }
+
+    private void syncAllPendingContent(Long sessionId) {
+        ActiveMessageTracker.ActiveMessageRef active = tracker.getActiveMessage(sessionId);
+        if (active != null) {
+            syncMessageContent(active);
+        }
     }
 
     // ==================== Internal Helpers ====================
@@ -381,7 +386,8 @@ public class MessagePersistenceService {
             return msg.getPartSeq();
         }
 
-        return partRepository.findMaxSeqByMessageId(messageDbId) + 1;
+        return tracker.nextPartSeq(messageDbId,
+                () -> partRepository.findMaxSeqByMessageId(messageDbId));
     }
 
     private void syncMessageContent(ActiveMessageTracker.ActiveMessageRef active) {
