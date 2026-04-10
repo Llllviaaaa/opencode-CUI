@@ -1217,7 +1217,9 @@ SS 收到 `im_push` 后：
 
 ---
 
-## 10. 云端 Question/Permission 旁路回复接口
+## 10. TODO：云端 Question/Permission 旁路回复接口
+
+> **不纳入本次设计和实施范围。** 以下为预定义协议，供后续实施参考。首期要求云端避免返回 question/permission 事件。
 
 ### 10.1 概述
 
@@ -1256,7 +1258,7 @@ SS 收到 `im_push` 后：
   "action": "question_reply",
   "assistantScope": "business",
   "payload": {
-    "toolSessionId": "ts-789",
+    "toolSessionId": "cloud-1001214",
     "answer": "Yes",
     "toolCallId": "call-q001"
   }
@@ -1276,7 +1278,7 @@ SS 收到 `im_push` 后：
   "action": "permission_reply",
   "assistantScope": "business",
   "payload": {
-    "toolSessionId": "ts-789",
+    "toolSessionId": "cloud-1001214",
     "permissionId": "perm-001",
     "response": "once"
   }
@@ -1322,7 +1324,7 @@ X-App-Id: {appId}
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | type | String | ✅ | `"question_reply"` / `"permission_reply"` |
-| topicId | String | ✅ | 会话主题 ID（关联到正在等待的 SSE 连接） |
+| topicId | String | ✅ | 会话主题 ID（= toolSessionId，关联到正在等待的 SSE 连接） |
 | toolCallId | String | 条件 | question_reply 时必填，对应 question 事件的 toolCallId |
 | answer | String | 条件 | question_reply 时必填，用户的回答 |
 | permissionId | String | 条件 | permission_reply 时必填，对应 permission.ask 的 permissionId |
@@ -1334,29 +1336,13 @@ X-App-Id: {appId}
 { "code": "200", "message": "success" }
 ```
 
-云端收到回复后，继续在原有 SSE 连接上推送后续事件。
+### 10.4 已知待解决问题
 
-### 10.4 GW 侧旁路路由逻辑
+实施前需解决以下问题：
 
-GW 的 `CloudAgentService` 需要区分 invoke action：
-
-- `action = "chat"` → 建立新的 SSE 连接（现有逻辑）
-- `action = "question_reply"` / `"permission_reply"` → 调用云端旁路 REST 接口（不建新连接，回复发到等待中的 SSE 对应的云端会话）
-
-> **注意**：旁路 REST 是同步调用，不返回 SSE 流。后续事件仍通过原有 SSE 连接（在 `chat` invoke 时建立的）回来。GW 需要维护 `topicId → SSE 连接` 的映射，确保 SSE 连接在等待回复期间不被关闭。
-
-### 10.5 SSE 连接生命周期（含旁路回复）
-
-```
-chat invoke → 建立 SSE 连接 → 读取事件流
-  → 收到 question → 转发 SS → SSE 保持打开，GW 继续读取（此时云端暂停推送）
-  → 用户回答 → question_reply invoke → GW 调旁路 REST
-  → 云端收到回复 → 继续在同一 SSE 推送后续事件 → GW 继续读取转发
-  → 可能再次收到 question/permission → 重复上述过程
-  → 最终 tool_done → SSE 关闭 → GW 清理连接映射
-```
-
-**超时处理**：如果用户长时间不回复，SSE 连接可能超时。GW 的 `read-timeout` 配置应足够长以覆盖用户交互时间，或在收到 question/permission 后动态延长超时。
+1. **多 GW 实例映射**：SSE 连接在 GW-A 上，reply invoke 可能路由到 GW-B，本地内存映射无法跨实例。需 Redis 共享或定向路由
+2. **旁路 REST 端点**：不应简单拼接 `{endpoint}/reply`，需由上游接口单独提供 reply endpoint
+3. **线程占用**：SSE 连接等待回复期间阻塞读取线程，需异步方案（WebClient）
 
 ---
 
@@ -1371,7 +1357,7 @@ chat invoke → 建立 SSE 连接 → 读取事件流
 | 3. 按 P3 协议适配响应格式 | 云端服务 | 返回标准 tool_event/tool_done/tool_error |
 | 4. 增加 authType 认证实现（如已有则跳过） | GW | 仅新 authType 时需要 |
 
-**GW 不需要为每个新 appId 做改动**——endpoint 和 authType 从 invoke 消息中动态获取。
+**GW 不需要为每个新 appId 做改动**——GW 通过 ak 调上游接口获取路由信息。
 
 ### 11.2 新增 event.type
 
@@ -1392,8 +1378,8 @@ chat invoke → 建立 SSE 连接 → 读取事件流
 ### 11.4 新增传输协议
 
 如需支持 WebSocket（双向）：
-1. `cloudConfig.protocol` 设为 `"websocket"`
-2. GW 的 `CloudAgentService` 增加 WebSocket 客户端实现
+1. 上游 API 返回 `protocol = "websocket"`
+2. GW 的 `CloudProtocolClient` 增加 WebSocket 策略实现
 3. 请求/响应格式不变，仅传输层切换
 
 ### 11.5 新增认证方式
