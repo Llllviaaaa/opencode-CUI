@@ -5,6 +5,20 @@ export interface QuestionOption {
   description?: string;
 }
 
+export interface SearchResultItem {
+  index: string;
+  title: string;
+  source: string;
+}
+
+export interface ReferenceItem {
+  index: string;
+  title: string;
+  source: string;
+  url: string;
+  content: string;
+}
+
 export type StreamMessageType =
   | 'text.delta'
   | 'text.done'
@@ -23,6 +37,12 @@ export type StreamMessageType =
   | 'agent.online'
   | 'agent.offline'
   | 'message.user'
+  | 'planning.delta'
+  | 'planning.done'
+  | 'searching'
+  | 'search_result'
+  | 'reference'
+  | 'ask_more'
   | 'error'
   | 'snapshot'
   | 'streaming';
@@ -81,6 +101,12 @@ export interface StreamMessage {
   subagentSessionId?: string;
   subagentName?: string;
 
+  // 云端扩展
+  keywords?: string[];
+  searchResults?: SearchResultItem[];
+  references?: ReferenceItem[];
+  askMoreQuestions?: string[];
+
   messages?: Array<Record<string, unknown>>;
   parts?: Array<Record<string, unknown>>;
 }
@@ -88,7 +114,7 @@ export interface StreamMessage {
 export interface MessagePart {
   partId: string;
   partSeq?: number;
-  type: 'text' | 'thinking' | 'tool' | 'question' | 'permission' | 'file' | 'subtask';
+  type: 'text' | 'thinking' | 'tool' | 'question' | 'permission' | 'file' | 'subtask' | 'planning' | 'searching' | 'search_result' | 'reference' | 'ask_more';
   content: string;
   isStreaming: boolean;
 
@@ -112,6 +138,12 @@ export interface MessagePart {
   fileName?: string;
   fileUrl?: string;
   fileMime?: string;
+
+  // 云端扩展字段
+  keywords?: string[];
+  searchResults?: SearchResultItem[];
+  references?: ReferenceItem[];
+  askMoreQuestions?: string[];
 
   // Subtask (subagent) 专用字段
   subagentSessionId?: string;
