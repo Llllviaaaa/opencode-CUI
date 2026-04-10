@@ -16,9 +16,12 @@ import requests
 import argparse
 import threading
 
-MOCK_URL = "http://localhost:9999"
-SS_URL = "http://localhost:8080"
-GW_URL = "http://localhost:8081"
+import os
+
+MOCK_URL = os.environ.get("MOCK_URL", "http://localhost:9999")
+SS_URL = os.environ.get("SS_URL", "http://localhost:8082")
+GW_URL = os.environ.get("GW_URL", "http://localhost:8081")
+IM_INBOUND_TOKEN = os.environ.get("IM_INBOUND_TOKEN", "")
 
 passed = 0
 failed = 0
@@ -51,6 +54,14 @@ def check_service(url, name):
         return True
     except:
         return False
+
+
+def inbound_headers():
+    """IM Inbound 请求需要 token 认证"""
+    h = {"Content-Type": "application/json"}
+    if IM_INBOUND_TOKEN:
+        h["Authorization"] = f"Bearer {IM_INBOUND_TOKEN}"
+    return h
 
 
 def reset_mock():
@@ -336,11 +347,11 @@ def test_e2e_02_business_im():
     reset_mock()
 
     # 通过 IM Inbound 接口发送消息
-    resp = requests.post(f"{SS_URL}/api/inbound/messages", json={
+    resp = requests.post(f"{SS_URL}/api/inbound/messages", headers=inbound_headers(), json={
         "businessDomain": "im",
         "sessionType": "direct",
         "sessionId": "e2e-im-session-001",
-        "assistantAccount": "test-business-ak",  # 使用 business ak
+        "assistantAccount": "test-business-ak",
         "content": "E2E IM 测试消息",
         "msgType": "text"
     })
@@ -400,7 +411,7 @@ def test_e2e_03_personal_regression():
     reset_mock()
 
     # 个人助手 IM Inbound — Agent 离线应报错
-    resp = requests.post(f"{SS_URL}/api/inbound/messages", json={
+    resp = requests.post(f"{SS_URL}/api/inbound/messages", headers=inbound_headers(), json={
         "businessDomain": "im",
         "sessionType": "direct",
         "sessionId": "e2e-personal-session",
@@ -492,7 +503,7 @@ def test_e2e_06_cloud_unavailable():
     requests.put(f"{MOCK_URL}/mock/switches", json={"sse_enabled": False})
 
     # 发送 business IM 消息
-    resp = requests.post(f"{SS_URL}/api/inbound/messages", json={
+    resp = requests.post(f"{SS_URL}/api/inbound/messages", headers=inbound_headers(), json={
         "businessDomain": "im",
         "sessionType": "direct",
         "sessionId": "e2e-error-session",
@@ -535,7 +546,7 @@ def test_e2e_07_cache_fallback():
     reset_mock()
 
     # 第一步：正常请求一次，让缓存写入
-    resp1 = requests.post(f"{SS_URL}/api/inbound/messages", json={
+    resp1 = requests.post(f"{SS_URL}/api/inbound/messages", headers=inbound_headers(), json={
         "businessDomain": "im",
         "sessionType": "direct",
         "sessionId": "e2e-cache-session",
@@ -554,7 +565,7 @@ def test_e2e_07_cache_fallback():
     # 第三步：再次请求，应从缓存读取
     reset_mock()  # 清空记录
 
-    resp2 = requests.post(f"{SS_URL}/api/inbound/messages", json={
+    resp2 = requests.post(f"{SS_URL}/api/inbound/messages", headers=inbound_headers(), json={
         "businessDomain": "im",
         "sessionType": "direct",
         "sessionId": "e2e-cache-session",
@@ -594,6 +605,10 @@ def main():
     print("Cloud Agent E2E Test")
     print("=" * 60)
 
+    if not IM_INBOUND_TOKEN:
+        print("\nWARN: IM_INBOUND_TOKEN not set. IM Inbound tests will fail (401).")
+        print("  Set via: export IM_INBOUND_TOKEN=your_token")
+
     # 检查 mock 服务
     if not check_service(f"{MOCK_URL}/mock/health", "Mock"):
         print("\nMock not running! Run: python tools/mock-cloud-server.py")
@@ -610,7 +625,7 @@ def main():
     if args.mock_only:
         print("\n--mock-only mode, skip full E2E")
     else:
-        ss_ok = check_service(f"{SS_URL}/actuator/health", "SS")
+        ss_ok = check_service(f"{SS_URL}/api/admin/configs?type=test", "SS")
         gw_ok = check_service(f"{GW_URL}/actuator/health", "GW")
 
         if ss_ok:
