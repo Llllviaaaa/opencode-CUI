@@ -54,10 +54,14 @@ switches = {
 
 @app.route('/appstore/wecodeapi/open/ak/info', methods=['GET', 'POST'])
 def get_assistant_info():
-    # 支持两种方式：query param ?ak=xxx 或 body {"ak":"xxx"}
+    # 支持：query param ?ak=xxx 或 body {"ak":"xxx"}（GET+body 或 POST+body）
     ak = request.args.get('ak')
-    if not ak and request.is_json:
-        ak = request.get_json(silent=True, force=True).get('ak') if request.data else None
+    if not ak and request.data:
+        try:
+            body = json.loads(request.data.decode('utf-8'))
+            ak = body.get('ak')
+        except Exception:
+            pass
     print(f"[上游API] 查询助手信息: ak={ak}")
 
     if not switches["upstream_api_enabled"]:

@@ -126,27 +126,30 @@ public class AssistantInfoService {
         long start = System.nanoTime();
 
         try {
-            RestTemplate restTemplate = new RestTemplate();
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+            // 上游接口要求 GET + JSON body，Spring RestTemplate GET 不支持 body，
+            // 使用 Java HttpClient 的 method("GET", body) 实现。
+            java.net.http.HttpRequest.Builder reqBuilder = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .method("GET", java.net.http.HttpRequest.BodyPublishers.ofString(
+                            "{\"ak\":\"" + ak + "\"}"));
             if (properties.getApiToken() != null && !properties.getApiToken().isBlank()) {
-                headers.set("Authorization", "Bearer " + properties.getApiToken());
+                reqBuilder.header("Authorization", "Bearer " + properties.getApiToken());
             }
-            // 上游接口：GET + JSON body {"ak":"xxx"}
-            String body = "{\"ak\":\"" + ak + "\"}";
-            HttpEntity<String> request = new HttpEntity<>(body, headers);
 
-            ResponseEntity<String> response = restTemplate.exchange(
-                    url, HttpMethod.GET, request, String.class);
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(java.time.Duration.ofSeconds(5)).build();
+            java.net.http.HttpResponse<String> response = client.send(
+                    reqBuilder.build(), java.net.http.HttpResponse.BodyHandlers.ofString());
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
-            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+            if (response.statusCode() != 200 || response.body() == null) {
                 log.warn("[AssistantInfoService] upstream non-success: ak={}, status={}, durationMs={}",
-                        ak, response.getStatusCode(), elapsedMs);
+                        ak, response.statusCode(), elapsedMs);
                 return null;
             }
 
-            AssistantInfo info = parseApiResponse(response.getBody());
+            AssistantInfo info = parseApiResponse(response.body());
             log.info("[AssistantInfoService] upstream success: ak={}, scope={}, durationMs={}",
                     ak, info != null ? info.getAssistantScope() : null, elapsedMs);
             return info;

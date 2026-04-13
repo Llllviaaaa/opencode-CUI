@@ -92,7 +92,7 @@ def test_mock_upstream_api():
     else:
         fail("M02", "appId", f"got: {data['data'].get('hisAppId')}")
 
-    if data["data"]["endpoint"] and data["data"]["protocol"] == "sse" and data["data"]["authType"] == "soa":
+    if data["data"]["endpoint"] and data["data"]["protocol"] == "2" and data["data"]["authType"] == "1":
         ok("M03", "endpoint/protocol/authType 正确")
     else:
         fail("M03", "endpoint/protocol/authType")
