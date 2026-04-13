@@ -85,6 +85,47 @@ public class RedisMessageBroker {
         unsubscribe(channel);
     }
 
+    // ========== Generic channel pub/sub ==========
+
+    /**
+     * Publish a message to a named channel.
+     *
+     * @param channel the full channel name (e.g. "stream:im")
+     * @param message the message to publish (as JSON string)
+     */
+    public void publishToChannel(String channel, String message) {
+        publishMessage(channel, message);
+    }
+
+    /**
+     * Subscribe to a named channel.
+     *
+     * @param channel the full channel name
+     * @param handler callback to handle received messages
+     */
+    public void subscribeToChannel(String channel, Consumer<String> handler) {
+        subscribe(channel, handler);
+    }
+
+    /**
+     * Unsubscribe from a named channel.
+     *
+     * @param channel the full channel name
+     */
+    public void unsubscribeFromChannel(String channel) {
+        unsubscribe(channel);
+    }
+
+    /**
+     * Check if a channel is currently subscribed.
+     *
+     * @param channel the full channel name
+     * @return true if subscribed
+     */
+    public boolean isChannelSubscribed(String channel) {
+        return activeListeners.containsKey(channel);
+    }
+
     // ========== Internal methods ==========
 
     private void publishMessage(String channel, String message) {
