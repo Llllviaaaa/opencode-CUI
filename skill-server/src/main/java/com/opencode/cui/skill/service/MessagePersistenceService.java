@@ -390,8 +390,7 @@ public class MessagePersistenceService {
             return msg.getPartSeq();
         }
 
-        return tracker.nextPartSeq(messageDbId,
-                () -> partRepository.findMaxSeqByMessageId(messageDbId));
+        return partRepository.findMaxSeqByMessageId(messageDbId) + 1;
     }
 
     private void syncMessageContent(ActiveMessageTracker.ActiveMessageRef active) {
