@@ -122,16 +122,19 @@ public class AssistantInfoService {
      * @return AssistantInfo，解析失败时返回 null
      */
     protected AssistantInfo fetchFromUpstream(String ak) {
-        String url = properties.getApiUrl() + "?ak=" + ak;
+        String url = properties.getApiUrl();
         long start = System.nanoTime();
 
         try {
             RestTemplate restTemplate = new RestTemplate();
             HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
             if (properties.getApiToken() != null && !properties.getApiToken().isBlank()) {
                 headers.set("Authorization", "Bearer " + properties.getApiToken());
             }
-            HttpEntity<Void> request = new HttpEntity<>(headers);
+            // 上游接口：GET + JSON body {"ak":"xxx"}
+            String body = "{\"ak\":\"" + ak + "\"}";
+            HttpEntity<String> request = new HttpEntity<>(body, headers);
 
             ResponseEntity<String> response = restTemplate.exchange(
                     url, HttpMethod.GET, request, String.class);
@@ -167,8 +170,8 @@ public class AssistantInfoService {
      *     "identityType": "3",   // "2"=personal, "3"=business
      *     "hisAppId": "app_36209",
      *     "endpoint": "https://cloud.example.com/chat",
-     *     "protocol": "sse",
-     *     "authType": "soa"
+     *     "protocol": "2",     // 1=rest, 2=sse, 3=websocket
+     *     "authType": "1"      // 1=soa
      *   }
      * }
      * </pre>
@@ -192,8 +195,8 @@ public class AssistantInfoService {
             info.setAssistantScope(scope);
             info.setAppId(dataNode.path("hisAppId").asText(null));
             info.setCloudEndpoint(dataNode.path("endpoint").asText(null));
-            info.setCloudProtocol(dataNode.path("protocol").asText(null));
-            info.setAuthType(dataNode.path("authType").asText(null));
+            info.setCloudProtocol(mapProtocol(dataNode.path("protocol").asText(null)));
+            info.setAuthType(mapAuthType(dataNode.path("authType").asText(null)));
 
             return info;
 
@@ -201,6 +204,26 @@ public class AssistantInfoService {
             log.warn("[AssistantInfoService] parseApiResponse error: {}", e.getMessage());
             return null;
         }
+    }
+
+    /** 上游 protocol 数字码 → 内部字符串：1=rest, 2=sse, 3=websocket */
+    private String mapProtocol(String code) {
+        if (code == null) return null;
+        return switch (code) {
+            case "1" -> "rest";
+            case "2" -> "sse";
+            case "3" -> "websocket";
+            default -> code; // 未知码直接透传
+        };
+    }
+
+    /** 上游 authType 数字码 → 内部字符串：1=soa */
+    private String mapAuthType(String code) {
+        if (code == null) return null;
+        return switch (code) {
+            case "1" -> "soa";
+            default -> code;
+        };
     }
 
     private String buildCacheKey(String ak) {

@@ -121,12 +121,14 @@ public class CloudRouteService {
      * @return 响应体字符串；失败时抛出异常
      */
     protected String fetchFromUpstream(String ak) throws Exception {
-        String url = apiUrl + "?ak=" + ak;
+        // 上游接口：GET + JSON body {"ak":"xxx"}
+        String body = "{\"ak\":\"" + ak + "\"}";
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
+                .uri(URI.create(apiUrl))
                 .header("Authorization", "Bearer " + bearerToken)
-                .GET()
+                .header("Content-Type", "application/json")
+                .method("GET", HttpRequest.BodyPublishers.ofString(body))
                 .timeout(Duration.ofSeconds(5))
                 .build();
 
@@ -199,13 +201,33 @@ public class CloudRouteService {
             CloudRouteInfo info = new CloudRouteInfo();
             info.setAppId(data.path("hisAppId").asText(null));
             info.setEndpoint(data.path("endpoint").asText(null));
-            info.setProtocol(data.path("protocol").asText(null));
-            info.setAuthType(data.path("authType").asText(null));
+            info.setProtocol(mapProtocol(data.path("protocol").asText(null)));
+            info.setAuthType(mapAuthType(data.path("authType").asText(null)));
             return info;
 
         } catch (Exception e) {
             log.warn("[CLOUD_ROUTE] Response parse error: ak={}, error={}", ak, e.getMessage());
             return null;
         }
+    }
+
+    /** 上游 protocol 数字码 → 内部字符串：1=rest, 2=sse, 3=websocket */
+    private String mapProtocol(String code) {
+        if (code == null) return null;
+        return switch (code) {
+            case "1" -> "rest";
+            case "2" -> "sse";
+            case "3" -> "websocket";
+            default -> code;
+        };
+    }
+
+    /** 上游 authType 数字码 → 内部字符串：1=soa */
+    private String mapAuthType(String code) {
+        if (code == null) return null;
+        return switch (code) {
+            case "1" -> "soa";
+            default -> code;
+        };
     }
 }

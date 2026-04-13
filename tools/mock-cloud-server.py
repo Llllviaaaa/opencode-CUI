@@ -24,8 +24,8 @@ ASSISTANT_INFO = {
         "identityType": "3",  # business
         "hisAppId": "app_test_001",
         "endpoint": "http://localhost:9999/api/v1/chat",
-        "protocol": "sse",
-        "authType": "soa"
+        "protocol": "2",     # 1=rest, 2=sse, 3=websocket
+        "authType": "1"      # 1=soa
     },
     "test-personal-ak": {
         "identityType": "2",  # personal
@@ -52,9 +52,12 @@ switches = {
 
 # ========== 1. 上游助手信息 API ==========
 
-@app.route('/appstore/wecodeapi/open/ak/info', methods=['GET'])
+@app.route('/appstore/wecodeapi/open/ak/info', methods=['GET', 'POST'])
 def get_assistant_info():
+    # 支持两种方式：query param ?ak=xxx 或 body {"ak":"xxx"}
     ak = request.args.get('ak')
+    if not ak and request.is_json:
+        ak = request.get_json(silent=True, force=True).get('ak') if request.data else None
     print(f"[上游API] 查询助手信息: ak={ak}")
 
     if not switches["upstream_api_enabled"]:
