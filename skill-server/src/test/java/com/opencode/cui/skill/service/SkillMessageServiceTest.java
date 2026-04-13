@@ -55,10 +55,9 @@ class SkillMessageServiceTest {
             task.run();
             return null;
         }).when(messageHistoryRefreshExecutor).execute(any(Runnable.class));
-        ActiveMessageTracker activeMessageTracker = new ActiveMessageTracker(null);
         service = new SkillMessageService(messageRepository, partRepository,
                 sessionService, snowflakeIdGenerator, new ObjectMapper(), messageHistoryCacheService,
-                messageHistoryRefreshExecutor, activeMessageTracker);
+                messageHistoryRefreshExecutor);
     }
 
     @Test
