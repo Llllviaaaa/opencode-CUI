@@ -471,8 +471,8 @@ def test_e2e_04_gw_im_push():
     reset_mock()
 
     resp = requests.post(f"{GW_URL}/api/gateway/cloud/im-push", json={
-        "assistantAccount": "test-bot",
-        "userAccount": "c30051824",
+        "assistantAccount": "test-business-ak",
+        "userAccount": "900001",
         "imGroupId": None,
         "topicId": "cloud-test-push-001",
         "content": "GW push e2e test"
@@ -518,7 +518,7 @@ def test_e2e_05_push_validation():
 
     # topicId 不存在
     requests.post(f"{GW_URL}/api/gateway/cloud/im-push", json={
-        "assistantAccount": "test-bot",
+        "assistantAccount": "test-business-ak",
         "userAccount": "c30051824",
         "topicId": "nonexistent-topic",
         "content": "should not be sent"
