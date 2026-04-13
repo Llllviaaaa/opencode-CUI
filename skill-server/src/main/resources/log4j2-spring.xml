@@ -29,9 +29,9 @@
     </Appenders>
 
     <Loggers>
-        <Root level="INFO">
+        <AsyncRoot level="INFO" includeLocation="false">
             <AppenderRef ref="FILE"/>
             <AppenderRef ref="CONSOLE"/>
-        </Root>
+        </AsyncRoot>
     </Loggers>
 </Configuration>

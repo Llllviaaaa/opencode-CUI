@@ -16,24 +16,56 @@ public class MdcDiagnostic implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
-        // 1. SLF4J MDC
-        MDC.put("traceId", "DIAG-SLF4J-001");
-        log.info("[MDC-DIAG] After SLF4J MDC.put traceId=DIAG-SLF4J-001");
-        String readBack = MDC.get("traceId");
-        log.info("[MDC-DIAG] SLF4J MDC.get traceId={}", readBack);
+        // Check async logger status
+        log.info("[MDC-DIAG] Logger factory: {}", org.slf4j.LoggerFactory.getILoggerFactory().getClass().getName());
 
-        // 2. Log4j2 ThreadContext directly
-        org.apache.logging.log4j.ThreadContext.put("traceId", "DIAG-LOG4J-002");
-        log.info("[MDC-DIAG] After Log4j2 ThreadContext.put traceId=DIAG-LOG4J-002");
-        String readBack2 = org.apache.logging.log4j.ThreadContext.get("traceId");
-        log.info("[MDC-DIAG] Log4j2 ThreadContext.get traceId={}", readBack2);
+        // Check ThreadContext implementation
+        log.info("[MDC-DIAG] ThreadContext map class: {}",
+            org.apache.logging.log4j.ThreadContext.getContext().getClass().getName());
 
-        // 3. Check MDC adapter class
-        log.info("[MDC-DIAG] MDC adapter class: {}", MDC.getMDCAdapter().getClass().getName());
+        // Test: put via ThreadContext, log immediately
+        org.apache.logging.log4j.ThreadContext.put("traceId", "DIAG-TC-001");
 
-        // Cleanup
-        MDC.remove("traceId");
-        org.apache.logging.log4j.ThreadContext.remove("traceId");
-        log.info("[MDC-DIAG] Cleanup done, traceId should be empty now");
+        // Use Log4j2 logger directly (bypass SLF4J)
+        org.apache.logging.log4j.Logger log4j = org.apache.logging.log4j.LogManager.getLogger(MdcDiagnostic.class);
+        log4j.info("[MDC-DIAG] Log4j2 direct logger, traceId should be DIAG-TC-001");
+
+        // Use SLF4J logger
+        log.info("[MDC-DIAG] SLF4J logger, traceId should be DIAG-TC-001");
+
+        // Check if ThreadContext is using DefaultThreadContextMap or CopyOnWriteSortedArrayThreadContextMap
+        log.info("[MDC-DIAG] ThreadContext impl: {}",
+            System.getProperty("log4j2.threadContextMap", "default"));
+        log.info("[MDC-DIAG] isThreadContextMapInheritable: {}",
+            System.getProperty("log4j2.isThreadContextMapInheritable", "not set"));
+        log.info("[MDC-DIAG] contextSelector: {}",
+            System.getProperty("Log4jContextSelector",
+                System.getProperty("log4j2.contextSelector", "not set")));
+
+        // Check internal ThreadContextMap implementation
+        try {
+            java.lang.reflect.Field field = org.apache.logging.log4j.ThreadContext.class.getDeclaredField("contextMap");
+            if (field == null) {
+                // Log4j2 3.x uses PROVIDER
+                field = org.apache.logging.log4j.ThreadContext.class.getDeclaredField("PROVIDER");
+            }
+            field.setAccessible(true);
+            Object impl = field.get(null);
+            log.info("[MDC-DIAG] ThreadContext internal impl: {}", impl.getClass().getName());
+        } catch (Exception e) {
+            log.info("[MDC-DIAG] Could not inspect ThreadContext internals: {}", e.getMessage());
+        }
+
+        // Check if ThreadContext is empty right after put
+        log.info("[MDC-DIAG] ThreadContext.containsKey('traceId')={}",
+            org.apache.logging.log4j.ThreadContext.containsKey("traceId"));
+        org.apache.logging.log4j.ThreadContext.put("traceId", "DIAG-FINAL");
+        log.info("[MDC-DIAG] After put, containsKey={}, get={}",
+            org.apache.logging.log4j.ThreadContext.containsKey("traceId"),
+            org.apache.logging.log4j.ThreadContext.get("traceId"));
+        log.info("[MDC-DIAG] ThreadContext.getImmutableContext={}",
+            org.apache.logging.log4j.ThreadContext.getImmutableContext());
+
+        org.apache.logging.log4j.ThreadContext.clearAll();
     }
 }
