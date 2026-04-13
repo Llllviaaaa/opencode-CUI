@@ -10,6 +10,7 @@ import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.CloudEventTranslator;
 import com.opencode.cui.skill.service.cloud.CloudRequestBuilder;
 import com.opencode.cui.skill.service.cloud.CloudRequestContext;
+import com.opencode.cui.skill.logging.MdcHelper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -64,6 +65,13 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
 
         ObjectNode cloudRequest = cloudRequestBuilder.buildCloudRequest(appId, context);
 
+        // 构建 payload：GW 的 CloudAgentService 期望 payload.cloudRequest 和 payload.toolSessionId
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.set("cloudRequest", cloudRequest);
+        if (toolSessionId != null && !toolSessionId.isBlank()) {
+            payload.put("toolSessionId", toolSessionId);
+        }
+
         // 包装为 Gateway invoke 消息格式
         ObjectNode message = objectMapper.createObjectNode();
         message.put("type", "invoke");
@@ -74,7 +82,12 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
         if (command.userId() != null && !command.userId().isBlank()) {
             message.put("userId", command.userId());
         }
-        message.set("payload", cloudRequest);
+
+        // 注入 traceId：从 MDC 获取或自动生成，确保跨服务链路可追踪
+        String traceId = MdcHelper.ensureTraceId();
+        message.put("traceId", traceId);
+
+        message.set("payload", payload);
 
         try {
             return objectMapper.writeValueAsString(message);

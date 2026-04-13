@@ -361,6 +361,12 @@ def test_e2e_02_business_im():
         return
 
     reset_mock()
+    time.sleep(1)  # 确保 mock 开关完全重置，且 Mock-2b 的异步影响消散
+
+    # 验证 mock SSE 可用
+    verify_resp = requests.post(f"{MOCK_URL}/api/v1/chat", json={"topicId": "verify", "content": "x"}, stream=True)
+    verify_resp.content  # 读完
+    requests.delete(f"{MOCK_URL}/mock/sse-requests")  # 清掉验证请求
 
     # 通过 IM Inbound 接口发送消息
     resp = requests.post(f"{SS_URL}/api/inbound/messages", headers=inbound_headers(), json={
@@ -495,9 +501,10 @@ def test_e2e_05_push_validation():
     """E2E-05: IM 推送校验失败"""
     print("\n[E2E-05] IM 推送校验")
 
+    time.sleep(3)   # 确保 E04 的异步推送消息完全处理完
     reset_mock()
-    time.sleep(2)  # 确保 E04 的异步推送消息完全处理完
-    reset_mock()   # 二次清空，确保干净
+    time.sleep(1)
+    reset_mock()    # 二次清空
 
     # topicId 不存在
     requests.post(f"{GW_URL}/api/gateway/cloud/im-push", json={
@@ -507,7 +514,7 @@ def test_e2e_05_push_validation():
         "content": "should not be sent"
     })
 
-    time.sleep(0.5)
+    time.sleep(2)
     msgs = requests.get(f"{MOCK_URL}/mock/im-messages").json()
     if len(msgs) == 0:
         ok("E05-01", "topicId 不存在时 IM 未收到消息")
