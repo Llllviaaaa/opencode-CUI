@@ -340,7 +340,9 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget {
 
         @Override
         public void onMessage(String message) {
-            gatewayRelayService.handleGatewayMessage(message);
+            Thread.ofVirtual().name("vt-gw-msg-", 0).start(() -> {
+                gatewayRelayService.handleGatewayMessage(message);
+            });
         }
 
         @Override
