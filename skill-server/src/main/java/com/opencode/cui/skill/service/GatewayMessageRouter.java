@@ -820,16 +820,18 @@ public class GatewayMessageRouter {
         }
 
         // 通过 sessionId 查 session，验证 assistantAccount 是否匹配
-        if (sessionId != null) {
-            Long numericId = ProtocolUtils.parseSessionId(sessionId);
-            if (numericId != null) {
-                SkillSession session = sessionService.findByIdSafe(numericId);
-                if (session != null && session.getAssistantAccount() != null
-                        && !session.getAssistantAccount().equals(assistantAccount)) {
-                    log.warn("[SKIP] handleImPush: reason=assistant_account_mismatch, sessionId={}, expected={}, actual={}",
-                            sessionId, session.getAssistantAccount(), assistantAccount);
-                    return;
-                }
+        if (sessionId == null) {
+            log.warn("[SKIP] handleImPush: reason=session_not_found, topicId={}", topicId);
+            return;
+        }
+        Long numericId = ProtocolUtils.parseSessionId(sessionId);
+        if (numericId != null) {
+            SkillSession session = sessionService.findByIdSafe(numericId);
+            if (session != null && session.getAssistantAccount() != null
+                    && !session.getAssistantAccount().equals(assistantAccount)) {
+                log.warn("[SKIP] handleImPush: reason=assistant_account_mismatch, sessionId={}, expected={}, actual={}",
+                        sessionId, session.getAssistantAccount(), assistantAccount);
+                return;
             }
         }
 

@@ -212,6 +212,11 @@ public class ImInboundController {
         Map<String, String> payloadFields = new LinkedHashMap<>();
         payloadFields.put("text", prompt); // 用户消息（可能已注入群聊历史）
         payloadFields.put("toolSessionId", session.getToolSessionId()); // Gateway 侧的 session 标识
+        // 业务助手云端请求需要的额外字段
+        payloadFields.put("assistantAccount", request.assistantAccount());
+        payloadFields.put("sendUserAccount", ownerWelinkId);
+        payloadFields.put("imGroupId", request.sessionType().equals("group") ? request.sessionId() : null);
+        payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
         gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
                 session.getAk(), // 应用密钥
                 ownerWelinkId, // 助手拥有者 ID（用于 Gateway 鉴权）

@@ -61,6 +61,11 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
                 .content(content)
                 .contentType("text")
                 .topicId(toolSessionId)
+                .assistantAccount(extractField(command.payload(), "assistantAccount"))
+                .sendUserAccount(extractField(command.payload(), "sendUserAccount"))
+                .imGroupId(extractField(command.payload(), "imGroupId"))
+                .messageId(extractField(command.payload(), "messageId"))
+                .clientLang("zh")
                 .build();
 
         ObjectNode cloudRequest = cloudRequestBuilder.buildCloudRequest(appId, context);

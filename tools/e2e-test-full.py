@@ -529,9 +529,7 @@ def test_e2e_05_push_validation():
     if len(msgs) == 0:
         ok("E05-01", "topicId 不存在时 IM 未收到消息")
     else:
-        # 已知问题：handleImPush 的 session 校验在 resolveSessionId 层面被跳过，
-        # 消息仍被发出。这是一个待修复的 bug。
-        skip("E05-01", f"topicId 不存在仍发送了 {len(msgs)} 条", "已知 bug: handleImPush 校验缺失")
+        fail("E05-01", "不应发送", f"收到 {len(msgs)} 条")
 
 
 def test_e2e_06_cloud_unavailable():
