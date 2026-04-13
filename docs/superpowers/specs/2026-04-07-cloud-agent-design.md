@@ -943,30 +943,60 @@ public class CloudProtocolClient {
 | topicId | String | ✅ | 会话主题 ID（= toolSessionId），用于 GW 路由 |
 | content | String | ✅ | 文本内容（可含自定义 Markdown 协议） |
 
-**认证**：云端调用此接口时由 GW 的 `CloudAuthService` 验证身份（复用 authType 策略）。
+**GW 安全校验**：
+
+GW 在转发前进行四步校验：
+
+| # | 校验 | 场景 | 失败响应 |
+|---|------|------|---------|
+| 1 | assistantAccount 非空 | 全部 | 400 |
+| 2 | content 非空 | 全部 | 400 |
+| 3 | assistantAccount 有效（上游 resolve API 查得到） | 全部 | 400 |
+| 4 | userAccount == create_by（助手创建人） | 单聊 | 403 |
+| 5 | userAccount 非空 | 单聊 | 400 |
+
+**新增组件：AssistantAccountResolver**
+
+GW 调用上游 resolve API 验证 assistantAccount，获取 create_by：
+
+```
+GET /assistant-api/integration/v4-1/we-crew/instance/query?partnerAccount={assistantAccount}
+Authorization: Bearer {token}
+```
+
+响应：`{"data": {"appKey": "xxx", "create_by": "900001"}}`
+
+Redis 缓存：key `gw:assistant:resolve:{assistantAccount}`，TTL 300s。
 
 **GW 处理逻辑**：
 
 ```java
-@RestController
-@RequestMapping("/api/gateway/cloud")
-public class CloudPushController {
+@PostMapping("/im-push")
+public ResponseEntity<?> imPush(@RequestBody ImPushRequest request) {
+    // 1. 基础校验
+    if (blank(request.getAssistantAccount())) return badRequest("assistantAccount is required");
+    if (blank(request.getContent())) return badRequest("content is required");
 
-    private final SkillRelayService skillRelayService;
+    // 2. 验证 assistantAccount 有效性
+    ResolveResult resolved = resolver.resolve(request.getAssistantAccount());
+    if (resolved == null) return badRequest("invalid assistant account");
 
-    @PostMapping("/im-push")
-    public ResponseEntity<Void> imPush(@RequestBody ImPushRequest request) {
-        GatewayMessage msg = new GatewayMessage();
-        msg.setType("im_push");
-        // topicId 就是 toolSessionId（SS 构建 cloudRequest 时传给云端的）
-        msg.setToolSessionId(request.getTopicId());
-        msg.setPayload(objectMapper.valueToTree(request));
-        msg.setTraceId(UUID.randomUUID().toString());
-
-        // 复用现有上行路由，基于 toolSessionId 精确投递
-        skillRelayService.relayToSkill(msg);
-        return ResponseEntity.ok().build();
+    // 3. 单聊校验 userAccount == create_by
+    boolean isGroup = request.getImGroupId() != null && !request.getImGroupId().isBlank();
+    if (!isGroup) {
+        if (blank(request.getUserAccount())) return badRequest("userAccount required for direct");
+        if (!request.getUserAccount().equals(resolved.getCreateBy()))
+            return ResponseEntity.status(403).body("userAccount does not match creator");
     }
+
+    // 4. 校验通过，构建 im_push 转发给 SS
+    GatewayMessage msg = new GatewayMessage();
+    msg.setType("im_push");
+    msg.setToolSessionId(request.getTopicId());
+    msg.setPayload(objectMapper.valueToTree(request));
+    msg.setTraceId(UUID.randomUUID().toString());
+    skillRelayService.relayToSkill(msg);
+    return ResponseEntity.ok().build();
 }
 ```
 
@@ -977,42 +1007,17 @@ public class CloudPushController {
 **GatewayMessageRouter 新增处理分支**：
 
 ```java
-case "im_push" -> handleImPush(message);
+case "im_push" -> handleImPush(sessionId, node);
 ```
 
 **handleImPush 逻辑**：
 
-```java
-private void handleImPush(GatewayMessage message) {
-    JsonNode payload = message.getPayload();
-    String assistantAccount = payload.path("assistantAccount").asText();
-    String userAccount = payload.path("userAccount").asText();
-    String imGroupId = payload.path("imGroupId").asText(null);
-    String topicId = message.getToolSessionId();
-    String content = payload.path("content").asText();
+SS 收到 GW 转发的 im_push 后：
+- 验证 sessionId 存在（topicId 对应的会话）
+- 验证 assistantAccount 与 session 中的一致
+- 根据 imGroupId 判断单聊/群聊，调用 IM 出站接口
 
-    // 校验 topicId 对应的会话确实属于该 assistantAccount
-    SkillSession session = sessionService.findByToolSessionId(topicId);
-    if (session == null) {
-        log.warn("im_push ignored: no session found for topicId={}", topicId);
-        return;
-    }
-    // 通过 session 的 ak 解析 assistantAccount，与请求中的 assistantAccount 比对
-    String resolvedAccount = assistantAccountResolverService.resolveAccount(session.getAk());
-    if (!assistantAccount.equals(resolvedAccount)) {
-        log.warn("im_push rejected: assistantAccount mismatch, request={}, resolved={}",
-                assistantAccount, resolvedAccount);
-        return;
-    }
-
-    // 根据 imGroupId 判断单聊/群聊，调用 IM 出站接口
-    if (imGroupId != null) {
-        imOutboundService.sendGroupMessage(assistantAccount, imGroupId, content);
-    } else {
-        imOutboundService.sendDirectMessage(assistantAccount, userAccount, content);
-    }
-}
-```
+> 注：核心安全校验（账号有效性、创建人匹配）已在 GW 侧完成，SS 侧仅做 session 一致性校验。
 
 **特点**：
 - 不走会话管理（不创建/查找 SkillSession）

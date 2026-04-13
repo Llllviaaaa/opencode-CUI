@@ -1186,13 +1186,24 @@ Content-Type: application/json
 
 **响应**：
 
-```json
-{ "code": 200, "message": "success" }
-```
+| 状态码 | 说明 |
+|--------|------|
+| 200 | 推送成功 |
+| 400 | 参数校验失败（assistantAccount/content 为空、无效 assistantAccount、单聊缺 userAccount） |
+| 403 | 单聊 userAccount 与助手创建人（create_by）不匹配 |
+
+**GW 安全校验**：
+
+1. 基础校验：assistantAccount、content 非空
+2. 调上游 resolve API 验证 assistantAccount 有效性（`GET /assistant-api/.../query?partnerAccount={assistantAccount}`），获取 `create_by`
+3. 单聊（imGroupId 为空）：校验 `userAccount == create_by`
+4. 群聊：不校验 userAccount，仅校验 assistantAccount 有效
+
+resolve 结果 Redis 缓存：`gw:assistant:resolve:{assistantAccount}`，TTL 300s。
 
 ### 9.3 GW → SS（WS 通道）
 
-GW 收到推送请求后，构建 `GatewayMessage(type="im_push")` 通过现有 `/ws/skill` WS 通道发给 SS：
+校验通过后，GW 构建 `GatewayMessage(type="im_push")` 通过现有 `/ws/skill` WS 通道发给 SS：
 
 ```json
 {
