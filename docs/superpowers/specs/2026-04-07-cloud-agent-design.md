@@ -128,8 +128,11 @@
 **上游接口**：
 
 ```
-GET https://api.openplatform.hisuat.huawei.com/appstore/wecodeapi/open/ak/info?ak={ak}
+GET https://api.openplatform.hisuat.huawei.com/appstore/wecodeapi/open/ak/info
 Authorization: Bearer {token}
+Content-Type: application/json
+
+{"ak": "{ak}"}
 ```
 
 **上游响应**：
@@ -143,8 +146,8 @@ Authorization: Bearer {token}
         "identityType": "3",
         "hisAppId": "app_36209",
         "endpoint": "https://cloud-agent.example.com/api/v1/chat",
-        "protocol": "sse",
-        "authType": "soa"
+        "protocol": "2",
+        "authType": "1"
     }
 }
 ```
@@ -156,8 +159,8 @@ Authorization: Bearer {token}
 | identityType | assistantScope | `"2"` → `"personal"`，`"3"` → `"business"` |
 | hisAppId | appId | 业务助手标识 |
 | endpoint | cloudEndpoint | 云端服务地址（business 时有值） |
-| protocol | cloudProtocol | `"sse"` / `"websocket"`（business 时有值） |
-| authType | authType | `"soa"` / `"apig"`（business 时有值） |
+| protocol | cloudProtocol | `"1"`=rest, `"2"`=sse, `"3"`=websocket（映射为字符串） |
+| authType | authType | `"1"`=soa（映射为字符串） |
 
 **内部模型**：
 
