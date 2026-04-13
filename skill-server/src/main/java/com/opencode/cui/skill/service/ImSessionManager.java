@@ -10,6 +10,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -141,7 +142,20 @@ public class ImSessionManager {
                 sessionService.updateToolSessionId(created.getId(), generatedToolSessionId);
                 log.info("Business assistant: toolSessionId pre-generated locally, skillSessionId={}, toolSessionId={}, ak={}",
                         created.getId(), generatedToolSessionId, ak);
-                // 不需要 requestToolSession，直接就绪
+                // 会话直接就绪，立即发送待发消息（不经过 session_created 回调）
+                if (pendingMessage != null && !pendingMessage.isBlank()) {
+                    Map<String, String> payloadFields = new LinkedHashMap<>();
+                    payloadFields.put("text", pendingMessage);
+                    payloadFields.put("toolSessionId", generatedToolSessionId);
+                    gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
+                            ak,
+                            ownerWelinkId,
+                            String.valueOf(created.getId()),
+                            GatewayActions.CHAT,
+                            PayloadBuilder.buildPayload(objectMapper, payloadFields)));
+                    log.info("Business assistant: chat invoke sent immediately, skillSessionId={}, ak={}",
+                            created.getId(), ak);
+                }
             } else {
                 // 个人助手：向 Gateway 请求创建 toolSession，等待 session_created 回调
                 requestToolSession(created, pendingMessage);

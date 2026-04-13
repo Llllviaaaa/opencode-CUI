@@ -496,7 +496,8 @@ def test_e2e_05_push_validation():
     print("\n[E2E-05] IM 推送校验")
 
     reset_mock()
-    time.sleep(0.5)  # 确保上一轮异步消息处理完
+    time.sleep(2)  # 确保 E04 的异步推送消息完全处理完
+    reset_mock()   # 二次清空，确保干净
 
     # topicId 不存在
     requests.post(f"{GW_URL}/api/gateway/cloud/im-push", json={
