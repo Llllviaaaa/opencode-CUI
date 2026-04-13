@@ -1,27 +1,12 @@
 package com.opencode.cui.skill.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.opencode.cui.skill.model.AssistantResolveResult;
 import com.opencode.cui.skill.model.ImMessageRequest;
-import com.opencode.cui.skill.model.InvokeCommand;
-import com.opencode.cui.skill.model.SkillSession;
-import com.opencode.cui.skill.config.AssistantIdProperties;
-import com.opencode.cui.skill.model.AgentSummary;
-import com.opencode.cui.skill.service.AssistantAccountResolverService;
-import com.opencode.cui.skill.service.AssistantInfoService;
-import com.opencode.cui.skill.service.ContextInjectionService;
-import com.opencode.cui.skill.service.GatewayApiClient;
-import com.opencode.cui.skill.service.GatewayRelayService;
-import com.opencode.cui.skill.service.ImOutboundService;
-import com.opencode.cui.skill.service.ImSessionManager;
-import com.opencode.cui.skill.service.SessionRebuildService;
-import com.opencode.cui.skill.service.SkillMessageService;
-import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
+import com.opencode.cui.skill.service.InboundProcessingService;
+import com.opencode.cui.skill.service.InboundProcessingService.InboundResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
@@ -29,269 +14,147 @@ import org.springframework.http.HttpStatus;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.contains;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-/** ImInboundController 单元测试：验证 IM 入站消息的接收和处理逻辑。 */
+/** ImInboundController 单元测试：验证 IM 入站消息的校验和委派逻辑。 */
 class ImInboundControllerTest {
 
         @Mock
-        private AssistantAccountResolverService resolverService;
-        @Mock
-        private GatewayApiClient gatewayApiClient;
-        @Mock
-        private ImSessionManager sessionManager;
-        @Mock
-        private ImOutboundService imOutboundService;
-        @Mock
-        private ContextInjectionService contextInjectionService;
-        @Mock
-        private GatewayRelayService gatewayRelayService;
-        @Mock
-        private SkillMessageService messageService;
-        @Mock
-        private SessionRebuildService rebuildService;
-        @Mock
-        private AssistantInfoService assistantInfoService;
-        @Mock
-        private AssistantScopeDispatcher scopeDispatcher;
-        private AssistantIdProperties assistantIdProperties;
+        private InboundProcessingService processingService;
+
         private ImInboundController controller;
 
         @BeforeEach
         void setUp() {
-                assistantIdProperties = new AssistantIdProperties();
-                assistantIdProperties.setEnabled(true);
-                assistantIdProperties.setTargetToolType("assistant");
-                controller = new ImInboundController(
-                                resolverService,
-                                assistantIdProperties,
-                                gatewayApiClient,
-                                sessionManager,
-                                imOutboundService,
-                                contextInjectionService,
-                                gatewayRelayService,
-                                messageService,
-                                rebuildService,
-                                new ObjectMapper(),
-                                assistantInfoService,
-                                scopeDispatcher);
-                // 默认 scopeDispatcher 返回 personal 策略（requiresOnlineCheck=true, generateToolSessionId=null）
-                com.opencode.cui.skill.service.scope.AssistantScopeStrategy personalStrategy =
-                        org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
-                lenient().when(personalStrategy.requiresOnlineCheck()).thenReturn(true);
-                lenient().when(personalStrategy.generateToolSessionId()).thenReturn(null);
-                lenient().when(scopeDispatcher.getStrategy(any())).thenReturn(personalStrategy);
-                lenient().when(assistantInfoService.getCachedScope(any())).thenReturn("personal");
-                // 默认 Agent 在线
-                lenient().when(gatewayApiClient.getAgentByAk(any()))
-                        .thenReturn(AgentSummary.builder().ak("ak-001").toolType("assistant").build());
+                controller = new ImInboundController(processingService);
         }
 
         @Test
-        @DisplayName("direct message persists user input and sends gateway invoke with ownerWelinkId")
-        void directMessagePersistsAndInvokes() {
-                SkillSession session = new SkillSession();
-                session.setId(101L);
-                session.setAk("ak-001");
-                session.setUserId("owner-welink-001");
-                session.setBusinessSessionDomain("im");
-                session.setBusinessSessionType("direct");
-                session.setToolSessionId("tool-001");
-
+        @DisplayName("valid direct message delegates to processing service and returns OK")
+        void validDirectMessageDelegates() {
                 ImMessageRequest request = new ImMessageRequest(
-                                "im",
-                                "direct",
-                                "dm-001",
-                                "assist-001",
-                                "hello",
-                                "text",
-                                null,
-                                null);
+                                "im", "direct", "dm-001", "assist-001",
+                                "hello", "text", null, null);
 
-                when(resolverService.resolve("assist-001"))
-                                .thenReturn(new AssistantResolveResult("ak-001", "owner-welink-001"));
-                when(sessionManager.findSession("im", "direct", "dm-001", "ak-001"))
-                                .thenReturn(session);
-                when(contextInjectionService.resolvePrompt("direct", "hello", null)).thenReturn("hello");
+                when(processingService.processChat(
+                                "im", "direct", "dm-001", "assist-001",
+                                "hello", "text", null, null))
+                                .thenReturn(InboundResult.ok());
 
                 var response = controller.receiveMessage(request);
 
                 assertEquals(HttpStatus.OK, response.getStatusCode());
-                verify(messageService).saveUserMessage(101L, "hello");
-                ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
-                verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
-                assertEquals("ak-001", captor.getValue().ak());
-                assertEquals("owner-welink-001", captor.getValue().userId());
-                assertEquals("chat", captor.getValue().action());
-                assertTrue(captor.getValue().payload().contains("tool-001"));
+                assertNotNull(response.getBody());
+                assertEquals(0, response.getBody().getCode());
+                verify(processingService).processChat(
+                                "im", "direct", "dm-001", "assist-001",
+                                "hello", "text", null, null);
         }
 
         @Test
-        @DisplayName("group message skips user persistence")
-        void groupMessageSkipsUserPersistence() {
-                SkillSession session = new SkillSession();
-                session.setId(102L);
-                session.setAk("ak-001");
-                session.setUserId("owner-welink-001");
-                session.setBusinessSessionDomain("im");
-                session.setBusinessSessionType("group");
-                session.setToolSessionId("tool-002");
-
+        @DisplayName("valid group message delegates with chatHistory")
+        void validGroupMessageDelegatesWithHistory() {
+                var history = List.of(
+                                new ImMessageRequest.ChatMessage("user-1", "Alice", "history", 1710000000L));
                 ImMessageRequest request = new ImMessageRequest(
-                                "im",
-                                "group",
-                                "grp-001",
-                                "assist-001",
-                                "summarize this",
-                                "text",
-                                null,
-                                List.of(new ImMessageRequest.ChatMessage("user-1", "Alice", "history", 1710000000L)));
+                                "im", "group", "grp-001", "assist-001",
+                                "summarize this", "text", null, history);
 
-                when(resolverService.resolve("assist-001"))
-                                .thenReturn(new AssistantResolveResult("ak-001", "owner-welink-001"));
-                when(sessionManager.findSession("im", "group", "grp-001", "ak-001"))
-                                .thenReturn(session);
-                when(contextInjectionService.resolvePrompt(eq("group"), eq("summarize this"), any()))
-                                .thenReturn("group prompt");
+                when(processingService.processChat(
+                                eq("im"), eq("group"), eq("grp-001"), eq("assist-001"),
+                                eq("summarize this"), eq("text"), eq(null), eq(history)))
+                                .thenReturn(InboundResult.ok());
 
                 var response = controller.receiveMessage(request);
 
                 assertEquals(HttpStatus.OK, response.getStatusCode());
-                verify(messageService, never()).saveUserMessage(any(), any());
-                verify(gatewayRelayService).sendInvokeToGateway(any(InvokeCommand.class));
+                verify(processingService).processChat(
+                                eq("im"), eq("group"), eq("grp-001"), eq("assist-001"),
+                                eq("summarize this"), eq("text"), eq(null), eq(history));
         }
 
         @Test
-        @DisplayName("no session triggers async creation with ownerWelinkId and returns OK immediately")
-        void noSessionTriggersAsyncCreation() {
+        @DisplayName("processing service error result returns OK with error body")
+        void processingErrorReturnsErrorBody() {
                 ImMessageRequest request = new ImMessageRequest(
-                                "im",
-                                "direct",
-                                "dm-new",
-                                "assist-001",
-                                "first message",
-                                "text",
-                                null,
-                                null);
+                                "im", "direct", "dm-001", "assist-001",
+                                "hello", "text", null, null);
 
-                when(resolverService.resolve("assist-001"))
-                                .thenReturn(new AssistantResolveResult("ak-001", "owner-welink-001"));
-                when(sessionManager.findSession("im", "direct", "dm-new", "ak-001"))
-                                .thenReturn(null);
-                when(contextInjectionService.resolvePrompt("direct", "first message", null))
-                                .thenReturn("first message");
+                when(processingService.processChat(any(), any(), any(), any(), any(), any(), any(), any()))
+                                .thenReturn(InboundResult.error(404, "Invalid assistant account"));
 
                 var response = controller.receiveMessage(request);
 
                 assertEquals(HttpStatus.OK, response.getStatusCode());
-                verify(sessionManager).createSessionAsync(
-                                "im", "direct", "dm-new", "ak-001",
-                                "owner-welink-001", "assist-001", "first message");
-                verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+                assertNotNull(response.getBody());
+                assertEquals(404, response.getBody().getCode());
+        }
+
+        // ========== 校验测试 ==========
+
+        @Test
+        @DisplayName("null request returns 400")
+        void nullRequestReturns400() {
+                var response = controller.receiveMessage(null);
+                assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
-        @DisplayName("session exists but toolSessionId not ready triggers requestToolSession")
-        void sessionWithoutToolSessionTriggersRebuild() {
-                SkillSession session = new SkillSession();
-                session.setId(105L);
-                session.setAk("ak-001");
-                session.setUserId("owner-welink-001");
-                session.setBusinessSessionDomain("im");
-                session.setBusinessSessionType("direct");
-                session.setToolSessionId(null);
-
+        @DisplayName("non-IM domain returns 400")
+        void nonImDomainReturns400() {
                 ImMessageRequest request = new ImMessageRequest(
-                                "im",
-                                "direct",
-                                "dm-005",
-                                "assist-001",
-                                "waiting message",
-                                "text",
-                                null,
-                                null);
-
-                when(resolverService.resolve("assist-001"))
-                                .thenReturn(new AssistantResolveResult("ak-001", "owner-welink-001"));
-                when(sessionManager.findSession("im", "direct", "dm-005", "ak-001"))
-                                .thenReturn(session);
-                when(contextInjectionService.resolvePrompt("direct", "waiting message", null))
-                                .thenReturn("waiting message");
+                                "external", "direct", "dm-001", "assist-001",
+                                "hello", "text", null, null);
 
                 var response = controller.receiveMessage(request);
 
-                assertEquals(HttpStatus.OK, response.getStatusCode());
-                verify(sessionManager).requestToolSession(session, "waiting message");
-                verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+                assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
-        @DisplayName("agent offline in direct chat with existing session replies IM and saves system message")
-        void agentOfflineDirectWithSessionRepliesAndPersists() {
-                SkillSession session = new SkillSession();
-                session.setId(101L);
-                session.setAk("ak-001");
-
+        @DisplayName("missing sessionType returns 400")
+        void missingSessionTypeReturns400() {
                 ImMessageRequest request = new ImMessageRequest(
-                                "im", "direct", "dm-001", "assist-001", "hello", "text", null, null);
-
-                when(resolverService.resolve("assist-001"))
-                                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
-                when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // Agent 离线
-                when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
+                                "im", null, "dm-001", "assist-001",
+                                "hello", "text", null, null);
 
                 var response = controller.receiveMessage(request);
 
-                assertEquals(HttpStatus.OK, response.getStatusCode());
-                verify(imOutboundService).sendTextToIm(eq("direct"), eq("dm-001"),
-                                contains("任务下发失败"), eq("assist-001"));
-                verify(messageService).saveSystemMessage(eq(101L), contains("任务下发失败"));
-                verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+                assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
-        @DisplayName("agent offline in group chat replies IM without persisting")
-        void agentOfflineGroupRepliesWithoutPersisting() {
+        @DisplayName("missing content returns 400")
+        void missingContentReturns400() {
                 ImMessageRequest request = new ImMessageRequest(
-                                "im", "group", "grp-001", "assist-001", "hello", "text", null, null);
-
-                when(resolverService.resolve("assist-001"))
-                                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
-                when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // Agent 离线
+                                "im", "direct", "dm-001", "assist-001",
+                                null, "text", null, null);
 
                 var response = controller.receiveMessage(request);
 
-                assertEquals(HttpStatus.OK, response.getStatusCode());
-                verify(imOutboundService).sendTextToIm(eq("group"), eq("grp-001"),
-                                contains("任务下发失败"), eq("assist-001"));
-                verify(messageService, never()).saveSystemMessage(any(), any());
-                verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+                assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
-        @DisplayName("agent offline in direct chat without session replies IM only")
-        void agentOfflineDirectNoSessionRepliesOnly() {
+        @DisplayName("non-text msgType returns 400")
+        void nonTextMsgTypeReturns400() {
                 ImMessageRequest request = new ImMessageRequest(
-                                "im", "direct", "dm-new", "assist-001", "hello", "text", null, null);
-
-                when(resolverService.resolve("assist-001"))
-                                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
-                when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // Agent 离线
-                when(sessionManager.findSession("im", "direct", "dm-new", "ak-001")).thenReturn(null);
+                                "im", "direct", "dm-001", "assist-001",
+                                "hello", "image", null, null);
 
                 var response = controller.receiveMessage(request);
 
-                assertEquals(HttpStatus.OK, response.getStatusCode());
-                verify(imOutboundService).sendTextToIm(eq("direct"), eq("dm-new"),
-                                contains("任务下发失败"), eq("assist-001"));
-                verify(messageService, never()).saveSystemMessage(any(), any());
+                assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any());
         }
 }
