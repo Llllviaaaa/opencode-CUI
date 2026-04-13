@@ -2,7 +2,6 @@ package com.opencode.cui.gateway.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.gateway.model.GatewayMessage;
-import com.opencode.cui.gateway.ws.AsyncSessionSender;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,6 +19,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 旧版 Source 服务路由策略。
@@ -54,7 +54,7 @@ public class LegacySkillRelayStrategy implements SkillRelayStrategy {
     /** Redis relay 订阅状态 */
     private final AtomicBoolean relaySubscribed = new AtomicBoolean(false);
 
-    private final ConcurrentHashMap<String, AsyncSessionSender> sessionSenders = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ReentrantLock> sessionLocks = new ConcurrentHashMap<>();
 
     public LegacySkillRelayStrategy(
             RedisMessageBroker redisMessageBroker,
@@ -264,30 +264,28 @@ public class LegacySkillRelayStrategy implements SkillRelayStrategy {
         return sendToSession(session, message);
     }
 
-    private AsyncSessionSender getOrCreateSender(WebSocketSession session) {
-        return sessionSenders.computeIfAbsent(session.getId(),
-                k -> new AsyncSessionSender(session));
+    private ReentrantLock getSessionLock(WebSocketSession session) {
+        return sessionLocks.computeIfAbsent(session.getId(), k -> new ReentrantLock());
     }
 
-    public void removeSessionSender(String sessionId) {
-        AsyncSessionSender sender = sessionSenders.remove(sessionId);
-        if (sender != null) {
-            sender.shutdown();
-        }
+    public void removeSessionLock(String sessionId) {
+        sessionLocks.remove(sessionId);
     }
 
     private boolean sendToSession(WebSocketSession session, GatewayMessage message) {
         try {
             String json = objectMapper.writeValueAsString(message);
-            AsyncSessionSender sender = getOrCreateSender(session);
-            boolean enqueued = sender.enqueue(new TextMessage(json));
-            if (enqueued) {
-                log.info("[Legacy] Enqueued to source session: linkId={}, type={}, pending={}",
-                        session.getId(), message.getType(), sender.pendingCount());
+            ReentrantLock lock = getSessionLock(session);
+            lock.lock();
+            try {
+                session.sendMessage(new TextMessage(json));
+            } finally {
+                lock.unlock();
             }
-            return enqueued;
+            log.info("[Legacy] Sent to source session: linkId={}, type={}", session.getId(), message.getType());
+            return true;
         } catch (IOException e) {
-            log.error("[Legacy] Failed to serialize message: linkId={}, type={}",
+            log.error("[Legacy] Failed to send to source session: linkId={}, type={}",
                     session.getId(), message.getType(), e);
             return false;
         }
@@ -427,10 +425,15 @@ public class LegacySkillRelayStrategy implements SkillRelayStrategy {
     private void sendProtocolError(WebSocketSession session, String reason) {
         try {
             String json = objectMapper.writeValueAsString(GatewayMessage.registerRejected(reason));
-            AsyncSessionSender sender = getOrCreateSender(session);
-            sender.enqueue(new TextMessage(json));
+            ReentrantLock lock = getSessionLock(session);
+            lock.lock();
+            try {
+                session.sendMessage(new TextMessage(json));
+            } finally {
+                lock.unlock();
+            }
         } catch (IOException e) {
-            log.error("[Legacy] Failed to serialize protocol error: linkId={}, reason={}", session.getId(), reason, e);
+            log.error("[Legacy] Failed to send protocol error: linkId={}, reason={}", session.getId(), reason, e);
         }
     }
 }
