@@ -4,7 +4,7 @@
         <Property name="SERVICE_NAME">skill-server</Property>
         <Property name="LOG_FILE">${sys:opencode.logging.file:-./logs/skill-server/skill-server.log}</Property>
         <Property name="ARCHIVE_DIR">${sys:opencode.logging.archive-dir:-./logs/skill-server/archive}</Property>
-        <Property name="LOG_PATTERN">%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [${SERVICE_NAME}] [%X{traceId:-}] [%X{sessionId:-}] [%X{ak:-}] %logger{36}.%method - %msg%n</Property>
+        <Property name="LOG_PATTERN">%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [${SERVICE_NAME}] [%X{traceId}] [%X{sessionId}] [%X{ak}] %logger{36}.%method - %msg%n</Property>
     </Properties>
 
     <Appenders>
@@ -29,9 +29,9 @@
     </Appenders>
 
     <Loggers>
-        <AsyncRoot level="INFO" includeLocation="false">
+        <Root level="INFO">
             <AppenderRef ref="FILE"/>
             <AppenderRef ref="CONSOLE"/>
-        </AsyncRoot>
+        </Root>
     </Loggers>
 </Configuration>
