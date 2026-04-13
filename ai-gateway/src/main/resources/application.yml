@@ -95,7 +95,7 @@ gateway:
 
   # 云端路由信息查询
   cloud-route:
-    api-url: ${CLOUD_ROUTE_API_URL:}
+    api-url: ${CLOUD_ROUTE_API_URL:http://localhost:9999/appstore/wecodeapi/open/ak/info}
     bearer-token: ${CLOUD_ROUTE_BEARER_TOKEN:}
     cache-ttl-seconds: ${CLOUD_ROUTE_CACHE_TTL_SECONDS:300}
 
