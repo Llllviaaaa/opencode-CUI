@@ -86,10 +86,10 @@ def get_assistant_info():
 
 # ========== 1b. 助手账号解析 API ==========
 
-# assistantAccount → {ak, ownerWelinkId} 映射
+# assistantAccount → {ak, create_by} 映射
 ASSISTANT_ACCOUNT_MAP = {
-    "test-business-ak": {"ak": "test-business-ak", "ownerWelinkId": "900001"},
-    "test-personal-ak": {"ak": "test-personal-ak", "ownerWelinkId": "900002"},
+    "test-business-ak": {"ak": "test-business-ak", "create_by": "900001"},
+    "test-personal-ak": {"ak": "test-personal-ak", "create_by": "900002"},
 }
 
 @app.route('/assistant-api/integration/v4-1/we-crew/instance/query', methods=['GET'])
@@ -102,7 +102,7 @@ def resolve_assistant_account():
         return jsonify({
             "data": {
                 "appKey": info["ak"],
-                "ownerWelinkId": info["ownerWelinkId"]
+                "create_by": info["create_by"]
             }
         })
     else:

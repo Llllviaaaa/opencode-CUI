@@ -93,6 +93,12 @@ gateway:
   websocket:
     max-text-message-buffer-size-bytes: 1048576
 
+  # 助手账号解析（IM 推送安全校验用）
+  assistant-resolve:
+    api-url: ${ASSISTANT_RESOLVE_URL:http://localhost:9999/assistant-api/integration/v4-1/we-crew/instance/query}
+    bearer-token: ${ASSISTANT_RESOLVE_TOKEN:}
+    cache-ttl-seconds: ${ASSISTANT_RESOLVE_CACHE_TTL:300}
+
   # 云端路由信息查询
   cloud-route:
     api-url: ${CLOUD_ROUTE_API_URL:http://localhost:9999/appstore/wecodeapi/open/ak/info}
