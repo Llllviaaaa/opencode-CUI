@@ -78,6 +78,12 @@
         WHERE ak = #{ak}
     </select>
 
+    <select id="findActiveByAk" resultMap="SkillSessionResultMap">
+        <include refid="selectAllColumns"/>
+        WHERE ak = #{ak}
+          AND status IN ('ACTIVE', 'IDLE')
+    </select>
+
     <select id="findByToolSessionId" resultMap="SkillSessionResultMap">
         <include refid="selectAllColumns"/>
         WHERE tool_session_id = #{toolSessionId}

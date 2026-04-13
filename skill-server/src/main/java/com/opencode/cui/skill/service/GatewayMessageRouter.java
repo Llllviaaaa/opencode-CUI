@@ -658,14 +658,16 @@ public class GatewayMessageRouter {
         // Ownership takeover is now message-driven (lazy) — no eager takeoverActiveRoutes needed.
 
         StreamMessage msg = StreamMessage.agentOnline();
-        sessionService.findByAk(ak).forEach(session -> broadcastStreamMessage(
+        List<SkillSession> activeSessions = sessionService.findActiveByAk(ak);
+        log.info("handleAgentOnline: ak={}, activeSessions={}", ak, activeSessions.size());
+        activeSessions.forEach(session -> broadcastStreamMessage(
                 session.getId().toString(),
                 userId != null && !userId.isBlank() ? userId : session.getUserId(),
                 msg));
         log.info("[EXIT] handleAgentOnline: ak={}", ak);
     }
 
-    /** 处理 agent_offline：向 AK 关联的所有会话广播离线状态。 */
+    /** 处理 agent_offline：向 AK 关联的活跃会话广播离线状态。 */
     private void handleAgentOffline(String ak, String userId) {
         log.warn("Agent offline: ak={}", ak);
 
@@ -673,7 +675,7 @@ public class GatewayMessageRouter {
             return;
         }
         StreamMessage msg = StreamMessage.agentOffline();
-        sessionService.findByAk(ak).forEach(session -> broadcastStreamMessage(
+        sessionService.findActiveByAk(ak).forEach(session -> broadcastStreamMessage(
                 session.getId().toString(),
                 userId != null && !userId.isBlank() ? userId : session.getUserId(),
                 msg));

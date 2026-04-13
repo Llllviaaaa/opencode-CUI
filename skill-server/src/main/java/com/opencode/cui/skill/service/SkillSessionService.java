@@ -222,10 +222,16 @@ public class SkillSessionService {
         return getSession(sessionId);
     }
 
-    /** 按 AK 查询会话（Agent 离线时使用）。 */
+    /** 按 AK 查询所有会话。 */
     @Transactional(readOnly = true)
     public List<SkillSession> findByAk(String ak) {
         return sessionRepository.findByAk(ak);
+    }
+
+    /** 按 AK 查询活跃会话（ACTIVE 或 IDLE）。用于 agent_online/offline 广播。 */
+    @Transactional(readOnly = true)
+    public List<SkillSession> findActiveByAk(String ak) {
+        return sessionRepository.findActiveByAk(ak);
     }
 
     /**
