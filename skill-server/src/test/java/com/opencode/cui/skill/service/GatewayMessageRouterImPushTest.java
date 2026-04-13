@@ -70,6 +70,8 @@ class GatewayMessageRouterImPushTest {
     private AssistantInfoService assistantInfoService;
     @Mock
     private AssistantScopeDispatcher scopeDispatcher;
+    @Mock
+    private com.opencode.cui.skill.service.delivery.OutboundDeliveryDispatcher outboundDeliveryDispatcher;
 
     private GatewayMessageRouter router;
 
@@ -94,6 +96,7 @@ class GatewayMessageRouterImPushTest {
                 skillInstanceRegistry,
                 assistantInfoService,
                 scopeDispatcher,
+                outboundDeliveryDispatcher,
                 120);
     }
 

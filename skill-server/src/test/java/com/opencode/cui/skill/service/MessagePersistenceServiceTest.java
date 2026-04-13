@@ -57,7 +57,6 @@ class MessagePersistenceServiceTest {
                                                 .seq(1)
                                                 .build());
                 when(partRepository.findMaxSeqByMessageId(11L)).thenReturn(0);
-                when(partRepository.findConcatenatedTextByMessageId(11L)).thenReturn("hello");
 
                 service.persistIfFinal(1L, StreamMessage.builder()
                                 .type(StreamMessage.Types.TEXT_DONE)
@@ -72,7 +71,7 @@ class MessagePersistenceServiceTest {
         }
 
         @Test
-        @DisplayName("text parts refresh skill_message content")
+        @DisplayName("text parts persist part and refresh history (content sync deferred to idle)")
         void textPartsRefreshMessageContent() {
                 when(messageService.saveMessage(
                                 any(com.opencode.cui.skill.model.SaveMessageCommand.class)))
@@ -83,7 +82,6 @@ class MessagePersistenceServiceTest {
                                                 .seq(1)
                                                 .build());
                 when(partRepository.findMaxSeqByMessageId(11L)).thenReturn(0);
-                when(partRepository.findConcatenatedTextByMessageId(11L)).thenReturn("final answer");
 
                 service.persistIfFinal(1L, StreamMessage.builder()
                                 .type(StreamMessage.Types.TEXT_DONE)
@@ -91,7 +89,8 @@ class MessagePersistenceServiceTest {
                                 .content("final answer")
                                 .build());
 
-                verify(messageService).updateMessageContent(11L, "final answer");
+                // content sync is deferred to session idle, so updateMessageContent is NOT called here
+                verify(messageService, never()).updateMessageContent(anyLong(), any());
                 verify(messageService).scheduleLatestHistoryRefreshAfterCommit(1L);
         }
 

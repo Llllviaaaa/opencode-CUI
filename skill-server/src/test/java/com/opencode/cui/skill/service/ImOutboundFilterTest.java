@@ -59,6 +59,7 @@ class ImOutboundFilterTest {
     @Mock private AssistantScopeDispatcher scopeDispatcher;
     @Mock private AssistantScopeStrategy businessScopeStrategy;
     @Mock private AssistantScopeStrategy personalScopeStrategy;
+    @Mock private com.opencode.cui.skill.service.delivery.OutboundDeliveryDispatcher outboundDeliveryDispatcher;
 
     private GatewayMessageRouter router;
 
@@ -82,6 +83,7 @@ class ImOutboundFilterTest {
                 skillInstanceRegistry,
                 assistantInfoService,
                 scopeDispatcher,
+                outboundDeliveryDispatcher,
                 120);
     }
 
@@ -153,11 +155,7 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.TEXT_DONE));
 
-        verify(imOutboundService).sendTextToIm(
-                eq(SkillSession.SESSION_TYPE_DIRECT),
-                eq("im-session-001"),
-                any(String.class),
-                eq(ASSISTANT_ACCOUNT));
+        verify(outboundDeliveryDispatcher).deliver(any(SkillSession.class), eq(SESSION_ID), eq(USER_ID), any(StreamMessage.class));
     }
 
     // ==================== S65: business IM + planning.delta -> filtered ====================
@@ -173,7 +171,7 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.PLANNING_DELTA));
 
-        verify(imOutboundService, never()).sendTextToIm(any(), any(), any(), any());
+        verify(outboundDeliveryDispatcher, never()).deliver(any(), any(), any(), any());
     }
 
     // ==================== S66: business IM + thinking.delta -> filtered ====================
@@ -189,7 +187,7 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.THINKING_DELTA));
 
-        verify(imOutboundService, never()).sendTextToIm(any(), any(), any(), any());
+        verify(outboundDeliveryDispatcher, never()).deliver(any(), any(), any(), any());
     }
 
     // ==================== S67: business IM + searching -> filtered ====================
@@ -204,7 +202,7 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.SEARCHING));
 
-        verify(imOutboundService, never()).sendTextToIm(any(), any(), any(), any());
+        verify(outboundDeliveryDispatcher, never()).deliver(any(), any(), any(), any());
     }
 
     // ==================== S68: business IM + search_result -> filtered ====================
@@ -219,7 +217,7 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.SEARCH_RESULT));
 
-        verify(imOutboundService, never()).sendTextToIm(any(), any(), any(), any());
+        verify(outboundDeliveryDispatcher, never()).deliver(any(), any(), any(), any());
     }
 
     // ==================== S69: business IM + reference -> filtered ====================
@@ -234,7 +232,7 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.REFERENCE));
 
-        verify(imOutboundService, never()).sendTextToIm(any(), any(), any(), any());
+        verify(outboundDeliveryDispatcher, never()).deliver(any(), any(), any(), any());
     }
 
     // ==================== S70: business IM + ask_more -> filtered ====================
@@ -249,7 +247,7 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.ASK_MORE));
 
-        verify(imOutboundService, never()).sendTextToIm(any(), any(), any(), any());
+        verify(outboundDeliveryDispatcher, never()).deliver(any(), any(), any(), any());
     }
 
     // ==================== S71: personal IM + text.done -> not filtered (regression) ====================
@@ -266,10 +264,6 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.TEXT_DONE));
 
-        verify(imOutboundService).sendTextToIm(
-                eq(SkillSession.SESSION_TYPE_DIRECT),
-                eq("im-session-001"),
-                any(String.class),
-                eq(ASSISTANT_ACCOUNT));
+        verify(outboundDeliveryDispatcher).deliver(any(SkillSession.class), eq(SESSION_ID), eq(USER_ID), any(StreamMessage.class));
     }
 }
