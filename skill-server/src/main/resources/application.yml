@@ -55,7 +55,7 @@ skill:
     allowed-origins: ${CORS_ORIGINS:*}
   gateway:
     ws-url: ${SKILL_GATEWAY_WS_URL:ws://localhost:8081/ws/skill}
-    connection-count: ${SKILL_GATEWAY_CONNECTION_COUNT:8}
+    connection-count: ${SKILL_GATEWAY_CONNECTION_COUNT:20}
     # Internal token for Skill Server -> AI-Gateway authentication
     internal-token: ${SKILL_SERVER_INTERNAL_TOKEN:changeme}
     reconnect-initial-delay-ms: 1000
