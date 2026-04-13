@@ -140,7 +140,7 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
         }
         try {
             JsonNode node = objectMapper.readTree(payload);
-            return node.path("content").asText(node.path("message").asText(""));
+            return node.path("text").asText(node.path("content").asText(node.path("message").asText("")));
         } catch (JsonProcessingException e) {
             log.debug("Failed to parse payload for content extraction, using raw: {}", e.getMessage());
             return payload;
