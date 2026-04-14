@@ -120,7 +120,7 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
 
     @Override
     public StreamMessage translateEvent(JsonNode event, String sessionId) {
-        return cloudEventTranslator.translate(event);
+        return cloudEventTranslator.translate(event, sessionId);
     }
 
     // ------------------------------------------------------------------ private

@@ -63,14 +63,14 @@ class EventTranslationScopeTest {
                 .type(StreamMessage.Types.TEXT_DELTA)
                 .content("hello")
                 .build();
-        when(cloudEventTranslator.translate(event)).thenReturn(expected);
+        when(cloudEventTranslator.translate(event, "session-1")).thenReturn(expected);
 
         StreamMessage result = businessStrategy.translateEvent(event, "session-1");
 
         assertNotNull(result, "business strategy should return translated message");
         assertEquals(StreamMessage.Types.TEXT_DELTA, result.getType());
         assertEquals("hello", result.getContent());
-        verify(cloudEventTranslator).translate(event);
+        verify(cloudEventTranslator).translate(event, "session-1");
     }
 
     /**

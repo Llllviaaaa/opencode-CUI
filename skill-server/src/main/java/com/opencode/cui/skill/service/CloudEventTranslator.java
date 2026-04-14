@@ -11,12 +11,17 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 云端事件翻译器：使用注册表模式将云端 CloudEvent 翻译为前端 StreamMessage。
  *
  * <p>每种 event.type 对应一个 {@link CloudEventHandler}，在 {@link #init()} 中注册。
- * {@link #translate(JsonNode)} 查表调用对应 handler。</p>
+ * {@link #translate(JsonNode, String)} 查表调用对应 handler，并为 Part 级事件自动注入
+ * messageId、sourceMessageId、role、partId、partSeq 等字段，使其与个人助手（OpenCodeEventTranslator）
+ * 生成的 StreamMessage 保持一致。</p>
  */
 @Slf4j
 @Component
@@ -30,7 +35,24 @@ public class CloudEventTranslator {
         StreamMessage handle(JsonNode event);
     }
 
+    /**
+     * 会话级事件类型集合——不需要注入 messageId / partId。
+     */
+    private static final Set<String> SESSION_LEVEL_TYPES = Set.of(
+            "session.status", "session.title", "session.error");
+
+    /**
+     * 消息级事件类型集合——需要 messageId/role 但不需要 partId/partSeq。
+     */
+    private static final Set<String> MESSAGE_LEVEL_TYPES = Set.of(
+            "step.start", "step.done");
+
     private final Map<String, CloudEventHandler> handlers = new HashMap<>();
+
+    /**
+     * 每个 sessionId 对应的会话状态，用于生成稳定的 messageId、partId、partSeq。
+     */
+    private final ConcurrentHashMap<String, CloudSessionState> sessionStates = new ConcurrentHashMap<>();
 
     @PostConstruct
     void init() {
@@ -80,12 +102,27 @@ public class CloudEventTranslator {
     }
 
     /**
-     * 翻译云端事件为 StreamMessage。
+     * 翻译云端事件为 StreamMessage（无 sessionId 版本，向后兼容）。
      *
      * @param event 云端事件 JSON
      * @return 翻译后的 StreamMessage，未知类型返回 null
      */
     public StreamMessage translate(JsonNode event) {
+        return translate(event, null);
+    }
+
+    /**
+     * 翻译云端事件为 StreamMessage，并根据 sessionId 自动注入消息标识字段。
+     *
+     * <p>Part 级事件（text/thinking/tool/question/permission/file/planning/searching 等）
+     * 自动注入 messageId、sourceMessageId、role、partId、partSeq。
+     * 会话级事件（session.status/title/error）不注入这些字段。</p>
+     *
+     * @param event     云端事件 JSON
+     * @param sessionId 会话 ID，用于生成稳定的消息标识
+     * @return 翻译后的 StreamMessage，未知类型返回 null
+     */
+    public StreamMessage translate(JsonNode event, String sessionId) {
         if (event == null) {
             return null;
         }
@@ -101,7 +138,59 @@ public class CloudEventTranslator {
             return null;
         }
 
-        return handler.handle(event);
+        StreamMessage msg = handler.handle(event);
+        if (msg == null) {
+            return null;
+        }
+
+        // 为 Part 级和 Message 级事件注入标识字段
+        if (sessionId != null && !sessionId.isEmpty() && !SESSION_LEVEL_TYPES.contains(eventType)) {
+            CloudSessionState state = sessionStates.computeIfAbsent(sessionId, CloudSessionState::new);
+
+            // messageId & sourceMessageId
+            String messageId = state.getMessageId();
+            if (msg.getMessageId() == null) {
+                msg.setMessageId(messageId);
+            }
+            if (msg.getSourceMessageId() == null) {
+                msg.setSourceMessageId(messageId);
+            }
+
+            // role
+            if (msg.getRole() == null) {
+                msg.setRole("assistant");
+            }
+
+            // partId & partSeq (仅 Part 级事件)
+            if (!MESSAGE_LEVEL_TYPES.contains(eventType)) {
+                if (msg.getPartId() == null) {
+                    msg.setPartId(state.resolvePartId(eventType));
+                }
+                if (msg.getPartSeq() == null) {
+                    msg.setPartSeq(state.nextPartSeq(eventType));
+                }
+            }
+        }
+
+        // session.status=idle 时清理会话状态
+        if ("session.status".equals(eventType) && sessionId != null) {
+            String status = event.path("sessionStatus").asText(null);
+            if ("idle".equals(status)) {
+                clearSession(sessionId);
+            }
+        }
+
+        return msg;
+    }
+
+    /**
+     * 清理指定会话的状态，释放资源。
+     * 应在会话结束（idle）时调用。
+     */
+    public void clearSession(String sessionId) {
+        if (sessionId != null) {
+            sessionStates.remove(sessionId);
+        }
     }
 
     // ==================== Text Handlers ====================
@@ -376,5 +465,55 @@ public class CloudEventTranslator {
                     .build());
         }
         return list.isEmpty() ? null : list;
+    }
+
+    // ==================== Session State ====================
+
+    /**
+     * 云端会话状态：跟踪单次 chat invoke 内的消息标识。
+     *
+     * <p>由于云端不像 OpenCode 那样有原始的 messageID/partID，
+     * 需要自动生成稳定的标识符供前端 StreamAssembler 使用。</p>
+     */
+    static class CloudSessionState {
+        private final String messageId;
+        private final ConcurrentHashMap<String, String> partIds = new ConcurrentHashMap<>();
+        private final ConcurrentHashMap<String, AtomicInteger> partSeqs = new ConcurrentHashMap<>();
+
+        CloudSessionState(String sessionId) {
+            this.messageId = "cloud-msg-" + sessionId;
+        }
+
+        String getMessageId() {
+            return messageId;
+        }
+
+        /**
+         * 根据事件类型解析 partId。同类型事件共享同一个 partId。
+         */
+        String resolvePartId(String eventType) {
+            return partIds.computeIfAbsent(eventType, t -> "cloud-part-" + normalizePartKey(t));
+        }
+
+        /**
+         * 获取指定事件类型的下一个 partSeq（从 0 开始递增）。
+         */
+        int nextPartSeq(String eventType) {
+            return partSeqs.computeIfAbsent(eventType, t -> new AtomicInteger(0))
+                    .getAndIncrement();
+        }
+
+        /**
+         * 将事件类型标准化为 partId 后缀（去掉 .delta/.done 区分，使 delta/done 共享 partId）。
+         */
+        private String normalizePartKey(String eventType) {
+            if (eventType.endsWith(".delta")) {
+                return eventType.substring(0, eventType.length() - 6);
+            }
+            if (eventType.endsWith(".done")) {
+                return eventType.substring(0, eventType.length() - 5);
+            }
+            return eventType;
+        }
     }
 }

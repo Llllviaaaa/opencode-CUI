@@ -82,12 +82,12 @@ class BusinessScopeStrategyTest {
         JsonNode event = objectMapper.createObjectNode().put("type", "text.delta");
         String sessionId = "session-123";
         StreamMessage expected = StreamMessage.builder().type("text.delta").build();
-        when(cloudEventTranslator.translate(event)).thenReturn(expected);
+        when(cloudEventTranslator.translate(event, sessionId)).thenReturn(expected);
 
         StreamMessage result = strategy.translateEvent(event, sessionId);
 
         assertSame(expected, result);
-        verify(cloudEventTranslator).translate(event);
+        verify(cloudEventTranslator).translate(event, sessionId);
     }
 
     @Test
