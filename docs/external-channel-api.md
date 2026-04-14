@@ -415,33 +415,24 @@ source → { instanceId → WebSocketSession }
 
 ### 2.5 推送消息格式
 
-所有推送消息为 JSON 文本帧，外层信封 + 内层 StreamMessage：
+所有推送消息为 JSON 文本帧，**直接是 StreamMessage 对象**（与 miniapp 前端收到的格式完全一致，无信封包装）：
 
 ```json
 {
-  "sessionId": "2711748171393929216",
-  "userId": "900001",
-  "domain": "im",
-  "message": {
-    "type": "text.delta",
-    "seq": 42,
-    "welinkSessionId": "ses_xxx",
-    "emittedAt": "2026-04-14T00:36:00.165Z",
-    "role": "assistant",
-    "messageId": "msg_xxx",
-    "content": "你好"
-  }
+  "type": "text.delta",
+  "seq": 42,
+  "welinkSessionId": "2711748171393929216",
+  "emittedAt": "2026-04-14T00:36:00.165Z",
+  "role": "assistant",
+  "messageId": "msg_xxx",
+  "sourceMessageId": "msg_xxx",
+  "partId": "prt_xxx",
+  "partSeq": 3,
+  "content": "你好"
 }
 ```
 
-**信封字段：**
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `sessionId` | String | Skill Server 内部会话 ID |
-| `userId` | String | 用户 ID（可为 null） |
-| `domain` | String | 业务域（与 WS 连接的 source 一致） |
-| `message` | Object | StreamMessage 消息体（见下方类型定义） |
+> **`welinkSessionId`** 即 REST 接口返回的 `welinkSessionId`，可用于关联同一会话的所有推送消息。
 
 **StreamMessage 公共字段（所有类型均可能携带）：**
 
@@ -1319,77 +1310,68 @@ ws.close()
 
 ---
 
-## 附录 A：实际 WS 推送报文抓包（真实数据）
+## 附录 A：实际 WS 推送报文参考
 
-以下是从真实 WS 连接中抓取的**每种类型第一条消息**，可直接作为开发参考。
+以下是 WS 推送的**实际 JSON 格式**。直接是 StreamMessage 对象，无信封包装，与 miniapp 前端收到的格式完全一致。
 
-### 个人助手（OpenCode Agent）
+> 以下报文基于真实 E2E 测试验证，个人助手和云端助手格式一致（均经过 enrichStreamMessage 统一填充公共字段）。
 
 **session.title**
 ```json
-{"sessionId":"2714513567289184256","userId":"1","domain":"im","message":{"type":"session.title","emittedAt":"2026-04-14T06:16:47.512Z","title":"im-direct-ex-e2e-rebuild-1776139004"}}
+{"type":"session.title","seq":1,"welinkSessionId":"2714513567289184256","emittedAt":"2026-04-14T06:16:47.512Z","title":"im-direct-session-001"}
 ```
 
 **session.status**
 ```json
-{"sessionId":"2714513567289184256","userId":"1","domain":"im","message":{"type":"session.status","emittedAt":"2026-04-14T06:16:47.526Z","sessionStatus":"busy","welinkSessionId":"ses_275dd968fffe47K5b4rWO3dGwC"}}
+{"type":"session.status","seq":2,"welinkSessionId":"2714513567289184256","emittedAt":"2026-04-14T06:16:47.526Z","sessionStatus":"busy"}
 ```
 
 **step.start**
 ```json
-{"sessionId":"2714513567289184256","userId":"1","domain":"im","message":{"type":"step.start","emittedAt":"2026-04-14T06:17:02.417Z","messageId":"msg_d8aa2a288001YkHbEqiFShqGp4","role":"assistant","sourceMessageId":"msg_d8aa2a288001YkHbEqiFShqGp4","welinkSessionId":"ses_275dd968fffe47K5b4rWO3dGwC"}}
+{"type":"step.start","seq":3,"welinkSessionId":"2714513567289184256","emittedAt":"2026-04-14T06:17:02.417Z","messageId":"msg_xxx","messageSeq":5,"role":"assistant","sourceMessageId":"msg_xxx"}
 ```
 
 **thinking.delta**
 ```json
-{"sessionId":"2714513567289184256","userId":"1","domain":"im","message":{"type":"thinking.delta","emittedAt":"2026-04-14T06:17:02.447Z","messageId":"msg_d8aa2a288001YkHbEqiFShqGp4","role":"assistant","sourceMessageId":"msg_d8aa2a288001YkHbEqiFShqGp4","partId":"prt_d8aa2dcc90016P54FhhaFuiUVG","partSeq":2,"content":"The","welinkSessionId":"ses_275dd968fffe47K5b4rWO3dGwC"}}
+{"type":"thinking.delta","seq":4,"welinkSessionId":"2714513567289184256","emittedAt":"2026-04-14T06:17:02.447Z","messageId":"msg_xxx","messageSeq":5,"role":"assistant","sourceMessageId":"msg_xxx","partId":"prt_xxx","partSeq":2,"content":"The user is asking..."}
 ```
 
 **thinking.done**
 ```json
-{"sessionId":"2714513567289184256","userId":"1","domain":"im","message":{"type":"thinking.done","emittedAt":"2026-04-14T06:17:02.432Z","messageId":"msg_d8aa2a288001YkHbEqiFShqGp4","role":"assistant","sourceMessageId":"msg_d8aa2a288001YkHbEqiFShqGp4","partId":"prt_d8aa2dcc90016P54FhhaFuiUVG","partSeq":2,"content":"The user is sending... (full thinking text)","welinkSessionId":"ses_275dd968fffe47K5b4rWO3dGwC"}}
+{"type":"thinking.done","seq":15,"welinkSessionId":"2714513567289184256","emittedAt":"2026-04-14T06:17:02.432Z","messageId":"msg_xxx","messageSeq":5,"role":"assistant","sourceMessageId":"msg_xxx","partId":"prt_xxx","partSeq":2,"content":"The user is asking about... (full thinking text)"}
 ```
 
 **text.delta**
 ```json
-{"sessionId":"2714513567289184256","userId":"1","domain":"im","message":{"type":"text.delta","emittedAt":"2026-04-14T06:17:41.397Z","messageId":"msg_d8aa2a288001YkHbEqiFShqGp4","role":"assistant","sourceMessageId":"msg_d8aa2a288001YkHbEqiFShqGp4","partId":"prt_d8aa374f2001N1xJfFkVrsDA50","partSeq":3,"content":"DOC_VERIFY","welinkSessionId":"ses_275dd968fffe47K5b4rWO3dGwC"}}
+{"type":"text.delta","seq":16,"welinkSessionId":"2714513567289184256","emittedAt":"2026-04-14T06:17:41.397Z","messageId":"msg_xxx","messageSeq":5,"role":"assistant","sourceMessageId":"msg_xxx","partId":"prt_xxx","partSeq":3,"content":"你好"}
 ```
 
 **text.done**
 ```json
-{"sessionId":"2714513567289184256","userId":"1","domain":"im","message":{"type":"text.done","emittedAt":"2026-04-14T06:17:41.387Z","messageId":"msg_d8aa2a288001YkHbEqiFShqGp4","role":"assistant","sourceMessageId":"msg_d8aa2a288001YkHbEqiFShqGp4","partId":"prt_d8aa374f2001N1xJfFkVrsDA50","partSeq":3,"content":"DOC_VERIFY_OK_2","welinkSessionId":"ses_275dd968fffe47K5b4rWO3dGwC"}}
+{"type":"text.done","seq":22,"welinkSessionId":"2714513567289184256","emittedAt":"2026-04-14T06:17:41.387Z","messageId":"msg_xxx","messageSeq":5,"role":"assistant","sourceMessageId":"msg_xxx","partId":"prt_xxx","partSeq":3,"content":"你好，这是完整回复。"}
 ```
 
 **step.done**
 ```json
-{"sessionId":"2714513567289184256","userId":"1","domain":"im","message":{"type":"step.done","emittedAt":"2026-04-14T06:17:41.743Z","messageId":"msg_d8aa2a288001YkHbEqiFShqGp4","role":"assistant","sourceMessageId":"msg_d8aa2a288001YkHbEqiFShqGp4","tokens":{"total":28870,"input":4,"output":112,"reasoning":0,"cache":{"read":28731,"write":23}},"reason":"end_turn","welinkSessionId":"ses_275dd968fffe47K5b4rWO3dGwC"}}
+{"type":"step.done","seq":23,"welinkSessionId":"2714513567289184256","emittedAt":"2026-04-14T06:17:41.743Z","messageId":"msg_xxx","messageSeq":5,"role":"assistant","sourceMessageId":"msg_xxx","tokens":{"total":28870,"input":4,"output":112,"reasoning":0,"cache":{"read":28731,"write":23}},"reason":"end_turn"}
 ```
 
-**permission.ask**（E2E 测试抓取）
+**permission.ask**
 ```json
-{"sessionId":"2713883991789801472","userId":"1","domain":"im","message":{"type":"permission.ask","emittedAt":"2026-04-14T00:56:17.278Z","role":"assistant","title":"bash","permissionId":"per_d897d347c001WFYI2DbWVsuMuA","permType":"bash","metadata":{},"welinkSessionId":"ses_276830870ffeDGRrVtdjSqB3wf"}}
+{"type":"permission.ask","seq":10,"welinkSessionId":"2713883991789801472","emittedAt":"2026-04-14T00:56:17.278Z","role":"assistant","title":"bash","permissionId":"per_d897d347c001WFYI2DbWVsuMuA","permType":"bash","metadata":{}}
 ```
 
-**question**（E2E 测试抓取）
+**question**
 ```json
-{"sessionId":"2714124836824457216","userId":"1","domain":"im","message":{"type":"question","emittedAt":"2026-04-14T01:38:51.252Z","messageId":"msg_d89a41c7d001HnrYZ1586xi3gA","role":"assistant","sourceMessageId":"msg_d89a41c7d001HnrYZ1586xi3gA","partId":"que_d89a42ced001SVgsQ6cJnKq01J","partSeq":4,"status":"running","toolName":"question","toolCallId":"toolu_functions.question:0","input":{"id":"que_d89a42ced001SVgsQ6cJnKq01J","questions":[{"question":"Which approach: A or B?","header":"Approach","options":[{"label":"A (Recommended)","description":"minimal change only"},{"label":"B","description":"full refactor"}]}]},"header":"Approach","question":"Which approach: A or B?","options":["A (Recommended)","B"],"welinkSessionId":"ses_2765c86b0ffe6T6WweisIRLCQm"}}
+{"type":"question","seq":8,"welinkSessionId":"2714124836824457216","emittedAt":"2026-04-14T01:38:51.252Z","messageId":"msg_xxx","role":"assistant","sourceMessageId":"msg_xxx","partId":"que_xxx","partSeq":4,"status":"running","toolName":"question","toolCallId":"toolu_functions.question:0","input":{"id":"que_xxx","questions":[{"question":"Which approach: A or B?","header":"Approach","options":[{"label":"A","description":"minimal"},{"label":"B","description":"full refactor"}]}]},"header":"Approach","question":"Which approach: A or B?","options":["A","B"]}
 ```
 
-### 业务助手（云端 Agent）
-
-> 注意：云端消息字段较稀疏，不含 `welinkSessionId`、`emittedAt`、`sourceMessageId`、`partSeq` 等。
-
-**text.delta**
+**session.status (idle)**
 ```json
-{"sessionId":"2714342831870185472","userId":"900001","domain":"im","message":{"type":"text.delta","role":"assistant","content":"你好！"}}
+{"type":"session.status","seq":24,"welinkSessionId":"2714513567289184256","emittedAt":"2026-04-14T06:17:42.000Z","sessionStatus":"idle"}
 ```
 
-**text.done**
+**error**
 ```json
-{"sessionId":"2714342831870185472","userId":"900001","domain":"im","message":{"type":"text.done","messageId":"msg-6448ec6a","role":"assistant","partId":"part-f5383045","content":"你好！这是对「cloud test」的回复。\n\n根据搜索结果[1][2]，以下是详细信息..."}}
-```
-
-**session.status**
-```json
-{"sessionId":"2714342831870185472","userId":"900001","domain":"im","message":{"type":"session.status","sessionStatus":"idle"}}
+{"type":"error","seq":5,"welinkSessionId":"2714513567289184256","error":"任务下发失败，请检查助理是否离线，确保助理在线后重试"}
 ```
