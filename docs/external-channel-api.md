@@ -245,15 +245,28 @@ External Channel 提供两个接口：
 
 ```json
 {
-  "code": 0
+  "code": 0,
+  "data": {
+    "businessSessionId": "dm-001",
+    "welinkSessionId": "2711748171393929216"
+  }
 }
 ```
 
-> `code=0` 表示消息已接收，不代表 AI 已回复。AI 回复通过 WebSocket 异步推送。
+| data 字段 | 类型 | 说明 |
+|-----------|------|------|
+| `businessSessionId` | String | 业务侧会话 ID（原样返回请求中的 sessionId） |
+| `welinkSessionId` | String | Skill Server 内部会话 ID，**与 WS 推送消息信封中的 `sessionId` 一致**，用于关联推送消息 |
+
+> - `code=0` 表示消息已接收，不代表 AI 已回复。AI 回复通过 WebSocket 异步推送。
+> - 首次 chat 时 session 异步创建，`welinkSessionId` 可能为 `null`。后续 WS 推送消息中的 `sessionId` 就是该值。
+> - 第二次及以后的 chat，`welinkSessionId` 一定有值。
 
 #### 错误响应
 
 **HTTP 400（信封/Payload 校验失败）**
+
+校验阶段尚未进入 session 处理，不返回 data。
 
 ```json
 {
@@ -293,17 +306,23 @@ External Channel 提供两个接口：
 
 **HTTP 200 + 业务错误码**
 
+业务错误也会尽量返回 session 信息（如果 session 已存在）。
+
 ```json
 {
   "code": 404,
-  "errormsg": "Invalid assistant account"
+  "errormsg": "Session not found or not ready",
+  "data": {
+    "businessSessionId": "dm-001",
+    "welinkSessionId": "2711748171393929216"
+  }
 }
 ```
 
-| code | errormsg | 原因 |
-|------|----------|------|
-| 404 | `Invalid assistant account` | assistantAccount 解析失败（无对应 AK） |
-| 404 | `Session not found or not ready` | question_reply/permission_reply 时 Session 不存在或 toolSessionId 未就绪 |
+| code | errormsg | 原因 | data |
+|------|----------|------|------|
+| 404 | `Invalid assistant account` | assistantAccount 解析失败 | 无 data |
+| 404 | `Session not found or not ready` | question_reply/permission_reply 时 Session 不存在或未就绪 | 有 businessSessionId，welinkSessionId 可能有值 |
 
 ---
 
