@@ -70,7 +70,23 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
     public void afterConnectionEstablished(WebSocketSession session) {
         String source = (String) session.getAttributes().get(SOURCE_ATTR);
         String instanceId = (String) session.getAttributes().get(INSTANCE_ID_ATTR);
-        connectionPool.computeIfAbsent(source, k -> new ConcurrentHashMap<>()).put(instanceId, session);
+
+        // 同一 source+instanceId 重连时，先关闭旧 session 并清理 lastActivity
+        Map<String, WebSocketSession> instances = connectionPool.computeIfAbsent(source, k -> new ConcurrentHashMap<>());
+        WebSocketSession oldSession = instances.put(instanceId, session);
+        if (oldSession != null && oldSession != session) {
+            lastActivity.remove(oldSession.getId());
+            if (oldSession.isOpen()) {
+                try {
+                    oldSession.close(CloseStatus.GOING_AWAY);
+                } catch (Exception e) {
+                    log.debug("Failed to close replaced session: {}", e.getMessage());
+                }
+            }
+            log.info("Replaced old WS session: source={}, instanceId={}, oldSessionId={}, newSessionId={}",
+                    source, instanceId, oldSession.getId(), session.getId());
+        }
+
         lastActivity.put(session.getId(), Instant.now());
 
         String channel = CHANNEL_PREFIX + source;
@@ -100,14 +116,16 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
         String instanceId = (String) session.getAttributes().get(INSTANCE_ID_ATTR);
         Map<String, WebSocketSession> instances = connectionPool.get(source);
         if (instances != null) {
-            instances.remove(instanceId);
+            // 只移除当前关闭的 session，避免旧 session 的 close 事件误删已替换的新 session
+            instances.remove(instanceId, session);
             if (instances.isEmpty()) {
                 connectionPool.remove(source);
                 redisMessageBroker.unsubscribeFromChannel(CHANNEL_PREFIX + source);
             }
         }
         lastActivity.remove(session.getId());
-        log.info("External WS disconnected: source={}, instanceId={}, status={}", source, instanceId, status);
+        log.info("External WS disconnected: source={}, instanceId={}, sessionId={}, status={}",
+                source, instanceId, session.getId(), status);
     }
 
     @Override
