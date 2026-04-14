@@ -448,22 +448,24 @@ Session 级事件（session.status/session.title/session.error）不需要 messa
 可多次返回，每次返回增量文本。文本内容可能包含自定义 Markdown 协议（见第 8 章）。
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"迁","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"移","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"价","role":"assistant"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"迁","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"移","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"价","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
 ```
 
 | properties 字段 | 类型 | 必填 | 说明 |
 |----------------|------|------|------|
 | content | String | ✅ | 增量文本内容 |
 | role | String | ✅ | 固定 `"assistant"` |
+| messageId | String | | 消息 ID |
+| partId | String | | 片段 ID |
 
 #### 5.3.2 `text.done` —— 文本片段完成
 
 一个文本片段输出完成时发送，携带该片段的完整内容。可选——如果只用 `text.delta`，SS 会自行拼接。
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.done","properties":{"content":"完整的回复文本内容...","role":"assistant","messageId":"msg-001","partId":"part-001"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.done","properties":{"content":"完整的回复文本内容...","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
 ```
 
 | properties 字段 | 类型 | 必填 | 说明 |
@@ -478,21 +480,23 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.done",
 可多次返回，每次返回增量思考内容。
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.delta","properties":{"content":"嗯","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.delta","properties":{"content":"，用户在问JDK版本对比","role":"assistant"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.delta","properties":{"content":"嗯","role":"assistant","messageId":"msg-001","partId":"prt-think-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.delta","properties":{"content":"，用户在问JDK版本对比","role":"assistant","messageId":"msg-001","partId":"prt-think-01"}}}
 ```
 
 | properties 字段 | 类型 | 必填 | 说明 |
 |----------------|------|------|------|
 | content | String | ✅ | 增量思考内容 |
 | role | String | ✅ | 固定 `"assistant"` |
+| messageId | String | | 消息 ID |
+| partId | String | | 片段 ID |
 
 #### 5.3.4 `thinking.done` —— 深度思考完成
 
 思考过程结束时发送，携带完整思考内容。可选。
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.done","properties":{"content":"用户在问JDK8和21的区别，需要从语言特性、性能、生态等维度对比","role":"assistant","messageId":"msg-001","partId":"part-002"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.done","properties":{"content":"用户在问JDK8和21的区别，需要从语言特性、性能、生态等维度对比","role":"assistant","messageId":"msg-001","partId":"prt-think-01"}}}
 ```
 
 | properties 字段 | 类型 | 必填 | 说明 |
@@ -511,11 +515,11 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.do
 云端 Agent 调用工具时发送，展示工具执行过程。
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"tool.update","properties":{"toolName":"web_search","toolCallId":"call-001","status":"running","input":{"query":"JDK21 new features"},"output":null,"error":null,"title":"搜索 JDK21 新特性"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"tool.update","properties":{"toolName":"web_search","toolCallId":"call-001","status":"running","input":{"query":"JDK21 new features"},"output":null,"error":null,"title":"搜索 JDK21 新特性","messageId":"msg-001","partId":"prt-tool-01"}}}
 ```
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"tool.update","properties":{"toolName":"web_search","toolCallId":"call-001","status":"completed","input":{"query":"JDK21 new features"},"output":"JDK21 引入了虚拟线程...","error":null,"title":"搜索 JDK21 新特性"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"tool.update","properties":{"toolName":"web_search","toolCallId":"call-001","status":"completed","input":{"query":"JDK21 new features"},"output":"JDK21 引入了虚拟线程...","error":null,"title":"搜索 JDK21 新特性","messageId":"msg-001","partId":"prt-tool-01"}}}
 ```
 
 | properties 字段 | 类型 | 必填 | 说明 |
@@ -527,6 +531,8 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"tool.update
 | output | String | | 工具输出结果（completed 时） |
 | error | String | | 错误信息（error 时） |
 | title | String | | 工具调用的显示标题 |
+| messageId | String | | 消息 ID |
+| partId | String | | 片段 ID |
 
 #### 5.4.2 `step.start` —— 执行步骤开始
 
@@ -567,13 +573,14 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"step.done",
 云端 Agent 需要用户回答问题时发送。用户回答后，SS 通过新的 invoke（action=chat）将答案传回。
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"question","properties":{"toolCallId":"call-002","messageId":"msg-001","header":"请确认操作","question":"您想查询哪个部门的信息？","options":["IT部","研发部","市场部"]}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"question","properties":{"toolCallId":"call-002","messageId":"msg-001","partId":"prt-q-01","header":"请确认操作","question":"您想查询哪个部门的信息？","options":["IT部","研发部","市场部"]}}}
 ```
 
 | properties 字段 | 类型 | 必填 | 说明 |
 |----------------|------|------|------|
 | toolCallId | String | ✅ | 工具调用 ID（用户回答时需回传） |
 | messageId | String | | 消息 ID |
+| partId | String | | 片段 ID |
 | header | String | | 问题标题 |
 | question | String | ✅ | 问题内容 |
 | options | List\<String\> | | 可选项列表（无则为开放式问答） |
@@ -583,7 +590,7 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"question","
 云端 Agent 需要用户授权某项操作时发送。
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"permission.ask","properties":{"permissionId":"perm-001","permType":"file_access","title":"请求访问文件","metadata":{"path":"/data/report.xlsx"}}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"permission.ask","properties":{"permissionId":"perm-001","permType":"file_access","title":"请求访问文件","metadata":{"path":"/data/report.xlsx"},"messageId":"msg-001","partId":"prt-perm-01"}}}
 ```
 
 | properties 字段 | 类型 | 必填 | 说明 |
@@ -592,13 +599,15 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"permission.
 | permType | String | ✅ | 权限类型 |
 | title | String | ✅ | 权限描述 |
 | metadata | Object | | 权限相关的额外信息 |
+| messageId | String | | 消息 ID |
+| partId | String | | 片段 ID |
 
 #### 5.5.3 `permission.reply` —— 权限应答结果
 
 云端返回权限处理结果（通常在用户授权后由云端确认）。
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"permission.reply","properties":{"permissionId":"perm-001","permType":"file_access","response":"once","status":"completed"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"permission.reply","properties":{"permissionId":"perm-001","permType":"file_access","response":"once","status":"completed","messageId":"msg-001","partId":"prt-perm-01"}}}
 ```
 
 | properties 字段 | 类型 | 必填 | 说明 |
@@ -607,6 +616,8 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"permission.
 | permType | String | ✅ | 权限类型 |
 | response | String | ✅ | `"once"` / `"always"` / `"reject"` |
 | status | String | | 状态 |
+| messageId | String | | 消息 ID |
+| partId | String | | 片段 ID |
 
 ---
 
@@ -668,7 +679,7 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"session.err
 云端 Agent 输出文件时发送。
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"file","properties":{"fileName":"report.xlsx","fileUrl":"https://cdn.example.com/files/report.xlsx","fileMime":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"file","properties":{"fileName":"report.xlsx","fileUrl":"https://cdn.example.com/files/report.xlsx","fileMime":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","messageId":"msg-001","partId":"prt-file-01"}}}
 ```
 
 | properties 字段 | 类型 | 必填 | 说明 |
@@ -676,6 +687,8 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"file","prop
 | fileName | String | ✅ | 文件名 |
 | fileUrl | String | ✅ | 文件下载地址 |
 | fileMime | String | | MIME 类型 |
+| messageId | String | | 消息 ID |
+| partId | String | | 片段 ID |
 
 ---
 
@@ -688,49 +701,57 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"file","prop
 可多次返回，每次返回增量文本。
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"planning.delta","properties":{"content":"用户询问JDK8和JDK21的区别，需"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"planning.delta","properties":{"content":"要分别搜索两者的特性并进行对比"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"planning.delta","properties":{"content":"用户询问JDK8和JDK21的区别，需","messageId":"msg-001","partId":"prt-plan-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"planning.delta","properties":{"content":"要分别搜索两者的特性并进行对比","messageId":"msg-001","partId":"prt-plan-01"}}}
 ```
 
 | properties 字段 | 类型 | 必填 | 说明 |
 |----------------|------|------|------|
 | content | String | ✅ | 增量规划内容 |
+| messageId | String | | 消息 ID |
+| partId | String | | 片段 ID |
 
 #### 5.8.2 `planning.done` —— 规划内容完成
 
 规划阶段结束时发送，携带完整规划内容。可选——如果只用 `planning.delta`，SS 会自行拼接。
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"planning.done","properties":{"content":"用户询问JDK8和JDK21的区别，需要分别搜索两者的特性并进行对比"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"planning.done","properties":{"content":"用户询问JDK8和JDK21的区别，需要分别搜索两者的特性并进行对比","messageId":"msg-001","partId":"prt-plan-01"}}}
 ```
 
 | properties 字段 | 类型 | 必填 | 说明 |
 |----------------|------|------|------|
 | content | String | ✅ | 完整规划内容 |
+| messageId | String | | 消息 ID |
+| partId | String | | 片段 ID |
 
 #### 5.8.3 `searching` —— 搜索中
 
 一次性返回完整搜索关键词列表。
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"searching","properties":{"keywords":["JDK8","JDK21"]}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"searching","properties":{"keywords":["JDK8","JDK21"],"messageId":"msg-001","partId":"prt-search-01"}}}
 ```
 
 | properties 字段 | 类型 | 必填 | 说明 |
 |----------------|------|------|------|
 | keywords | List\<String\> | ✅ | 搜索关键词列表（可以是空数组） |
+| messageId | String | | 消息 ID |
+| partId | String | | 片段 ID |
 
 #### 5.8.4 `search_result` —— 搜索结果
 
 一次性返回完整搜索结果列表。支持多条结果，按 `index` 字段升序排列。可多次返回（多轮搜索场景），每次返回一批结果。
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"search_result","properties":{"results":[{"index":"1","title":"java学习系列15","source":"CSDN博客"},{"index":"2","title":"JAVA8新特性","source":"菜鸟教程"},{"index":"3","title":"JDK21发布说明","source":"Oracle官网"}]}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"search_result","properties":{"results":[{"index":"1","title":"java学习系列15","source":"CSDN博客"},{"index":"2","title":"JAVA8新特性","source":"菜鸟教程"},{"index":"3","title":"JDK21发布说明","source":"Oracle官网"}],"messageId":"msg-001","partId":"prt-sr-01"}}}
 ```
 
 | properties 字段 | 类型 | 必填 | 说明 |
 |----------------|------|------|------|
 | results | List\<SearchResult\> | ✅ | 搜索结果列表，按 index 升序排列（可以是空数组） |
+| messageId | String | | 消息 ID |
+| partId | String | | 片段 ID |
 
 **SearchResult 对象**：
 
@@ -745,12 +766,14 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"search_resu
 一次性返回完整引用列表。支持多条引用，按 `index` 字段升序排列。index 与 `search_result` 中的 index 对应，用于文本中的角标引用（如 `[1]`）。
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"reference","properties":{"references":[{"index":"1","title":"java学习系列15","url":"https://blog.csdn.net/xxx","source":"CSDN博客","content":"JDK8是JAVA开发工具包的一个版本..."},{"index":"2","title":"Java8新特性","url":"https://www.runoob.com/java/java8-new-features.html","source":"菜鸟教程","content":"Java8是java语言开发的一个主要版本..."},{"index":"3","title":"JDK21发布说明","url":"https://openjdk.org/projects/jdk/21/","source":"Oracle官网","content":"JDK 21 is the open-source reference implementation..."}]}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"reference","properties":{"references":[{"index":"1","title":"java学习系列15","url":"https://blog.csdn.net/xxx","source":"CSDN博客","content":"JDK8是JAVA开发工具包的一个版本..."},{"index":"2","title":"Java8新特性","url":"https://www.runoob.com/java/java8-new-features.html","source":"菜鸟教程","content":"Java8是java语言开发的一个主要版本..."},{"index":"3","title":"JDK21发布说明","url":"https://openjdk.org/projects/jdk/21/","source":"Oracle官网","content":"JDK 21 is the open-source reference implementation..."}],"messageId":"msg-001","partId":"prt-ref-01"}}}
 ```
 
 | properties 字段 | 类型 | 必填 | 说明 |
 |----------------|------|------|------|
 | references | List\<Reference\> | ✅ | 引用列表，按 index 升序排列 |
+| messageId | String | | 消息 ID |
+| partId | String | | 片段 ID |
 
 **Reference 对象**：
 
@@ -767,12 +790,14 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"reference",
 一次性返回追问建议列表。
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"ask_more","properties":{"questions":["Lambda表达式可以用于哪些典型场景？","JDK8的Lambda表达式如何使用"]}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"ask_more","properties":{"questions":["Lambda表达式可以用于哪些典型场景？","JDK8的Lambda表达式如何使用"],"messageId":"msg-001","partId":"prt-askmore-01"}}}
 ```
 
 | properties 字段 | 类型 | 必填 | 说明 |
 |----------------|------|------|------|
 | questions | List\<String\> | ✅ | 追问问题列表 |
+| messageId | String | | 消息 ID |
+| partId | String | | 片段 ID |
 
 ---
 
