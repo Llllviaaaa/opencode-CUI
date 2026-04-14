@@ -952,92 +952,149 @@ WS 重连时推送的当前正在进行的流式内容。
 
 ---
 
-### K. 云端扩展类型（业务助手专属）
+### K. 业务助手（云端 Agent）完整报文参考
 
-以下类型仅在业务助手（走云端 SSE）场景下出现：
+业务助手的所有消息都经过 CloudEventTranslator 翻译，字段比个人助手稀疏。以下列出**业务助手场景下每种消息类型的实际 JSON 报文**（基于 CloudEventTranslator 源码逐行推导）。
 
-#### type = `planning.delta`（规划过程片段）
+> 外层信封始终为 `{"sessionId":"...","userId":"...","domain":"im","message":{...}}`，以下只列出 message 部分。
+
+#### 文本
 
 ```json
-{
-  "type": "planning.delta",
-  "content": "分析用户问题，准备搜索相关资料"
-}
+// text.delta — 仅 type + content + role
+{"type":"text.delta","content":"你好","role":"assistant"}
+
+// text.done — 多了 messageId 和 partId
+{"type":"text.done","content":"你好，完整回复","role":"assistant","messageId":"msg-xxx","partId":"part-xxx"}
 ```
 
-#### type = `planning.done`（规划完成）
+#### 思考
 
 ```json
-{
-  "type": "planning.done",
-  "content": "分析用户问题，准备搜索相关资料并整理回答"
-}
+// thinking.delta
+{"type":"thinking.delta","content":"让我想想...","role":"assistant"}
+
+// thinking.done
+{"type":"thinking.done","content":"完整思考内容","role":"assistant","messageId":"msg-xxx","partId":"part-xxx"}
 ```
 
-#### type = `searching`（正在搜索）
+#### 工具调用
 
 ```json
-{
-  "type": "searching",
-  "keywords": ["测试关键词1", "测试关键词2"]
-}
-```
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `keywords` | String[] | 搜索关键词列表 |
-
-#### type = `search_result`（搜索结果）
-
-```json
-{
-  "type": "search_result",
-  "searchResults": [
-    {"index": "1", "title": "文章标题", "source": "来源名称"},
-    {"index": "2", "title": "文章标题2", "source": "来源2"}
-  ]
-}
+// tool.update — @JsonUnwrapped 平铺 ToolInfo 字段
+{"type":"tool.update","toolName":"bash","toolCallId":"call-xxx","input":"echo hello","output":"hello\n","status":"completed","title":"执行命令","error":null}
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `searchResults` | Array | 搜索结果列表 |
-| `searchResults[].index` | String | 序号 |
-| `searchResults[].title` | String | 标题 |
-| `searchResults[].source` | String | 来源 |
+| `toolName` | String | 工具名 |
+| `toolCallId` | String | 调用 ID |
+| `input` | String | 输入（云端为字符串，个人助手为 Object） |
+| `output` | String | 输出 |
+| `status` | String | running / completed / failed |
+| `title` | String | 描述 |
+| `error` | String | 错误信息 |
 
-#### type = `reference`（引用来源）
+#### 文件
 
 ```json
-{
-  "type": "reference",
-  "references": [
-    {"index": "1", "title": "文章标题", "source": "来源", "url": "https://...", "content": "摘要内容"}
-  ]
-}
+// file — @JsonUnwrapped 平铺 FileInfo 字段
+{"type":"file","fileName":"report.pdf","fileUrl":"https://...","fileMime":"application/pdf"}
+```
+
+#### 步骤
+
+```json
+// step.start
+{"type":"step.start","messageId":"msg-xxx","role":"assistant"}
+
+// step.done — @JsonUnwrapped 平铺 UsageInfo 字段
+{"type":"step.done","tokens":{"input":100,"output":50},"cost":0.01,"reason":"end_turn"}
+```
+
+> 注意：云端的 `tokens` 结构可能与个人助手不同，字段名取决于云端返回。
+
+#### 问答
+
+```json
+// question — @JsonUnwrapped 平铺 ToolInfo + QuestionInfo
+{"type":"question","toolCallId":"call-xxx","status":"running","header":"选择方案","question":"选 A 还是 B？","options":["A","B"]}
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `references` | Array | 引用列表 |
-| `references[].index` | String | 序号 |
-| `references[].title` | String | 标题 |
-| `references[].source` | String | 来源 |
-| `references[].url` | String | 链接 |
-| `references[].content` | String | 内容摘要 |
+| `toolCallId` | String | **回复时必须使用** |
+| `status` | String | running / completed |
+| `header` | String | 问题标题 |
+| `question` | String | 问题文本 |
+| `options` | String[] | 选项（可为 null） |
 
-#### type = `ask_more`（追问建议）
+#### 权限
 
 ```json
-{
-  "type": "ask_more",
-  "askMoreQuestions": ["还有什么想了解的？", "需要更详细的说明吗？"]
-}
+// permission.ask — @JsonUnwrapped 平铺 PermissionInfo
+{"type":"permission.ask","permissionId":"per-xxx","permType":"bash","metadata":{},"title":"bash"}
+
+// permission.reply
+{"type":"permission.reply","permissionId":"per-xxx","permType":"bash","response":"once"}
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `askMoreQuestions` | String[] | 建议的追问列表 |
+| `permissionId` | String | **回复时必须使用** |
+| `permType` | String | 工具类型 |
+| `title` | String | 工具名 |
+| `metadata` | Object | 详细参数 |
+| `response` | String | once / always / reject（仅 reply） |
+
+#### 会话状态
+
+```json
+// session.status
+{"type":"session.status","sessionStatus":"idle"}
+
+// session.title
+{"type":"session.title","title":"天气查询对话"}
+
+// session.error
+{"type":"session.error","error":"上下文溢出"}
+```
+
+#### 云端专属类型
+
+```json
+// planning.delta
+{"type":"planning.delta","content":"分析用户问题，准备搜索资料"}
+
+// planning.done
+{"type":"planning.done","content":"分析完毕，准备整理回答"}
+
+// searching
+{"type":"searching","keywords":["关键词1","关键词2"]}
+
+// search_result
+{"type":"search_result","searchResults":[
+  {"index":"1","title":"文章标题","source":"来源"},
+  {"index":"2","title":"文章标题2","source":"来源2"}
+]}
+
+// reference
+{"type":"reference","references":[
+  {"index":"1","title":"文章标题","source":"来源","url":"https://example.com","content":"摘要"}
+]}
+
+// ask_more
+{"type":"ask_more","askMoreQuestions":["还想了解什么？","需要更详细吗？"]}
+```
+
+| type | 字段 | 类型 | 说明 |
+|------|------|------|------|
+| `planning.delta` | `content` | String | 规划内容片段 |
+| `planning.done` | `content` | String | 完整规划内容 |
+| `searching` | `keywords` | String[] | 搜索关键词 |
+| `search_result` | `searchResults` | Array | `[{index, title, source}]` |
+| `reference` | `references` | Array | `[{index, title, source, url, content}]` |
+| `ask_more` | `askMoreQuestions` | String[] | 追问建议 |
 
 ---
 
