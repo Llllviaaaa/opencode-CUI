@@ -441,15 +441,15 @@ source → { instanceId → WebSocketSession }
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `type` | String | **必有**。消息类型，见下方所有类型定义 |
-| `seq` | Long | 传输序号（全局递增，用于排序和去重） |
-| `welinkSessionId` | String | 会话标识 |
+| `seq` | Long | **传输序号**（每条 WS 推送递增，用于客户端排序和去重） |
+| `welinkSessionId` | String | 会话标识（= REST 返回的 welinkSessionId） |
 | `emittedAt` | String | 服务端发送时间（ISO-8601） |
 | `role` | String | 角色：`assistant` / `user` |
-| `messageId` | String | 消息 ID（同一轮回复共享） |
-| `messageSeq` | Integer | 消息序号 |
-| `sourceMessageId` | String | 源消息 ID |
-| `partId` | String | 消息部分 ID |
-| `partSeq` | Integer | 部分序号 |
+| `messageId` | String | 消息 ID（同一轮回复的所有事件共享，如 thinking + text + step 属于同一个 messageId） |
+| `messageSeq` | Integer | **消息在会话中的序号**（第 1 条消息=1，第 2 条=2...同一轮回复共享相同值） |
+| `sourceMessageId` | String | 源消息 ID（通常与 messageId 相同） |
+| `partId` | String | 部分 ID（同一 messageId 下不同部分各有不同 partId，如 thinking 部分和 text 部分） |
+| `partSeq` | Integer | 部分序号（同一 messageId 下的排序：thinking=1, text=2, tool=3...） |
 | `subagentSessionId` | String | 子 Agent 会话 ID（多 Agent 场景） |
 | `subagentName` | String | 子 Agent 名称 |
 
