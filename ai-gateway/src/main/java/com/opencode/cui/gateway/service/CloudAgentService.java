@@ -8,6 +8,8 @@ import com.opencode.cui.gateway.service.cloud.CloudProtocolClient;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 /**
@@ -71,7 +73,11 @@ public class CloudAgentService {
                 .traceId(invokeMessage.getTraceId())
                 .build();
 
-        // 3. 连接云端服务
+        // 3. 兜底 messageId/partId（每次 SSE 连接生成一份，云端没传时补上）
+        String fallbackMessageId = "cloud-msg-" + UUID.randomUUID().toString().replace("-", "");
+        ConcurrentHashMap<String, String> fallbackPartIds = new ConcurrentHashMap<>();
+
+        // 4. 连接云端服务
         cloudProtocolClient.connect(routeInfo.getProtocol(), context,
                 event -> {
                     // 注入路由上下文
@@ -82,6 +88,34 @@ public class CloudAgentService {
                     if (event.getToolSessionId() == null) {
                         event.setToolSessionId(toolSessionId);
                     }
+
+                    // 兜底：云端未传 messageId/partId 时 GW 自动补充
+                    JsonNode eventNode = event.getPayload() != null ? event.getPayload().path("event") : null;
+                    if (eventNode == null) eventNode = event.getPayload();
+                    if (eventNode != null) {
+                        String eventType = eventNode.path("type").asText("");
+                        JsonNode props = eventNode.path("properties");
+                        if (props != null && !props.isMissingNode()) {
+                            // messageId 兜底
+                            if (!props.has("messageId") || props.path("messageId").isNull()
+                                    || props.path("messageId").asText("").isBlank()) {
+                                ((com.fasterxml.jackson.databind.node.ObjectNode) props)
+                                        .put("messageId", fallbackMessageId);
+                                log.debug("[CLOUD_AGENT] Injected fallback messageId for type={}", eventType);
+                            }
+                            // partId 兜底（按 event type 归一化）
+                            if (!props.has("partId") || props.path("partId").isNull()
+                                    || props.path("partId").asText("").isBlank()) {
+                                String normalizedType = normalizeEventType(eventType);
+                                String fbPartId = fallbackPartIds.computeIfAbsent(normalizedType,
+                                        t -> "cloud-part-" + t + "-" + UUID.randomUUID().toString().substring(0, 8));
+                                ((com.fasterxml.jackson.databind.node.ObjectNode) props)
+                                        .put("partId", fbPartId);
+                                log.debug("[CLOUD_AGENT] Injected fallback partId for type={}", eventType);
+                            }
+                        }
+                    }
+
                     onRelay.accept(event);
                 },
                 error -> {
@@ -91,6 +125,16 @@ public class CloudAgentService {
                     onRelay.accept(errorMsg);
                 }
         );
+    }
+
+    /**
+     * 归一化事件类型（去掉 .delta/.done 后缀），使同类型事件共享 partId。
+     */
+    private static String normalizeEventType(String eventType) {
+        if (eventType == null) return "unknown";
+        if (eventType.endsWith(".delta")) return eventType.substring(0, eventType.length() - 6);
+        if (eventType.endsWith(".done")) return eventType.substring(0, eventType.length() - 5);
+        return eventType;
     }
 
     /**

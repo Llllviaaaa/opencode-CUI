@@ -47,6 +47,14 @@ public class CloudEventTranslator {
 
     private final Map<String, CloudEventHandler> handlers = new HashMap<>();
 
+    /**
+     * 会话级 partSeq 计数器。按 partId 维度递增，session idle 时清理。
+     * key = sessionId, value = { partId → AtomicInteger }
+     */
+    private final java.util.concurrent.ConcurrentHashMap<String,
+            java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>>
+            partSeqCounters = new java.util.concurrent.ConcurrentHashMap<>();
+
     @PostConstruct
     void init() {
         // --- text ---
@@ -151,11 +159,28 @@ public class CloudEventTranslator {
                 msg.setRole("assistant");
             }
 
-            // Part 级事件：partId 应由云端传入
+            // Part 级事件：partId 应由云端传入，partSeq 由 SS 生成
             if (!MESSAGE_LEVEL_TYPES.contains(eventType)) {
                 if (msg.getPartId() == null) {
                     log.warn("[CloudEventTranslator] cloud event missing partId: type={}, sessionId={}", eventType, sessionId);
                 }
+                // partSeq：按 partId 维度递增（SS 内部生成，不需要云端传）
+                if (msg.getPartSeq() == null && sessionId != null && msg.getPartId() != null) {
+                    var counters = partSeqCounters.computeIfAbsent(sessionId,
+                            k -> new java.util.concurrent.ConcurrentHashMap<>());
+                    int seq = counters.computeIfAbsent(msg.getPartId(),
+                            k -> new java.util.concurrent.atomic.AtomicInteger(0)).getAndIncrement();
+                    msg.setPartSeq(seq);
+                }
+            }
+        }
+
+        // session.status=idle 时清理 partSeq 计数器
+        if ("session.status".equals(eventType) && sessionId != null) {
+            JsonNode props = event.has("properties") ? event.get("properties") : event;
+            String status = props.path("status").asText(props.path("sessionStatus").asText(null));
+            if ("idle".equals(status)) {
+                partSeqCounters.remove(sessionId);
             }
         }
 
