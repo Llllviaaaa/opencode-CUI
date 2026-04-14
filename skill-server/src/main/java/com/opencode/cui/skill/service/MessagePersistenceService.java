@@ -410,7 +410,14 @@ public class MessagePersistenceService {
                     StreamMessage.Types.STEP_START,
                     StreamMessage.Types.STEP_DONE,
                     StreamMessage.Types.PERMISSION_ASK,
-                    StreamMessage.Types.PERMISSION_REPLY ->
+                    StreamMessage.Types.PERMISSION_REPLY,
+                    // 云端扩展类型
+                    StreamMessage.Types.PLANNING_DELTA,
+                    StreamMessage.Types.PLANNING_DONE,
+                    StreamMessage.Types.SEARCHING,
+                    StreamMessage.Types.SEARCH_RESULT,
+                    StreamMessage.Types.REFERENCE,
+                    StreamMessage.Types.ASK_MORE ->
                 true;
             default -> false;
         };
