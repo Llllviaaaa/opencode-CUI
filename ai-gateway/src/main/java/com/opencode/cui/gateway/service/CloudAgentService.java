@@ -90,29 +90,36 @@ public class CloudAgentService {
                     }
 
                     // 兜底：云端未传 messageId/partId 时 GW 自动补充
-                    // GatewayMessage.event 是 JsonNode，结构: {"type":"text.delta","properties":{...}}
+                    // GatewayMessage.event 结构: {"type":"text.delta","properties":{"content":"..."}}
+                    // SS 的 CloudEventTranslator handler 从 event.properties 中读取字段
+                    // 所以注入到 properties 和 event 顶层都需要（properties 给 handler 读，顶层给 translate 方法读）
                     JsonNode eventNode = event.getEvent();
-                    if (eventNode != null && !eventNode.isMissingNode()) {
+                    if (eventNode != null && !eventNode.isMissingNode() && eventNode.isObject()) {
                         String eventType = eventNode.path("type").asText("");
-                        JsonNode props = eventNode.path("properties");
-                        if (props != null && !props.isMissingNode()) {
-                            // messageId 兜底
-                            if (!props.has("messageId") || props.path("messageId").isNull()
-                                    || props.path("messageId").asText("").isBlank()) {
-                                ((com.fasterxml.jackson.databind.node.ObjectNode) props)
-                                        .put("messageId", fallbackMessageId);
-                                log.debug("[CLOUD_AGENT] Injected fallback messageId for type={}", eventType);
-                            }
-                            // partId 兜底（按 event type 归一化）
-                            if (!props.has("partId") || props.path("partId").isNull()
-                                    || props.path("partId").asText("").isBlank()) {
-                                String normalizedType = normalizeEventType(eventType);
-                                String fbPartId = fallbackPartIds.computeIfAbsent(normalizedType,
-                                        t -> "cloud-part-" + t + "-" + UUID.randomUUID().toString().substring(0, 8));
-                                ((com.fasterxml.jackson.databind.node.ObjectNode) props)
-                                        .put("partId", fbPartId);
-                                log.debug("[CLOUD_AGENT] Injected fallback partId for type={}", eventType);
-                            }
+                        com.fasterxml.jackson.databind.node.ObjectNode eventObj =
+                                (com.fasterxml.jackson.databind.node.ObjectNode) eventNode;
+                        JsonNode props = eventObj.path("properties");
+                        com.fasterxml.jackson.databind.node.ObjectNode propsObj =
+                                (props != null && props.isObject())
+                                        ? (com.fasterxml.jackson.databind.node.ObjectNode) props : null;
+
+                        // messageId 兜底：注入到 properties 中
+                        boolean needMsgId = propsObj == null
+                                || !propsObj.has("messageId")
+                                || propsObj.path("messageId").asText("").isBlank();
+                        if (needMsgId && propsObj != null) {
+                            propsObj.put("messageId", fallbackMessageId);
+                        }
+
+                        // partId 兜底：注入到 properties 中
+                        boolean needPartId = propsObj == null
+                                || !propsObj.has("partId")
+                                || propsObj.path("partId").asText("").isBlank();
+                        if (needPartId && propsObj != null) {
+                            String normalizedType = normalizeEventType(eventType);
+                            String fbPartId = fallbackPartIds.computeIfAbsent(normalizedType,
+                                    t -> "cloud-part-" + t + "-" + UUID.randomUUID().toString().substring(0, 8));
+                            propsObj.put("partId", fbPartId);
                         }
                     }
 

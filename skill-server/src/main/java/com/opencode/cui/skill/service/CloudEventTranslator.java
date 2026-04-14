@@ -139,7 +139,10 @@ public class CloudEventTranslator {
             return null;
         }
 
-        StreamMessage msg = handler.handle(event);
+        // handler 期望接收 properties 级别的数据（content/messageId/partId 等）
+        // 如果 event 有 properties 子节点，传 properties；否则传 event 本身（兼容展平格式）
+        JsonNode handlerInput = event.has("properties") ? event.get("properties") : event;
+        StreamMessage msg = handler.handle(handlerInput);
         if (msg == null) {
             return null;
         }
