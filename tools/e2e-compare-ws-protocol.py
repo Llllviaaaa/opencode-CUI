@@ -161,6 +161,33 @@ def main():
                 miniapp_msgs.extend(extra)
                 break
 
+    # 发触发 question 的消息
+    QUESTION_PROMPT = (
+        'Next, before doing anything, you MUST use the Question tool to ask me exactly 1 '
+        'multiple-choice question:\n"Which approach: A or B?"\nOptions:\n'
+        '- A (Recommended): minimal change only\n- B: full refactor\n'
+        'Do NOT modify any files or run any commands until I answer.'
+    )
+    print("Sending question-triggering chat via miniapp API...")
+    requests.post(f"{SS_URL}/api/skill/sessions/{miniapp_sid}/messages",
+                  headers={"Cookie": f"userId={USER_ID}", "Content-Type": "application/json"},
+                  json={"content": QUESTION_PROMPT})
+    miniapp_q_msgs = collect(ws_m, WAIT)
+    miniapp_msgs.extend(miniapp_q_msgs)
+
+    # 如果收到 question，自动回复
+    for m in miniapp_q_msgs:
+        if m.get("type") == "question":
+            tcid = m.get("toolCallId")
+            if tcid:
+                print(f"  Replying question: toolCallId={tcid}")
+                requests.post(f"{SS_URL}/api/skill/sessions/{miniapp_sid}/messages",
+                              headers={"Cookie": f"userId={USER_ID}", "Content-Type": "application/json"},
+                              json={"content": "A", "toolCallId": tcid})
+                extra = collect(ws_m, WAIT)
+                miniapp_msgs.extend(extra)
+                break
+
     ws_m.close()
     m_grouped = group_by_type(miniapp_msgs)
     print(f"Types: {sorted(m_grouped.keys())}")
@@ -214,6 +241,32 @@ def main():
                                     "sessionType": "direct", "sessionId": ext_sid,
                                     "assistantAccount": AGENT_AK,
                                     "payload": {"permissionId": perm_id, "response": "once"}})
+                extra = collect(ws_e, WAIT)
+                external_msgs.extend(extra)
+                break
+
+    # 发触发 question 的消息
+    print("Sending question-triggering chat via external invoke...")
+    requests.post(f"{SS_URL}/api/external/invoke",
+                  headers={"Content-Type": "application/json", "Authorization": f"Bearer {TOKEN}"},
+                  json={"action": "chat", "businessDomain": "im", "sessionType": "direct",
+                        "sessionId": ext_sid, "assistantAccount": AGENT_AK,
+                        "payload": {"content": QUESTION_PROMPT, "msgType": "text"}})
+    external_q_msgs = collect(ws_e, WAIT)
+    external_msgs.extend(external_q_msgs)
+
+    # 如果收到 question，自动回复
+    for m in external_q_msgs:
+        if m.get("type") == "question":
+            tcid = m.get("toolCallId")
+            if tcid:
+                print(f"  Replying question: toolCallId={tcid}")
+                requests.post(f"{SS_URL}/api/external/invoke",
+                              headers={"Content-Type": "application/json", "Authorization": f"Bearer {TOKEN}"},
+                              json={"action": "question_reply", "businessDomain": "im",
+                                    "sessionType": "direct", "sessionId": ext_sid,
+                                    "assistantAccount": AGENT_AK,
+                                    "payload": {"content": "A", "toolCallId": tcid}})
                 extra = collect(ws_e, WAIT)
                 external_msgs.extend(extra)
                 break
