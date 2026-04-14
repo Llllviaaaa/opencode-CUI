@@ -357,6 +357,26 @@ GW 侧错误码：
 | error | String | 条件 | `tool_error` 时必填 |
 | reason | String | | `tool_error` 时可选，错误描述 |
 
+**event.properties 公共必填字段**：
+
+Part 级事件（text/thinking/tool/question/file/permission/planning/searching/search_result/reference/ask_more）的 properties 中**必须包含**：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| messageId | String | ✅ | 消息 ID，同一轮对话（同一次 chat invoke）的所有事件**必须共享同一个 messageId**。不同轮次必须不同。由云端生成，全局唯一。 |
+| partId | String | ✅ | Part ID，同类型事件共享同一个 partId（如所有 text.delta 和 text.done 共享一个 partId），不同类型不同 partId。由云端生成。 |
+| role | String | | 固定 `"assistant"`，可选（SS 兜底补充） |
+
+Message 级事件（step.start/step.done）的 properties 中：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| messageId | String | ✅ | 同上，与同轮次的 Part 级事件共享 |
+
+Session 级事件（session.status/session.title/session.error）不需要 messageId/partId。
+
+> **重要**：messageId 和 partId 由云端自行生成并传入，SS/GW 不会自动补充。缺失时 SS 会打 warn 日志，前端 StreamAssembler 可能无法正确组装消息。
+
 ### 5.2 三方协议映射
 
 我们的协议事件类型与 OpenCode 原始事件、云端 API 原始类型的对应关系：
@@ -812,9 +832,9 @@ data: {"type":"tool_error","toolSessionId":"ts-789","error":"internal_error","re
 #### 示例一：简单文本对话（最小实现）
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"你好","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"！有什么可以帮你的？","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.done","properties":{"content":"你好！有什么可以帮你的？","role":"assistant","messageId":"msg-001","partId":"prt-001"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"你好","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"！有什么可以帮你的？","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.done","properties":{"content":"你好！有什么可以帮你的？","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
 data: {"type":"tool_done","toolSessionId":"ts-789"}
 ```
 
@@ -823,13 +843,13 @@ data: {"type":"tool_done","toolSessionId":"ts-789"}
 ```
 data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"step.start","properties":{"messageId":"msg-001","role":"assistant"}}}
 
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.delta","properties":{"content":"用户想了解","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.delta","properties":{"content":"Spring Boot的优势","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.done","properties":{"content":"用户想了解Spring Boot的优势","role":"assistant","messageId":"msg-001","partId":"prt-r1"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.delta","properties":{"content":"用户想了解","role":"assistant","messageId":"msg-001","partId":"prt-think-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.delta","properties":{"content":"Spring Boot的优势","role":"assistant","messageId":"msg-001","partId":"prt-think-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.done","properties":{"content":"用户想了解Spring Boot的优势","role":"assistant","messageId":"msg-001","partId":"prt-think-01"}}}
 
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"Spring Boot 的主要优势：\n\n","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"1. 自动配置\n2. 起步依赖","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.done","properties":{"content":"Spring Boot 的主要优势：\n\n1. 自动配置\n2. 起步依赖","role":"assistant","messageId":"msg-001","partId":"prt-t1"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"Spring Boot 的主要优势：\n\n","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"1. 自动配置\n2. 起步依赖","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.done","properties":{"content":"Spring Boot 的主要优势：\n\n1. 自动配置\n2. 起步依赖","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
 
 data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"step.done","properties":{"messageId":"msg-001","usage":{"input_tokens":50,"output_tokens":30},"reason":"stop"}}}
 data: {"type":"tool_done","toolSessionId":"ts-789","usage":{"input_tokens":50,"output_tokens":30}}
@@ -840,16 +860,16 @@ data: {"type":"tool_done","toolSessionId":"ts-789","usage":{"input_tokens":50,"o
 ```
 data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"step.start","properties":{"messageId":"msg-001","role":"assistant"}}}
 
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.delta","properties":{"content":"用户想查员工信息，需要调用人事系统","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.done","properties":{"content":"用户想查员工信息，需要调用人事系统","role":"assistant","messageId":"msg-001","partId":"prt-r1"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.delta","properties":{"content":"用户想查员工信息，需要调用人事系统","role":"assistant","messageId":"msg-001","partId":"prt-think-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.done","properties":{"content":"用户想查员工信息，需要调用人事系统","role":"assistant","messageId":"msg-001","partId":"prt-think-01"}}}
 
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"tool.update","properties":{"toolName":"hr_query","toolCallId":"call-001","status":"pending","input":{"employeeId":"300518xx"},"title":"查询员工信息"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"tool.update","properties":{"toolName":"hr_query","toolCallId":"call-001","status":"running","input":{"employeeId":"300518xx"},"title":"查询员工信息"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"tool.update","properties":{"toolName":"hr_query","toolCallId":"call-001","status":"completed","input":{"employeeId":"300518xx"},"output":"{\"name\":\"张三\",\"dept\":\"IT部\"}","title":"查询员工信息"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"tool.update","properties":{"toolName":"hr_query","toolCallId":"call-001","status":"pending","input":{"employeeId":"300518xx"},"title":"查询员工信息","messageId":"msg-001","partId":"prt-tool-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"tool.update","properties":{"toolName":"hr_query","toolCallId":"call-001","status":"running","input":{"employeeId":"300518xx"},"title":"查询员工信息","messageId":"msg-001","partId":"prt-tool-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"tool.update","properties":{"toolName":"hr_query","toolCallId":"call-001","status":"completed","input":{"employeeId":"300518xx"},"output":"{\"name\":\"张三\",\"dept\":\"IT部\"}","title":"查询员工信息","messageId":"msg-001","partId":"prt-tool-01"}}}
 
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"查询到员工信息：","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"张三，IT部","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.done","properties":{"content":"查询到员工信息：张三，IT部","role":"assistant","messageId":"msg-001","partId":"prt-t1"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"查询到员工信息：","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"张三，IT部","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.done","properties":{"content":"查询到员工信息：张三，IT部","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
 
 data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"step.done","properties":{"messageId":"msg-001","usage":{"input_tokens":200,"output_tokens":80},"reason":"stop"}}}
 data: {"type":"tool_done","toolSessionId":"ts-789","usage":{"input_tokens":200,"output_tokens":80}}
@@ -858,24 +878,24 @@ data: {"type":"tool_done","toolSessionId":"ts-789","usage":{"input_tokens":200,"
 #### 示例四：带搜索和引用的完整对话（appId: "uniassistant"）
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"planning.delta","properties":{"content":"用户询问JDK8和JDK21的区别，需"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"planning.delta","properties":{"content":"要分别搜索两者的特性并进行对比"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"planning.done","properties":{"content":"用户询问JDK8和JDK21的区别，需要分别搜索两者的特性并进行对比"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"planning.delta","properties":{"content":"用户询问JDK8和JDK21的区别，需","messageId":"msg-001","partId":"prt-plan-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"planning.delta","properties":{"content":"要分别搜索两者的特性并进行对比","messageId":"msg-001","partId":"prt-plan-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"planning.done","properties":{"content":"用户询问JDK8和JDK21的区别，需要分别搜索两者的特性并进行对比","messageId":"msg-001","partId":"prt-plan-01"}}}
 
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"searching","properties":{"keywords":["JDK8特性","JDK21特性"]}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"searching","properties":{"keywords":["JDK8特性","JDK21特性"],"messageId":"msg-001","partId":"prt-search-01"}}}
 
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"search_result","properties":{"results":[{"index":"1","title":"java学习系列15","source":"CSDN博客"},{"index":"2","title":"JAVA8新特性","source":"菜鸟教程"}]}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"search_result","properties":{"results":[{"index":"1","title":"java学习系列15","source":"CSDN博客"},{"index":"2","title":"JAVA8新特性","source":"菜鸟教程"}],"messageId":"msg-001","partId":"prt-sr-01"}}}
 
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"reference","properties":{"references":[{"index":"1","title":"java学习系列15","url":"https://blog.csdn.net/xxx","source":"CSDN博客","content":"JDK8是JAVA开发工具包的一个版本..."},{"index":"2","title":"Java8新特性","url":"https://www.runoob.com/java/java8-new-features.html","source":"菜鸟教程","content":"Java8是java语言开发的一个主要版本..."}]}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"reference","properties":{"references":[{"index":"1","title":"java学习系列15","url":"https://blog.csdn.net/xxx","source":"CSDN博客","content":"JDK8是JAVA开发工具包的一个版本..."},{"index":"2","title":"Java8新特性","url":"https://www.runoob.com/java/java8-new-features.html","source":"菜鸟教程","content":"Java8是java语言开发的一个主要版本..."}],"messageId":"msg-001","partId":"prt-ref-01"}}}
 
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.delta","properties":{"content":"嗯，用户在问版本区别，我需要整理对比","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.done","properties":{"content":"嗯，用户在问版本区别，我需要整理对比","role":"assistant","messageId":"msg-001","partId":"prt-r1"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.delta","properties":{"content":"嗯，用户在问版本区别，我需要整理对比","role":"assistant","messageId":"msg-001","partId":"prt-think-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"thinking.done","properties":{"content":"嗯，用户在问版本区别，我需要整理对比","role":"assistant","messageId":"msg-001","partId":"prt-think-01"}}}
 
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"# JDK8 vs JDK21 主要区别\n\n","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"JDK8 引入了 Lambda 表达式和 Stream API[1]...","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.done","properties":{"content":"# JDK8 vs JDK21 主要区别\n\nJDK8 引入了 Lambda 表达式和 Stream API[1]...","role":"assistant","messageId":"msg-001","partId":"prt-t1"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"# JDK8 vs JDK21 主要区别\n\n","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"JDK8 引入了 Lambda 表达式和 Stream API[1]...","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.done","properties":{"content":"# JDK8 vs JDK21 主要区别\n\nJDK8 引入了 Lambda 表达式和 Stream API[1]...","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
 
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"ask_more","properties":{"questions":["Lambda表达式可以用于哪些典型场景？","JDK21的虚拟线程如何使用？"]}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"ask_more","properties":{"questions":["Lambda表达式可以用于哪些典型场景？","JDK21的虚拟线程如何使用？"],"messageId":"msg-001","partId":"prt-askmore-01"}}}
 
 data: {"type":"tool_done","toolSessionId":"ts-789","usage":{"input_tokens":150,"output_tokens":320}}
 ```
@@ -883,9 +903,9 @@ data: {"type":"tool_done","toolSessionId":"ts-789","usage":{"input_tokens":150,"
 #### 示例五：带交互式问答的对话
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"我需要了解更多信息","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.done","properties":{"content":"我需要了解更多信息","role":"assistant","messageId":"msg-001","partId":"prt-t1"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"question","properties":{"toolCallId":"call-003","messageId":"msg-001","header":"请选择查询范围","question":"您想查询哪个部门的信息？","options":["IT部","研发部","市场部"]}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"我需要了解更多信息","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.done","properties":{"content":"我需要了解更多信息","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"question","properties":{"toolCallId":"call-003","messageId":"msg-001","partId":"prt-q-01","header":"请选择查询范围","question":"您想查询哪个部门的信息？","options":["IT部","研发部","市场部"]}}}
 data: {"type":"tool_done","toolSessionId":"ts-789"}
 ```
 
@@ -894,9 +914,9 @@ data: {"type":"tool_done","toolSessionId":"ts-789"}
 #### 示例六：带权限请求的对话
 
 ```
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"需要访问您的文件来完成分析","role":"assistant"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.done","properties":{"content":"需要访问您的文件来完成分析","role":"assistant","messageId":"msg-001","partId":"prt-t1"}}}
-data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"permission.ask","properties":{"permissionId":"perm-001","permType":"file_access","title":"请求访问 report.xlsx","metadata":{"path":"/data/report.xlsx"}}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.delta","properties":{"content":"需要访问您的文件来完成分析","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"text.done","properties":{"content":"需要访问您的文件来完成分析","role":"assistant","messageId":"msg-001","partId":"prt-text-01"}}}
+data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"permission.ask","properties":{"permissionId":"perm-001","permType":"file_access","title":"请求访问 report.xlsx","metadata":{"path":"/data/report.xlsx"},"messageId":"msg-001","partId":"prt-perm-01"}}}
 data: {"type":"tool_done","toolSessionId":"ts-789"}
 ```
 

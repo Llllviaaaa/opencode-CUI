@@ -12,8 +12,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 云端事件翻译器：使用注册表模式将云端 CloudEvent 翻译为前端 StreamMessage。
@@ -48,11 +46,6 @@ public class CloudEventTranslator {
             "step.start", "step.done");
 
     private final Map<String, CloudEventHandler> handlers = new HashMap<>();
-
-    /**
-     * 每个 sessionId 对应的会话状态，用于生成稳定的 messageId、partId、partSeq。
-     */
-    private final ConcurrentHashMap<String, CloudSessionState> sessionStates = new ConcurrentHashMap<>();
 
     @PostConstruct
     void init() {
@@ -143,54 +136,30 @@ public class CloudEventTranslator {
             return null;
         }
 
-        // 为 Part 级和 Message 级事件注入标识字段
-        if (sessionId != null && !sessionId.isEmpty() && !SESSION_LEVEL_TYPES.contains(eventType)) {
-            CloudSessionState state = sessionStates.computeIfAbsent(sessionId, CloudSessionState::new);
-
-            // messageId & sourceMessageId
-            String messageId = state.getMessageId();
+        // 为 Part 级和 Message 级事件补充标识字段
+        if (!SESSION_LEVEL_TYPES.contains(eventType)) {
+            // messageId/partId 应由云端传入（协议必填），此处仅做 sourceMessageId 同步和 role 兜底
             if (msg.getMessageId() == null) {
-                msg.setMessageId(messageId);
+                log.warn("[CloudEventTranslator] cloud event missing messageId: type={}, sessionId={}", eventType, sessionId);
             }
-            if (msg.getSourceMessageId() == null) {
-                msg.setSourceMessageId(messageId);
+            if (msg.getSourceMessageId() == null && msg.getMessageId() != null) {
+                msg.setSourceMessageId(msg.getMessageId());
             }
 
-            // role
+            // role 兜底
             if (msg.getRole() == null) {
                 msg.setRole("assistant");
             }
 
-            // partId & partSeq (仅 Part 级事件)
+            // Part 级事件：partId 应由云端传入
             if (!MESSAGE_LEVEL_TYPES.contains(eventType)) {
                 if (msg.getPartId() == null) {
-                    msg.setPartId(state.resolvePartId(eventType));
+                    log.warn("[CloudEventTranslator] cloud event missing partId: type={}, sessionId={}", eventType, sessionId);
                 }
-                if (msg.getPartSeq() == null) {
-                    msg.setPartSeq(state.nextPartSeq(eventType));
-                }
-            }
-        }
-
-        // session.status=idle 时清理会话状态
-        if ("session.status".equals(eventType) && sessionId != null) {
-            String status = event.path("sessionStatus").asText(null);
-            if ("idle".equals(status)) {
-                clearSession(sessionId);
             }
         }
 
         return msg;
-    }
-
-    /**
-     * 清理指定会话的状态，释放资源。
-     * 应在会话结束（idle）时调用。
-     */
-    public void clearSession(String sessionId) {
-        if (sessionId != null) {
-            sessionStates.remove(sessionId);
-        }
     }
 
     // ==================== Text Handlers ====================
@@ -200,6 +169,8 @@ public class CloudEventTranslator {
                 .type(Types.TEXT_DELTA)
                 .content(event.path("content").asText(null))
                 .role(event.path("role").asText(null))
+                .messageId(event.path("messageId").asText(null))
+                .partId(event.path("partId").asText(null))
                 .build();
     }
 
@@ -220,6 +191,8 @@ public class CloudEventTranslator {
                 .type(Types.THINKING_DELTA)
                 .content(event.path("content").asText(null))
                 .role(event.path("role").asText(null))
+                .messageId(event.path("messageId").asText(null))
+                .partId(event.path("partId").asText(null))
                 .build();
     }
 
@@ -238,6 +211,8 @@ public class CloudEventTranslator {
     private StreamMessage handleToolUpdate(JsonNode event) {
         return StreamMessage.builder()
                 .type(Types.TOOL_UPDATE)
+                .messageId(event.path("messageId").asText(null))
+                .partId(event.path("partId").asText(null))
                 .tool(ToolInfo.builder()
                         .toolName(event.path("toolName").asText(null))
                         .toolCallId(event.path("toolCallId").asText(null))
@@ -284,6 +259,7 @@ public class CloudEventTranslator {
 
         return StreamMessage.builder()
                 .type(Types.STEP_DONE)
+                .messageId(event.path("messageId").asText(null))
                 .usage(usageBuilder.build())
                 .build();
     }
@@ -293,6 +269,8 @@ public class CloudEventTranslator {
     private StreamMessage handleQuestion(JsonNode event) {
         return StreamMessage.builder()
                 .type(Types.QUESTION)
+                .messageId(event.path("messageId").asText(null))
+                .partId(event.path("partId").asText(null))
                 .tool(ToolInfo.builder()
                         .toolCallId(event.path("toolCallId").asText(null))
                         .build())
@@ -310,6 +288,8 @@ public class CloudEventTranslator {
     private StreamMessage handlePermissionAsk(JsonNode event) {
         return StreamMessage.builder()
                 .type(Types.PERMISSION_ASK)
+                .messageId(event.path("messageId").asText(null))
+                .partId(event.path("partId").asText(null))
                 .permission(PermissionInfo.builder()
                         .permissionId(event.path("permissionId").asText(null))
                         .permType(event.path("permType").asText(null))
@@ -322,6 +302,8 @@ public class CloudEventTranslator {
     private StreamMessage handlePermissionReply(JsonNode event) {
         return StreamMessage.builder()
                 .type(Types.PERMISSION_REPLY)
+                .messageId(event.path("messageId").asText(null))
+                .partId(event.path("partId").asText(null))
                 .permission(PermissionInfo.builder()
                         .permissionId(event.path("permissionId").asText(null))
                         .permType(event.path("permType").asText(null))
@@ -355,6 +337,8 @@ public class CloudEventTranslator {
     private StreamMessage handleFile(JsonNode event) {
         return StreamMessage.builder()
                 .type(Types.FILE)
+                .messageId(event.path("messageId").asText(null))
+                .partId(event.path("partId").asText(null))
                 .file(FileInfo.builder()
                         .fileName(event.path("fileName").asText(null))
                         .fileUrl(event.path("fileUrl").asText(null))
@@ -368,6 +352,8 @@ public class CloudEventTranslator {
     private StreamMessage handlePlanningDelta(JsonNode event) {
         return StreamMessage.builder()
                 .type(Types.PLANNING_DELTA)
+                .messageId(event.path("messageId").asText(null))
+                .partId(event.path("partId").asText(null))
                 .content(event.path("content").asText(null))
                 .build();
     }
@@ -375,6 +361,8 @@ public class CloudEventTranslator {
     private StreamMessage handlePlanningDone(JsonNode event) {
         return StreamMessage.builder()
                 .type(Types.PLANNING_DONE)
+                .messageId(event.path("messageId").asText(null))
+                .partId(event.path("partId").asText(null))
                 .content(event.path("content").asText(null))
                 .build();
     }
@@ -384,6 +372,8 @@ public class CloudEventTranslator {
     private StreamMessage handleSearching(JsonNode event) {
         return StreamMessage.builder()
                 .type(Types.SEARCHING)
+                .messageId(event.path("messageId").asText(null))
+                .partId(event.path("partId").asText(null))
                 .keywords(toStringList(event.get("keywords")))
                 .build();
     }
@@ -391,6 +381,8 @@ public class CloudEventTranslator {
     private StreamMessage handleSearchResult(JsonNode event) {
         return StreamMessage.builder()
                 .type(Types.SEARCH_RESULT)
+                .messageId(event.path("messageId").asText(null))
+                .partId(event.path("partId").asText(null))
                 .searchResults(toSearchResultList(event.get("searchResults")))
                 .build();
     }
@@ -400,6 +392,8 @@ public class CloudEventTranslator {
     private StreamMessage handleReference(JsonNode event) {
         return StreamMessage.builder()
                 .type(Types.REFERENCE)
+                .messageId(event.path("messageId").asText(null))
+                .partId(event.path("partId").asText(null))
                 .references(toReferenceList(event.get("references")))
                 .build();
     }
@@ -409,6 +403,8 @@ public class CloudEventTranslator {
     private StreamMessage handleAskMore(JsonNode event) {
         return StreamMessage.builder()
                 .type(Types.ASK_MORE)
+                .messageId(event.path("messageId").asText(null))
+                .partId(event.path("partId").asText(null))
                 .askMoreQuestions(toStringList(event.get("askMoreQuestions")))
                 .build();
     }
@@ -467,53 +463,4 @@ public class CloudEventTranslator {
         return list.isEmpty() ? null : list;
     }
 
-    // ==================== Session State ====================
-
-    /**
-     * 云端会话状态：跟踪单次 chat invoke 内的消息标识。
-     *
-     * <p>由于云端不像 OpenCode 那样有原始的 messageID/partID，
-     * 需要自动生成稳定的标识符供前端 StreamAssembler 使用。</p>
-     */
-    static class CloudSessionState {
-        private final String messageId;
-        private final ConcurrentHashMap<String, String> partIds = new ConcurrentHashMap<>();
-        private final ConcurrentHashMap<String, AtomicInteger> partSeqs = new ConcurrentHashMap<>();
-
-        CloudSessionState(String sessionId) {
-            this.messageId = "cloud-msg-" + sessionId;
-        }
-
-        String getMessageId() {
-            return messageId;
-        }
-
-        /**
-         * 根据事件类型解析 partId。同类型事件共享同一个 partId。
-         */
-        String resolvePartId(String eventType) {
-            return partIds.computeIfAbsent(eventType, t -> "cloud-part-" + normalizePartKey(t));
-        }
-
-        /**
-         * 获取指定事件类型的下一个 partSeq（从 0 开始递增）。
-         */
-        int nextPartSeq(String eventType) {
-            return partSeqs.computeIfAbsent(eventType, t -> new AtomicInteger(0))
-                    .getAndIncrement();
-        }
-
-        /**
-         * 将事件类型标准化为 partId 后缀（去掉 .delta/.done 区分，使 delta/done 共享 partId）。
-         */
-        private String normalizePartKey(String eventType) {
-            if (eventType.endsWith(".delta")) {
-                return eventType.substring(0, eventType.length() - 6);
-            }
-            if (eventType.endsWith(".done")) {
-                return eventType.substring(0, eventType.length() - 5);
-            }
-            return eventType;
-        }
-    }
 }
