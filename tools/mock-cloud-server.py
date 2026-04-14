@@ -33,6 +33,13 @@ ASSISTANT_INFO = {
         "endpoint": None,
         "protocol": None,
         "authType": None
+    },
+    "test-ak-001": {
+        "identityType": "2",  # personal (real local OpenCode agent)
+        "hisAppId": None,
+        "endpoint": None,
+        "protocol": None,
+        "authType": None
     }
 }
 
@@ -90,6 +97,7 @@ def get_assistant_info():
 ASSISTANT_ACCOUNT_MAP = {
     "test-business-ak": {"ak": "test-business-ak", "ownerWelinkId": "900001", "create_by": "900001"},
     "test-personal-ak": {"ak": "test-personal-ak", "ownerWelinkId": "900002", "create_by": "900002"},
+    "test-ak-001": {"ak": "test-ak-001", "ownerWelinkId": "1", "create_by": "1"},
 }
 
 @app.route('/assistant-api/integration/v4-1/we-crew/instance/query', methods=['GET'])
@@ -206,18 +214,23 @@ def cloud_chat():
             chunk = reply_text[i:i+3]
             yield sse_event({"type": "tool_event", "toolSessionId": ts, "event": {
                 "type": "text.delta",
+                "content": chunk, "role": "assistant",
                 "properties": {"content": chunk, "role": "assistant"}
             }})
             time.sleep(0.05)
 
         # text.done
+        msg_id = f"msg-{uuid.uuid4().hex[:8]}"
+        part_id = f"part-{uuid.uuid4().hex[:8]}"
         yield sse_event({"type": "tool_event", "toolSessionId": ts, "event": {
             "type": "text.done",
+            "content": reply_text, "role": "assistant",
+            "messageId": msg_id, "partId": part_id,
             "properties": {
                 "content": reply_text,
                 "role": "assistant",
-                "messageId": f"msg-{uuid.uuid4().hex[:8]}",
-                "partId": f"part-{uuid.uuid4().hex[:8]}"
+                "messageId": msg_id,
+                "partId": part_id
             }
         }})
         time.sleep(0.1)
