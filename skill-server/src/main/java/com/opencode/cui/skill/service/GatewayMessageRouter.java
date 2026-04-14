@@ -526,6 +526,9 @@ public class GatewayMessageRouter {
             syncPendingImInteraction(session, msg);
         }
 
+        // 统一填充 welinkSessionId、emittedAt 等公共字段
+        enrichStreamMessage(sessionId, msg);
+
         // 统一投递
         outboundDeliveryDispatcher.deliver(session, sessionId, userId, msg);
 
@@ -558,6 +561,7 @@ public class GatewayMessageRouter {
         SkillSession session = resolveSession(sessionId);
         Long numericId = ProtocolUtils.parseSessionId(sessionId);
 
+        enrichStreamMessage(sessionId, msg);
         outboundDeliveryDispatcher.deliver(session, sessionId, userId, msg);
 
         if (session == null || session.isMiniappDomain()) {
@@ -608,6 +612,7 @@ public class GatewayMessageRouter {
                 .type(StreamMessage.Types.ERROR)
                 .error(error)
                 .build();
+        enrichStreamMessage(sessionId, errorMsg);
         outboundDeliveryDispatcher.deliver(session, sessionId, userId, errorMsg);
 
         if (numericId != null) {
@@ -751,6 +756,7 @@ public class GatewayMessageRouter {
                     msg.getPermission().getPermissionId());
         }
 
+        enrichStreamMessage(sessionId, msg);
         outboundDeliveryDispatcher.deliver(session, sessionId, userId, msg);
     }
 
@@ -1008,6 +1014,7 @@ public class GatewayMessageRouter {
                 .type(StreamMessage.Types.ERROR)
                 .error(CONTEXT_RESET_MESSAGE)
                 .build();
+        enrichStreamMessage(sessionId, resetMsg);
         outboundDeliveryDispatcher.deliver(session, sessionId, userId, resetMsg);
 
         if (session.isImDirectSession()) {
