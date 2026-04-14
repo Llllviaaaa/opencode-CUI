@@ -405,9 +405,11 @@ source → { instanceId → WebSocketSession }
   "domain": "im",
   "message": {
     "type": "text.delta",
-    "welinkSessionId": "...",
+    "seq": 42,
+    "welinkSessionId": "ses_xxx",
     "emittedAt": "2026-04-14T00:36:00.165Z",
     "role": "assistant",
+    "messageId": "msg_xxx",
     "content": "你好"
   }
 }
@@ -418,74 +420,121 @@ source → { instanceId → WebSocketSession }
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `sessionId` | String | Skill Server 内部会话 ID |
-| `userId` | String | 用户 ID |
+| `userId` | String | 用户 ID（可为 null） |
 | `domain` | String | 业务域（与 WS 连接的 source 一致） |
 | `message` | Object | StreamMessage 消息体（见下方类型定义） |
 
-### 2.6 StreamMessage 类型定义
+**StreamMessage 公共字段（所有类型均可能携带）：**
 
-`message` 字段中的 `type` 决定消息类型。以下是所有可能的类型：
+所有 null 字段在 JSON 中自动省略（`@JsonInclude(NON_NULL)`）。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `type` | String | **必有**。消息类型，见下方所有类型定义 |
+| `seq` | Long | 传输序号（全局递增，用于排序和去重） |
+| `welinkSessionId` | String | 会话标识 |
+| `emittedAt` | String | 服务端发送时间（ISO-8601） |
+| `role` | String | 角色：`assistant` / `user` |
+| `messageId` | String | 消息 ID（同一轮回复共享） |
+| `messageSeq` | Integer | 消息序号 |
+| `sourceMessageId` | String | 源消息 ID |
+| `partId` | String | 消息部分 ID |
+| `partSeq` | Integer | 部分序号 |
+| `subagentSessionId` | String | 子 Agent 会话 ID（多 Agent 场景） |
+| `subagentName` | String | 子 Agent 名称 |
+
+### 2.6 StreamMessage 类型定义（共 26 种）
+
+`message.type` 决定消息类型和携带的字段。以下按功能分组，列出所有类型的完整字段定义。
+
+> **约定**：公共字段（`type`、`seq`、`welinkSessionId`、`emittedAt` 等）见 2.5 节，以下仅列出各类型的**特有字段**。所有 null 字段在 JSON 中省略。
 
 ---
 
+### A. 文本消息（核心交互）
+
 #### type = `text.delta`（流式文本片段）
 
-AI 回复的流式文本片段，逐 token 推送。客户端应追加显示。
+AI 回复的流式文本片段，逐 token 推送。客户端应**追加**显示。同一轮回复的多个 delta 共享相同 `messageId`。
 
 ```json
 {
   "type": "text.delta",
+  "seq": 42,
   "welinkSessionId": "ses_xxx",
   "emittedAt": "2026-04-14T00:36:00Z",
-  "role": "assistant",
   "messageId": "msg_xxx",
+  "sourceMessageId": "msg_xxx",
+  "role": "assistant",
+  "partId": "part_xxx",
+  "partSeq": 3,
   "content": "你好"
 }
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `content` | String | 文本片段（追加到已有内容后） |
-| `role` | String | 固定 `assistant` |
-| `messageId` | String | 消息 ID（同一轮回复的 delta 共享相同 messageId） |
+| 字段 | 类型 | 必有 | 说明 |
+|------|------|------|------|
+| `content` | String | 是 | 文本片段（追加到已有内容后） |
+| `role` | String | 是 | 固定 `assistant` |
+| `messageId` | String | 是 | 消息 ID（同一轮回复共享） |
+| `sourceMessageId` | String | 否 | 源消息 ID |
+| `partId` | String | 否 | 消息部分 ID |
+| `partSeq` | Integer | 否 | 部分序号 |
 
 ---
 
 #### type = `text.done`（文本完成）
 
-一轮文本回复完成。`content` 包含完整文本（= 所有同 messageId 的 `text.delta` 拼接结果）。
+一轮文本回复完成。`content` = 所有同 `messageId` 的 `text.delta.content` 拼接结果。
 
 ```json
 {
   "type": "text.done",
+  "seq": 55,
   "welinkSessionId": "ses_xxx",
   "emittedAt": "2026-04-14T00:36:01Z",
-  "role": "assistant",
   "messageId": "msg_xxx",
+  "sourceMessageId": "msg_xxx",
+  "role": "assistant",
   "partId": "part_xxx",
+  "partSeq": 3,
   "content": "你好，这是完整的回复内容。"
+}
+```
+
+| 字段 | 类型 | 必有 | 说明 |
+|------|------|------|------|
+| `content` | String | 是 | **完整的回复文本** |
+| `role` | String | 是 | 固定 `assistant` |
+| `messageId` | String | 是 | 消息 ID |
+| `partId` | String | 否 | 消息部分 ID |
+| `partSeq` | Integer | 否 | 部分序号 |
+
+---
+
+### B. 思考过程
+
+#### type = `thinking.delta`（思考过程片段）
+
+AI 的内部推理过程（流式）。可选择性展示。
+
+```json
+{
+  "type": "thinking.delta",
+  "seq": 30,
+  "welinkSessionId": "ses_xxx",
+  "emittedAt": "2026-04-14T00:36:00Z",
+  "messageId": "msg_xxx",
+  "role": "assistant",
+  "partId": "part_xxx",
+  "partSeq": 2,
+  "content": "让我分析一下这个问题..."
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `content` | String | 完整的回复文本 |
-| `messageId` | String | 消息 ID |
-| `partId` | String | 消息部分 ID |
-
----
-
-#### type = `thinking.delta`（思考过程片段）
-
-AI 的思考/推理过程（流式）。可选择性展示给用户。
-
-```json
-{
-  "type": "thinking.delta",
-  "content": "让我分析一下这个问题...",
-  "role": "assistant"
-}
-```
+| `content` | String | 思考内容片段 |
 
 ---
 
@@ -494,120 +543,208 @@ AI 的思考/推理过程（流式）。可选择性展示给用户。
 ```json
 {
   "type": "thinking.done",
-  "content": "让我分析一下这个问题，需要考虑以下几个方面...",
-  "role": "assistant"
+  "messageId": "msg_xxx",
+  "role": "assistant",
+  "partId": "part_xxx",
+  "content": "让我分析一下这个问题，需要考虑以下几个方面..."
 }
 ```
 
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `content` | String | 完整思考内容 |
+
 ---
 
-#### type = `tool.update`（工具调用更新）
+### C. 工具调用
 
-AI Agent 正在调用工具（如执行命令、读取文件等）。
+#### type = `tool.update`（工具调用状态更新）
+
+AI Agent 正在调用或已完成工具调用（bash、read、write、edit 等）。
 
 ```json
 {
   "type": "tool.update",
+  "seq": 35,
+  "welinkSessionId": "ses_xxx",
+  "emittedAt": "2026-04-14T00:36:00Z",
+  "messageId": "msg_xxx",
+  "role": "assistant",
+  "partId": "part_xxx",
+  "partSeq": 2,
+  "status": "running",
+  "title": "Running bash command",
+  "error": null,
   "toolName": "bash",
   "toolCallId": "toolu_xxx",
-  "input": {"command": "echo hello"},
-  "output": "hello\n",
-  "status": "running"
+  "input": {"command": "echo hello", "description": "Print hello"},
+  "output": "hello\n"
+}
+```
+
+| 字段 | 类型 | 必有 | 说明 |
+|------|------|------|------|
+| `toolName` | String | 是 | 工具名称：`bash` / `read` / `write` / `edit` / `glob` / `grep` 等 |
+| `toolCallId` | String | 是 | 工具调用 ID |
+| `input` | Object | 否 | 工具输入参数（结构因工具而异） |
+| `output` | String | 否 | 工具执行输出文本 |
+| `status` | String | 否 | 状态：`running` / `completed` / `failed` |
+| `title` | String | 否 | 工具调用描述 |
+| `error` | String | 否 | 工具执行错误信息 |
+
+---
+
+#### type = `file`（文件消息）
+
+Agent 产生了文件输出。
+
+```json
+{
+  "type": "file",
+  "messageId": "msg_xxx",
+  "role": "assistant",
+  "partId": "part_xxx",
+  "fileName": "report.pdf",
+  "fileUrl": "https://example.com/files/report.pdf",
+  "fileMime": "application/pdf"
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `toolName` | String | 工具名称（如 `bash`, `read`, `write`, `edit`） |
-| `toolCallId` | String | 工具调用 ID |
-| `input` | Object | 工具输入参数 |
-| `output` | String | 工具执行输出 |
-| `status` | String | 工具状态：`running` / `completed` / `failed` |
+| `fileName` | String | 文件名 |
+| `fileUrl` | String | 文件下载 URL |
+| `fileMime` | String | MIME 类型 |
 
 ---
 
-#### type = `permission.ask`（权限请求）⭐
+### D. 权限交互 ⭐
 
-AI Agent 请求执行工具的权限。**客户端必须通过 REST 接口的 `permission_reply` action 回复**，否则 Agent 将等待。
+#### type = `permission.ask`（权限请求）
+
+AI Agent 请求执行工具的权限。**客户端必须通过 REST `permission_reply` 回复**，否则 Agent 阻塞等待。
 
 ```json
 {
   "type": "permission.ask",
+  "seq": 38,
   "welinkSessionId": "ses_xxx",
   "emittedAt": "2026-04-14T00:56:17Z",
+  "messageId": "msg_xxx",
+  "sourceMessageId": "msg_xxx",
   "role": "assistant",
+  "status": "running",
   "title": "bash",
   "permissionId": "per_d897d347c001WFYI2DbWVsuMuA",
   "permType": "bash",
-  "metadata": {}
+  "metadata": {
+    "command": "echo hello world"
+  }
 }
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `permissionId` | String | **权限请求 ID（回复时必须使用此 ID）** |
-| `permType` | String | 工具类型（如 `bash`, `write`, `edit`） |
-| `title` | String | 工具名称 |
-| `metadata` | Object | 工具调用的元数据 |
+| 字段 | 类型 | 必有 | 说明 |
+|------|------|------|------|
+| `permissionId` | String | **是** | **权限请求 ID — 回复时必须使用此值** |
+| `permType` | String | 是 | 工具类型：`bash` / `write` / `edit` 等 |
+| `title` | String | 是 | 工具名称/描述 |
+| `metadata` | Object | 否 | 工具调用的详细参数（如 bash 的 command） |
+| `status` | String | 否 | 通常为 `running` |
+| `messageId` | String | 否 | 关联的消息 ID |
 
-**收到后的操作：** 调用 `POST /api/external/invoke`，action=`permission_reply`，payload 中带 `permissionId` 和 `response`。
+**收到后操作**：调用 REST `action=permission_reply`，payload 带 `permissionId` 和 `response`（once/always/reject）。
 
 ---
 
 #### type = `permission.reply`（权限回复确认）
 
-服务端确认已收到权限回复。
+服务端确认已处理权限回复。
 
 ```json
 {
   "type": "permission.reply",
+  "messageId": "msg_xxx",
+  "sourceMessageId": "msg_xxx",
   "role": "assistant",
+  "partId": "part_xxx",
+  "partSeq": 2,
+  "status": "completed",
+  "title": "bash",
   "permissionId": "per_xxx",
-  "response": "once"
+  "permType": "bash",
+  "response": "once",
+  "subagentSessionId": null
 }
 ```
 
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `permissionId` | String | 对应的权限请求 ID |
+| `response` | String | 授权结果：`once` / `always` / `reject` |
+| `permType` | String | 工具类型 |
+| `status` | String | 通常为 `completed` |
+
 ---
 
-#### type = `question`（Agent 提问）⭐
+### E. 问答交互 ⭐
 
-AI Agent 向用户提出问题，等待回答。**客户端必须通过 REST 接口的 `question_reply` action 回复**。
+#### type = `question`（Agent 提问）
+
+AI Agent 向用户提出问题，等待回答。**客户端必须通过 REST `question_reply` 回复**。
 
 ```json
 {
   "type": "question",
+  "seq": 40,
   "welinkSessionId": "ses_xxx",
   "emittedAt": "2026-04-14T01:38:51Z",
-  "role": "assistant",
   "messageId": "msg_xxx",
+  "sourceMessageId": "msg_xxx",
+  "role": "assistant",
+  "partId": "que_xxx",
+  "partSeq": 4,
   "status": "running",
   "toolName": "question",
   "toolCallId": "toolu_functions.question:0",
+  "input": {
+    "id": "que_xxx",
+    "questions": [{"question": "Which approach?", "header": "Approach", "options": [...]}]
+  },
+  "output": null,
   "header": "Approach",
   "question": "Which approach: A or B?",
   "options": ["A (Recommended)", "B"]
 }
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `toolCallId` | String | **问题调用 ID（回复时必须使用此 ID）** |
-| `header` | String | 问题标题/分类 |
-| `question` | String | 问题文本 |
-| `options` | String[] | 选项列表（可能为空，表示开放式问题） |
-| `status` | String | 状态：`running`（等待回答）/ `completed`（已回答） |
+| 字段 | 类型 | 必有 | 说明 |
+|------|------|------|------|
+| `toolCallId` | String | **是** | **问题调用 ID — 回复时必须使用此值** |
+| `question` | String | 是 | 问题文本 |
+| `header` | String | 否 | 问题标题/分类 |
+| `options` | String[] | 否 | 选项列表（空表示开放式问题） |
+| `status` | String | 是 | `running`=等待回答，`completed`=已回答 |
+| `toolName` | String | 是 | 固定 `question` |
+| `input` | Object | 否 | 问题详细数据（含原始 questions 数组） |
+| `output` | String | 否 | 回答内容（completed 时有值） |
 
-**收到后的操作：** 调用 `POST /api/external/invoke`，action=`question_reply`，payload 中带 `toolCallId` 和 `content`（回答内容）。
+**收到后操作**：调用 REST `action=question_reply`，payload 带 `toolCallId` 和 `content`（回答）。
 
 ---
 
+### F. 步骤生命周期
+
 #### type = `step.start`（步骤开始）
 
-Agent 开始一个新的处理步骤。
+Agent 开始一个新的处理步骤（一轮对话可能有多个步骤：思考 → 工具调用 → 回复）。
 
 ```json
 {
-  "type": "step.start"
+  "type": "step.start",
+  "welinkSessionId": "ses_xxx",
+  "emittedAt": "2026-04-14T00:36:00Z",
+  "messageId": "msg_xxx",
+  "role": "assistant"
 }
 ```
 
@@ -615,32 +752,45 @@ Agent 开始一个新的处理步骤。
 
 #### type = `step.done`（步骤完成）
 
-Agent 完成一个处理步骤。
-
 ```json
 {
   "type": "step.done",
-  "tokens": {"input": 1500, "output": 200},
+  "welinkSessionId": "ses_xxx",
+  "emittedAt": "2026-04-14T00:36:05Z",
+  "messageId": "msg_xxx",
+  "role": "assistant",
+  "tokens": {"input_tokens": 1500, "output_tokens": 200, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 500},
   "cost": 0.005,
   "reason": "end_turn"
 }
 ```
 
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `tokens` | Object | Token 使用量：`{input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}` |
+| `cost` | Double | 本步骤费用（USD） |
+| `reason` | String | 结束原因：`end_turn`（正常结束）/ `max_tokens` / `stop_sequence` 等 |
+
 ---
+
+### G. 会话状态
 
 #### type = `session.status`（会话状态变更）
 
 ```json
 {
   "type": "session.status",
+  "seq": 60,
+  "welinkSessionId": "ses_xxx",
   "sessionStatus": "busy"
 }
 ```
 
 | sessionStatus | 含义 |
 |---------------|------|
-| `busy` | Agent 正在处理中 |
+| `busy` | Agent 正在处理中（可展示加载状态） |
 | `idle` | Agent 处理完毕，等待新消息 |
+| `retry` | Session 重建中，消息将自动重发 |
 
 ---
 
@@ -649,57 +799,265 @@ Agent 完成一个处理步骤。
 ```json
 {
   "type": "session.title",
+  "welinkSessionId": "ses_xxx",
   "title": "天气查询对话"
 }
 ```
 
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `title` | String | 会话标题（由 Agent 自动生成） |
+
 ---
 
-#### type = `session.error`（会话错误）
+#### type = `session.error`（会话级错误）
+
+不可恢复的会话错误，如上下文溢出。
 
 ```json
 {
   "type": "session.error",
-  "error": "ContextOverflowError: 上下文超出限制"
+  "welinkSessionId": "ses_xxx",
+  "error": "ContextOverflowError: 对话上下文已超出限制，已自动重置"
 }
 ```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `error` | String | 错误描述 |
 
 ---
 
 #### type = `error`（通用错误）
 
+临时性错误，如 Agent 离线、工具执行异常。
+
 ```json
 {
   "type": "error",
-  "error": "Agent 离线或处理异常"
+  "error": "任务下发失败，请检查助理是否离线，确保助理在线后重试"
 }
 ```
 
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `error` | String | 错误描述 |
+
 ---
 
-#### type = `agent.online` / `agent.offline`
+### H. Agent 状态
 
-Agent 上线/下线通知。
+#### type = `agent.online`（Agent 上线）
 
 ```json
 {"type": "agent.online"}
+```
+
+#### type = `agent.offline`（Agent 下线）
+
+```json
 {"type": "agent.offline"}
 ```
 
+> 仅有 `type` 字段，无其他负载。
+
 ---
 
-#### 云端扩展类型（业务助手专属）
+### I. 用户消息同步
+
+#### type = `message.user`（用户消息多端同步）
+
+用户通过其他端（如 MiniApp）发送的消息同步推送。
+
+```json
+{
+  "type": "message.user",
+  "messageId": "msg_xxx",
+  "messageSeq": 5,
+  "role": "user",
+  "content": "用户在其他端发送的消息",
+  "welinkSessionId": "ses_xxx"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `messageId` | String | 消息 ID |
+| `messageSeq` | Integer | 消息序号 |
+| `role` | String | 固定 `user` |
+| `content` | String | 消息内容 |
+
+---
+
+### J. 会话恢复（重连场景）
+
+#### type = `snapshot`（会话快照）
+
+WS 重连时推送的历史消息快照。
+
+```json
+{
+  "type": "snapshot",
+  "seq": 1,
+  "welinkSessionId": "ses_xxx",
+  "emittedAt": "2026-04-14T00:36:00Z",
+  "messages": [
+    {"messageId": "msg_1", "role": "user", "content": "你好", "seq": 1},
+    {"messageId": "msg_2", "role": "assistant", "content": "你好！", "seq": 2}
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `messages` | Array | 历史消息列表 |
+
+---
+
+#### type = `streaming`（当前流式状态）
+
+WS 重连时推送的当前正在进行的流式内容。
+
+```json
+{
+  "type": "streaming",
+  "seq": 2,
+  "welinkSessionId": "ses_xxx",
+  "emittedAt": "2026-04-14T00:36:00Z",
+  "sessionStatus": "busy",
+  "parts": [
+    {"type": "text.delta", "content": "正在回复中..."},
+    {"type": "tool.update", "toolName": "bash", "status": "running"}
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `sessionStatus` | String | `busy` / `idle` |
+| `parts` | Array | 当前正在进行的流式部分列表 |
+
+---
+
+### K. 云端扩展类型（业务助手专属）
 
 以下类型仅在业务助手（走云端 SSE）场景下出现：
 
-| type | 说明 | 关键字段 |
-|------|------|----------|
-| `planning.delta` | 规划过程片段 | `content` |
-| `planning.done` | 规划过程完成 | `content` |
-| `searching` | 正在搜索 | `keywords`: String[] |
-| `search_result` | 搜索结果 | `searchResults`: [{index, title, source}] |
-| `reference` | 引用来源 | `references`: [{index, title, source, url, content}] |
-| `ask_more` | 追问建议 | `askMoreQuestions`: String[] |
+#### type = `planning.delta`（规划过程片段）
+
+```json
+{
+  "type": "planning.delta",
+  "content": "分析用户问题，准备搜索相关资料"
+}
+```
+
+#### type = `planning.done`（规划完成）
+
+```json
+{
+  "type": "planning.done",
+  "content": "分析用户问题，准备搜索相关资料并整理回答"
+}
+```
+
+#### type = `searching`（正在搜索）
+
+```json
+{
+  "type": "searching",
+  "keywords": ["测试关键词1", "测试关键词2"]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `keywords` | String[] | 搜索关键词列表 |
+
+#### type = `search_result`（搜索结果）
+
+```json
+{
+  "type": "search_result",
+  "searchResults": [
+    {"index": "1", "title": "文章标题", "source": "来源名称"},
+    {"index": "2", "title": "文章标题2", "source": "来源2"}
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `searchResults` | Array | 搜索结果列表 |
+| `searchResults[].index` | String | 序号 |
+| `searchResults[].title` | String | 标题 |
+| `searchResults[].source` | String | 来源 |
+
+#### type = `reference`（引用来源）
+
+```json
+{
+  "type": "reference",
+  "references": [
+    {"index": "1", "title": "文章标题", "source": "来源", "url": "https://...", "content": "摘要内容"}
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `references` | Array | 引用列表 |
+| `references[].index` | String | 序号 |
+| `references[].title` | String | 标题 |
+| `references[].source` | String | 来源 |
+| `references[].url` | String | 链接 |
+| `references[].content` | String | 内容摘要 |
+
+#### type = `ask_more`（追问建议）
+
+```json
+{
+  "type": "ask_more",
+  "askMoreQuestions": ["还有什么想了解的？", "需要更详细的说明吗？"]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `askMoreQuestions` | String[] | 建议的追问列表 |
+
+---
+
+### 类型速查表
+
+| type | 分类 | 需要回复？ | 关键字段 |
+|------|------|-----------|----------|
+| `text.delta` | 文本 | 否 | `content`, `messageId` |
+| `text.done` | 文本 | 否 | `content`, `messageId`, `partId` |
+| `thinking.delta` | 思考 | 否 | `content` |
+| `thinking.done` | 思考 | 否 | `content` |
+| `tool.update` | 工具 | 否 | `toolName`, `toolCallId`, `input`, `output`, `status` |
+| `file` | 工具 | 否 | `fileName`, `fileUrl`, `fileMime` |
+| `permission.ask` | 权限 | **是** → `permission_reply` | `permissionId`, `permType`, `title`, `metadata` |
+| `permission.reply` | 权限 | 否 | `permissionId`, `response` |
+| `question` | 问答 | **是** → `question_reply` | `toolCallId`, `question`, `options`, `header` |
+| `step.start` | 生命周期 | 否 | `messageId` |
+| `step.done` | 生命周期 | 否 | `tokens`, `cost`, `reason` |
+| `session.status` | 会话 | 否 | `sessionStatus` (busy/idle/retry) |
+| `session.title` | 会话 | 否 | `title` |
+| `session.error` | 错误 | 否 | `error` |
+| `error` | 错误 | 否 | `error` |
+| `agent.online` | Agent | 否 | (无) |
+| `agent.offline` | Agent | 否 | (无) |
+| `message.user` | 同步 | 否 | `content`, `messageId`, `messageSeq` |
+| `snapshot` | 恢复 | 否 | `messages` |
+| `streaming` | 恢复 | 否 | `sessionStatus`, `parts` |
+| `planning.delta` | 云端 | 否 | `content` |
+| `planning.done` | 云端 | 否 | `content` |
+| `searching` | 云端 | 否 | `keywords` |
+| `search_result` | 云端 | 否 | `searchResults` |
+| `reference` | 云端 | 否 | `references` |
+| `ask_more` | 云端 | 否 | `askMoreQuestions` |
 
 ---
 
