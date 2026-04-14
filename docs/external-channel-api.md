@@ -443,13 +443,13 @@ source → { instanceId → WebSocketSession }
 | `subagentSessionId` | String | 子 Agent 会话 ID（多 Agent 场景） |
 | `subagentName` | String | 子 Agent 名称 |
 
-> **⚠️ 个人助手 vs 业务助手字段差异**
+> **个人助手与业务助手格式一致**
 >
-> 个人助手（OpenCode Agent）的消息字段最完整，包含 `welinkSessionId`、`emittedAt`、`messageId`、`sourceMessageId`、`partId`、`partSeq` 等。
+> 所有消息在推送前都会经过 `enrichStreamMessage` 统一填充 `welinkSessionId`、`emittedAt` 等公共字段。个人助手和业务助手的消息格式一致，客户端只需一套解析逻辑。
 >
-> 业务助手（云端 Agent）的消息字段较稀疏，通常只有 `type` + 该类型的核心字段（如 `content`、`role`）。`welinkSessionId`、`emittedAt`、`sourceMessageId`、`partSeq` 等通常不出现。
+> 两者的差异仅在于：个人助手消息的 `messageId`、`sourceMessageId`、`partId`、`partSeq` 等由 OpenCode 协议自带；业务助手的这些字段取决于云端是否返回（`messageId`、`partId` 在 `text.done`/`thinking.done` 中有值，`text.delta` 中可能无值）。
 >
-> **客户端应对所有公共字段做 null 兼容处理，不要假设某个字段一定存在。**
+> **建议：客户端对 `messageId`、`partId`、`partSeq` 做 null 兼容处理即可。**
 
 ### 2.6 StreamMessage 类型定义（共 26 种）
 
@@ -954,35 +954,36 @@ WS 重连时推送的当前正在进行的流式内容。
 
 ### K. 业务助手（云端 Agent）完整报文参考
 
-业务助手的所有消息都经过 CloudEventTranslator 翻译，字段比个人助手稀疏。以下列出**业务助手场景下每种消息类型的实际 JSON 报文**（基于 CloudEventTranslator 源码逐行推导）。
+业务助手的消息经过 CloudEventTranslator 翻译后，由 `enrichStreamMessage` 统一补充 `welinkSessionId`、`emittedAt` 等公共字段，**格式与个人助手一致**。以下列出业务助手场景下每种消息类型的实际 JSON 报文。
 
 > 外层信封始终为 `{"sessionId":"...","userId":"...","domain":"im","message":{...}}`，以下只列出 message 部分。
+> 公共字段 `welinkSessionId`、`emittedAt` 始终存在（由 enrichStreamMessage 填充），以下简写为 `...` 省略。
 
 #### 文本
 
 ```json
-// text.delta — 仅 type + content + role
-{"type":"text.delta","content":"你好","role":"assistant"}
+// text.delta
+{"type":"text.delta","welinkSessionId":"ses_xxx","emittedAt":"2026-04-14T06:17:00Z","content":"你好","role":"assistant"}
 
-// text.done — 多了 messageId 和 partId
-{"type":"text.done","content":"你好，完整回复","role":"assistant","messageId":"msg-xxx","partId":"part-xxx"}
+// text.done — 多了 messageId 和 partId（由云端返回）
+{"type":"text.done","welinkSessionId":"ses_xxx","emittedAt":"2026-04-14T06:17:01Z","content":"你好，完整回复","role":"assistant","messageId":"msg-xxx","partId":"part-xxx"}
 ```
 
 #### 思考
 
 ```json
 // thinking.delta
-{"type":"thinking.delta","content":"让我想想...","role":"assistant"}
+{"type":"thinking.delta","welinkSessionId":"ses_xxx","emittedAt":"...","content":"让我想想...","role":"assistant"}
 
 // thinking.done
-{"type":"thinking.done","content":"完整思考内容","role":"assistant","messageId":"msg-xxx","partId":"part-xxx"}
+{"type":"thinking.done","welinkSessionId":"ses_xxx","emittedAt":"...","content":"完整思考内容","role":"assistant","messageId":"msg-xxx","partId":"part-xxx"}
 ```
 
 #### 工具调用
 
 ```json
 // tool.update — @JsonUnwrapped 平铺 ToolInfo 字段
-{"type":"tool.update","toolName":"bash","toolCallId":"call-xxx","input":"echo hello","output":"hello\n","status":"completed","title":"执行命令","error":null}
+{"type":"tool.update","welinkSessionId":"ses_xxx","emittedAt":"...","toolName":"bash","toolCallId":"call-xxx","input":"echo hello","output":"hello\n","status":"completed","title":"执行命令"}
 ```
 
 | 字段 | 类型 | 说明 |
@@ -999,17 +1000,17 @@ WS 重连时推送的当前正在进行的流式内容。
 
 ```json
 // file — @JsonUnwrapped 平铺 FileInfo 字段
-{"type":"file","fileName":"report.pdf","fileUrl":"https://...","fileMime":"application/pdf"}
+{"type":"file","welinkSessionId":"ses_xxx","emittedAt":"...","fileName":"report.pdf","fileUrl":"https://...","fileMime":"application/pdf"}
 ```
 
 #### 步骤
 
 ```json
 // step.start
-{"type":"step.start","messageId":"msg-xxx","role":"assistant"}
+{"type":"step.start","welinkSessionId":"ses_xxx","emittedAt":"...","messageId":"msg-xxx","role":"assistant"}
 
 // step.done — @JsonUnwrapped 平铺 UsageInfo 字段
-{"type":"step.done","tokens":{"input":100,"output":50},"cost":0.01,"reason":"end_turn"}
+{"type":"step.done","welinkSessionId":"ses_xxx","emittedAt":"...","tokens":{"input":100,"output":50},"cost":0.01,"reason":"end_turn"}
 ```
 
 > 注意：云端的 `tokens` 结构可能与个人助手不同，字段名取决于云端返回。
@@ -1018,7 +1019,7 @@ WS 重连时推送的当前正在进行的流式内容。
 
 ```json
 // question — @JsonUnwrapped 平铺 ToolInfo + QuestionInfo
-{"type":"question","toolCallId":"call-xxx","status":"running","header":"选择方案","question":"选 A 还是 B？","options":["A","B"]}
+{"type":"question","welinkSessionId":"ses_xxx","emittedAt":"...","toolCallId":"call-xxx","status":"running","header":"选择方案","question":"选 A 还是 B？","options":["A","B"]}
 ```
 
 | 字段 | 类型 | 说明 |
@@ -1033,10 +1034,10 @@ WS 重连时推送的当前正在进行的流式内容。
 
 ```json
 // permission.ask — @JsonUnwrapped 平铺 PermissionInfo
-{"type":"permission.ask","permissionId":"per-xxx","permType":"bash","metadata":{},"title":"bash"}
+{"type":"permission.ask","welinkSessionId":"ses_xxx","emittedAt":"...","permissionId":"per-xxx","permType":"bash","metadata":{},"title":"bash"}
 
 // permission.reply
-{"type":"permission.reply","permissionId":"per-xxx","permType":"bash","response":"once"}
+{"type":"permission.reply","welinkSessionId":"ses_xxx","permissionId":"per-xxx","permType":"bash","response":"once"}
 ```
 
 | 字段 | 类型 | 说明 |
@@ -1051,40 +1052,40 @@ WS 重连时推送的当前正在进行的流式内容。
 
 ```json
 // session.status
-{"type":"session.status","sessionStatus":"idle"}
+{"type":"session.status","welinkSessionId":"ses_xxx","emittedAt":"...","sessionStatus":"idle"}
 
 // session.title
-{"type":"session.title","title":"天气查询对话"}
+{"type":"session.title","welinkSessionId":"ses_xxx","emittedAt":"...","title":"天气查询对话"}
 
 // session.error
-{"type":"session.error","error":"上下文溢出"}
+{"type":"session.error","welinkSessionId":"ses_xxx","emittedAt":"...","error":"上下文溢出"}
 ```
 
 #### 云端专属类型
 
 ```json
 // planning.delta
-{"type":"planning.delta","content":"分析用户问题，准备搜索资料"}
+{"type":"planning.delta","welinkSessionId":"ses_xxx","emittedAt":"...","content":"分析用户问题，准备搜索资料"}
 
 // planning.done
-{"type":"planning.done","content":"分析完毕，准备整理回答"}
+{"type":"planning.done","welinkSessionId":"ses_xxx","emittedAt":"...","content":"分析完毕，准备整理回答"}
 
 // searching
-{"type":"searching","keywords":["关键词1","关键词2"]}
+{"type":"searching","welinkSessionId":"ses_xxx","emittedAt":"...","keywords":["关键词1","关键词2"]}
 
 // search_result
-{"type":"search_result","searchResults":[
+{"type":"search_result","welinkSessionId":"ses_xxx","emittedAt":"...","searchResults":[
   {"index":"1","title":"文章标题","source":"来源"},
   {"index":"2","title":"文章标题2","source":"来源2"}
 ]}
 
 // reference
-{"type":"reference","references":[
+{"type":"reference","welinkSessionId":"ses_xxx","emittedAt":"...","references":[
   {"index":"1","title":"文章标题","source":"来源","url":"https://example.com","content":"摘要"}
 ]}
 
 // ask_more
-{"type":"ask_more","askMoreQuestions":["还想了解什么？","需要更详细吗？"]}
+{"type":"ask_more","welinkSessionId":"ses_xxx","emittedAt":"...","askMoreQuestions":["还想了解什么？","需要更详细吗？"]}
 ```
 
 | type | 字段 | 类型 | 说明 |
