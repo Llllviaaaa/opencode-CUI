@@ -111,7 +111,10 @@ public class InboundProcessingService {
                 log.warn("[SKIP] processChat: reason=agent_offline, ak={}, sessionType={}, sessionId={}",
                         ak, sessionType, sessionId);
                 handleAgentOffline(businessDomain, sessionType, sessionId, ak, assistantAccount);
-                return InboundResult.ok();
+                // 离线时查找已有 session 返回其 ID
+                SkillSession offlineSession = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
+                return InboundResult.ok(sessionId,
+                        offlineSession != null ? String.valueOf(offlineSession.getId()) : null);
             }
         }
 
@@ -123,13 +126,16 @@ public class InboundProcessingService {
         // 第 4 步：查找已有 session
         SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
 
-        // 情况 A：session 不存在 → 异步创建
+        // 情况 A：session 不存在 → 异步创建（welinkSessionId 异步生成，暂不返回）
         if (session == null) {
             log.info("No existing session found, creating async: domain={}, sessionType={}, sessionId={}, ak={}",
                     businessDomain, sessionType, sessionId, ak);
             sessionManager.createSessionAsync(businessDomain, sessionType, sessionId,
                     ak, ownerWelinkId, assistantAccount, prompt);
-            return InboundResult.ok();
+            // 异步创建后重新查询获取 session ID
+            SkillSession created = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
+            return InboundResult.ok(sessionId,
+                    created != null ? String.valueOf(created.getId()) : null);
         }
 
         // 情况 B：session 存在但 toolSessionId 尚未就绪
@@ -137,7 +143,7 @@ public class InboundProcessingService {
             log.info("Session exists but toolSessionId not ready, requesting rebuild: skillSessionId={}",
                     session.getId());
             sessionManager.requestToolSession(session, prompt);
-            return InboundResult.ok();
+            return InboundResult.ok(sessionId, String.valueOf(session.getId()));
         }
 
         // 情况 C：session 就绪，转发消息到 AI Gateway
@@ -161,7 +167,7 @@ public class InboundProcessingService {
                 GatewayActions.CHAT,
                 PayloadBuilder.buildPayload(objectMapper, payloadFields)));
 
-        return InboundResult.ok();
+        return InboundResult.ok(sessionId, String.valueOf(session.getId()));
     }
 
     /**
@@ -189,7 +195,8 @@ public class InboundProcessingService {
 
         SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
         if (session == null || session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
-            return InboundResult.error(404, "Session not found or not ready");
+            return InboundResult.error(404, "Session not found or not ready", sessionId,
+                    session != null ? String.valueOf(session.getId()) : null);
         }
 
         String targetToolSessionId = subagentSessionId != null ? subagentSessionId : session.getToolSessionId();
@@ -202,7 +209,7 @@ public class InboundProcessingService {
                 GatewayActions.QUESTION_REPLY,
                 PayloadBuilder.buildPayload(objectMapper, payloadFields)));
 
-        return InboundResult.ok();
+        return InboundResult.ok(sessionId, String.valueOf(session.getId()));
     }
 
     /**
@@ -213,7 +220,7 @@ public class InboundProcessingService {
      * @param sessionId         业务侧会话 ID
      * @param assistantAccount  助手账号
      * @param permissionId      权限请求 ID
-     * @param response          用户应答（allow / deny）
+     * @param response          用户应答（once / always / reject）
      * @param subagentSessionId 子代理会话 ID（可为 null）
      * @return 处理结果
      */
@@ -230,7 +237,8 @@ public class InboundProcessingService {
 
         SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
         if (session == null || session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
-            return InboundResult.error(404, "Session not found or not ready");
+            return InboundResult.error(404, "Session not found or not ready", sessionId,
+                    session != null ? String.valueOf(session.getId()) : null);
         }
 
         String targetToolSessionId = subagentSessionId != null ? subagentSessionId : session.getToolSessionId();
@@ -255,7 +263,7 @@ public class InboundProcessingService {
                 .build();
         gatewayRelayService.publishProtocolMessage(String.valueOf(session.getId()), replyMsg);
 
-        return InboundResult.ok();
+        return InboundResult.ok(sessionId, String.valueOf(session.getId()));
     }
 
     /**
@@ -280,11 +288,14 @@ public class InboundProcessingService {
         SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
         if (session != null) {
             sessionManager.requestToolSession(session, null);
+            return InboundResult.ok(sessionId, String.valueOf(session.getId()));
         } else {
             sessionManager.createSessionAsync(businessDomain, sessionType, sessionId,
                     ak, ownerWelinkId, assistantAccount, null);
+            SkillSession created = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
+            return InboundResult.ok(sessionId,
+                    created != null ? String.valueOf(created.getId()) : null);
         }
-        return InboundResult.ok();
     }
 
     /**
@@ -318,13 +329,32 @@ public class InboundProcessingService {
      * @param code    错误码（成功为 0）
      * @param message 错误消息（成功为 null）
      */
-    public record InboundResult(boolean success, int code, String message) {
+    /**
+     * 入站处理结果。
+     *
+     * @param success           是否成功
+     * @param code              错误码（成功为 0）
+     * @param message           错误消息（成功为 null）
+     * @param businessSessionId 业务侧会话 ID（原样返回）
+     * @param welinkSessionId   Skill Server 内部会话 ID（WS 推送消息中的 sessionId）
+     */
+    public record InboundResult(boolean success, int code, String message,
+                                 String businessSessionId, String welinkSessionId) {
+        public static InboundResult ok(String businessSessionId, String welinkSessionId) {
+            return new InboundResult(true, 0, null, businessSessionId, welinkSessionId);
+        }
+
         public static InboundResult ok() {
-            return new InboundResult(true, 0, null);
+            return new InboundResult(true, 0, null, null, null);
         }
 
         public static InboundResult error(int code, String message) {
-            return new InboundResult(false, code, message);
+            return new InboundResult(false, code, message, null, null);
+        }
+
+        public static InboundResult error(int code, String message,
+                                           String businessSessionId, String welinkSessionId) {
+            return new InboundResult(false, code, message, businessSessionId, welinkSessionId);
         }
     }
 }

@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 @Slf4j
@@ -36,7 +37,8 @@ public class ExternalInboundController {
     }
 
     @PostMapping("/invoke")
-    public ResponseEntity<ApiResponse<Void>> invoke(@RequestBody ExternalInvokeRequest request) {
+    @SuppressWarnings("unchecked")
+    public ResponseEntity<ApiResponse<?>> invoke(@RequestBody ExternalInvokeRequest request) {
         log.info("[ENTRY] ExternalInboundController.invoke: action={}, domain={}, sessionType={}, sessionId={}, assistant={}",
                 request != null ? request.getAction() : null,
                 request != null ? request.getBusinessDomain() : null,
@@ -76,10 +78,24 @@ public class ExternalInboundController {
             default -> InboundResult.error(400, "Unknown action: " + request.getAction());
         };
 
-        if (!result.success()) {
-            return ResponseEntity.ok(ApiResponse.error(result.code(), result.message()));
+        // 构建 session 信息（成功和失败都返回）
+        Map<String, String> sessionData = new java.util.LinkedHashMap<>();
+        if (result.businessSessionId() != null) {
+            sessionData.put("businessSessionId", result.businessSessionId());
         }
-        return ResponseEntity.ok(ApiResponse.ok(null));
+        if (result.welinkSessionId() != null) {
+            sessionData.put("welinkSessionId", result.welinkSessionId());
+        }
+
+        if (!result.success()) {
+            ApiResponse<Map<String, String>> errorResp = ApiResponse.<Map<String, String>>builder()
+                    .code(result.code())
+                    .errormsg(result.message())
+                    .data(sessionData.isEmpty() ? null : sessionData)
+                    .build();
+            return ResponseEntity.ok(errorResp);
+        }
+        return ResponseEntity.ok(ApiResponse.ok(sessionData.isEmpty() ? null : sessionData));
     }
 
     private String validateEnvelope(ExternalInvokeRequest request) {
