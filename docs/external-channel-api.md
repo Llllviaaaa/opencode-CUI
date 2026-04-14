@@ -453,19 +453,29 @@ source → { instanceId → WebSocketSession }
 | `subagentSessionId` | String | 子 Agent 会话 ID（多 Agent 场景） |
 | `subagentName` | String | 子 Agent 名称 |
 
-> **个人助手与业务助手格式一致**
->
-> 所有消息在推送前都会经过 `enrichStreamMessage` 统一填充 `welinkSessionId`、`emittedAt` 等公共字段。个人助手和业务助手的消息格式一致，客户端只需一套解析逻辑。
->
-> 两者的差异仅在于：个人助手消息的 `messageId`、`sourceMessageId`、`partId`、`partSeq` 等由 OpenCode 协议自带；业务助手的这些字段取决于云端是否返回（`messageId`、`partId` 在 `text.done`/`thinking.done` 中有值，`text.delta` 中可能无值）。
->
-> **建议：客户端对 `messageId`、`partId`、`partSeq` 做 null 兼容处理即可。**
+> **统一协议：个人助手与业务助手格式完全一致。** 客户端只需一套解析逻辑，不区分 agent 类型。
 
 ### 2.6 StreamMessage 类型定义（共 26 种）
 
-`message.type` 决定消息类型和携带的字段。以下按功能分组，列出所有类型的完整字段定义。
+`type` 字段决定消息类型。以下为统一协议标准，**个人助手和业务助手完全一致**。
 
-> **约定**：公共字段（`type`、`seq`、`welinkSessionId`、`emittedAt` 等）见 2.5 节，以下仅列出各类型的**特有字段**。所有 null 字段在 JSON 中省略。
+> **公共字段规范**：以下字段在所有消息类型中**必须存在**（服务端保证填充）：
+> - `type` — 消息类型
+> - `seq` — 传输序号（递增）
+> - `welinkSessionId` — 会话 ID（用于关联 REST 返回的 welinkSessionId）
+> - `emittedAt` — 服务端时间戳
+>
+> 以下字段在**有内容交互的消息类型**（文本/思考/工具/问答/权限/步骤）中必须存在：
+> - `messageId` — 消息 ID（同一轮回复共享）
+> - `sourceMessageId` — 源消息 ID
+> - `messageSeq` — 消息序号
+> - `role` — 角色（`assistant`）
+>
+> 以下字段在**部分级消息**（delta/done/tool.update/question/file）中必须存在：
+> - `partId` — 部分 ID
+> - `partSeq` — 部分序号
+>
+> 所有 null 字段在 JSON 中省略（`@JsonInclude(NON_NULL)`）。
 
 ---
 
@@ -479,54 +489,47 @@ AI 回复的流式文本片段，逐 token 推送。客户端应**追加**显示
 {
   "type": "text.delta",
   "seq": 42,
-  "welinkSessionId": "ses_xxx",
+  "welinkSessionId": "2711748171393929216",
   "emittedAt": "2026-04-14T00:36:00Z",
   "messageId": "msg_xxx",
   "sourceMessageId": "msg_xxx",
+  "messageSeq": 5,
   "role": "assistant",
-  "partId": "part_xxx",
+  "partId": "prt_xxx",
   "partSeq": 3,
   "content": "你好"
 }
 ```
 
-| 字段 | 类型 | 必有 | 说明 |
-|------|------|------|------|
-| `content` | String | 是 | 文本片段（追加到已有内容后） |
-| `role` | String | 是 | 固定 `assistant` |
-| `messageId` | String | 是 | 消息 ID（同一轮回复共享） |
-| `sourceMessageId` | String | 否 | 源消息 ID |
-| `partId` | String | 否 | 消息部分 ID |
-| `partSeq` | Integer | 否 | 部分序号 |
+| 特有字段 | 类型 | 说明 |
+|----------|------|------|
+| `content` | String | 文本片段（追加显示） |
 
 ---
 
 #### type = `text.done`（文本完成）
 
-一轮文本回复完成。`content` = 所有同 `messageId` 的 `text.delta.content` 拼接结果。
+一轮文本回复完成。`content` = 所有同 `messageId` + `partId` 的 `text.delta.content` 拼接结果。
 
 ```json
 {
   "type": "text.done",
   "seq": 55,
-  "welinkSessionId": "ses_xxx",
+  "welinkSessionId": "2711748171393929216",
   "emittedAt": "2026-04-14T00:36:01Z",
   "messageId": "msg_xxx",
   "sourceMessageId": "msg_xxx",
+  "messageSeq": 5,
   "role": "assistant",
-  "partId": "part_xxx",
+  "partId": "prt_xxx",
   "partSeq": 3,
   "content": "你好，这是完整的回复内容。"
 }
 ```
 
-| 字段 | 类型 | 必有 | 说明 |
-|------|------|------|------|
-| `content` | String | 是 | **完整的回复文本** |
-| `role` | String | 是 | 固定 `assistant` |
-| `messageId` | String | 是 | 消息 ID |
-| `partId` | String | 否 | 消息部分 ID |
-| `partSeq` | Integer | 否 | 部分序号 |
+| 特有字段 | 类型 | 说明 |
+|----------|------|------|
+| `content` | String | **完整回复文本**（= 同 partId 的所有 delta 拼接） |
 
 ---
 
@@ -534,42 +537,52 @@ AI 回复的流式文本片段，逐 token 推送。客户端应**追加**显示
 
 #### type = `thinking.delta`（思考过程片段）
 
-AI 的内部推理过程（流式）。可选择性展示。
+AI 的内部推理过程（流式）。可选择性展示。字段结构与 `text.delta` 一致。
 
 ```json
 {
   "type": "thinking.delta",
   "seq": 30,
-  "welinkSessionId": "ses_xxx",
+  "welinkSessionId": "2711748171393929216",
   "emittedAt": "2026-04-14T00:36:00Z",
   "messageId": "msg_xxx",
+  "sourceMessageId": "msg_xxx",
+  "messageSeq": 5,
   "role": "assistant",
-  "partId": "part_xxx",
+  "partId": "prt_xxx",
   "partSeq": 2,
   "content": "让我分析一下这个问题..."
 }
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
+| 特有字段 | 类型 | 说明 |
+|----------|------|------|
 | `content` | String | 思考内容片段 |
 
 ---
 
 #### type = `thinking.done`（思考过程完成）
 
+字段结构与 `text.done` 一致。
+
 ```json
 {
   "type": "thinking.done",
+  "seq": 35,
+  "welinkSessionId": "2711748171393929216",
+  "emittedAt": "2026-04-14T00:36:01Z",
   "messageId": "msg_xxx",
+  "sourceMessageId": "msg_xxx",
+  "messageSeq": 5,
   "role": "assistant",
-  "partId": "part_xxx",
+  "partId": "prt_xxx",
+  "partSeq": 2,
   "content": "让我分析一下这个问题，需要考虑以下几个方面..."
 }
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
+| 特有字段 | 类型 | 说明 |
+|----------|------|------|
 | `content` | String | 完整思考内容 |
 
 ---
@@ -962,150 +975,136 @@ WS 重连时推送的当前正在进行的流式内容。
 
 ---
 
-### K. 业务助手（云端 Agent）完整报文参考
+### K. 云端扩展类型（业务助手专属）
 
-业务助手的消息经过 CloudEventTranslator 翻译后，由 `enrichStreamMessage` 统一补充 `welinkSessionId`、`emittedAt` 等公共字段，**格式与个人助手一致**。以下列出业务助手场景下每种消息类型的实际 JSON 报文。
+以下类型仅在业务助手场景下出现。公共字段（`seq`、`welinkSessionId`、`emittedAt`、`messageId`、`sourceMessageId`、`messageSeq`、`role`、`partId`、`partSeq`）同样遵循统一规范。
 
-> 外层信封始终为 `{"sessionId":"...","userId":"...","domain":"im","message":{...}}`，以下只列出 message 部分。
-> 公共字段 `welinkSessionId`、`emittedAt` 始终存在（由 enrichStreamMessage 填充），以下简写为 `...` 省略。
-
-#### 文本
+#### type = `planning.delta`（规划过程片段）
 
 ```json
-// text.delta
-{"type":"text.delta","welinkSessionId":"ses_xxx","emittedAt":"2026-04-14T06:17:00Z","content":"你好","role":"assistant"}
-
-// text.done — 多了 messageId 和 partId（由云端返回）
-{"type":"text.done","welinkSessionId":"ses_xxx","emittedAt":"2026-04-14T06:17:01Z","content":"你好，完整回复","role":"assistant","messageId":"msg-xxx","partId":"part-xxx"}
+{
+  "type": "planning.delta",
+  "seq": 5,
+  "welinkSessionId": "2711748171393929216",
+  "emittedAt": "2026-04-14T00:36:00Z",
+  "messageId": "msg_xxx",
+  "sourceMessageId": "msg_xxx",
+  "messageSeq": 3,
+  "role": "assistant",
+  "partId": "prt_xxx",
+  "partSeq": 1,
+  "content": "分析用户问题，准备搜索资料"
+}
 ```
 
-#### 思考
+| 特有字段 | 类型 | 说明 |
+|----------|------|------|
+| `content` | String | 规划内容片段 |
+
+#### type = `planning.done`（规划完成）
+
+结构同 `planning.delta`，`content` 为完整规划文本。
+
+---
+
+#### type = `searching`（正在搜索）
 
 ```json
-// thinking.delta
-{"type":"thinking.delta","welinkSessionId":"ses_xxx","emittedAt":"...","content":"让我想想...","role":"assistant"}
-
-// thinking.done
-{"type":"thinking.done","welinkSessionId":"ses_xxx","emittedAt":"...","content":"完整思考内容","role":"assistant","messageId":"msg-xxx","partId":"part-xxx"}
+{
+  "type": "searching",
+  "seq": 8,
+  "welinkSessionId": "2711748171393929216",
+  "emittedAt": "2026-04-14T00:36:01Z",
+  "messageId": "msg_xxx",
+  "sourceMessageId": "msg_xxx",
+  "messageSeq": 3,
+  "role": "assistant",
+  "partId": "prt_xxx",
+  "partSeq": 2,
+  "keywords": ["关键词1", "关键词2"]
+}
 ```
 
-#### 工具调用
+| 特有字段 | 类型 | 说明 |
+|----------|------|------|
+| `keywords` | String[] | 搜索关键词列表 |
+
+---
+
+#### type = `search_result`（搜索结果）
 
 ```json
-// tool.update — @JsonUnwrapped 平铺 ToolInfo 字段
-{"type":"tool.update","welinkSessionId":"ses_xxx","emittedAt":"...","toolName":"bash","toolCallId":"call-xxx","input":"echo hello","output":"hello\n","status":"completed","title":"执行命令"}
+{
+  "type": "search_result",
+  "seq": 9,
+  "welinkSessionId": "2711748171393929216",
+  "emittedAt": "2026-04-14T00:36:01Z",
+  "messageId": "msg_xxx",
+  "sourceMessageId": "msg_xxx",
+  "messageSeq": 3,
+  "role": "assistant",
+  "partId": "prt_xxx",
+  "partSeq": 3,
+  "searchResults": [
+    {"index": "1", "title": "文章标题", "source": "来源"},
+    {"index": "2", "title": "文章标题2", "source": "来源2"}
+  ]
+}
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `toolName` | String | 工具名 |
-| `toolCallId` | String | 调用 ID |
-| `input` | String | 输入（云端为字符串，个人助手为 Object） |
-| `output` | String | 输出 |
-| `status` | String | running / completed / failed |
-| `title` | String | 描述 |
-| `error` | String | 错误信息 |
+| 特有字段 | 类型 | 说明 |
+|----------|------|------|
+| `searchResults` | Array | `[{index, title, source}]` |
 
-#### 文件
+---
+
+#### type = `reference`（引用来源）
 
 ```json
-// file — @JsonUnwrapped 平铺 FileInfo 字段
-{"type":"file","welinkSessionId":"ses_xxx","emittedAt":"...","fileName":"report.pdf","fileUrl":"https://...","fileMime":"application/pdf"}
+{
+  "type": "reference",
+  "seq": 10,
+  "welinkSessionId": "2711748171393929216",
+  "emittedAt": "2026-04-14T00:36:02Z",
+  "messageId": "msg_xxx",
+  "sourceMessageId": "msg_xxx",
+  "messageSeq": 3,
+  "role": "assistant",
+  "partId": "prt_xxx",
+  "partSeq": 4,
+  "references": [
+    {"index": "1", "title": "文章标题", "source": "来源", "url": "https://example.com", "content": "摘要内容"}
+  ]
+}
 ```
 
-#### 步骤
+| 特有字段 | 类型 | 说明 |
+|----------|------|------|
+| `references` | Array | `[{index, title, source, url, content}]` |
+
+---
+
+#### type = `ask_more`（追问建议）
 
 ```json
-// step.start
-{"type":"step.start","welinkSessionId":"ses_xxx","emittedAt":"...","messageId":"msg-xxx","role":"assistant"}
-
-// step.done — @JsonUnwrapped 平铺 UsageInfo 字段
-{"type":"step.done","welinkSessionId":"ses_xxx","emittedAt":"...","tokens":{"input":100,"output":50},"cost":0.01,"reason":"end_turn"}
+{
+  "type": "ask_more",
+  "seq": 25,
+  "welinkSessionId": "2711748171393929216",
+  "emittedAt": "2026-04-14T00:36:05Z",
+  "messageId": "msg_xxx",
+  "sourceMessageId": "msg_xxx",
+  "messageSeq": 3,
+  "role": "assistant",
+  "partId": "prt_xxx",
+  "partSeq": 8,
+  "askMoreQuestions": ["还想了解什么？", "需要更详细吗？"]
+}
 ```
 
-> 注意：云端的 `tokens` 结构可能与个人助手不同，字段名取决于云端返回。
-
-#### 问答
-
-```json
-// question — @JsonUnwrapped 平铺 ToolInfo + QuestionInfo
-{"type":"question","welinkSessionId":"ses_xxx","emittedAt":"...","toolCallId":"call-xxx","status":"running","header":"选择方案","question":"选 A 还是 B？","options":["A","B"]}
-```
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `toolCallId` | String | **回复时必须使用** |
-| `status` | String | running / completed |
-| `header` | String | 问题标题 |
-| `question` | String | 问题文本 |
-| `options` | String[] | 选项（可为 null） |
-
-#### 权限
-
-```json
-// permission.ask — @JsonUnwrapped 平铺 PermissionInfo
-{"type":"permission.ask","welinkSessionId":"ses_xxx","emittedAt":"...","permissionId":"per-xxx","permType":"bash","metadata":{},"title":"bash"}
-
-// permission.reply
-{"type":"permission.reply","welinkSessionId":"ses_xxx","permissionId":"per-xxx","permType":"bash","response":"once"}
-```
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `permissionId` | String | **回复时必须使用** |
-| `permType` | String | 工具类型 |
-| `title` | String | 工具名 |
-| `metadata` | Object | 详细参数 |
-| `response` | String | once / always / reject（仅 reply） |
-
-#### 会话状态
-
-```json
-// session.status
-{"type":"session.status","welinkSessionId":"ses_xxx","emittedAt":"...","sessionStatus":"idle"}
-
-// session.title
-{"type":"session.title","welinkSessionId":"ses_xxx","emittedAt":"...","title":"天气查询对话"}
-
-// session.error
-{"type":"session.error","welinkSessionId":"ses_xxx","emittedAt":"...","error":"上下文溢出"}
-```
-
-#### 云端专属类型
-
-```json
-// planning.delta
-{"type":"planning.delta","welinkSessionId":"ses_xxx","emittedAt":"...","content":"分析用户问题，准备搜索资料"}
-
-// planning.done
-{"type":"planning.done","welinkSessionId":"ses_xxx","emittedAt":"...","content":"分析完毕，准备整理回答"}
-
-// searching
-{"type":"searching","welinkSessionId":"ses_xxx","emittedAt":"...","keywords":["关键词1","关键词2"]}
-
-// search_result
-{"type":"search_result","welinkSessionId":"ses_xxx","emittedAt":"...","searchResults":[
-  {"index":"1","title":"文章标题","source":"来源"},
-  {"index":"2","title":"文章标题2","source":"来源2"}
-]}
-
-// reference
-{"type":"reference","welinkSessionId":"ses_xxx","emittedAt":"...","references":[
-  {"index":"1","title":"文章标题","source":"来源","url":"https://example.com","content":"摘要"}
-]}
-
-// ask_more
-{"type":"ask_more","welinkSessionId":"ses_xxx","emittedAt":"...","askMoreQuestions":["还想了解什么？","需要更详细吗？"]}
-```
-
-| type | 字段 | 类型 | 说明 |
-|------|------|------|------|
-| `planning.delta` | `content` | String | 规划内容片段 |
-| `planning.done` | `content` | String | 完整规划内容 |
-| `searching` | `keywords` | String[] | 搜索关键词 |
-| `search_result` | `searchResults` | Array | `[{index, title, source}]` |
-| `reference` | `references` | Array | `[{index, title, source, url, content}]` |
-| `ask_more` | `askMoreQuestions` | String[] | 追问建议 |
+| 特有字段 | 类型 | 说明 |
+|----------|------|------|
+| `askMoreQuestions` | String[] | 建议的追问列表 |
 
 ---
 
