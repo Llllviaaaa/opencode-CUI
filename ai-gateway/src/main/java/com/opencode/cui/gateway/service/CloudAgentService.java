@@ -90,9 +90,9 @@ public class CloudAgentService {
                     }
 
                     // 兜底：云端未传 messageId/partId 时 GW 自动补充
-                    JsonNode eventNode = event.getPayload() != null ? event.getPayload().path("event") : null;
-                    if (eventNode == null) eventNode = event.getPayload();
-                    if (eventNode != null) {
+                    // GatewayMessage.event 是 JsonNode，结构: {"type":"text.delta","properties":{...}}
+                    JsonNode eventNode = event.getEvent();
+                    if (eventNode != null && !eventNode.isMissingNode()) {
                         String eventType = eventNode.path("type").asText("");
                         JsonNode props = eventNode.path("properties");
                         if (props != null && !props.isMissingNode()) {
