@@ -1,7 +1,6 @@
 package com.opencode.cui.skill.service.delivery;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.RedisMessageBroker;
@@ -9,6 +8,10 @@ import com.opencode.cui.skill.ws.ExternalStreamHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+/**
+ * 通用外部 WS 出站投递策略。
+ * 直接序列化 StreamMessage 推送，与 miniapp 前端收到的报文格式完全一致（无信封包装）。
+ */
 @Slf4j
 @Component
 public class ExternalWsDeliveryStrategy implements OutboundDeliveryStrategy {
@@ -38,13 +41,14 @@ public class ExternalWsDeliveryStrategy implements OutboundDeliveryStrategy {
     public void deliver(SkillSession session, String sessionId, String userId, StreamMessage msg) {
         String domain = session.getBusinessSessionDomain();
         try {
-            ObjectNode envelope = objectMapper.createObjectNode();
-            envelope.put("sessionId", sessionId);
-            if (userId != null) envelope.put("userId", userId);
-            envelope.put("domain", domain);
-            envelope.set("message", objectMapper.valueToTree(msg));
-            redisMessageBroker.publishToChannel("stream:" + domain, objectMapper.writeValueAsString(envelope));
-            log.info("[DELIVERY] ExternalWs: sessionId={}, type={}, domain={}",
+            // 分配传输序号（与 miniapp 一致）
+            if (sessionId != null) {
+                msg.setSeq(redisMessageBroker.nextStreamSeq(sessionId));
+            }
+            // 直接序列化 StreamMessage，与 miniapp 前端收到的格式一致
+            String json = objectMapper.writeValueAsString(msg);
+            redisMessageBroker.publishToChannel("stream:" + domain, json);
+            log.debug("[DELIVERY] ExternalWs: sessionId={}, type={}, domain={}",
                     sessionId, msg != null ? msg.getType() : null, domain);
         } catch (Exception e) {
             log.error("Failed to deliver external WS message: sessionId={}, domain={}, error={}",

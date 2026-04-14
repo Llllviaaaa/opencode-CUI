@@ -8,6 +8,7 @@ import com.opencode.cui.skill.ws.ExternalStreamHandler;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
@@ -55,12 +56,21 @@ class ExternalWsDeliveryStrategyTest {
     }
 
     @Test
-    @DisplayName("delivers to stream:{domain} via Redis")
+    @DisplayName("delivers StreamMessage directly (no envelope) to stream:{domain}")
     void deliversToStreamChannel() {
+        when(redisMessageBroker.nextStreamSeq("sess-1")).thenReturn(1L);
         SkillSession session = SkillSession.builder().businessSessionDomain("im").build();
-        StreamMessage msg = StreamMessage.builder().type("delta").content("hello").build();
+        StreamMessage msg = StreamMessage.builder().type("text.delta").content("hello").build();
         strategy.deliver(session, "sess-1", "user-42", msg);
-        verify(redisMessageBroker).publishToChannel(eq("stream:im"), any(String.class));
+
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(redisMessageBroker).publishToChannel(eq("stream:im"), captor.capture());
+        // 验证推送的是 StreamMessage 直接序列化，不是信封
+        String json = captor.getValue();
+        assertTrue(json.contains("\"type\":\"text.delta\""));
+        assertTrue(json.contains("\"content\":\"hello\""));
+        assertFalse(json.contains("\"message\":"), "should not have envelope wrapper");
+        assertFalse(json.contains("\"domain\":"), "should not have domain in envelope");
     }
 
     @Test
