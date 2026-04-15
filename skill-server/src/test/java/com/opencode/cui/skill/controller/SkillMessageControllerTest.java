@@ -299,6 +299,56 @@ class SkillMessageControllerTest {
     }
 
     @Test
+    @DisplayName("replyPermission returns 503 when personal agent is offline")
+    void permissionReplyAgentOffline503() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+        when(gatewayApiClient.getAgentByAk("99")).thenReturn(null); // Agent 离线
+
+        var request = new SkillMessageController.PermissionReplyRequest();
+        request.setResponse("once");
+
+        var response = controller.replyPermission("1", "1", "p-abc", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(503, response.getBody().getCode());
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+    }
+
+    @Test
+    @DisplayName("replyPermission skips online check for business assistant (always online)")
+    void permissionReplyBusinessAssistantSkipsOnlineCheck() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("biz-ak");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+
+        // 设置 business scope 策略（requiresOnlineCheck=false）
+        com.opencode.cui.skill.service.scope.AssistantScopeStrategy businessStrategy =
+                org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
+        when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
+        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
+        when(assistantInfoService.getCachedScope("biz-ak")).thenReturn("business");
+
+        var request = new SkillMessageController.PermissionReplyRequest();
+        request.setResponse("once");
+
+        var response = controller.replyPermission("1", "1", "p-abc", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(0, response.getBody().getCode());
+        // 不应调用 getAgentByAk — 云端助手跳过在线检查
+        verify(gatewayApiClient, never()).getAgentByAk("biz-ak");
+        verify(gatewayRelayService).sendInvokeToGateway(any());
+    }
+
+    @Test
     @DisplayName("sendToIm returns 200 with success")
     void sendToIm200() {
         SkillSession session = new SkillSession();
