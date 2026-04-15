@@ -28,6 +28,9 @@
 skill:
   delivery:
     mode: rest   # rest | ws
+    invoke-source-ttl-seconds: 300    # invoke-source Redis 标记 TTL
+    registry-ttl-seconds: 30          # WS 连接注册表 TTL
+    registry-heartbeat-interval-ms: 10000  # 注册表心跳刷新间隔
 ```
 
 - `rest`：非 miniapp 域全部走 ImRest（过渡期）
@@ -39,10 +42,10 @@ skill:
 
 | 入口 | 传入 inboundSource | 写入 |
 |------|-------------------|------|
-| `ImInboundController` | `"IM"` | `SET invoke-source:{welinkSessionId} IM EX 300` |
-| `ExternalInboundController` | `"EXTERNAL"` | `SET invoke-source:{welinkSessionId} EXTERNAL EX 300` |
+| `ImInboundController` | `"IM"` | `SET invoke-source:{welinkSessionId} IM EX {invoke-source-ttl-seconds}` |
+| `ExternalInboundController` | `"EXTERNAL"` | `SET invoke-source:{welinkSessionId} EXTERNAL EX {invoke-source-ttl-seconds}` |
 
-- TTL 300 秒，Dispatcher 每次读取时续期
+- TTL 由 `skill.delivery.invoke-source-ttl-seconds` 配置（默认 300 秒），Dispatcher 每次读取时续期
 - 同一 session 不会被并发使用，无竞争
 
 ### 2.3 WS 连接注册表（ExternalWsRegistry）
@@ -53,13 +56,13 @@ skill:
 Key:    external-ws:registry:{domain}   (Hash)
 Field:  {ss-instance-id}
 Value:  {connectionCount}
-TTL:    30 秒，每 10 秒心跳续期
+TTL:    由 skill.delivery.registry-ttl-seconds 配置（默认 30 秒）
 ```
 
 注册时机：
 - `afterConnectionEstablished()`：注册/更新
 - `afterConnectionClosed()`：更新，连接数为 0 时 HDEL
-- 定时心跳（10 秒）：续期 TTL
+- 定时心跳（间隔由 `skill.delivery.registry-heartbeat-interval-ms` 配置，默认 10 秒）：续期 TTL
 
 ### 2.4 三层 WS 精确投递
 
