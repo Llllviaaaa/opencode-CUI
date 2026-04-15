@@ -1,7 +1,10 @@
 package com.opencode.cui.skill.ws;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.config.DeliveryProperties;
+import com.opencode.cui.skill.service.ExternalWsRegistry;
 import com.opencode.cui.skill.service.RedisMessageBroker;
+import com.opencode.cui.skill.service.SkillInstanceRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,6 +33,9 @@ import static org.mockito.Mockito.*;
 class ExternalStreamHandlerTest {
 
     @Mock private RedisMessageBroker redisMessageBroker;
+    @Mock private ExternalWsRegistry wsRegistry;
+    @Mock private SkillInstanceRegistry instanceRegistry;
+    @Mock private DeliveryProperties deliveryProperties;
     @Mock private ServerHttpRequest request;
     @Mock private ServerHttpResponse response;
     @Mock private WebSocketHandler wsHandler;
@@ -40,7 +46,10 @@ class ExternalStreamHandlerTest {
 
     @BeforeEach
     void setUp() {
-        handler = new ExternalStreamHandler(objectMapper, redisMessageBroker, "test-token");
+        when(instanceRegistry.getInstanceId()).thenReturn("test-instance-1");
+        handler = new ExternalStreamHandler(objectMapper, redisMessageBroker, "test-token",
+                wsRegistry, instanceRegistry, deliveryProperties);
+        handler.subscribeRelayChannel();
     }
 
     private String buildAuthProtocol(String token, String source, String instanceId) {

@@ -2,6 +2,7 @@ package com.opencode.cui.skill.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.config.AssistantIdProperties;
+import com.opencode.cui.skill.config.DeliveryProperties;
 import com.opencode.cui.skill.model.AgentSummary;
 import com.opencode.cui.skill.model.AssistantResolveResult;
 import com.opencode.cui.skill.model.InvokeCommand;
@@ -47,8 +48,11 @@ class InboundProcessingServiceTest {
     private AssistantScopeDispatcher scopeDispatcher;
     @Mock
     private OutboundDeliveryDispatcher outboundDeliveryDispatcher;
+    @Mock
+    private RedisMessageBroker redisMessageBroker;
 
     private AssistantIdProperties assistantIdProperties;
+    private DeliveryProperties deliveryProperties;
     private InboundProcessingService service;
 
     @BeforeEach
@@ -56,6 +60,8 @@ class InboundProcessingServiceTest {
         assistantIdProperties = new AssistantIdProperties();
         assistantIdProperties.setEnabled(true);
         assistantIdProperties.setTargetToolType("assistant");
+
+        deliveryProperties = new DeliveryProperties();
 
         service = new InboundProcessingService(
                 resolverService,
@@ -69,7 +75,9 @@ class InboundProcessingServiceTest {
                 new ObjectMapper(),
                 assistantInfoService,
                 scopeDispatcher,
-                outboundDeliveryDispatcher);
+                outboundDeliveryDispatcher,
+                deliveryProperties,
+                redisMessageBroker);
 
         // 默认 scope 策略：personal（requiresOnlineCheck=true）
         AssistantScopeStrategy personalStrategy = mock(AssistantScopeStrategy.class);
@@ -96,7 +104,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                "hello", "text", null, null);
+                "hello", "text", null, null, null);
 
         assertTrue(result.success());
         ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
@@ -116,7 +124,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "unknown",
-                "hello", "text", null, null);
+                "hello", "text", null, null, null);
 
         assertFalse(result.success());
         assertEquals(404, result.code());
@@ -135,7 +143,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-new", "assist-001",
-                "first msg", "text", null, null);
+                "first msg", "text", null, null, null);
 
         assertTrue(result.success());
         verify(sessionManager).createSessionAsync(
@@ -157,7 +165,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processQuestionReply(
                 "im", "direct", "dm-001", "assist-001",
-                "yes", "tc-001", null);
+                "yes", "tc-001", null, null);
 
         assertTrue(result.success());
         ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
@@ -181,7 +189,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processPermissionReply(
                 "im", "direct", "dm-001", "assist-001",
-                "perm-001", "allow", null);
+                "perm-001", "allow", null, null);
 
         assertTrue(result.success());
         // 验证 invoke

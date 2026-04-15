@@ -61,17 +61,18 @@ public class ExternalInboundController {
                     request.getBusinessDomain(), request.getSessionType(),
                     request.getSessionId(), request.getAssistantAccount(),
                     request.payloadString("content"), request.payloadString("msgType"),
-                    request.payloadString("imageUrl"), parseChatHistory(request.getPayload()));
+                    request.payloadString("imageUrl"), parseChatHistory(request.getPayload()),
+                    "EXTERNAL");
             case "question_reply" -> processingService.processQuestionReply(
                     request.getBusinessDomain(), request.getSessionType(),
                     request.getSessionId(), request.getAssistantAccount(),
                     request.payloadString("content"), request.payloadString("toolCallId"),
-                    request.payloadString("subagentSessionId"));
+                    request.payloadString("subagentSessionId"), "EXTERNAL");
             case "permission_reply" -> processingService.processPermissionReply(
                     request.getBusinessDomain(), request.getSessionType(),
                     request.getSessionId(), request.getAssistantAccount(),
                     request.payloadString("permissionId"), request.payloadString("response"),
-                    request.payloadString("subagentSessionId"));
+                    request.payloadString("subagentSessionId"), "EXTERNAL");
             case "rebuild" -> processingService.processRebuild(
                     request.getBusinessDomain(), request.getSessionType(),
                     request.getSessionId(), request.getAssistantAccount());

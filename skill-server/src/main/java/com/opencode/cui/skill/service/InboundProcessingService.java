@@ -2,6 +2,7 @@ package com.opencode.cui.skill.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.config.AssistantIdProperties;
+import com.opencode.cui.skill.config.DeliveryProperties;
 import com.opencode.cui.skill.model.AssistantResolveResult;
 import com.opencode.cui.skill.model.ImMessageRequest;
 import com.opencode.cui.skill.model.InvokeCommand;
@@ -47,6 +48,8 @@ public class InboundProcessingService {
     private final AssistantInfoService assistantInfoService;
     private final AssistantScopeDispatcher scopeDispatcher;
     private final OutboundDeliveryDispatcher outboundDeliveryDispatcher;
+    private final DeliveryProperties deliveryProperties;
+    private final RedisMessageBroker redisMessageBroker;
 
     public InboundProcessingService(
             AssistantAccountResolverService resolverService,
@@ -60,7 +63,9 @@ public class InboundProcessingService {
             ObjectMapper objectMapper,
             AssistantInfoService assistantInfoService,
             AssistantScopeDispatcher scopeDispatcher,
-            OutboundDeliveryDispatcher outboundDeliveryDispatcher) {
+            OutboundDeliveryDispatcher outboundDeliveryDispatcher,
+            DeliveryProperties deliveryProperties,
+            RedisMessageBroker redisMessageBroker) {
         this.resolverService = resolverService;
         this.assistantIdProperties = assistantIdProperties;
         this.gatewayApiClient = gatewayApiClient;
@@ -73,6 +78,8 @@ public class InboundProcessingService {
         this.assistantInfoService = assistantInfoService;
         this.scopeDispatcher = scopeDispatcher;
         this.outboundDeliveryDispatcher = outboundDeliveryDispatcher;
+        this.deliveryProperties = deliveryProperties;
+        this.redisMessageBroker = redisMessageBroker;
     }
 
     /**
@@ -91,7 +98,8 @@ public class InboundProcessingService {
      */
     public InboundResult processChat(String businessDomain, String sessionType, String sessionId,
                                       String assistantAccount, String content, String msgType,
-                                      String imageUrl, List<ImMessageRequest.ChatMessage> chatHistory) {
+                                      String imageUrl, List<ImMessageRequest.ChatMessage> chatHistory,
+                                      String inboundSource) {
         // 第 1 步：解析助手账号 → 获取 ak 和 ownerWelinkId
         AssistantResolveResult resolveResult = resolverService.resolve(assistantAccount);
         if (resolveResult == null) {
@@ -134,6 +142,7 @@ public class InboundProcessingService {
                     ak, ownerWelinkId, assistantAccount, prompt);
             // 异步创建后重新查询获取 session ID
             SkillSession created = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
+            writeInvokeSource(created, inboundSource);
             return InboundResult.ok(sessionId,
                     created != null ? String.valueOf(created.getId()) : null);
         }
@@ -143,6 +152,7 @@ public class InboundProcessingService {
             log.info("Session exists but toolSessionId not ready, requesting rebuild: skillSessionId={}",
                     session.getId());
             sessionManager.requestToolSession(session, prompt);
+            writeInvokeSource(session, inboundSource);
             return InboundResult.ok(sessionId, String.valueOf(session.getId()));
         }
 
@@ -167,6 +177,7 @@ public class InboundProcessingService {
                 GatewayActions.CHAT,
                 PayloadBuilder.buildPayload(objectMapper, payloadFields)));
 
+        writeInvokeSource(session, inboundSource);
         return InboundResult.ok(sessionId, String.valueOf(session.getId()));
     }
 
@@ -185,7 +196,7 @@ public class InboundProcessingService {
     public InboundResult processQuestionReply(String businessDomain, String sessionType,
                                                String sessionId, String assistantAccount,
                                                String content, String toolCallId,
-                                               String subagentSessionId) {
+                                               String subagentSessionId, String inboundSource) {
         AssistantResolveResult resolveResult = resolverService.resolve(assistantAccount);
         if (resolveResult == null) {
             return InboundResult.error(404, "Invalid assistant account");
@@ -209,6 +220,7 @@ public class InboundProcessingService {
                 GatewayActions.QUESTION_REPLY,
                 PayloadBuilder.buildPayload(objectMapper, payloadFields)));
 
+        writeInvokeSource(session, inboundSource);
         return InboundResult.ok(sessionId, String.valueOf(session.getId()));
     }
 
@@ -227,7 +239,7 @@ public class InboundProcessingService {
     public InboundResult processPermissionReply(String businessDomain, String sessionType,
                                                  String sessionId, String assistantAccount,
                                                  String permissionId, String response,
-                                                 String subagentSessionId) {
+                                                 String subagentSessionId, String inboundSource) {
         AssistantResolveResult resolveResult = resolverService.resolve(assistantAccount);
         if (resolveResult == null) {
             return InboundResult.error(404, "Invalid assistant account");
@@ -263,6 +275,7 @@ public class InboundProcessingService {
                 .build();
         gatewayRelayService.publishProtocolMessage(String.valueOf(session.getId()), replyMsg);
 
+        writeInvokeSource(session, inboundSource);
         return InboundResult.ok(sessionId, String.valueOf(session.getId()));
     }
 
@@ -295,6 +308,14 @@ public class InboundProcessingService {
             SkillSession created = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
             return InboundResult.ok(sessionId,
                     created != null ? String.valueOf(created.getId()) : null);
+        }
+    }
+
+    private void writeInvokeSource(SkillSession session, String inboundSource) {
+        if (session != null && inboundSource != null && deliveryProperties.isWsMode()) {
+            redisMessageBroker.setInvokeSource(
+                    String.valueOf(session.getId()), inboundSource,
+                    deliveryProperties.getInvokeSourceTtlSeconds());
         }
     }
 

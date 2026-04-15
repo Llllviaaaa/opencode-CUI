@@ -1,7 +1,11 @@
 package com.opencode.cui.skill.ws;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.config.DeliveryProperties;
+import com.opencode.cui.skill.service.ExternalWsRegistry;
 import com.opencode.cui.skill.service.RedisMessageBroker;
+import com.opencode.cui.skill.service.SkillInstanceRegistry;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.server.ServerHttpRequest;
@@ -34,6 +38,9 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
     private final ObjectMapper objectMapper;
     private final RedisMessageBroker redisMessageBroker;
     private final String inboundToken;
+    private final ExternalWsRegistry wsRegistry;
+    private final SkillInstanceRegistry instanceRegistry;
+    private final DeliveryProperties deliveryProperties;
 
     /** source → { instanceId → WebSocketSession } */
     private final Map<String, Map<String, WebSocketSession>> connectionPool = new ConcurrentHashMap<>();
@@ -42,10 +49,16 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
 
     public ExternalStreamHandler(ObjectMapper objectMapper,
                                   RedisMessageBroker redisMessageBroker,
-                                  @Value("${skill.im.inbound-token:changeme}") String inboundToken) {
+                                  @Value("${skill.im.inbound-token:changeme}") String inboundToken,
+                                  ExternalWsRegistry wsRegistry,
+                                  SkillInstanceRegistry instanceRegistry,
+                                  DeliveryProperties deliveryProperties) {
         this.objectMapper = objectMapper;
         this.redisMessageBroker = redisMessageBroker;
         this.inboundToken = inboundToken;
+        this.wsRegistry = wsRegistry;
+        this.instanceRegistry = instanceRegistry;
+        this.deliveryProperties = deliveryProperties;
     }
 
     @Override
@@ -94,6 +107,7 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
             redisMessageBroker.subscribeToChannel(channel, msg -> handleRedisMessage(source, msg));
         }
         log.info("External WS connected: source={}, instanceId={}, sessionId={}", source, instanceId, session.getId());
+        wsRegistry.register(source, instances.size());
     }
 
     @Override
@@ -121,6 +135,9 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
             if (instances.isEmpty()) {
                 connectionPool.remove(source);
                 redisMessageBroker.unsubscribeFromChannel(CHANNEL_PREFIX + source);
+                wsRegistry.unregister(source);
+            } else {
+                wsRegistry.register(source, instances.size());
             }
         }
         lastActivity.remove(session.getId());
@@ -160,6 +177,54 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
         }
     }
 
+    /**
+     * 精确投递：选择一条活跃 WS 连接推送消息。
+     * 与 pushToSource（广播到所有连接）不同，pushToOne 只发一次。
+     *
+     * @return true 如果成功推送，false 如果无可用连接
+     */
+    public boolean pushToOne(String source, String message) {
+        Map<String, WebSocketSession> instances = connectionPool.get(source);
+        if (instances == null || instances.isEmpty()) {
+            return false;
+        }
+        TextMessage textMessage = new TextMessage(message);
+        for (WebSocketSession session : instances.values()) {
+            if (session.isOpen()) {
+                try {
+                    synchronized (session) { session.sendMessage(textMessage); }
+                    return true;
+                } catch (Exception e) {
+                    log.error("Failed to pushToOne: source={}, sessionId={}, error={}",
+                            source, session.getId(), e.getMessage());
+                }
+            }
+        }
+        return false;
+    }
+
+    @PostConstruct
+    public void subscribeRelayChannel() {
+        String instanceId = instanceRegistry.getInstanceId();
+        redisMessageBroker.subscribeToChannel("ss:external-relay:" + instanceId,
+                this::handleExternalRelayMessage);
+        log.info("Subscribed to external relay channel: ss:external-relay:{}", instanceId);
+    }
+
+    private void handleExternalRelayMessage(String message) {
+        try {
+            var node = objectMapper.readTree(message);
+            String domain = node.path("domain").asText(null);
+            String payload = node.path("payload").asText(null);
+            if (domain != null && payload != null) {
+                boolean sent = pushToOne(domain, payload);
+                log.info("[RELAY-RX] External relay: domain={}, sent={}", domain, sent);
+            }
+        } catch (Exception e) {
+            log.error("Failed to handle external relay message: {}", e.getMessage());
+        }
+    }
+
     @Scheduled(fixedRate = 30_000)
     public void checkHeartbeatTimeouts() {
         Instant timeout = Instant.now().minusSeconds(60);
@@ -175,6 +240,10 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
                     }
                 }
             }
+        }
+        // 续期 WS 连接注册表
+        for (String source : connectionPool.keySet()) {
+            wsRegistry.heartbeat(source);
         }
     }
 

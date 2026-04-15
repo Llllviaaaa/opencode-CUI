@@ -40,7 +40,7 @@ class ExternalInboundControllerTest {
     @Test
     @DisplayName("chat action dispatches to processChat")
     void chatAction() throws Exception {
-        when(processingService.processChat(any(), any(), any(), any(), any(), any(), any(), any()))
+        when(processingService.processChat(any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(InboundResult.ok());
         var request = buildRequest("chat", "{\"content\":\"hello\",\"msgType\":\"text\"}");
         var response = controller.invoke(request);
@@ -48,7 +48,7 @@ class ExternalInboundControllerTest {
         assertEquals(0, response.getBody().getCode());
         verify(processingService).processChat(
                 eq("im"), eq("direct"), eq("dm-001"), eq("assist-01"),
-                eq("hello"), eq("text"), isNull(), isNull());
+                eq("hello"), eq("text"), isNull(), isNull(), eq("EXTERNAL"));
     }
 
     @Test
@@ -74,27 +74,27 @@ class ExternalInboundControllerTest {
     @Test
     @DisplayName("question_reply dispatches correctly")
     void questionReplyAction() throws Exception {
-        when(processingService.processQuestionReply(any(), any(), any(), any(), any(), any(), any()))
+        when(processingService.processQuestionReply(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(InboundResult.ok());
         var request = buildRequest("question_reply", "{\"content\":\"A\",\"toolCallId\":\"tc-1\"}");
         var response = controller.invoke(request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
         verify(processingService).processQuestionReply(
                 eq("im"), eq("direct"), eq("dm-001"), eq("assist-01"),
-                eq("A"), eq("tc-1"), isNull());
+                eq("A"), eq("tc-1"), isNull(), eq("EXTERNAL"));
     }
 
     @Test
     @DisplayName("permission_reply dispatches correctly")
     void permissionReplyAction() throws Exception {
-        when(processingService.processPermissionReply(any(), any(), any(), any(), any(), any(), any()))
+        when(processingService.processPermissionReply(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(InboundResult.ok());
         var request = buildRequest("permission_reply", "{\"permissionId\":\"perm-1\",\"response\":\"once\"}");
         var response = controller.invoke(request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
         verify(processingService).processPermissionReply(
                 eq("im"), eq("direct"), eq("dm-001"), eq("assist-01"),
-                eq("perm-1"), eq("once"), isNull());
+                eq("perm-1"), eq("once"), isNull(), eq("EXTERNAL"));
     }
 
     @Test

@@ -44,7 +44,7 @@ class ImInboundControllerTest {
 
                 when(processingService.processChat(
                                 "im", "direct", "dm-001", "assist-001",
-                                "hello", "text", null, null))
+                                "hello", "text", null, null, "IM"))
                                 .thenReturn(InboundResult.ok());
 
                 var response = controller.receiveMessage(request);
@@ -54,7 +54,7 @@ class ImInboundControllerTest {
                 assertEquals(0, response.getBody().getCode());
                 verify(processingService).processChat(
                                 "im", "direct", "dm-001", "assist-001",
-                                "hello", "text", null, null);
+                                "hello", "text", null, null, "IM");
         }
 
         @Test
@@ -68,7 +68,7 @@ class ImInboundControllerTest {
 
                 when(processingService.processChat(
                                 eq("im"), eq("group"), eq("grp-001"), eq("assist-001"),
-                                eq("summarize this"), eq("text"), eq(null), eq(history)))
+                                eq("summarize this"), eq("text"), eq(null), eq(history), eq("IM")))
                                 .thenReturn(InboundResult.ok());
 
                 var response = controller.receiveMessage(request);
@@ -76,7 +76,7 @@ class ImInboundControllerTest {
                 assertEquals(HttpStatus.OK, response.getStatusCode());
                 verify(processingService).processChat(
                                 eq("im"), eq("group"), eq("grp-001"), eq("assist-001"),
-                                eq("summarize this"), eq("text"), eq(null), eq(history));
+                                eq("summarize this"), eq("text"), eq(null), eq(history), eq("IM"));
         }
 
         @Test
@@ -86,7 +86,7 @@ class ImInboundControllerTest {
                                 "im", "direct", "dm-001", "assist-001",
                                 "hello", "text", null, null);
 
-                when(processingService.processChat(any(), any(), any(), any(), any(), any(), any(), any()))
+                when(processingService.processChat(any(), any(), any(), any(), any(), any(), any(), any(), any()))
                                 .thenReturn(InboundResult.error(404, "Invalid assistant account"));
 
                 var response = controller.receiveMessage(request);
@@ -103,7 +103,7 @@ class ImInboundControllerTest {
         void nullRequestReturns400() {
                 var response = controller.receiveMessage(null);
                 assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any());
+                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -116,7 +116,7 @@ class ImInboundControllerTest {
                 var response = controller.receiveMessage(request);
 
                 assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any());
+                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -129,7 +129,7 @@ class ImInboundControllerTest {
                 var response = controller.receiveMessage(request);
 
                 assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any());
+                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -142,7 +142,7 @@ class ImInboundControllerTest {
                 var response = controller.receiveMessage(request);
 
                 assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any());
+                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -155,6 +155,6 @@ class ImInboundControllerTest {
                 var response = controller.receiveMessage(request);
 
                 assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any());
+                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any(), any());
         }
 }

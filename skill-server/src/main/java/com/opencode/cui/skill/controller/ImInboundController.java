@@ -66,7 +66,8 @@ public class ImInboundController {
                 request.content(),
                 request.msgType(),
                 request.imageUrl(),
-                request.chatHistory());
+                request.chatHistory(),
+                "IM");
 
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
