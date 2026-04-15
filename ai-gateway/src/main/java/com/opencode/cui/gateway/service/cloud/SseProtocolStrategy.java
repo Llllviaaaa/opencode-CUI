@@ -114,8 +114,8 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                 new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                if (line.startsWith("data: ")) {
-                    String jsonData = line.substring(6).trim();
+                if (line.startsWith("data:")) {
+                    String jsonData = line.substring(5).trim();
                     if (jsonData.isEmpty() || "[DONE]".equals(jsonData)) {
                         continue;
                     }

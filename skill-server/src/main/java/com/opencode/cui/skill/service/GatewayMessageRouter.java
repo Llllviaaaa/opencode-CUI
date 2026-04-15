@@ -126,6 +126,10 @@ public class GatewayMessageRouter {
     /** Owner 被判定为死亡的超时阈值（秒） */
     private final int ownerDeadThresholdSeconds;
 
+    /** 业务助手 IM 场景 text.delta 内容累积器：sessionId → StringBuilder */
+    private final java.util.concurrent.ConcurrentHashMap<String, StringBuilder> cloudImTextBuffer =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     /** 业务助手 IM 场景需过滤的云端扩展事件类型集合 */
     private static final Set<String> BUSINESS_IM_FILTERED_TYPES = Set.of(
             StreamMessage.Types.PLANNING_DELTA, StreamMessage.Types.PLANNING_DONE,
@@ -526,6 +530,16 @@ public class GatewayMessageRouter {
             syncPendingImInteraction(session, msg);
         }
 
+        // IM 非流式渠道：累积 text.delta，兼容上游不发 text.done 的场景（业务/个人助手通用）
+        if (session != null && session.isImDomain()) {
+            if (StreamMessage.Types.TEXT_DELTA.equals(msg.getType()) && msg.getContent() != null) {
+                cloudImTextBuffer.computeIfAbsent(sessionId, k -> new StringBuilder())
+                        .append(msg.getContent());
+            } else if (StreamMessage.Types.TEXT_DONE.equals(msg.getType())) {
+                cloudImTextBuffer.remove(sessionId);
+            }
+        }
+
         // 统一填充 welinkSessionId、emittedAt 等公共字段
         enrichStreamMessage(sessionId, msg);
 
@@ -557,8 +571,22 @@ public class GatewayMessageRouter {
         log.info("handleToolDone: sessionId={}", sessionId);
         completedSessions.put(sessionId, Instant.now());
 
-        StreamMessage msg = StreamMessage.sessionStatus("idle");
+        // 刷出累积的 text.delta 内容（上游未发 text.done 时，用累积内容合成 text.done）
+        StringBuilder accumulated = cloudImTextBuffer.remove(sessionId);
         SkillSession session = resolveSession(sessionId);
+        if (accumulated != null && !accumulated.isEmpty() && session != null && session.isImDomain()) {
+            StreamMessage textDoneMsg = StreamMessage.builder()
+                    .type(StreamMessage.Types.TEXT_DONE)
+                    .content(accumulated.toString())
+                    .role("assistant")
+                    .build();
+            enrichStreamMessage(sessionId, textDoneMsg);
+            outboundDeliveryDispatcher.deliver(session, sessionId, userId, textDoneMsg);
+            log.info("Flushed accumulated text.delta as text.done to IM: sessionId={}, length={}",
+                    sessionId, accumulated.length());
+        }
+
+        StreamMessage msg = StreamMessage.sessionStatus("idle");
         Long numericId = ProtocolUtils.parseSessionId(sessionId);
 
         enrichStreamMessage(sessionId, msg);

@@ -690,7 +690,28 @@ public class SkillRelayService {
         if ("business".equals(scope)) {
             InvokeRouteStrategy strategy = routeStrategyMap.get("business");
             if (strategy != null) {
-                strategy.route(message, this::relayToSkill);
+                GatewayMessage tracedMsg = message.ensureTraceId();
+                String source = tracedMsg.getSource();
+
+                // 先学路由，确保云端响应能精确路由回 skill-server，不走 L3 广播
+                if (source != null && !source.isBlank()) {
+                    routingTable.learnRoute(tracedMsg, source);
+                    learnRouteFromInvoke(tracedMsg, session);
+
+                    String ssInstanceId = resolveSsInstanceId(session);
+                    if (ssInstanceId != null) {
+                        String toolSessionId = extractToolSessionIdFromPayload(tracedMsg);
+                        if (toolSessionId != null && !toolSessionId.isBlank()) {
+                            redisMessageBroker.setSessionRoute(toolSessionId, source, ssInstanceId);
+                        }
+                        String welinkSessionId = tracedMsg.getWelinkSessionId();
+                        if (welinkSessionId != null && !welinkSessionId.isBlank()) {
+                            redisMessageBroker.setWelinkSessionRoute(welinkSessionId, source, ssInstanceId);
+                        }
+                    }
+                }
+
+                strategy.route(tracedMsg, this::relayToSkill);
                 return;
             }
         }
