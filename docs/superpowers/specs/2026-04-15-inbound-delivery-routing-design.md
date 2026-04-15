@@ -34,11 +34,18 @@
 
 ### 2.1 标记写入
 
-| 入口 | 写入时机 | Redis 操作 |
-|------|---------|-----------|
-| `ImInboundController` | `processChat()` 之前 | `SET invoke-source:{welinkSessionId} IM EX 300` |
-| `ExternalInboundController` | `processChat()` 之前 | `SET invoke-source:{welinkSessionId} EXTERNAL EX 300` |
+标记在 `InboundProcessingService.processChat()` 内部写入，而非 Controller 层。原因：
+- session（welinkSessionId）在 `processChat()` 第 4 步才确定（查找或异步创建）
+- 情况 A（新建 session）中 invoke 在异步流程中发出，Controller 层写标记可能晚于 AI 响应
 
+**改动方式：** `processChat()` 新增 `inboundSource` 参数，Controller 传入 `"IM"` 或 `"EXTERNAL"`。在 session 确定后（情况 A/B/C 均有 session 可用时），写入 Redis 标记。`processQuestionReply()` 和 `processPermissionReply()` 同理，因为它们也触发 AI 响应流。
+
+| 入口 | 传入 inboundSource | 写入时机 |
+|------|-------------------|---------|
+| `ImInboundController` | `"IM"` | `processChat()` 内部，session 确定后 |
+| `ExternalInboundController` | `"EXTERNAL"` | `processChat()` 内部，session 确定后 |
+
+- Redis 操作：`SET invoke-source:{welinkSessionId} {IM|EXTERNAL} EX 300`
 - key 格式：`invoke-source:{welinkSessionId}`
 - value：`IM` 或 `EXTERNAL`
 - TTL：300 秒（5 分钟），防止不活跃 session 的 key 残留
@@ -76,8 +83,9 @@ MiniApp 域的判断优先于 invoke-source 标记。`isMiniappDomain()` 为 tru
 
 | 文件 | 改动 |
 |------|------|
-| `ImInboundController` | 在调用 `processChat()` 前写入 `invoke-source:{welinkSessionId} = IM` |
-| `ExternalInboundController` | 在调用 `processChat()` 前写入 `invoke-source:{welinkSessionId} = EXTERNAL` |
+| `InboundProcessingService` | `processChat()`、`processQuestionReply()`、`processPermissionReply()` 新增 `inboundSource` 参数，session 确定后写 Redis 标记 |
+| `ImInboundController` | 调用 `processChat()` 时传入 `"IM"` |
+| `ExternalInboundController` | 调用 `processChat()`、`processQuestionReply()`、`processPermissionReply()` 时传入 `"EXTERNAL"` |
 | `OutboundDeliveryDispatcher` | 读取 invoke-source 标记，按标记选择策略；MiniApp 优先判断不变 |
 | `ImRestDeliveryStrategy` | `supports()` 去掉 `hasActiveConnections` 检查，去掉 `ExternalStreamHandler` 依赖 |
 | `ExternalWsDeliveryStrategy` | 投递前检查 `PUBSUB NUMSUB`，无订阅者时打警告丢弃 |
