@@ -34,9 +34,10 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
     private final HttpClient httpClient;
 
     @org.springframework.beans.factory.annotation.Autowired
-    public SseProtocolStrategy(CloudAuthService cloudAuthService, ObjectMapper objectMapper) {
+    public SseProtocolStrategy(CloudAuthService cloudAuthService, ObjectMapper objectMapper,
+            @org.springframework.beans.factory.annotation.Value("${gateway.cloud.sse.connect-timeout-seconds:30}") int connectTimeoutSeconds) {
         this(cloudAuthService, objectMapper,
-                HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build());
+                HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(connectTimeoutSeconds)).build());
     }
 
     /**
