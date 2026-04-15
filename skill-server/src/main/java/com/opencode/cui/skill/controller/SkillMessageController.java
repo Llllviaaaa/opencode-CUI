@@ -368,6 +368,18 @@ public class SkillMessageController {
             return ResponseEntity.ok(ApiResponse.error(400, "No agent associated with this session"));
         }
 
+        // Agent 在线检查：云端助手永远在线（跳过），个人助手需要检查
+        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
+                assistantInfoService.getCachedScope(session.getAk()));
+        if (assistantIdProperties.isEnabled() && scopeStrategy.requiresOnlineCheck()) {
+            AgentSummary agent = gatewayApiClient.getAgentByAk(session.getAk());
+            if (agent == null) {
+                log.warn("[SKIP] replyPermission: reason=agent_offline, sessionId={}, ak={}",
+                        sessionId, session.getAk());
+                return ResponseEntity.ok(ApiResponse.error(503, AGENT_OFFLINE_MESSAGE));
+            }
+        }
+
         if (session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
             return ResponseEntity.ok(ApiResponse.error(500, "No toolSessionId available"));
         }
