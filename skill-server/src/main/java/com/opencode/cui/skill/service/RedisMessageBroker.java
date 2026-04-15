@@ -267,4 +267,80 @@ public class RedisMessageBroker {
         return seq != null ? seq : 1L;
     }
 
+    // ==================== invoke-source 标记 ====================
+
+    private static final String INVOKE_SOURCE_PREFIX = "invoke-source:";
+
+    public void setInvokeSource(String sessionId, String source, int ttlSeconds) {
+        try {
+            redisTemplate.opsForValue().set(
+                    INVOKE_SOURCE_PREFIX + sessionId, source, ttlSeconds, TimeUnit.SECONDS);
+            log.debug("Set invoke-source: sessionId={}, source={}, ttl={}s", sessionId, source, ttlSeconds);
+        } catch (Exception e) {
+            log.error("Failed to set invoke-source: sessionId={}, error={}", sessionId, e.getMessage());
+        }
+    }
+
+    public String getInvokeSource(String sessionId) {
+        try {
+            return redisTemplate.opsForValue().get(INVOKE_SOURCE_PREFIX + sessionId);
+        } catch (Exception e) {
+            log.error("Failed to get invoke-source: sessionId={}, error={}", sessionId, e.getMessage());
+            return null;
+        }
+    }
+
+    public void expireInvokeSource(String sessionId, int ttlSeconds) {
+        try {
+            redisTemplate.expire(INVOKE_SOURCE_PREFIX + sessionId, ttlSeconds, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.error("Failed to expire invoke-source: sessionId={}, error={}", sessionId, e.getMessage());
+        }
+    }
+
+    // ==================== WS 连接注册表 ====================
+
+    private static final String WS_REGISTRY_PREFIX = "external-ws:registry:";
+
+    public void registerWsConnection(String domain, String instanceId, int connectionCount, int ttlSeconds) {
+        try {
+            String key = WS_REGISTRY_PREFIX + domain;
+            redisTemplate.opsForHash().put(key, instanceId, String.valueOf(connectionCount));
+            redisTemplate.expire(key, ttlSeconds, TimeUnit.SECONDS);
+            log.debug("Registered WS connection: domain={}, instanceId={}, count={}", domain, instanceId, connectionCount);
+        } catch (Exception e) {
+            log.error("Failed to register WS connection: domain={}, error={}", domain, e.getMessage());
+        }
+    }
+
+    public void unregisterWsConnection(String domain, String instanceId) {
+        try {
+            redisTemplate.opsForHash().delete(WS_REGISTRY_PREFIX + domain, instanceId);
+            log.debug("Unregistered WS connection: domain={}, instanceId={}", domain, instanceId);
+        } catch (Exception e) {
+            log.error("Failed to unregister WS connection: domain={}, error={}", domain, e.getMessage());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public Map<String, String> getWsRegistry(String domain) {
+        try {
+            Map<Object, Object> entries = redisTemplate.opsForHash().entries(WS_REGISTRY_PREFIX + domain);
+            Map<String, String> result = new java.util.HashMap<>();
+            entries.forEach((k, v) -> result.put(k.toString(), v.toString()));
+            return result;
+        } catch (Exception e) {
+            log.error("Failed to get WS registry: domain={}, error={}", domain, e.getMessage());
+            return java.util.Collections.emptyMap();
+        }
+    }
+
+    public void expireWsRegistry(String domain, int ttlSeconds) {
+        try {
+            redisTemplate.expire(WS_REGISTRY_PREFIX + domain, ttlSeconds, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.error("Failed to expire WS registry: domain={}, error={}", domain, e.getMessage());
+        }
+    }
+
 }
