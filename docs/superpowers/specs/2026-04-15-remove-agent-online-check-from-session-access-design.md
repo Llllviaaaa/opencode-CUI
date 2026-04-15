@@ -4,7 +4,12 @@
 
 云端助手永远在线，不需要判断 agent 是否在线。即使是个人助手，获取会话、关闭会话、查询历史消息等纯数据操作也不应依赖 agent 在线状态。
 
-当前 `SessionAccessControlService.requireSessionAccess()` 通过 `isAkOwnedByUser()` → `getOnlineAgentsByUserId()` 校验 AK 归属，该实现将"AK 归属校验"和"Agent 在线判断"耦合在一起，导致 agent 离线时所有会话操作返回 403。
+### 当前问题
+
+`SessionAccessControlService.requireSessionAccess()` 通过 `isAkOwnedByUser()` → `getOnlineAgentsByUserId()` 校验 AK 归属，该实现将"AK 归属校验"和"Agent 在线判断"耦合在一起，存在两个问题：
+
+1. **纯数据操作被阻断**：获取会话、历史消息等不需要 agent 在线的接口，在 agent 离线时返回 403
+2. **云端助手被错误拦截**：`requireSessionAccess()` 的在线检查**不区分 scope**，云端助手（business scope）和个人助手一视同仁。虽然 `routeToGateway()` 中已通过 `requiresOnlineCheck()` 做了 scope 区分（业务助手跳过），但请求在到达 `routeToGateway()` 之前就被 `requireSessionAccess()` 的在线检查拦截了
 
 ## 变更范围
 
