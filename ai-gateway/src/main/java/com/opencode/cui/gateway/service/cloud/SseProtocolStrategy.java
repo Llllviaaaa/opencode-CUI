@@ -68,7 +68,8 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                     .header("X-Trace-Id", context.getTraceId() != null ? context.getTraceId() : "")
                     .header("X-Request-Id", UUID.randomUUID().toString())
                     .header("X-App-Id", context.getAppId() != null ? context.getAppId() : "")
-                    .timeout(Duration.ofMinutes(5));
+                    // 不设请求级超时，由云端关闭 SSE 流来结束连接
+                    ;
 
             // 3. 注入认证头
             cloudAuthService.applyAuth(requestBuilder, context.getAppId(), context.getAuthType());
