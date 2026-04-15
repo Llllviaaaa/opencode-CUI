@@ -12,12 +12,9 @@ import org.springframework.stereotype.Service;
 public class SessionAccessControlService {
 
     private final SkillSessionService sessionService;
-    private final GatewayApiClient gatewayApiClient;
 
-    public SessionAccessControlService(SkillSessionService sessionService,
-            GatewayApiClient gatewayApiClient) {
+    public SessionAccessControlService(SkillSessionService sessionService) {
         this.sessionService = sessionService;
-        this.gatewayApiClient = gatewayApiClient;
     }
 
     /**
@@ -36,7 +33,7 @@ public class SessionAccessControlService {
 
     /**
      * 校验用户对指定会话的访问权限。
-     * 同时校验 userId 归属和 AK 所有权。
+     * 仅校验 userId 归属，不检查 Agent 在线状态。
      *
      * @param sessionId    会话 ID
      * @param userIdCookie 从 Cookie 中读取的 userId 值
@@ -48,11 +45,6 @@ public class SessionAccessControlService {
         SkillSession session = sessionService.getSession(sessionId);
 
         if (!userId.equals(session.getUserId())) {
-            throw new ProtocolException(403, "Session access denied");
-        }
-
-        if (session.getAk() != null && !session.getAk().isBlank()
-                && !gatewayApiClient.isAkOwnedByUser(session.getAk(), userId)) {
             throw new ProtocolException(403, "Session access denied");
         }
 
