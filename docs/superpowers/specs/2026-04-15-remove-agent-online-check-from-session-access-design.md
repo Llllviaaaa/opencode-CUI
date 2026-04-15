@@ -55,11 +55,40 @@ public SkillSession requireSessionAccess(Long sessionId, String userIdCookie) {
 
 `SessionAccessControlService` 不再需要 `GatewayApiClient` 依赖，移除构造函数注入。
 
-### 变更 3：清理 `isAkOwnedByUser()` 方法
+### 变更 3：`replyPermission` 补充显式在线检查
+
+**文件**: `SkillMessageController.java` — `replyPermission()` 方法
+
+当前 `replyPermission` 的在线检查隐含在 `requireSessionAccess()` 的 `isAkOwnedByUser()` 中。移除后权限回复将完全没有在线检查 — 个人助手离线时也会直接发到 gateway，会失败。
+
+需要补充与 `routeToGateway()` 相同的 `requiresOnlineCheck()` 显式检查：
+- **个人助手**（`PersonalScopeStrategy`）：检查 agent 在线，离线则返回错误
+- **云端助手**（`BusinessScopeStrategy`）：跳过检查，云端助手永远在线
+
+```java
+// 在 gatewayRelayService.sendInvokeToGateway() 之前添加
+AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
+        assistantInfoService.getCachedScope(session.getAk()));
+if (assistantIdProperties.isEnabled() && scopeStrategy.requiresOnlineCheck()) {
+    AgentSummary agent = gatewayApiClient.getAgentByAk(session.getAk());
+    if (agent == null) {
+        return ResponseEntity.ok(ApiResponse.error(503, AGENT_OFFLINE_MESSAGE));
+    }
+}
+```
+
+### 变更 4：清理 `isAkOwnedByUser()` 方法
 
 **文件**: `GatewayApiClient.java`
 
 `isAkOwnedByUser()` 方法在移除 `requireSessionAccess()` 的调用后，检查是否还有其他调用方。如果没有则删除该方法。
+
+### 设计原则：云端助手永远在线
+
+云端助手（business scope）在整个系统中被视为永远在线，通过 `BusinessScopeStrategy.requiresOnlineCheck() = false` 体现。所有需要 agent 在线才能执行的操作（发送消息、权限回复等），都通过 scope 策略区分：
+
+- **个人助手**：需要显式检查 agent 在线状态，离线时返回错误提示
+- **云端助手**：跳过在线检查，始终可用
 
 ### 不变更的部分
 
@@ -79,11 +108,11 @@ public SkillSession requireSessionAccess(Long sessionId, String userIdCookie) {
 | `GET /sessions/{id}` | agent 离线 → 403 | 仅校验 userId |
 | `DELETE /sessions/{id}` | agent 离线 → 403 | 仅校验 userId |
 | `POST /sessions/{id}/abort` | agent 离线 → 403 | 仅校验 userId |
-| `POST /sessions/{id}/messages` | agent 离线 → 403（访问控制层） | 仅校验 userId（发送时仍有在线检查） |
+| `POST /sessions/{id}/messages` | agent 离线 → 403（访问控制层） | 仅校验 userId（发送时仍有 scope 策略在线检查） |
 | `GET /sessions/{id}/messages` | agent 离线 → 403 | 仅校验 userId |
 | `GET /sessions/{id}/messages/history` | agent 离线 → 403 | 仅校验 userId |
 | `POST /sessions/{id}/send-to-im` | agent 离线 → 403 | 仅校验 userId |
-| `POST /sessions/{id}/permissions/{permId}` | agent 离线 → 403 | 仅校验 userId |
+| `POST /sessions/{id}/permissions/{permId}` | agent 离线 → 403（隐含） | 仅校验 userId + 显式 scope 策略在线检查 |
 
 ## 安全性分析
 
@@ -97,4 +126,5 @@ public SkillSession requireSessionAccess(Long sessionId, String userIdCookie) {
 - 验证 agent 离线时，获取会话/历史消息等接口仍能正常返回
 - 验证 userId 不匹配时仍然返回 403
 - 验证发送消息时个人助手的在线检查仍然生效
+- 验证权限回复时个人助手离线返回错误，云端助手正常通过
 - 更新 `SessionAccessControlService` 相关单元测试
