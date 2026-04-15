@@ -3,7 +3,6 @@ package com.opencode.cui.skill.service.delivery;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.ImOutboundService;
-import com.opencode.cui.skill.ws.ExternalStreamHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -12,19 +11,15 @@ import org.springframework.stereotype.Component;
 public class ImRestDeliveryStrategy implements OutboundDeliveryStrategy {
 
     private final ImOutboundService imOutboundService;
-    private final ExternalStreamHandler externalStreamHandler;
 
-    public ImRestDeliveryStrategy(ImOutboundService imOutboundService,
-                                   ExternalStreamHandler externalStreamHandler) {
+    public ImRestDeliveryStrategy(ImOutboundService imOutboundService) {
         this.imOutboundService = imOutboundService;
-        this.externalStreamHandler = externalStreamHandler;
     }
 
     @Override
     public boolean supports(SkillSession session) {
         if (session == null || session.isMiniappDomain()) return false;
-        if (!session.isImDomain()) return false;
-        return !externalStreamHandler.hasActiveConnections(session.getBusinessSessionDomain());
+        return session.isImDomain();
     }
 
     @Override

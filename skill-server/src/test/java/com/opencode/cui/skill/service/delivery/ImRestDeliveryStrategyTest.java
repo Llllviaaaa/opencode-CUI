@@ -3,7 +3,6 @@ package com.opencode.cui.skill.service.delivery;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.ImOutboundService;
-import com.opencode.cui.skill.ws.ExternalStreamHandler;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -18,29 +17,26 @@ import static org.mockito.Mockito.*;
 class ImRestDeliveryStrategyTest {
 
     @Mock private ImOutboundService imOutboundService;
-    @Mock private ExternalStreamHandler externalStreamHandler;
     @InjectMocks private ImRestDeliveryStrategy strategy;
 
     @Test
-    @DisplayName("supports IM domain when no active WS connections")
-    void supportsImWithoutWs() {
+    @DisplayName("supports IM domain regardless of WS connections")
+    void supportsImDomain() {
         SkillSession session = SkillSession.builder().businessSessionDomain("im").build();
-        when(externalStreamHandler.hasActiveConnections("im")).thenReturn(false);
         assertTrue(strategy.supports(session));
-    }
-
-    @Test
-    @DisplayName("does not support IM domain when WS connections exist")
-    void doesNotSupportImWithWs() {
-        SkillSession session = SkillSession.builder().businessSessionDomain("im").build();
-        when(externalStreamHandler.hasActiveConnections("im")).thenReturn(true);
-        assertFalse(strategy.supports(session));
     }
 
     @Test
     @DisplayName("does not support miniapp domain")
     void doesNotSupportMiniapp() {
         SkillSession session = SkillSession.builder().businessSessionDomain("miniapp").build();
+        assertFalse(strategy.supports(session));
+    }
+
+    @Test
+    @DisplayName("does not support non-IM non-miniapp domain")
+    void doesNotSupportOtherDomain() {
+        SkillSession session = SkillSession.builder().businessSessionDomain("custom").build();
         assertFalse(strategy.supports(session));
     }
 
