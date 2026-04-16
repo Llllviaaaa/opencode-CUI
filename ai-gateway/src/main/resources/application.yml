@@ -99,6 +99,18 @@ gateway:
     bearer-token: ${ASSISTANT_RESOLVE_TOKEN:}
     cache-ttl-seconds: ${ASSISTANT_RESOLVE_CACHE_TTL:300}
 
+  # 云端连接超时配置
+  cloud:
+    connect-timeout-seconds: ${CLOUD_CONNECT_TIMEOUT:30}
+    first-event-timeout-seconds: ${CLOUD_FIRST_EVENT_TIMEOUT:120}
+    idle-timeout-seconds: ${CLOUD_IDLE_TIMEOUT:90}
+    max-duration-seconds: ${CLOUD_MAX_DURATION:600}
+    sse:
+      idle-timeout-seconds: ${CLOUD_SSE_IDLE_TIMEOUT:90}
+    websocket:
+      idle-timeout-seconds: ${CLOUD_WS_IDLE_TIMEOUT:60}
+      ping-interval-seconds: ${CLOUD_WS_PING_INTERVAL:30}
+
   # 云端路由信息查询
   cloud-route:
     api-url: ${CLOUD_ROUTE_API_URL:http://localhost:9999/appstore/wecodeapi/open/ak/info}
