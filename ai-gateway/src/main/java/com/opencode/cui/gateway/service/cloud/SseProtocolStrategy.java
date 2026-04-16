@@ -35,7 +35,7 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
 
     @org.springframework.beans.factory.annotation.Autowired
     public SseProtocolStrategy(CloudAuthService cloudAuthService, ObjectMapper objectMapper,
-            @org.springframework.beans.factory.annotation.Value("${gateway.cloud.sse.connect-timeout-seconds:30}") int connectTimeoutSeconds) {
+            @org.springframework.beans.factory.annotation.Value("${gateway.cloud.connect-timeout-seconds:30}") int connectTimeoutSeconds) {
         this(cloudAuthService, objectMapper,
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(connectTimeoutSeconds)).build());
     }
@@ -55,7 +55,8 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
     }
 
     @Override
-    public void connect(CloudConnectionContext context, Consumer<GatewayMessage> onEvent, Consumer<Throwable> onError) {
+    public void connect(CloudConnectionContext context, CloudConnectionLifecycle lifecycle,
+                        Consumer<GatewayMessage> onEvent, Consumer<Throwable> onError) {
         try {
             // 1. 构建请求体
             String requestBody = objectMapper.writeValueAsString(context.getCloudRequest());
@@ -88,8 +89,13 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                 return;
             }
 
+            // 4.1 通知 lifecycle 已连接
+            if (lifecycle != null) {
+                lifecycle.onConnected();
+            }
+
             // 5. 读取 SSE 流
-            readSseStream(response.body(), onEvent, onError, context.getTraceId());
+            readSseStream(response.body(), lifecycle, onEvent, onError, context.getTraceId());
 
         } catch (Exception e) {
             log.error("[SSE] Connection error: endpoint={}, traceId={}, error={}",
@@ -109,6 +115,7 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
      * 读取 SSE 流并解析事件。
      */
     private void readSseStream(InputStream inputStream,
+                               CloudConnectionLifecycle lifecycle,
                                Consumer<GatewayMessage> onEvent,
                                Consumer<Throwable> onError,
                                String traceId) {
@@ -116,6 +123,13 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                 new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
+                // SSE 注释行（心跳）
+                if (line.startsWith(":")) {
+                    if (lifecycle != null) {
+                        lifecycle.onHeartbeat();
+                    }
+                    continue;
+                }
                 if (line.startsWith("data:")) {
                     String jsonData = line.substring(5).trim();
                     if (jsonData.isEmpty() || "[DONE]".equals(jsonData)) {
@@ -123,7 +137,18 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                     }
                     try {
                         GatewayMessage message = objectMapper.readValue(jsonData, GatewayMessage.class);
+                        if (lifecycle != null) {
+                            lifecycle.onEventReceived();
+                        }
                         onEvent.accept(message);
+                        // 终态事件：停止读取
+                        if (message.isType(GatewayMessage.Type.TOOL_DONE)
+                                || message.isType(GatewayMessage.Type.TOOL_ERROR)) {
+                            if (lifecycle != null) {
+                                lifecycle.onTerminalEvent();
+                            }
+                            return;
+                        }
                     } catch (Exception e) {
                         log.warn("[SSE] Failed to parse event: traceId={}, data={}, error={}",
                                 traceId, jsonData, e.getMessage());

@@ -53,6 +53,8 @@ class SseProtocolStrategyTest {
     private ObjectMapper objectMapper;
     private SseProtocolStrategy strategy;
 
+    private CloudConnectionLifecycle lifecycle;
+
     private List<GatewayMessage> receivedEvents;
     private List<Throwable> receivedErrors;
     private Consumer<GatewayMessage> onEvent;
@@ -62,6 +64,7 @@ class SseProtocolStrategyTest {
     void setUp() {
         objectMapper = new ObjectMapper();
         strategy = spy(new SseProtocolStrategy(cloudAuthService, objectMapper, httpClient));
+        lifecycle = mock(CloudConnectionLifecycle.class);
 
         receivedEvents = new ArrayList<>();
         receivedErrors = new ArrayList<>();
@@ -106,7 +109,7 @@ class SseProtocolStrategyTest {
         doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
 
         // when
-        strategy.connect(buildContext(), onEvent, onError);
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
 
         // then
         assertEquals(2, receivedEvents.size(), "should receive 2 events");
@@ -131,7 +134,7 @@ class SseProtocolStrategyTest {
         doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
 
         // when
-        strategy.connect(buildContext(), onEvent, onError);
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
 
         // then
         assertEquals(2, receivedEvents.size());
@@ -157,7 +160,7 @@ class SseProtocolStrategyTest {
         doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
 
         // when
-        strategy.connect(buildContext(), onEvent, onError);
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
 
         // then
         assertEquals(1, receivedEvents.size());
@@ -178,7 +181,7 @@ class SseProtocolStrategyTest {
         doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
 
         // when
-        strategy.connect(buildContext(), onEvent, onError);
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
 
         // then
         assertTrue(receivedEvents.isEmpty(), "should have no events on HTTP error");
@@ -203,7 +206,7 @@ class SseProtocolStrategyTest {
         doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
 
         // when
-        strategy.connect(buildContext(), onEvent, onError);
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
 
         // then
         assertEquals(2, receivedEvents.size(), "should receive 2 valid events, skipping malformed line");
@@ -233,7 +236,7 @@ class SseProtocolStrategyTest {
         doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
 
         // when
-        strategy.connect(buildContext(), onEvent, onError);
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
 
         // then
         assertEquals(1, receivedEvents.size(), "should only parse the single valid data line");
@@ -254,12 +257,51 @@ class SseProtocolStrategyTest {
         CloudConnectionContext context = buildContext();
 
         // when
-        strategy.connect(context, onEvent, onError);
+        strategy.connect(context, lifecycle, onEvent, onError);
 
         // then
         verify(cloudAuthService).applyAuth(
                 any(HttpRequest.Builder.class),
                 eq("app_test"),
                 eq("soa"));
+    }
+
+    // ==================== G31: SSE 心跳注释行 ====================
+
+    @Test
+    @DisplayName("G31: SSE 心跳注释行 - 触发 lifecycle.onHeartbeat()")
+    void shouldCallOnHeartbeatForHeartbeatComment() throws Exception {
+        String sseStream = String.join("\n",
+                ": heartbeat",
+                "data: {\"type\":\"tool_event\",\"toolSessionId\":\"s7\",\"event\":{\"text\":\"ok\"}}",
+                ": heartbeat",
+                "");
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
+
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
+
+        verify(lifecycle, times(2)).onHeartbeat();
+        verify(lifecycle).onConnected();
+        verify(lifecycle).onEventReceived();
+        assertEquals(1, receivedEvents.size());
+    }
+
+    // ==================== G32: tool_done 触发 lifecycle.onTerminalEvent() ====================
+
+    @Test
+    @DisplayName("G32: tool_done 触发 lifecycle.onTerminalEvent()")
+    void shouldCallOnTerminalEventForToolDone() throws Exception {
+        String sseStream = String.join("\n",
+                "data: {\"type\":\"tool_event\",\"toolSessionId\":\"s8\",\"event\":{\"text\":\"hi\"}}",
+                "data: {\"type\":\"tool_done\",\"toolSessionId\":\"s8\"}",
+                "");
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
+
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
+
+        verify(lifecycle).onTerminalEvent();
+        verify(lifecycle, times(2)).onEventReceived();
     }
 }

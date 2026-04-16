@@ -78,7 +78,7 @@ public class CloudAgentService {
         ConcurrentHashMap<String, String> fallbackPartIds = new ConcurrentHashMap<>();
 
         // 4. 连接云端服务
-        cloudProtocolClient.connect(routeInfo.getProtocol(), context,
+        cloudProtocolClient.connect(routeInfo.getProtocol(), context, null,
                 event -> {
                     // 注入路由上下文
                     event.setAk(ak);
