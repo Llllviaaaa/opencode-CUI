@@ -119,4 +119,131 @@ class ExternalStreamHandlerTest {
         handler.handleTextMessage(wsSession, new TextMessage("{\"action\":\"ping\"}"));
         verify(wsSession).sendMessage(any(TextMessage.class));
     }
+
+    @org.junit.jupiter.api.Nested
+    @DisplayName("ConnectionPool")
+    class ConnectionPoolTest {
+
+        private ExternalStreamHandler.ConnectionPool pool;
+
+        @BeforeEach
+        void setUp() {
+            pool = new ExternalStreamHandler.ConnectionPool();
+        }
+
+        @Test
+        @DisplayName("add and countBySource tracks multiple sessions per instanceId")
+        void addMultipleSessions() {
+            WebSocketSession s1 = mockSession("s1", true);
+            WebSocketSession s2 = mockSession("s2", true);
+            pool.add("im", "im-1", s1);
+            pool.add("im", "im-1", s2);
+            assertEquals(2, pool.countBySource("im"));
+        }
+
+        @Test
+        @DisplayName("add sessions from different instanceIds under same source")
+        void addDifferentInstances() {
+            WebSocketSession s1 = mockSession("s1", true);
+            WebSocketSession s2 = mockSession("s2", true);
+            pool.add("im", "im-1", s1);
+            pool.add("im", "im-2", s2);
+            assertEquals(2, pool.countBySource("im"));
+        }
+
+        @Test
+        @DisplayName("remove by session reference decrements count")
+        void removeBySession() {
+            WebSocketSession s1 = mockSession("s1", true);
+            WebSocketSession s2 = mockSession("s2", true);
+            pool.add("im", "im-1", s1);
+            pool.add("im", "im-1", s2);
+            int remaining = pool.remove("im", "im-1", s1);
+            assertEquals(1, remaining);
+            assertEquals(1, pool.countBySource("im"));
+        }
+
+        @Test
+        @DisplayName("remove last session returns 0 and cleans up source")
+        void removeLastSession() {
+            WebSocketSession s1 = mockSession("s1", true);
+            pool.add("im", "im-1", s1);
+            int remaining = pool.remove("im", "im-1", s1);
+            assertEquals(0, remaining);
+            assertEquals(0, pool.countBySource("im"));
+            assertFalse(pool.hasActiveConnections("im"));
+        }
+
+        @Test
+        @DisplayName("removeBySessionId removes by wsSessionId string")
+        void removeBySessionId() {
+            WebSocketSession s1 = mockSession("s1", true);
+            WebSocketSession s2 = mockSession("s2", true);
+            pool.add("im", "im-1", s1);
+            pool.add("im", "im-1", s2);
+            int remaining = pool.removeBySessionId("im", "im-1", "s1");
+            assertEquals(1, remaining);
+        }
+
+        @Test
+        @DisplayName("pickOne returns an open session")
+        void pickOneReturnsOpen() {
+            WebSocketSession s1 = mockSession("s1", false);
+            WebSocketSession s2 = mockSession("s2", true);
+            pool.add("im", "im-1", s1);
+            pool.add("im", "im-1", s2);
+            WebSocketSession picked = pool.pickOne("im");
+            assertNotNull(picked);
+            assertTrue(picked.isOpen());
+        }
+
+        @Test
+        @DisplayName("pickOne returns null when no open sessions")
+        void pickOneReturnsNullWhenAllClosed() {
+            WebSocketSession s1 = mockSession("s1", false);
+            pool.add("im", "im-1", s1);
+            assertNull(pool.pickOne("im"));
+        }
+
+        @Test
+        @DisplayName("pickOne returns null for unknown source")
+        void pickOneUnknownSource() {
+            assertNull(pool.pickOne("unknown"));
+        }
+
+        @Test
+        @DisplayName("hasActiveConnections returns true only if open session exists")
+        void hasActiveConnections() {
+            WebSocketSession s1 = mockSession("s1", false);
+            pool.add("im", "im-1", s1);
+            assertFalse(pool.hasActiveConnections("im"));
+
+            WebSocketSession s2 = mockSession("s2", true);
+            pool.add("im", "im-1", s2);
+            assertTrue(pool.hasActiveConnections("im"));
+        }
+
+        @Test
+        @DisplayName("sources returns all registered sources")
+        void sourcesReturnsAll() {
+            pool.add("im", "im-1", mockSession("s1", true));
+            pool.add("crm", "crm-1", mockSession("s2", true));
+            assertEquals(2, pool.sources().size());
+            assertTrue(pool.sources().contains("im"));
+            assertTrue(pool.sources().contains("crm"));
+        }
+
+        @Test
+        @DisplayName("countBySource returns 0 for unknown source")
+        void countBySourceUnknown() {
+            assertEquals(0, pool.countBySource("unknown"));
+        }
+
+        private WebSocketSession mockSession(String id, boolean open) {
+            WebSocketSession session = mock(WebSocketSession.class);
+            when(session.getId()).thenReturn(id);
+            lenient().when(session.isOpen()).thenReturn(open);
+            return session;
+        }
+    }
 }

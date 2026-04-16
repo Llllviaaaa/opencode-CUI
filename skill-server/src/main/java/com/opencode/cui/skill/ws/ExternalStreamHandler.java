@@ -282,5 +282,94 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
         }
     }
 
+    /**
+     * 多连接池：source → { instanceId → { wsSessionId → WebSocketSession } }。
+     * 封装并发安全的连接管理，对外暴露简洁 API。
+     */
+    static class ConnectionPool {
+        private final ConcurrentHashMap<String, ConcurrentHashMap<String, ConcurrentHashMap<String, WebSocketSession>>> pool
+                = new ConcurrentHashMap<>();
+
+        void add(String source, String instanceId, WebSocketSession session) {
+            pool.computeIfAbsent(source, k -> new ConcurrentHashMap<>())
+                .computeIfAbsent(instanceId, k -> new ConcurrentHashMap<>())
+                .put(session.getId(), session);
+        }
+
+        int remove(String source, String instanceId, WebSocketSession session) {
+            var instances = pool.get(source);
+            if (instances == null) return 0;
+            var sessions = instances.get(instanceId);
+            if (sessions != null) {
+                sessions.remove(session.getId(), session);
+                if (sessions.isEmpty()) instances.remove(instanceId);
+            }
+            if (instances.isEmpty()) pool.remove(source);
+            return countBySource(source);
+        }
+
+        int removeBySessionId(String source, String instanceId, String wsSessionId) {
+            var instances = pool.get(source);
+            if (instances == null) return 0;
+            var sessions = instances.get(instanceId);
+            if (sessions != null) {
+                sessions.remove(wsSessionId);
+                if (sessions.isEmpty()) instances.remove(instanceId);
+            }
+            if (instances.isEmpty()) pool.remove(source);
+            return countBySource(source);
+        }
+
+        WebSocketSession pickOne(String source) {
+            var instances = pool.get(source);
+            if (instances == null) return null;
+            for (var sessions : instances.values()) {
+                for (WebSocketSession session : sessions.values()) {
+                    if (session.isOpen()) return session;
+                }
+            }
+            return null;
+        }
+
+        int countBySource(String source) {
+            var instances = pool.get(source);
+            if (instances == null) return 0;
+            int count = 0;
+            for (var sessions : instances.values()) {
+                count += sessions.size();
+            }
+            return count;
+        }
+
+        boolean hasActiveConnections(String source) {
+            return pickOne(source) != null;
+        }
+
+        java.util.Set<String> sources() {
+            return pool.keySet();
+        }
+
+        void forEach(String source, java.util.function.BiConsumer<String, WebSocketSession> action) {
+            var instances = pool.get(source);
+            if (instances == null) return;
+            for (var entry : instances.entrySet()) {
+                String instanceId = entry.getKey();
+                for (var sessionEntry : entry.getValue().entrySet()) {
+                    action.accept(instanceId + ":" + sessionEntry.getKey(), sessionEntry.getValue());
+                }
+            }
+        }
+
+        void forEachAll(java.util.function.Consumer<WebSocketSession> action) {
+            for (var instances : pool.values()) {
+                for (var sessions : instances.values()) {
+                    for (WebSocketSession session : sessions.values()) {
+                        action.accept(session);
+                    }
+                }
+            }
+        }
+    }
+
     private record HandshakeAuth(String protocol, String source, String instanceId) {}
 }
