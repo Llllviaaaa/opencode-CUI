@@ -18,6 +18,7 @@ import java.util.function.Consumer;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 /**
@@ -65,10 +66,10 @@ class CloudProtocolClientTest {
             Consumer<GatewayMessage> onEvent = msg -> {};
             Consumer<Throwable> onError = err -> {};
 
-            client.connect("sse", context, onEvent, onError);
+            client.connect("sse", context, null, onEvent, onError);
 
-            verify(sseStrategy).connect(eq(context), eq(onEvent), eq(onError));
-            verify(wsStrategy, never()).connect(any(), any(), any());
+            verify(sseStrategy).connect(eq(context), isNull(), eq(onEvent), eq(onError));
+            verify(wsStrategy, never()).connect(any(), any(), any(), any());
         }
 
         @Test
@@ -84,10 +85,10 @@ class CloudProtocolClientTest {
             Consumer<GatewayMessage> onEvent = msg -> {};
             Consumer<Throwable> onError = err -> {};
 
-            client.connect("websocket", context, onEvent, onError);
+            client.connect("websocket", context, null, onEvent, onError);
 
-            verify(wsStrategy).connect(eq(context), eq(onEvent), eq(onError));
-            verify(sseStrategy, never()).connect(any(), any(), any());
+            verify(wsStrategy).connect(eq(context), isNull(), eq(onEvent), eq(onError));
+            verify(sseStrategy, never()).connect(any(), any(), any(), any());
         }
     }
 
@@ -110,7 +111,7 @@ class CloudProtocolClientTest {
             Consumer<GatewayMessage> onEvent = msg -> {};
             Consumer<Throwable> onError = errors::add;
 
-            client.connect("grpc", context, onEvent, onError);
+            client.connect("grpc", context, null, onEvent, onError);
 
             assertEquals(1, errors.size());
             assertTrue(errors.get(0).getMessage().contains("grpc"));
@@ -131,7 +132,7 @@ class CloudProtocolClientTest {
             Consumer<GatewayMessage> onEvent = msg -> {};
             Consumer<Throwable> onError = errors::add;
 
-            client.connect(null, context, onEvent, onError);
+            client.connect(null, context, null, onEvent, onError);
 
             assertEquals(1, errors.size());
         }

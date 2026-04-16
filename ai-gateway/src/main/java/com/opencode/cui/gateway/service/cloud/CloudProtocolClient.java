@@ -31,12 +31,14 @@ public class CloudProtocolClient {
     /**
      * 按协议类型连接云端服务。
      *
-     * @param protocol 协议标识（sse / websocket）
-     * @param context  连接上下文
-     * @param onEvent  事件回调
-     * @param onError  错误回调（未知协议时也通过此回调报错）
+     * @param protocol  协议标识（sse / websocket）
+     * @param context   连接上下文
+     * @param lifecycle 连接生命周期管理器，用于超时计时；可为 null
+     * @param onEvent   事件回调
+     * @param onError   错误回调（未知协议时也通过此回调报错）
      */
     public void connect(String protocol, CloudConnectionContext context,
+                        CloudConnectionLifecycle lifecycle,
                         Consumer<GatewayMessage> onEvent, Consumer<Throwable> onError) {
         CloudProtocolStrategy strategy = strategyMap.get(protocol);
         if (strategy == null) {
@@ -44,6 +46,6 @@ public class CloudProtocolClient {
             onError.accept(new IllegalArgumentException("Unknown cloud protocol: " + protocol));
             return;
         }
-        strategy.connect(context, onEvent, onError);
+        strategy.connect(context, lifecycle, onEvent, onError);
     }
 }
