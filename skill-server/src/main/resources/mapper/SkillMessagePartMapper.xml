@@ -139,4 +139,40 @@
         DELETE FROM skill_message_part WHERE message_id = #{messageId}
     </delete>
 
+    <!-- Batch upsert: insert or update multiple parts in one statement -->
+    <insert id="batchUpsert">
+        INSERT INTO skill_message_part
+            (id, message_id, session_id, part_id, seq, part_type,
+             content, tool_name, tool_call_id, tool_status, tool_input, tool_output, tool_error, tool_title,
+             file_name, file_url, file_mime,
+             tokens_in, tokens_out, cost, finish_reason,
+             subagent_session_id, subagent_name,
+             created_at, updated_at)
+        VALUES
+        <foreach collection="parts" item="p" separator=",">
+            (#{p.id}, #{p.messageId}, #{p.sessionId}, #{p.partId}, #{p.seq}, #{p.partType},
+             #{p.content}, #{p.toolName}, #{p.toolCallId}, #{p.toolStatus}, #{p.toolInput}, #{p.toolOutput}, #{p.toolError}, #{p.toolTitle},
+             #{p.fileName}, #{p.fileUrl}, #{p.fileMime},
+             #{p.tokensIn}, #{p.tokensOut}, #{p.cost}, #{p.finishReason},
+             #{p.subagentSessionId}, #{p.subagentName},
+             NOW(), NOW())
+        </foreach>
+        ON DUPLICATE KEY UPDATE
+            content     = COALESCE(VALUES(content), content),
+            tool_name   = COALESCE(VALUES(tool_name), tool_name),
+            tool_call_id = COALESCE(VALUES(tool_call_id), tool_call_id),
+            tool_status = COALESCE(VALUES(tool_status), tool_status),
+            tool_input  = COALESCE(VALUES(tool_input), tool_input),
+            tool_output = COALESCE(VALUES(tool_output), tool_output),
+            tool_error  = COALESCE(VALUES(tool_error), tool_error),
+            tool_title  = COALESCE(VALUES(tool_title), tool_title),
+            tokens_in   = COALESCE(VALUES(tokens_in), tokens_in),
+            tokens_out  = COALESCE(VALUES(tokens_out), tokens_out),
+            cost        = COALESCE(VALUES(cost), cost),
+            finish_reason = COALESCE(VALUES(finish_reason), finish_reason),
+            subagent_session_id = COALESCE(VALUES(subagent_session_id), subagent_session_id),
+            subagent_name = COALESCE(VALUES(subagent_name), subagent_name),
+            updated_at  = NOW()
+    </insert>
+
 </mapper>
