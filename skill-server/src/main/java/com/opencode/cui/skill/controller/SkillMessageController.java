@@ -38,6 +38,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -200,9 +201,13 @@ public class SkillMessageController {
                     "toolSessionId", targetToolSessionId));
         } else {
             action = GatewayActions.CHAT;
-            payload = PayloadBuilder.buildPayload(objectMapper, Map.of(
-                    "text", request.getContent(),
-                    "toolSessionId", session.getToolSessionId()));
+            Map<String, String> payloadFields = new LinkedHashMap<>();
+            payloadFields.put("text", request.getContent());
+            payloadFields.put("toolSessionId", session.getToolSessionId());
+            payloadFields.put("sendUserAccount", session.getUserId());
+            payloadFields.put("assistantAccount", session.getAssistantAccount());
+            payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
+            payload = PayloadBuilder.buildPayload(objectMapper, payloadFields);
         }
 
         log.info("SkillMessageController.routeToGateway: sessionId={}, action={}, ak={}",
