@@ -72,8 +72,18 @@ public class PartBufferService {
         String bufKey = BUF_PREFIX + messageDbId;
         String seqKey = SEQ_PREFIX + messageDbId;
 
-        List<String> jsonList = redis.opsForList().range(bufKey, 0, -1);
-        redis.delete(bufKey);
+        // Atomically rename to temp key to prevent race with concurrent bufferPart()
+        String tempKey = bufKey + ":flush:" + System.nanoTime();
+        List<String> jsonList = null;
+        try {
+            redis.rename(bufKey, tempKey);
+            jsonList = redis.opsForList().range(tempKey, 0, -1);
+            redis.delete(tempKey);
+        } catch (Exception e) {
+            // rename fails if key doesn't exist — try direct read as fallback
+            jsonList = redis.opsForList().range(bufKey, 0, -1);
+            redis.delete(bufKey);
+        }
         redis.delete(seqKey);
 
         if (jsonList == null || jsonList.isEmpty()) {
@@ -90,6 +100,40 @@ public class PartBufferService {
         }
         log.debug("Flushed {} parts from Redis buffer: messageDbId={}", parts.size(), messageDbId);
         return parts;
+    }
+
+    /**
+     * 在 Redis 缓冲中查找并更新 permission part 的 reply。
+     * 扫描 buffer，找到 toolCallId 匹配的 permission part，更新 toolOutput 和 toolStatus，
+     * 然后用 LSET 原地替换。
+     *
+     * @return true if a matching permission part was found and updated
+     */
+    public boolean updatePermissionReply(Long messageDbId, String permissionId, String status, String response) {
+        String bufKey = BUF_PREFIX + messageDbId;
+        List<String> jsonList = redis.opsForList().range(bufKey, 0, -1);
+        if (jsonList == null || jsonList.isEmpty()) {
+            return false;
+        }
+
+        for (int i = 0; i < jsonList.size(); i++) {
+            try {
+                SkillMessagePart part = objectMapper.readValue(jsonList.get(i), SkillMessagePart.class);
+                if ("permission".equals(part.getPartType())
+                        && permissionId.equals(part.getToolCallId())) {
+                    part.setToolStatus(status);
+                    part.setToolOutput(response);
+                    String updatedJson = objectMapper.writeValueAsString(part);
+                    redis.opsForList().set(bufKey, i, updatedJson);
+                    log.info("Updated permission reply in Redis buffer: messageDbId={}, permissionId={}, response={}",
+                            messageDbId, permissionId, response);
+                    return true;
+                }
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to process buffered part during permission update: {}", e.getMessage());
+            }
+        }
+        return false;
     }
 
     /**

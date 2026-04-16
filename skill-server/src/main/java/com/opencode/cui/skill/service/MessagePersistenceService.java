@@ -294,8 +294,16 @@ public class MessagePersistenceService {
             return true;
         }
 
-        // DB 中没有 → 可能在 Redis 缓冲中，permission reply 会在 flush 时随缓冲一起写入
-        log.debug("Permission part not found in DB, may be in Redis buffer: sessionId={}, permissionId={}",
+        // DB 中没有 → 尝试更新 Redis 缓冲中的 permission part
+        ActiveMessageTracker.ActiveMessageRef active = tracker.getActiveMessage(sessionId);
+        if (active != null) {
+            boolean updated = partBufferService.updatePermissionReply(active.dbId(), permissionId, status, response);
+            if (updated) {
+                return true;
+            }
+        }
+
+        log.debug("Permission part not found in DB or Redis buffer: sessionId={}, permissionId={}",
                 sessionId, permissionId);
         return false;
     }
@@ -378,12 +386,11 @@ public class MessagePersistenceService {
         if (!"idle".equals(msg.getSessionStatus()) && !"completed".equals(msg.getSessionStatus())) {
             return;
         }
-        // 先 flush Redis 缓冲到 MySQL，再 sync content（sync 需要从 DB 读 part）
         ActiveMessageTracker.ActiveMessageRef active = tracker.getActiveMessage(sessionId);
         if (active != null) {
             flushPartBuffer(active.dbId());
+            syncMessageContent(active);
         }
-        syncAllPendingContent(sessionId);
         sessionService.touchSession(sessionId);
         tracker.removeAndFinalize(sessionId);
     }
@@ -416,17 +423,7 @@ public class MessagePersistenceService {
         }
 
         if (hasStats) {
-            messageService.updateMessageStats(messageDbId,
-                    totalTokensIn > 0 ? totalTokensIn : null,
-                    totalTokensOut > 0 ? totalTokensOut : null,
-                    totalCost > 0 ? totalCost : null);
-        }
-    }
-
-    private void syncAllPendingContent(Long sessionId) {
-        ActiveMessageTracker.ActiveMessageRef active = tracker.getActiveMessage(sessionId);
-        if (active != null) {
-            syncMessageContent(active);
+            messageService.updateMessageStats(messageDbId, totalTokensIn, totalTokensOut, totalCost);
         }
     }
 
