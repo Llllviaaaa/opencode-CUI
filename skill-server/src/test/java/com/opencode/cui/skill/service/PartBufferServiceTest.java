@@ -143,4 +143,62 @@ class PartBufferServiceTest {
 
         assertThat(result).isNull();
     }
+
+    @Test
+    @DisplayName("updatePermissionReply finds and updates matching permission part")
+    void updatePermissionReplyFindsAndUpdates() throws Exception {
+        SkillMessagePart textPart = SkillMessagePart.builder()
+                .id(1L).messageId(100L).sessionId(10L)
+                .partId("p1").seq(1).partType("text").content("hi")
+                .build();
+        SkillMessagePart permPart = SkillMessagePart.builder()
+                .id(2L).messageId(100L).sessionId(10L)
+                .partId("perm-1").seq(2).partType("permission")
+                .toolCallId("perm-id-1").toolName("Bash")
+                .build();
+
+        String json1 = objectMapper.writeValueAsString(textPart);
+        String json2 = objectMapper.writeValueAsString(permPart);
+        when(listOps.range("ss:part-buf:100", 0, -1)).thenReturn(List.of(json1, json2));
+
+        boolean result = service.updatePermissionReply(100L, "perm-id-1", "completed", "approved");
+
+        assertThat(result).isTrue();
+        verify(listOps).set(eq("ss:part-buf:100"), eq(1L), argThat(updatedJson -> {
+            try {
+                SkillMessagePart updated = objectMapper.readValue(updatedJson, SkillMessagePart.class);
+                return "completed".equals(updated.getToolStatus()) && "approved".equals(updated.getToolOutput());
+            } catch (Exception e) {
+                return false;
+            }
+        }));
+    }
+
+    @Test
+    @DisplayName("updatePermissionReply returns false when no matching permission found")
+    void updatePermissionReplyNotFound() throws Exception {
+        SkillMessagePart textPart = SkillMessagePart.builder()
+                .id(1L).messageId(100L).sessionId(10L)
+                .partId("p1").seq(1).partType("text").content("hello")
+                .build();
+
+        String json1 = objectMapper.writeValueAsString(textPart);
+        when(listOps.range("ss:part-buf:100", 0, -1)).thenReturn(List.of(json1));
+
+        boolean result = service.updatePermissionReply(100L, "perm-id-1", "completed", "approved");
+
+        assertThat(result).isFalse();
+        verify(listOps, never()).set(anyString(), anyLong(), anyString());
+    }
+
+    @Test
+    @DisplayName("updatePermissionReply returns false when buffer is empty")
+    void updatePermissionReplyEmptyBuffer() {
+        when(listOps.range("ss:part-buf:100", 0, -1)).thenReturn(null);
+
+        boolean result = service.updatePermissionReply(100L, "perm-id-1", "completed", "approved");
+
+        assertThat(result).isFalse();
+        verify(listOps, never()).set(anyString(), anyLong(), anyString());
+    }
 }
