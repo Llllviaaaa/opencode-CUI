@@ -42,8 +42,7 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
     private final SkillInstanceRegistry instanceRegistry;
     private final DeliveryProperties deliveryProperties;
 
-    /** source → { instanceId → WebSocketSession } */
-    private final Map<String, Map<String, WebSocketSession>> connectionPool = new ConcurrentHashMap<>();
+    private final ConnectionPool connectionPool = new ConnectionPool();
     /** wsSessionId → last activity time */
     private final Map<String, Instant> lastActivity = new ConcurrentHashMap<>();
 
@@ -84,22 +83,7 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
         String source = (String) session.getAttributes().get(SOURCE_ATTR);
         String instanceId = (String) session.getAttributes().get(INSTANCE_ID_ATTR);
 
-        // 同一 source+instanceId 重连时，先关闭旧 session 并清理 lastActivity
-        Map<String, WebSocketSession> instances = connectionPool.computeIfAbsent(source, k -> new ConcurrentHashMap<>());
-        WebSocketSession oldSession = instances.put(instanceId, session);
-        if (oldSession != null && oldSession != session) {
-            lastActivity.remove(oldSession.getId());
-            if (oldSession.isOpen()) {
-                try {
-                    oldSession.close(CloseStatus.GOING_AWAY);
-                } catch (Exception e) {
-                    log.debug("Failed to close replaced session: {}", e.getMessage());
-                }
-            }
-            log.info("Replaced old WS session: source={}, instanceId={}, oldSessionId={}, newSessionId={}",
-                    source, instanceId, oldSession.getId(), session.getId());
-        }
-
+        connectionPool.add(source, instanceId, session);
         lastActivity.put(session.getId(), Instant.now());
 
         String channel = CHANNEL_PREFIX + source;
@@ -107,7 +91,7 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
             redisMessageBroker.subscribeToChannel(channel, msg -> handleRedisMessage(source, msg));
         }
         log.info("External WS connected: source={}, instanceId={}, sessionId={}", source, instanceId, session.getId());
-        wsRegistry.register(source, instances.size());
+        wsRegistry.register(source, connectionPool.countBySource(source));
     }
 
     @Override
@@ -128,21 +112,18 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         String source = (String) session.getAttributes().get(SOURCE_ATTR);
         String instanceId = (String) session.getAttributes().get(INSTANCE_ID_ATTR);
-        Map<String, WebSocketSession> instances = connectionPool.get(source);
-        if (instances != null) {
-            // 只移除当前关闭的 session，避免旧 session 的 close 事件误删已替换的新 session
-            instances.remove(instanceId, session);
-            if (instances.isEmpty()) {
-                connectionPool.remove(source);
-                redisMessageBroker.unsubscribeFromChannel(CHANNEL_PREFIX + source);
-                wsRegistry.unregister(source);
-            } else {
-                wsRegistry.register(source, instances.size());
-            }
-        }
+
+        int remaining = connectionPool.remove(source, instanceId, session);
         lastActivity.remove(session.getId());
-        log.info("External WS disconnected: source={}, instanceId={}, sessionId={}, status={}",
-                source, instanceId, session.getId(), status);
+
+        if (remaining == 0) {
+            redisMessageBroker.unsubscribeFromChannel(CHANNEL_PREFIX + source);
+            wsRegistry.unregister(source);
+        } else {
+            wsRegistry.register(source, remaining);
+        }
+        log.info("External WS disconnected: source={}, instanceId={}, sessionId={}, status={}, remaining={}",
+                source, instanceId, session.getId(), status, remaining);
     }
 
     @Override
@@ -152,52 +133,48 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
     }
 
     public boolean hasActiveConnections(String source) {
-        Map<String, WebSocketSession> instances = connectionPool.get(source);
-        if (instances == null || instances.isEmpty()) return false;
-        return instances.values().stream().anyMatch(WebSocketSession::isOpen);
+        return connectionPool.hasActiveConnections(source);
     }
 
     public void pushToSource(String source, String message) {
-        Map<String, WebSocketSession> instances = connectionPool.get(source);
-        if (instances == null || instances.isEmpty()) {
+        if (!connectionPool.hasActiveConnections(source)) {
             log.warn("No active connections for source: {}", source);
             return;
         }
         TextMessage textMessage = new TextMessage(message);
-        for (Map.Entry<String, WebSocketSession> entry : instances.entrySet()) {
-            WebSocketSession session = entry.getValue();
+        connectionPool.forEach(source, (key, session) -> {
             if (session.isOpen()) {
                 try {
                     synchronized (session) { session.sendMessage(textMessage); }
                 } catch (Exception e) {
-                    log.error("Failed to push to external WS: source={}, instanceId={}, error={}",
-                            source, entry.getKey(), e.getMessage());
+                    log.error("Failed to push to external WS: source={}, key={}, error={}",
+                            source, key, e.getMessage());
                 }
             }
-        }
+        });
     }
 
     /**
      * 精确投递：选择一条活跃 WS 连接推送消息。
-     * 与 pushToSource（广播到所有连接）不同，pushToOne 只发一次。
+     * 发送失败时自动移除该连接并重试下一条，最多 3 次。
      *
      * @return true 如果成功推送，false 如果无可用连接
      */
     public boolean pushToOne(String source, String message) {
-        Map<String, WebSocketSession> instances = connectionPool.get(source);
-        if (instances == null || instances.isEmpty()) {
-            return false;
-        }
         TextMessage textMessage = new TextMessage(message);
-        for (WebSocketSession session : instances.values()) {
-            if (session.isOpen()) {
-                try {
-                    synchronized (session) { session.sendMessage(textMessage); }
-                    return true;
-                } catch (Exception e) {
-                    log.error("Failed to pushToOne: source={}, sessionId={}, error={}",
-                            source, session.getId(), e.getMessage());
-                }
+        int maxRetries = 3;
+        for (int i = 0; i < maxRetries; i++) {
+            WebSocketSession session = connectionPool.pickOne(source);
+            if (session == null) return false;
+            try {
+                synchronized (session) { session.sendMessage(textMessage); }
+                return true;
+            } catch (Exception e) {
+                log.warn("pushToOne failed, removing session and retrying: source={}, sessionId={}, attempt={}/{}",
+                        source, session.getId(), i + 1, maxRetries);
+                connectionPool.removeBySessionId(source,
+                        (String) session.getAttributes().get(INSTANCE_ID_ATTR),
+                        session.getId());
             }
         }
         return false;
@@ -228,21 +205,18 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
     @Scheduled(fixedRate = 30_000)
     public void checkHeartbeatTimeouts() {
         Instant timeout = Instant.now().minusSeconds(60);
-        for (Map<String, WebSocketSession> instances : connectionPool.values()) {
-            for (WebSocketSession session : instances.values()) {
-                Instant last = lastActivity.get(session.getId());
-                if (last != null && last.isBefore(timeout) && session.isOpen()) {
-                    try {
-                        log.warn("Closing external WS due to heartbeat timeout: sessionId={}", session.getId());
-                        session.close(CloseStatus.GOING_AWAY);
-                    } catch (Exception e) {
-                        log.error("Failed to close timed-out session: {}", e.getMessage());
-                    }
+        connectionPool.forEachAll(session -> {
+            Instant last = lastActivity.get(session.getId());
+            if (last != null && last.isBefore(timeout) && session.isOpen()) {
+                try {
+                    log.warn("Closing external WS due to heartbeat timeout: sessionId={}", session.getId());
+                    session.close(CloseStatus.GOING_AWAY);
+                } catch (Exception e) {
+                    log.error("Failed to close timed-out session: {}", e.getMessage());
                 }
             }
-        }
-        // 续期 WS 连接注册表
-        for (String source : connectionPool.keySet()) {
+        });
+        for (String source : connectionPool.sources()) {
             wsRegistry.heartbeat(source);
         }
     }

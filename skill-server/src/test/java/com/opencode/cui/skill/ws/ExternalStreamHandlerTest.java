@@ -120,6 +120,98 @@ class ExternalStreamHandlerTest {
         verify(wsSession).sendMessage(any(TextMessage.class));
     }
 
+    @Test
+    @DisplayName("multiple connections from same source+instanceId coexist")
+    void multipleConnectionsCoexist() throws Exception {
+        WebSocketSession s1 = mock(WebSocketSession.class);
+        WebSocketSession s2 = mock(WebSocketSession.class);
+        Map<String, Object> attrs1 = new HashMap<>(Map.of("source", "im", "instanceId", "im-1"));
+        Map<String, Object> attrs2 = new HashMap<>(Map.of("source", "im", "instanceId", "im-1"));
+        when(s1.getAttributes()).thenReturn(attrs1);
+        when(s2.getAttributes()).thenReturn(attrs2);
+        when(s1.getId()).thenReturn("ws-1");
+        when(s2.getId()).thenReturn("ws-2");
+        lenient().when(s1.isOpen()).thenReturn(true);
+        lenient().when(s2.isOpen()).thenReturn(true);
+
+        handler.afterConnectionEstablished(s1);
+        handler.afterConnectionEstablished(s2);
+
+        assertTrue(handler.hasActiveConnections("im"));
+        // 注册调用：第一次 count=1，第二次 count=2
+        verify(wsRegistry).register("im", 1);
+        verify(wsRegistry).register("im", 2);
+    }
+
+    @Test
+    @DisplayName("closing one connection does not remove others")
+    void closingOneKeepsOthers() throws Exception {
+        WebSocketSession s1 = mock(WebSocketSession.class);
+        WebSocketSession s2 = mock(WebSocketSession.class);
+        Map<String, Object> attrs1 = new HashMap<>(Map.of("source", "im", "instanceId", "im-1"));
+        Map<String, Object> attrs2 = new HashMap<>(Map.of("source", "im", "instanceId", "im-1"));
+        when(s1.getAttributes()).thenReturn(attrs1);
+        when(s2.getAttributes()).thenReturn(attrs2);
+        when(s1.getId()).thenReturn("ws-1");
+        when(s2.getId()).thenReturn("ws-2");
+        lenient().when(s1.isOpen()).thenReturn(true);
+        when(s2.isOpen()).thenReturn(true);
+
+        handler.afterConnectionEstablished(s1);
+        handler.afterConnectionEstablished(s2);
+
+        handler.afterConnectionClosed(s1, CloseStatus.NORMAL);
+
+        assertTrue(handler.hasActiveConnections("im"));
+        // closingOneKeepsOthers verifies register("im", 1) was called.
+        // Note: register("im", 1) is called BOTH during afterConnectionEstablished(s1) AND afterConnectionClosed(s1).
+        // So it's called at least twice with these args. Use atLeast(1):
+        verify(wsRegistry, atLeast(1)).register("im", 1);
+    }
+
+    @Test
+    @DisplayName("pushToOne retries on send failure")
+    void pushToOneRetriesOnFailure() throws Exception {
+        WebSocketSession s1 = mock(WebSocketSession.class);
+        WebSocketSession s2 = mock(WebSocketSession.class);
+        Map<String, Object> attrs1 = new HashMap<>(Map.of("source", "im", "instanceId", "im-1"));
+        Map<String, Object> attrs2 = new HashMap<>(Map.of("source", "im", "instanceId", "im-1"));
+        when(s1.getAttributes()).thenReturn(attrs1);
+        when(s2.getAttributes()).thenReturn(attrs2);
+        when(s1.getId()).thenReturn("ws-fail");
+        when(s2.getId()).thenReturn("ws-ok");
+        when(s1.isOpen()).thenReturn(true);
+        when(s2.isOpen()).thenReturn(true);
+
+        handler.afterConnectionEstablished(s1);
+        handler.afterConnectionEstablished(s2);
+
+        // s1 发送抛异常，s2 发送成功
+        doThrow(new RuntimeException("connection reset")).when(s1).sendMessage(any(TextMessage.class));
+
+        boolean result = handler.pushToOne("im", "{\"type\":\"test\"}");
+        assertTrue(result);
+        // s2 应该收到消息
+        verify(s2).sendMessage(any(TextMessage.class));
+    }
+
+    @Test
+    @DisplayName("pushToOne returns false when all connections fail")
+    void pushToOneAllFail() throws Exception {
+        WebSocketSession s1 = mock(WebSocketSession.class);
+        Map<String, Object> attrs1 = new HashMap<>(Map.of("source", "im", "instanceId", "im-1"));
+        when(s1.getAttributes()).thenReturn(attrs1);
+        when(s1.getId()).thenReturn("ws-fail");
+        when(s1.isOpen()).thenReturn(true);
+
+        handler.afterConnectionEstablished(s1);
+
+        doThrow(new RuntimeException("broken")).when(s1).sendMessage(any(TextMessage.class));
+
+        boolean result = handler.pushToOne("im", "{\"type\":\"test\"}");
+        assertFalse(result);
+    }
+
     @org.junit.jupiter.api.Nested
     @DisplayName("ConnectionPool")
     class ConnectionPoolTest {
