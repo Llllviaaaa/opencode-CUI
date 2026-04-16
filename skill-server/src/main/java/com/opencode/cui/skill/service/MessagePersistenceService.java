@@ -10,10 +10,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
+
 /**
  * 流式消息持久化服务。
  * 负责将 AI Gateway 返回的流式消息（文本、工具调用、权限、文件等）持久化到数据库。
- * 
+ *
  * InboundController 直接使用的方法：
  * - {@link #finalizeActiveAssistantTurn} — 结束当前助手回复轮次
  */
@@ -27,19 +29,22 @@ public class MessagePersistenceService {
     private final SnowflakeIdGenerator snowflakeIdGenerator; // 分布式 ID 生成器
     private final ActiveMessageTracker tracker; // 活跃消息状态追踪器
     private final SkillSessionService sessionService; // 会话服务（用于延迟更新 last_active_at）
+    private final PartBufferService partBufferService;
 
     public MessagePersistenceService(SkillMessageService messageService,
             SkillMessagePartRepository partRepository,
             ObjectMapper objectMapper,
             SnowflakeIdGenerator snowflakeIdGenerator,
             ActiveMessageTracker tracker,
-            SkillSessionService sessionService) {
+            SkillSessionService sessionService,
+            PartBufferService partBufferService) {
         this.messageService = messageService;
         this.partRepository = partRepository;
         this.objectMapper = objectMapper;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
         this.tracker = tracker;
         this.sessionService = sessionService;
+        this.partBufferService = partBufferService;
     }
 
     /** 为流式消息准备消息上下文（解析或创建活跃消息引用） */
@@ -100,7 +105,16 @@ public class MessagePersistenceService {
             return null;
         }
 
-        SkillMessagePart pendingPart = partRepository.findLatestPendingPermissionPart(sessionId);
+        // 先查 Redis 缓冲中的 pending permission part
+        ActiveMessageTracker.ActiveMessageRef active = tracker.getActiveMessage(sessionId);
+        SkillMessagePart pendingPart = null;
+        if (active != null) {
+            pendingPart = partBufferService.findLatestPendingPermission(active.dbId());
+        }
+        // 降级查 DB（兼容 takeover 后已刷盘的场景）
+        if (pendingPart == null) {
+            pendingPart = partRepository.findLatestPendingPermissionPart(sessionId);
+        }
         if (pendingPart == null) {
             return null;
         }
@@ -145,15 +159,15 @@ public class MessagePersistenceService {
                 .messageId(active.dbId())
                 .sessionId(sessionId)
                 .partId(msg.getPartId() != null ? msg.getPartId() : partType + "-" + active.messageSeq())
-                .seq(resolvePartSeq(sessionId, active.dbId(), msg))
+                .seq(resolvePartSeq(active.dbId(), msg))
                 .partType(partType)
                 .content(msg.getContent())
                 .subagentSessionId(msg.getSubagentSessionId())
                 .subagentName(msg.getSubagentName())
                 .build();
 
-        partRepository.upsert(part);
-        log.debug("Persisted {} part: sessionId={}, protocolId={}, partId={}",
+        partBufferService.bufferPart(active.dbId(), part);
+        log.debug("Buffered {} part: sessionId={}, protocolId={}, partId={}",
                 partType, sessionId, active.protocolMessageId(), part.getPartId());
 
         return true;
@@ -189,7 +203,7 @@ public class MessagePersistenceService {
                 .messageId(active.dbId())
                 .sessionId(sessionId)
                 .partId(msg.getPartId() != null ? msg.getPartId() : "tool-" + active.messageSeq())
-                .seq(resolvePartSeq(sessionId, active.dbId(), msg))
+                .seq(resolvePartSeq(active.dbId(), msg))
                 .partType("tool")
                 .toolName(tool != null ? tool.getToolName() : null)
                 .toolCallId(tool != null ? tool.getToolCallId() : null)
@@ -202,8 +216,8 @@ public class MessagePersistenceService {
                 .subagentName(msg.getSubagentName())
                 .build();
 
-        partRepository.upsert(part);
-        log.debug("Persisted tool part: sessionId={}, protocolId={}, tool={}, status={}",
+        partBufferService.bufferPart(active.dbId(), part);
+        log.debug("Buffered tool part: sessionId={}, protocolId={}, tool={}, status={}",
                 sessionId, active.protocolMessageId(),
                 tool != null ? tool.getToolName() : null, msg.getStatus());
         return true;
@@ -237,7 +251,7 @@ public class MessagePersistenceService {
                 .sessionId(sessionId)
                 .partId(msg.getPartId() != null ? msg.getPartId()
                         : permissionId != null ? permissionId : "permission-" + active.messageSeq())
-                .seq(resolvePartSeq(sessionId, active.dbId(), msg))
+                .seq(resolvePartSeq(active.dbId(), msg))
                 .partType("permission")
                 .content(msg.getTitle() != null ? msg.getTitle() : msg.getContent())
                 .toolName(permission != null ? permission.getPermType() : null)
@@ -249,8 +263,8 @@ public class MessagePersistenceService {
                 .subagentName(msg.getSubagentName())
                 .build();
 
-        partRepository.upsert(part);
-        log.debug("Persisted permission part: sessionId={}, protocolId={}, permissionId={}, type={}",
+        partBufferService.bufferPart(active.dbId(), part);
+        log.debug("Buffered permission part: sessionId={}, protocolId={}, permissionId={}, type={}",
                 sessionId, active.protocolMessageId(), permissionId, msg.getType());
         return true;
     }
@@ -268,21 +282,22 @@ public class MessagePersistenceService {
         String response = permission.getResponse();
         String status = msg.getStatus() != null ? msg.getStatus() : "completed";
 
-        // 通过 (session_id, part_id) 查找已有的 permission.ask part
-        // partId 在 persistPermissionPart 中设为 permissionId
+        // 先查 DB（已刷盘的场景）
         SkillMessagePart existing = partRepository.findByPartId(sessionId, permissionId);
-        if (existing == null) {
-            log.debug("No existing permission part to update: sessionId={}, permissionId={}", sessionId, permissionId);
-            return false;
+        if (existing != null) {
+            existing.setToolStatus(status);
+            existing.setToolOutput(response);
+            existing.setUpdatedAt(null);
+            partRepository.upsert(existing);
+            log.info("Updated permission reply by permissionId (DB): sessionId={}, permissionId={}, response={}",
+                    sessionId, permissionId, response);
+            return true;
         }
 
-        existing.setToolStatus(status);
-        existing.setToolOutput(response);
-        existing.setUpdatedAt(null); // 让 SQL 使用 NOW()
-        partRepository.upsert(existing);
-        log.info("Updated permission reply by permissionId: sessionId={}, permissionId={}, response={}",
-                sessionId, permissionId, response);
-        return true;
+        // DB 中没有 → 可能在 Redis 缓冲中，permission reply 会在 flush 时随缓冲一起写入
+        log.debug("Permission part not found in DB, may be in Redis buffer: sessionId={}, permissionId={}",
+                sessionId, permissionId);
+        return false;
     }
 
     private boolean persistFilePart(Long sessionId, StreamMessage msg,
@@ -297,7 +312,7 @@ public class MessagePersistenceService {
                 .messageId(active.dbId())
                 .sessionId(sessionId)
                 .partId(msg.getPartId() != null ? msg.getPartId() : "file-" + active.messageSeq())
-                .seq(resolvePartSeq(sessionId, active.dbId(), msg))
+                .seq(resolvePartSeq(active.dbId(), msg))
                 .partType("file")
                 .fileName(f != null ? f.getFileName() : null)
                 .fileUrl(f != null ? f.getFileUrl() : null)
@@ -306,8 +321,8 @@ public class MessagePersistenceService {
                 .subagentName(msg.getSubagentName())
                 .build();
 
-        partRepository.upsert(part);
-        log.debug("Persisted file part: sessionId={}, protocolId={}, file={}",
+        partBufferService.bufferPart(active.dbId(), part);
+        log.debug("Buffered file part: sessionId={}, protocolId={}, file={}",
                 sessionId, active.protocolMessageId(),
                 f != null ? f.getFileName() : null);
         return true;
@@ -336,7 +351,7 @@ public class MessagePersistenceService {
 
         var u = msg.getUsage();
         UsageStats stats = extractUsageStats(msg);
-        int partSeq = resolvePartSeq(sessionId, active.dbId(), msg);
+        int partSeq = resolvePartSeq(active.dbId(), msg);
         Double cost = u != null ? u.getCost() : null;
         SkillMessagePart part = SkillMessagePart.builder()
                 .id(snowflakeIdGenerator.nextId())
@@ -353,9 +368,8 @@ public class MessagePersistenceService {
                 .subagentName(msg.getSubagentName())
                 .build();
 
-        partRepository.upsert(part);
-        messageService.updateMessageStats(active.dbId(), stats.tokensIn(), stats.tokensOut(), cost);
-        log.debug("Persisted step.done: sessionId={}, protocolId={}, tokensIn={}, tokensOut={}, cost={}",
+        partBufferService.bufferPart(active.dbId(), part);
+        log.debug("Buffered step.done: sessionId={}, protocolId={}, tokensIn={}, tokensOut={}, cost={}",
                 sessionId, active.protocolMessageId(), stats.tokensIn(), stats.tokensOut(), cost);
         return true;
     }
@@ -364,9 +378,49 @@ public class MessagePersistenceService {
         if (!"idle".equals(msg.getSessionStatus()) && !"completed".equals(msg.getSessionStatus())) {
             return;
         }
+        // 先 flush Redis 缓冲到 MySQL，再 sync content（sync 需要从 DB 读 part）
+        ActiveMessageTracker.ActiveMessageRef active = tracker.getActiveMessage(sessionId);
+        if (active != null) {
+            flushPartBuffer(active.dbId());
+        }
         syncAllPendingContent(sessionId);
         sessionService.touchSession(sessionId);
         tracker.removeAndFinalize(sessionId);
+    }
+
+    /**
+     * 从 Redis 缓冲读取所有 part，批量写入 MySQL，累积 step-done 的 stats 后一次性更新。
+     */
+    private void flushPartBuffer(Long messageDbId) {
+        List<SkillMessagePart> parts = partBufferService.flushParts(messageDbId);
+        if (parts.isEmpty()) {
+            return;
+        }
+
+        partRepository.batchUpsert(parts);
+        log.info("Batch upserted {} parts for messageDbId={}", parts.size(), messageDbId);
+
+        // 累积 step-done 的 tokens/cost，一次性更新主消息 stats
+        int totalTokensIn = 0;
+        int totalTokensOut = 0;
+        double totalCost = 0.0;
+        boolean hasStats = false;
+
+        for (SkillMessagePart part : parts) {
+            if ("step-finish".equals(part.getPartType())) {
+                if (part.getTokensIn() != null) totalTokensIn += part.getTokensIn();
+                if (part.getTokensOut() != null) totalTokensOut += part.getTokensOut();
+                if (part.getCost() != null) totalCost += part.getCost();
+                hasStats = true;
+            }
+        }
+
+        if (hasStats) {
+            messageService.updateMessageStats(messageDbId,
+                    totalTokensIn > 0 ? totalTokensIn : null,
+                    totalTokensOut > 0 ? totalTokensOut : null,
+                    totalCost > 0 ? totalCost : null);
+        }
     }
 
     private void syncAllPendingContent(Long sessionId) {
@@ -378,19 +432,11 @@ public class MessagePersistenceService {
 
     // ==================== Internal Helpers ====================
 
-    private int resolvePartSeq(Long sessionId, Long messageDbId, StreamMessage msg) {
-        if (msg.getPartId() != null && !msg.getPartId().isBlank()) {
-            SkillMessagePart existing = partRepository.findByPartId(sessionId, msg.getPartId());
-            if (existing != null && existing.getSeq() != null) {
-                return existing.getSeq();
-            }
-        }
-
+    private int resolvePartSeq(Long messageDbId, StreamMessage msg) {
         if (msg.getPartSeq() != null && msg.getPartSeq() > 0) {
             return msg.getPartSeq();
         }
-
-        return partRepository.findMaxSeqByMessageId(messageDbId) + 1;
+        return partBufferService.nextSeq(messageDbId);
     }
 
     private void syncMessageContent(ActiveMessageTracker.ActiveMessageRef active) {
