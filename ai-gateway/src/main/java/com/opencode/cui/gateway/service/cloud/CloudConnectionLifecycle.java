@@ -59,12 +59,16 @@ public class CloudConnectionLifecycle {
     public void onConnected() {
         if (closed.get()) return;
         connectedAtMs = System.currentTimeMillis();
-        firstEventFuture = scheduler.schedule(
-                () -> fireTimeout("first_event_timeout"),
-                firstEventTimeoutSeconds, TimeUnit.SECONDS);
-        maxDurationFuture = scheduler.schedule(
-                () -> fireTimeout("max_duration"),
-                maxDurationSeconds, TimeUnit.SECONDS);
+        try {
+            firstEventFuture = scheduler.schedule(
+                    () -> fireTimeout("first_event_timeout"),
+                    firstEventTimeoutSeconds, TimeUnit.SECONDS);
+            maxDurationFuture = scheduler.schedule(
+                    () -> fireTimeout("max_duration"),
+                    maxDurationSeconds, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            // Scheduler already shut down by a concurrent timeout/terminal event
+        }
     }
 
     public void onEventReceived() {
@@ -82,10 +86,10 @@ public class CloudConnectionLifecycle {
     }
 
     public void onTerminalEvent() {
-        if (closed.get()) return;
+        if (!closed.compareAndSet(false, true)) return;
         cancelAllTimers();
         closeAction.run();
-        shutdown();
+        scheduler.shutdownNow();
     }
 
     public void close() {
@@ -96,19 +100,24 @@ public class CloudConnectionLifecycle {
     }
 
     private void fireTimeout(String timeoutType) {
-        if (closed.get()) return;
+        if (!closed.compareAndSet(false, true)) return;
         long elapsed = (System.currentTimeMillis() - connectedAtMs) / 1000;
         log.warn("[CLOUD_LIFECYCLE] Timeout fired: type={}, elapsedSeconds={}", timeoutType, elapsed);
+        cancelAllTimers();
         onTimeout.onTimeout(timeoutType, elapsed);
         closeAction.run();
-        shutdown();
+        scheduler.shutdownNow();
     }
 
     private void resetIdleTimeout() {
         cancelFuture(idleFuture);
-        idleFuture = scheduler.schedule(
-                () -> fireTimeout("idle_timeout"),
-                idleTimeoutSeconds, TimeUnit.SECONDS);
+        try {
+            idleFuture = scheduler.schedule(
+                    () -> fireTimeout("idle_timeout"),
+                    idleTimeoutSeconds, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            // Scheduler already shut down by a concurrent timeout/terminal event
+        }
     }
 
     private void cancelAllTimers() {
@@ -126,8 +135,4 @@ public class CloudConnectionLifecycle {
         }
     }
 
-    private void shutdown() {
-        closed.set(true);
-        scheduler.shutdownNow();
-    }
 }

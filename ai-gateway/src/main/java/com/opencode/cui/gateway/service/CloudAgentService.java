@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
@@ -83,6 +84,7 @@ public class CloudAgentService {
         ConcurrentHashMap<String, String> fallbackPartIds = new ConcurrentHashMap<>();
 
         // 4. 创建连接生命周期管理器
+        AtomicBoolean errorSent = new AtomicBoolean(false);
         String protocol = routeInfo.getProtocol();
         CloudConnectionLifecycle lifecycle = new CloudConnectionLifecycle(
                 timeoutProperties.getFirstEventTimeoutSeconds(),
@@ -93,7 +95,7 @@ public class CloudAgentService {
                             ak, invokeMessage.getTraceId(), timeoutType, elapsedSeconds);
                     GatewayMessage errorMsg = buildCloudError(invokeMessage, toolSessionId,
                             new RuntimeException(timeoutType + " (elapsed: " + elapsedSeconds + "s)"));
-                    onRelay.accept(errorMsg);
+                    if (errorSent.compareAndSet(false, true)) { onRelay.accept(errorMsg); }
                 },
                 () -> log.info("[CLOUD_AGENT] Connection closed by lifecycle: ak={}, traceId={}",
                         ak, invokeMessage.getTraceId())
@@ -146,13 +148,14 @@ public class CloudAgentService {
                         }
                     }
 
+                    if (errorSent.get()) return;
                     onRelay.accept(event);
                 },
                 error -> {
                     log.error("[CLOUD_AGENT] Cloud connection error: ak={}, traceId={}, error={}",
                             ak, invokeMessage.getTraceId(), error.getMessage());
                     GatewayMessage errorMsg = buildCloudError(invokeMessage, toolSessionId, error);
-                    onRelay.accept(errorMsg);
+                    if (errorSent.compareAndSet(false, true)) { onRelay.accept(errorMsg); }
                 }
         );
         } finally {

@@ -66,7 +66,7 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
                     .buildAsync(URI.create(context.getEndpoint()), listener)
                     .get(timeoutProperties.getConnectTimeoutSeconds(), TimeUnit.SECONDS);
 
-            lifecycle.onConnected();
+            if (lifecycle != null) lifecycle.onConnected();
 
             String requestBody = objectMapper.writeValueAsString(context.getCloudRequest());
             ws.sendText(requestBody, true).get(10, TimeUnit.SECONDS);
@@ -138,7 +138,7 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
 
             @Override
             public CompletionStage<?> onPong(WebSocket webSocket, ByteBuffer message) {
-                lifecycle.onHeartbeat();
+                if (lifecycle != null) lifecycle.onHeartbeat();
                 webSocket.request(1);
                 return CompletableFuture.completedFuture(null);
             }
@@ -163,12 +163,12 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
                                 Consumer<GatewayMessage> onEvent, Consumer<Throwable> onError) {
         try {
             GatewayMessage message = objectMapper.readValue(json, GatewayMessage.class);
-            lifecycle.onEventReceived();
+            if (lifecycle != null) lifecycle.onEventReceived();
             onEvent.accept(message);
 
             if (message.isType(GatewayMessage.Type.TOOL_DONE)
                     || message.isType(GatewayMessage.Type.TOOL_ERROR)) {
-                lifecycle.onTerminalEvent();
+                if (lifecycle != null) lifecycle.onTerminalEvent();
             }
         } catch (Exception e) {
             log.warn("[WS] Failed to parse message: json={}, error={}", json, e.getMessage());
