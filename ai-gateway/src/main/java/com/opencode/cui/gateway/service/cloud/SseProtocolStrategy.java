@@ -123,42 +123,53 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                 new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                // SSE 注释行（心跳）
                 if (line.startsWith(":")) {
-                    if (lifecycle != null) {
-                        lifecycle.onHeartbeat();
-                    }
+                    // SSE 注释行（心跳）
+                    notifyLifecycle(lifecycle, CloudConnectionLifecycle::onHeartbeat);
                     continue;
                 }
-                if (line.startsWith("data:")) {
-                    String jsonData = line.substring(5).trim();
-                    if (jsonData.isEmpty() || "[DONE]".equals(jsonData)) {
-                        continue;
-                    }
-                    try {
-                        GatewayMessage message = objectMapper.readValue(jsonData, GatewayMessage.class);
-                        if (lifecycle != null) {
-                            lifecycle.onEventReceived();
-                        }
-                        onEvent.accept(message);
-                        // 终态事件：停止读取
-                        if (message.isType(GatewayMessage.Type.TOOL_DONE)
-                                || message.isType(GatewayMessage.Type.TOOL_ERROR)) {
-                            if (lifecycle != null) {
-                                lifecycle.onTerminalEvent();
-                            }
-                            return;
-                        }
-                    } catch (Exception e) {
-                        log.warn("[SSE] Failed to parse event: traceId={}, data={}, error={}",
-                                traceId, jsonData, e.getMessage());
-                    }
+                if (line.startsWith("data:") && handleDataLine(line, lifecycle, onEvent, traceId)) {
+                    return;
                 }
             }
             log.info("[SSE] Stream completed: traceId={}", traceId);
         } catch (Exception e) {
             log.error("[SSE] Stream read error: traceId={}, error={}", traceId, e.getMessage());
             onError.accept(e);
+        }
+    }
+
+    /**
+     * 解析 SSE data 行并分发事件。
+     *
+     * @return true 表示遇到终态事件，调用方应停止读取
+     */
+    private boolean handleDataLine(String line, CloudConnectionLifecycle lifecycle,
+                                   Consumer<GatewayMessage> onEvent, String traceId) {
+        String jsonData = line.substring(5).trim();
+        if (jsonData.isEmpty() || "[DONE]".equals(jsonData)) {
+            return false;
+        }
+        try {
+            GatewayMessage message = objectMapper.readValue(jsonData, GatewayMessage.class);
+            notifyLifecycle(lifecycle, CloudConnectionLifecycle::onEventReceived);
+            onEvent.accept(message);
+            if (message.isType(GatewayMessage.Type.TOOL_DONE)
+                    || message.isType(GatewayMessage.Type.TOOL_ERROR)) {
+                notifyLifecycle(lifecycle, CloudConnectionLifecycle::onTerminalEvent);
+                return true;
+            }
+        } catch (Exception e) {
+            log.warn("[SSE] Failed to parse event: traceId={}, data={}, error={}",
+                    traceId, jsonData, e.getMessage());
+        }
+        return false;
+    }
+
+    private static void notifyLifecycle(CloudConnectionLifecycle lifecycle,
+                                        Consumer<CloudConnectionLifecycle> action) {
+        if (lifecycle != null) {
+            action.accept(lifecycle);
         }
     }
 }

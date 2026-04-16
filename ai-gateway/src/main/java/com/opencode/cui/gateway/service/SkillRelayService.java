@@ -687,33 +687,8 @@ public class SkillRelayService {
 
         // 业务助手走云端路由策略，个人助手保持现有逻辑
         String scope = Optional.ofNullable(message.getAssistantScope()).orElse("personal");
-        if ("business".equals(scope)) {
-            InvokeRouteStrategy strategy = routeStrategyMap.get("business");
-            if (strategy != null) {
-                GatewayMessage tracedMsg = message.ensureTraceId();
-                String source = tracedMsg.getSource();
-
-                // 先学路由，确保云端响应能精确路由回 skill-server，不走 L3 广播
-                if (source != null && !source.isBlank()) {
-                    routingTable.learnRoute(tracedMsg, source);
-                    learnRouteFromInvoke(tracedMsg, session);
-
-                    String ssInstanceId = resolveSsInstanceId(session);
-                    if (ssInstanceId != null) {
-                        String toolSessionId = extractToolSessionIdFromPayload(tracedMsg);
-                        if (toolSessionId != null && !toolSessionId.isBlank()) {
-                            redisMessageBroker.setSessionRoute(toolSessionId, source, ssInstanceId);
-                        }
-                        String welinkSessionId = tracedMsg.getWelinkSessionId();
-                        if (welinkSessionId != null && !welinkSessionId.isBlank()) {
-                            redisMessageBroker.setWelinkSessionRoute(welinkSessionId, source, ssInstanceId);
-                        }
-                    }
-                }
-
-                strategy.route(tracedMsg, this::relayToSkill);
-                return;
-            }
+        if ("business".equals(scope) && routeBusinessInvoke(session, message)) {
+            return;
         }
 
         GatewayMessage tracedMessage = message.ensureTraceId();
@@ -721,6 +696,50 @@ public class SkillRelayService {
         log.info("[ENTRY] SkillRelayService.handleInvokeFromSkill: ak={}, action={}, linkId={}",
                 tracedMessage.getAk(), tracedMessage.getAction(), session.getId());
 
+        if (!validateInvokeMessage(session, tracedMessage)) {
+            return;
+        }
+
+        String messageSource = tracedMessage.getSource();
+
+        // Learn route and write session route to Redis
+        routingTable.learnRoute(tracedMessage, messageSource);
+        learnRouteFromInvoke(tracedMessage, session);
+        writeSessionRouteToRedis(tracedMessage, messageSource, session);
+
+        // 3-tier delivery — local → remote GW relay → pending queue
+        dispatchToAgent(tracedMessage, messageSource);
+    }
+
+    /**
+     * 业务助手云端路由。
+     *
+     * @return true 表示已由云端路由策略处理
+     */
+    private boolean routeBusinessInvoke(WebSocketSession session, GatewayMessage message) {
+        InvokeRouteStrategy strategy = routeStrategyMap.get("business");
+        if (strategy == null) {
+            return false;
+        }
+        GatewayMessage tracedMsg = message.ensureTraceId();
+        String source = tracedMsg.getSource();
+
+        if (source != null && !source.isBlank()) {
+            routingTable.learnRoute(tracedMsg, source);
+            learnRouteFromInvoke(tracedMsg, session);
+            writeSessionRouteToRedis(tracedMsg, source, session);
+        }
+
+        strategy.route(tracedMsg, this::relayToSkill);
+        return true;
+    }
+
+    /**
+     * 校验上行 invoke 消息的 source、ak、userId。
+     *
+     * @return true 表示校验通过
+     */
+    private boolean validateInvokeMessage(WebSocketSession session, GatewayMessage tracedMessage) {
         // Validate source
         String boundSource = resolveBoundSource(session);
         String messageSource = tracedMessage.getSource();
@@ -728,21 +747,21 @@ public class SkillRelayService {
             log.warn("[SKIP] SkillRelayService.handleInvokeFromSkill: reason=missing_source, linkId={}",
                     session.getId());
             sendProtocolError(session, ERROR_SOURCE_NOT_ALLOWED);
-            return;
+            return false;
         }
         if (boundSource == null || !boundSource.equals(messageSource)) {
             log.warn(
                     "[SKIP] SkillRelayService.handleInvokeFromSkill: reason=source_mismatch, bound={}, message={}, linkId={}",
                     boundSource, messageSource, session.getId());
             sendProtocolError(session, ERROR_SOURCE_MISMATCH);
-            return;
+            return false;
         }
 
         // Validate ak
         if (tracedMessage.getAk() == null || tracedMessage.getAk().isBlank()) {
             log.warn("[SKIP] SkillRelayService.handleInvokeFromSkill: reason=missing_ak, linkId={}",
                     session.getId());
-            return;
+            return false;
         }
 
         // Validate userId
@@ -750,38 +769,43 @@ public class SkillRelayService {
         if (tracedMessage.getUserId() == null || tracedMessage.getUserId().isBlank()) {
             log.warn("[SKIP] SkillRelayService.handleInvokeFromSkill: reason=missing_userId, linkId={}, ak={}",
                     session.getId(), tracedMessage.getAk());
-            return;
+            return false;
         }
         if (expectedUserId == null || !tracedMessage.getUserId().equals(expectedUserId)) {
             log.warn(
                     "[SKIP] SkillRelayService.handleInvokeFromSkill: reason=userId_mismatch, expected={}, actual={}, ak={}",
                     expectedUserId, tracedMessage.getUserId(), tracedMessage.getAk());
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * 将 session 路由信息写入 Redis，用于跨集群路由。
+     */
+    private void writeSessionRouteToRedis(GatewayMessage tracedMessage, String source,
+                                          WebSocketSession session) {
+        String ssInstanceId = resolveSsInstanceId(session);
+        if (ssInstanceId == null) {
             return;
         }
-
-        // V2: Learn route in UpstreamRoutingTable
-        routingTable.learnRoute(tracedMessage, messageSource);
-
-        // V2: Also learn in legacy route cache for backward compatibility
-        learnRouteFromInvoke(tracedMessage, session);
-
-        // Write session route to Redis for cross-cluster routing
-        String ssInstanceId = resolveSsInstanceId(session);
-        if (ssInstanceId != null) {
-            String toolSessionId = extractToolSessionIdFromPayload(tracedMessage);
-            if (toolSessionId != null && !toolSessionId.isBlank()) {
-                redisMessageBroker.setSessionRoute(toolSessionId, messageSource, ssInstanceId);
-            }
-            String welinkSessionId = tracedMessage.getWelinkSessionId();
-            if (welinkSessionId != null && !welinkSessionId.isBlank()) {
-                redisMessageBroker.setWelinkSessionRoute(welinkSessionId, messageSource, ssInstanceId);
-            }
+        String toolSessionId = extractToolSessionIdFromPayload(tracedMessage);
+        if (toolSessionId != null && !toolSessionId.isBlank()) {
+            redisMessageBroker.setSessionRoute(toolSessionId, source, ssInstanceId);
         }
+        String welinkSessionId = tracedMessage.getWelinkSessionId();
+        if (welinkSessionId != null && !welinkSessionId.isBlank()) {
+            redisMessageBroker.setWelinkSessionRoute(welinkSessionId, source, ssInstanceId);
+        }
+    }
 
+    /**
+     * 3-tier delivery：local → remote GW relay → pending queue。
+     */
+    private void dispatchToAgent(GatewayMessage tracedMessage, String messageSource) {
         String ak = tracedMessage.getAk();
         GatewayMessage agentMessage = tracedMessage.withoutRoutingContext();
 
-        // V2: 3-tier delivery — local → remote GW relay → pending queue
         if (deliverToLocalAgent(ak, agentMessage)) {
             relayLocalCount.incrementAndGet();
             log.info("[EXIT->AGENT] Delivered invoke locally: ak={}, action={}, source={}",
@@ -796,13 +820,11 @@ public class SkillRelayService {
             return;
         }
 
-        // Agent not found anywhere → enqueue pending
         enqueueToPending(ak, agentMessage);
         relayPendingCount.incrementAndGet();
         log.info("[EXIT->PENDING] Enqueued invoke to pending: ak={}, action={}, source={}",
                 ak, tracedMessage.getAction(), messageSource);
 
-        // Legacy fallback: also publish to agent pub/sub channel if legacy-relay is enabled
         if (legacyRelayEnabled) {
             redisMessageBroker.publishToAgent(ak, agentMessage);
             log.info("[EXIT->LEGACY] Also published to legacy agent channel: ak={}", ak);
