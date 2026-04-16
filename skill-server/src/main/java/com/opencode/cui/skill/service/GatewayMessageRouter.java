@@ -801,6 +801,17 @@ public class GatewayMessageRouter {
     private void handleImPush(String sessionId, JsonNode node) {
         log.info("[ENTRY] handleImPush: sessionId={}", sessionId);
 
+        // 幂等保护：GW 广播时多个 pod 可能同时收到同一条 im_push，用 traceId 去重
+        String traceId = node.path("traceId").asText(null);
+        if (traceId != null) {
+            String dedupKey = "ss:im-push-dedup:" + traceId;
+            Boolean acquired = redisMessageBroker.tryAcquire(dedupKey, java.time.Duration.ofSeconds(30));
+            if (!Boolean.TRUE.equals(acquired)) {
+                log.info("[SKIP] handleImPush: deduplicated by traceId={}", traceId);
+                return;
+            }
+        }
+
         // 从顶层节点获取 topicId（即 toolSessionId）
         String topicId = node.path("toolSessionId").asText(null);
 

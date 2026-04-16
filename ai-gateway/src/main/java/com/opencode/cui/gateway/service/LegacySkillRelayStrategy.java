@@ -265,8 +265,11 @@ public class LegacySkillRelayStrategy implements SkillRelayStrategy {
     }
 
     private AsyncSessionSender getOrCreateSender(WebSocketSession session) {
-        return sessionSenders.computeIfAbsent(session.getId(),
-                k -> new AsyncSessionSender(session));
+        return sessionSenders.computeIfAbsent(session.getId(), k -> {
+            AsyncSessionSender sender = new AsyncSessionSender(session);
+            sender.start();
+            return sender;
+        });
     }
 
     public void removeSessionSender(String sessionId) {

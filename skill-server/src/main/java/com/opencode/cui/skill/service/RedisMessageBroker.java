@@ -343,4 +343,20 @@ public class RedisMessageBroker {
         }
     }
 
+    /**
+     * 尝试获取分布式去重锁（SET NX + TTL）。
+     *
+     * @param key 去重 key
+     * @param ttl 锁超时时间
+     * @return true 表示获取成功（首次处理），false 表示已被其他实例处理
+     */
+    public Boolean tryAcquire(String key, java.time.Duration ttl) {
+        try {
+            return redisTemplate.opsForValue().setIfAbsent(key, "1", ttl);
+        } catch (Exception e) {
+            log.warn("tryAcquire failed, allowing through: key={}, error={}", key, e.getMessage());
+            return true; // Redis 异常时放行，避免消息丢失
+        }
+    }
+
 }

@@ -137,7 +137,7 @@ public class SkillMessageController {
                         sessionId));
 
         // 路由到 AI-Gateway
-        routeToGateway(session, sessionId, numericSessionId, request);
+        routeToGateway(session, sessionId, numericSessionId, request, userIdCookie);
 
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
         log.info("[EXIT] SkillMessageController.sendMessage: sessionId={}, ak={}, durationMs={}", sessionId,
@@ -150,7 +150,7 @@ public class SkillMessageController {
      * 根据会话状态和请求类型将用户消息路由到 AI-Gateway。
      */
     private void routeToGateway(SkillSession session, String sessionId,
-            Long numericSessionId, SendMessageRequest request) {
+            Long numericSessionId, SendMessageRequest request, String userIdCookie) {
         if (session.getAk() == null) {
             log.warn("[SKIP] SkillMessageController.routeToGateway: reason=no_agent, sessionId={}", sessionId);
             return;
@@ -204,7 +204,9 @@ public class SkillMessageController {
             Map<String, String> payloadFields = new LinkedHashMap<>();
             payloadFields.put("text", request.getContent());
             payloadFields.put("toolSessionId", session.getToolSessionId());
-            payloadFields.put("sendUserAccount", session.getUserId());
+            // 优先使用实际操作用户（cookie），兜底用 session 创建人
+            payloadFields.put("sendUserAccount",
+                    userIdCookie != null && !userIdCookie.isBlank() ? userIdCookie : session.getUserId());
             payloadFields.put("assistantAccount", session.getAssistantAccount());
             payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
             payload = PayloadBuilder.buildPayload(objectMapper, payloadFields);
@@ -212,8 +214,10 @@ public class SkillMessageController {
 
         log.info("SkillMessageController.routeToGateway: sessionId={}, action={}, ak={}",
                 sessionId, action, session.getAk());
+        String effectiveUserId = userIdCookie != null && !userIdCookie.isBlank()
+                ? userIdCookie : session.getUserId();
         gatewayRelayService.sendInvokeToGateway(
-                new InvokeCommand(session.getAk(), session.getUserId(), sessionId, action, payload));
+                new InvokeCommand(session.getAk(), effectiveUserId, sessionId, action, payload));
     }
 
     /**

@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
@@ -79,8 +80,8 @@ public class CloudAgentService {
                 .traceId(invokeMessage.getTraceId())
                 .build();
 
-        // 3. 兜底 messageId/partId（每次 SSE 连接生成一份，云端没传时补上）
-        String fallbackMessageId = "cloud-msg-" + UUID.randomUUID().toString().replace("-", "");
+        // 3. 兜底 messageId/partId（优先使用云端首个事件携带的 messageId，不存在时再生成）
+        AtomicReference<String> fallbackMessageIdRef = new AtomicReference<>(null);
         ConcurrentHashMap<String, String> fallbackPartIds = new ConcurrentHashMap<>();
 
         // 4. 创建连接生命周期管理器
@@ -128,12 +129,18 @@ public class CloudAgentService {
                                 (props != null && props.isObject())
                                         ? (com.fasterxml.jackson.databind.node.ObjectNode) props : null;
 
-                        // messageId 兜底：注入到 properties 中
-                        boolean needMsgId = propsObj == null
-                                || !propsObj.has("messageId")
-                                || propsObj.path("messageId").asText("").isBlank();
-                        if (needMsgId && propsObj != null) {
-                            propsObj.put("messageId", fallbackMessageId);
+                        // messageId 兜底：优先从云端事件学习，不存在时生成
+                        String eventMsgId = (propsObj != null && propsObj.has("messageId"))
+                                ? propsObj.path("messageId").asText("") : "";
+                        if (!eventMsgId.isBlank()) {
+                            // 学习云端首个携带 messageId 的事件，作为后续的 fallback
+                            fallbackMessageIdRef.compareAndSet(null, eventMsgId);
+                        } else if (propsObj != null) {
+                            // 云端没传 messageId，使用已学习的或生成兜底
+                            String fallback = fallbackMessageIdRef.updateAndGet(current ->
+                                    current != null ? current
+                                            : "cloud-msg-" + UUID.randomUUID().toString().replace("-", ""));
+                            propsObj.put("messageId", fallback);
                         }
 
                         // partId 兜底：注入到 properties 中

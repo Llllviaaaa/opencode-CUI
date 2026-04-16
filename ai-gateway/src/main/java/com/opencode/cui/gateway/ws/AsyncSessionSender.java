@@ -29,6 +29,12 @@ public class AsyncSessionSender {
         this.queue = new LinkedBlockingQueue<>(queueCapacity);
         this.senderThread = new Thread(this::sendLoop, "ws-sender-" + session.getId());
         this.senderThread.setDaemon(true);
+    }
+
+    /**
+     * 启动发送线程。必须在对象完全构造之后调用。
+     */
+    public void start() {
         this.senderThread.start();
     }
 

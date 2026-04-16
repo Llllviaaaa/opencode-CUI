@@ -97,7 +97,8 @@ public class InboundProcessingService {
      * @return 处理结果
      */
     public InboundResult processChat(String businessDomain, String sessionType, String sessionId,
-                                      String assistantAccount, String content, String msgType,
+                                      String assistantAccount, String senderUserAccount,
+                                      String content, String msgType,
                                       String imageUrl, List<ImMessageRequest.ChatMessage> chatHistory,
                                       String inboundSource) {
         // 第 1 步：解析助手账号 → 获取 ak 和 ownerWelinkId
@@ -169,7 +170,11 @@ public class InboundProcessingService {
         payloadFields.put("text", prompt);
         payloadFields.put("toolSessionId", session.getToolSessionId());
         payloadFields.put("assistantAccount", assistantAccount);
-        payloadFields.put("sendUserAccount", ownerWelinkId);
+        // 群聊：用实际发送者；单聊：用助手创建人（即对话人）
+        String effectiveSender = "group".equals(sessionType)
+                && senderUserAccount != null && !senderUserAccount.isBlank()
+                ? senderUserAccount : ownerWelinkId;
+        payloadFields.put("sendUserAccount", effectiveSender);
         payloadFields.put("imGroupId", "group".equals(sessionType) ? sessionId : null);
         payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
         gatewayRelayService.sendInvokeToGateway(new InvokeCommand(

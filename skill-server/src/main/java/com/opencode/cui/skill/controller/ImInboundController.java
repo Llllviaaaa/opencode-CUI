@@ -63,6 +63,7 @@ public class ImInboundController {
                 request.sessionType(),
                 request.sessionId(),
                 request.assistantAccount(),
+                request.senderUserAccount(),
                 request.content(),
                 request.msgType(),
                 request.imageUrl(),

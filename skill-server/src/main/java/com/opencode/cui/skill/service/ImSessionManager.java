@@ -147,6 +147,9 @@ public class ImSessionManager {
                     Map<String, String> payloadFields = new LinkedHashMap<>();
                     payloadFields.put("text", pendingMessage);
                     payloadFields.put("toolSessionId", generatedToolSessionId);
+                    payloadFields.put("assistantAccount", assistantAccount);
+                    payloadFields.put("sendUserAccount", ownerWelinkId);
+                    payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
                     gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
                             ak,
                             ownerWelinkId,
