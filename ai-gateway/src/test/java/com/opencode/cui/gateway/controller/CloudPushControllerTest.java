@@ -1,6 +1,7 @@
 package com.opencode.cui.gateway.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.gateway.model.ApiResponse;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.model.ImPushRequest;
 import com.opencode.cui.gateway.service.AssistantAccountResolver;
@@ -57,9 +58,12 @@ class CloudPushControllerTest {
                 .thenReturn(createResult("ak_001", "creator_001"));
         when(skillRelayService.relayToSkill(any(GatewayMessage.class))).thenReturn(true);
 
-        ResponseEntity<?> response = controller.imPush(request);
+        ResponseEntity<ApiResponse<?>> response = controller.imPush(request);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(0, response.getBody().getCode());
+        assertEquals("success", response.getBody().getData());
         verify(skillRelayService).relayToSkill(messageCaptor.capture());
 
         GatewayMessage captured = messageCaptor.getValue();
@@ -97,8 +101,10 @@ class CloudPushControllerTest {
 
         when(assistantAccountResolver.resolve("invalid")).thenReturn(null);
 
-        ResponseEntity<?> response = controller.imPush(request);
+        ResponseEntity<ApiResponse<?>> response = controller.imPush(request);
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals(400, response.getBody().getCode());
+        assertEquals("invalid assistant account", response.getBody().getErrormsg());
         verify(skillRelayService, never()).relayToSkill(any());
     }
 
@@ -113,8 +119,10 @@ class CloudPushControllerTest {
         when(assistantAccountResolver.resolve("bot_003"))
                 .thenReturn(createResult("ak_003", "real_creator"));
 
-        ResponseEntity<?> response = controller.imPush(request);
+        ResponseEntity<ApiResponse<?>> response = controller.imPush(request);
         assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
+        assertEquals(403, response.getBody().getCode());
+        assertEquals("userAccount does not match assistant creator", response.getBody().getErrormsg());
         verify(skillRelayService, never()).relayToSkill(any());
     }
 
@@ -125,8 +133,10 @@ class CloudPushControllerTest {
         request.setAssistantAccount("bot_004");
         request.setContent("");
 
-        ResponseEntity<?> response = controller.imPush(request);
+        ResponseEntity<ApiResponse<?>> response = controller.imPush(request);
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals(400, response.getBody().getCode());
+        assertEquals("content is required", response.getBody().getErrormsg());
         verify(skillRelayService, never()).relayToSkill(any());
     }
 

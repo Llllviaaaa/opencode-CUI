@@ -1,6 +1,7 @@
 package com.opencode.cui.gateway.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.gateway.model.ApiResponse;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.model.ImPushRequest;
 import com.opencode.cui.gateway.service.AssistantAccountResolver;
@@ -14,7 +15,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -48,23 +48,23 @@ public class CloudPushController {
      * @return 200 OK / 400 Bad Request / 403 Forbidden
      */
     @PostMapping("/im-push")
-    public ResponseEntity<?> imPush(@RequestBody ImPushRequest request) {
+    public ResponseEntity<ApiResponse<?>> imPush(@RequestBody ImPushRequest request) {
         // 1. 基础校验
         if (isBlank(request.getAssistantAccount())) {
             log.warn("[IM_PUSH] Rejected: assistantAccount is blank");
-            return ResponseEntity.badRequest().body(Map.of("error", "assistantAccount is required"));
+            return ResponseEntity.badRequest().body(ApiResponse.error(400, "assistantAccount is required"));
         }
         if (isBlank(request.getContent())) {
             log.warn("[IM_PUSH] Rejected: content is blank, assistantAccount={}",
                     request.getAssistantAccount());
-            return ResponseEntity.badRequest().body(Map.of("error", "content is required"));
+            return ResponseEntity.badRequest().body(ApiResponse.error(400, "content is required"));
         }
 
         // 2. 验证 assistantAccount 有效性
         ResolveResult resolved = assistantAccountResolver.resolve(request.getAssistantAccount());
         if (resolved == null) {
             log.warn("[IM_PUSH] Rejected: invalid assistant account={}", request.getAssistantAccount());
-            return ResponseEntity.badRequest().body(Map.of("error", "invalid assistant account"));
+            return ResponseEntity.badRequest().body(ApiResponse.error(400, "invalid assistant account"));
         }
 
         // 3. 单聊校验 userAccount == create_by
@@ -74,13 +74,13 @@ public class CloudPushController {
                 log.warn("[IM_PUSH] Rejected: userAccount is required for direct chat, assistantAccount={}",
                         request.getAssistantAccount());
                 return ResponseEntity.badRequest()
-                        .body(Map.of("error", "userAccount is required for direct chat"));
+                        .body(ApiResponse.error(400, "userAccount is required for direct chat"));
             }
             if (!request.getUserAccount().equals(resolved.getCreateBy())) {
                 log.warn("[IM_PUSH] Rejected: userAccount={} does not match creator={}, assistantAccount={}",
                         request.getUserAccount(), resolved.getCreateBy(), request.getAssistantAccount());
                 return ResponseEntity.status(403)
-                        .body(Map.of("error", "userAccount does not match assistant creator"));
+                        .body(ApiResponse.error(403, "userAccount does not match assistant creator"));
             }
         }
 
@@ -91,7 +91,7 @@ public class CloudPushController {
         msg.setPayload(objectMapper.valueToTree(request));
         msg.setTraceId(UUID.randomUUID().toString());
         skillRelayService.relayToSkill(msg);
-        return ResponseEntity.ok().build();
+        return ResponseEntity.ok(ApiResponse.ok("success"));
     }
 
     private static boolean isBlank(String s) {
