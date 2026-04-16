@@ -51,12 +51,13 @@ class OutboundDeliveryDispatcherTest {
     void modeRestImDomain() {
         when(deliveryProperties.isWsMode()).thenReturn(false);
         when(miniappStrategy.supports(any())).thenReturn(false);
-        when(externalWsStrategy.supports(any())).thenReturn(true);
-        // first-match: ExternalWs (order=2) matches first since supports returns true
+        when(externalWsStrategy.supports(any())).thenReturn(false);
+        when(imRestStrategy.supports(any())).thenReturn(true);
         SkillSession session = SkillSession.builder().businessSessionDomain("im").build();
         StreamMessage msg = StreamMessage.builder().type("text.done").build();
         dispatcher.deliver(session, "sess-1", "user-1", msg);
-        verify(externalWsStrategy).deliver(session, "sess-1", "user-1", msg);
+        verify(imRestStrategy).deliver(session, "sess-1", "user-1", msg);
+        verify(externalWsStrategy, never()).deliver(any(), any(), any(), any());
     }
 
     @Test
@@ -86,16 +87,18 @@ class OutboundDeliveryDispatcherTest {
     }
 
     @Test
-    @DisplayName("mode=ws + no invoke-source falls back to first-match")
+    @DisplayName("mode=ws + no invoke-source falls back to first-match, IM goes to ImRest")
     void modeWsNoInvokeSourceFallback() {
         when(deliveryProperties.isWsMode()).thenReturn(true);
         when(miniappStrategy.supports(any())).thenReturn(false);
-        when(externalWsStrategy.supports(any())).thenReturn(true);
+        when(externalWsStrategy.supports(any())).thenReturn(false);
+        when(imRestStrategy.supports(any())).thenReturn(true);
         when(redisMessageBroker.getInvokeSource("sess-1")).thenReturn(null);
         SkillSession session = SkillSession.builder().id(1L).businessSessionDomain("im").build();
         StreamMessage msg = StreamMessage.builder().type("text.done").build();
         dispatcher.deliver(session, "sess-1", "user-1", msg);
-        verify(externalWsStrategy).deliver(session, "sess-1", "user-1", msg);
+        verify(imRestStrategy).deliver(session, "sess-1", "user-1", msg);
+        verify(externalWsStrategy, never()).deliver(any(), any(), any(), any());
     }
 
     @Test

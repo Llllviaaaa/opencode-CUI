@@ -37,7 +37,7 @@ public class ExternalWsDeliveryStrategy implements OutboundDeliveryStrategy {
     @Override
     public boolean supports(SkillSession session) {
         if (session == null || session.isMiniappDomain()) return false;
-        return true;
+        return !session.isImDomain();
     }
 
     @Override
