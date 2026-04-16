@@ -2,9 +2,11 @@ package com.opencode.cui.gateway.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.opencode.cui.gateway.config.CloudTimeoutProperties;
 import com.opencode.cui.gateway.model.CloudRouteInfo;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionContext;
+import com.opencode.cui.gateway.service.cloud.CloudConnectionLifecycle;
 import com.opencode.cui.gateway.service.cloud.CloudProtocolClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -21,6 +23,7 @@ import java.util.function.Consumer;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.lenient;
 
 /**
  * CloudAgentService 单元测试（TDD）。
@@ -38,6 +41,8 @@ class CloudAgentServiceTest {
     @Mock
     private CloudProtocolClient cloudProtocolClient;
     @Mock
+    private CloudTimeoutProperties cloudTimeoutProperties;
+    @Mock
     private Consumer<GatewayMessage> onRelay;
 
     @Captor
@@ -54,7 +59,11 @@ class CloudAgentServiceTest {
 
     @BeforeEach
     void setUp() {
-        cloudAgentService = new CloudAgentService(cloudRouteService, cloudProtocolClient);
+        lenient().when(cloudTimeoutProperties.getFirstEventTimeoutSeconds()).thenReturn(120);
+        lenient().when(cloudTimeoutProperties.getEffectiveIdleTimeoutSeconds(anyString())).thenReturn(90);
+        lenient().when(cloudTimeoutProperties.getMaxDurationSeconds()).thenReturn(600);
+
+        cloudAgentService = new CloudAgentService(cloudRouteService, cloudProtocolClient, cloudTimeoutProperties);
     }
 
     private GatewayMessage buildInvokeMessage() {
@@ -97,6 +106,7 @@ class CloudAgentServiceTest {
             verify(cloudProtocolClient).connect(
                     eq("sse"),
                     contextCaptor.capture(),
+                    any(CloudConnectionLifecycle.class),
                     any(),
                     any()
             );
@@ -121,6 +131,7 @@ class CloudAgentServiceTest {
             verify(cloudProtocolClient).connect(
                     eq("sse"),
                     contextCaptor.capture(),
+                    any(CloudConnectionLifecycle.class),
                     onEventCaptor.capture(),
                     any()
             );
@@ -155,6 +166,7 @@ class CloudAgentServiceTest {
             verify(cloudProtocolClient).connect(
                     eq("sse"),
                     contextCaptor.capture(),
+                    any(CloudConnectionLifecycle.class),
                     onEventCaptor.capture(),
                     any()
             );
@@ -186,7 +198,7 @@ class CloudAgentServiceTest {
 
             cloudAgentService.handleInvoke(invokeMsg, onRelay);
 
-            verify(cloudProtocolClient, never()).connect(any(), any(), any(), any());
+            verify(cloudProtocolClient, never()).connect(any(), any(), any(), any(), any());
             verify(onRelay).accept(messageCaptor.capture());
 
             GatewayMessage errorMsg = messageCaptor.getValue();
@@ -210,6 +222,7 @@ class CloudAgentServiceTest {
             verify(cloudProtocolClient).connect(
                     eq("sse"),
                     contextCaptor.capture(),
+                    any(CloudConnectionLifecycle.class),
                     any(),
                     onErrorCaptor.capture()
             );
@@ -222,6 +235,33 @@ class CloudAgentServiceTest {
             assertEquals(GatewayMessage.Type.TOOL_ERROR, errorMsg.getType());
             assertEquals("ak-test-001", errorMsg.getAk());
             assertTrue(errorMsg.getError().contains("Connection timeout"));
+        }
+
+        @Test
+        @DisplayName("云端超时时通过 onRelay 返回包含超时信息的 tool_error")
+        void shouldRelayToolErrorWithTimeoutInfoOnTimeout() {
+            GatewayMessage invokeMsg = buildInvokeMessage();
+            CloudRouteInfo routeInfo = buildRouteInfo();
+            when(cloudRouteService.getRouteInfo("ak-test-001")).thenReturn(routeInfo);
+
+            cloudAgentService.handleInvoke(invokeMsg, onRelay);
+
+            verify(cloudProtocolClient).connect(
+                    eq("sse"),
+                    contextCaptor.capture(),
+                    any(CloudConnectionLifecycle.class),
+                    any(),
+                    onErrorCaptor.capture()
+            );
+
+            // Simulate timeout error (this is what lifecycle's onTimeout callback produces)
+            onErrorCaptor.getValue().accept(
+                    new RuntimeException("Cloud agent error: idle_timeout (elapsed: 90s)"));
+
+            verify(onRelay).accept(messageCaptor.capture());
+            GatewayMessage errorMsg = messageCaptor.getValue();
+            assertEquals(GatewayMessage.Type.TOOL_ERROR, errorMsg.getType());
+            assertTrue(errorMsg.getError().contains("idle_timeout"));
         }
     }
 }

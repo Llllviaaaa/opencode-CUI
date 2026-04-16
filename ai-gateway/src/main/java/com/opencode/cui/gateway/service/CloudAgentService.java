@@ -1,9 +1,11 @@
 package com.opencode.cui.gateway.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.opencode.cui.gateway.config.CloudTimeoutProperties;
 import com.opencode.cui.gateway.model.CloudRouteInfo;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionContext;
+import com.opencode.cui.gateway.service.cloud.CloudConnectionLifecycle;
 import com.opencode.cui.gateway.service.cloud.CloudProtocolClient;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -33,11 +35,14 @@ public class CloudAgentService {
 
     private final CloudRouteService cloudRouteService;
     private final CloudProtocolClient cloudProtocolClient;
+    private final CloudTimeoutProperties timeoutProperties;
 
     public CloudAgentService(CloudRouteService cloudRouteService,
-                             CloudProtocolClient cloudProtocolClient) {
+                             CloudProtocolClient cloudProtocolClient,
+                             CloudTimeoutProperties timeoutProperties) {
         this.cloudRouteService = cloudRouteService;
         this.cloudProtocolClient = cloudProtocolClient;
+        this.timeoutProperties = timeoutProperties;
     }
 
     /**
@@ -77,8 +82,26 @@ public class CloudAgentService {
         String fallbackMessageId = "cloud-msg-" + UUID.randomUUID().toString().replace("-", "");
         ConcurrentHashMap<String, String> fallbackPartIds = new ConcurrentHashMap<>();
 
-        // 4. 连接云端服务
-        cloudProtocolClient.connect(routeInfo.getProtocol(), context, null,
+        // 4. 创建连接生命周期管理器
+        String protocol = routeInfo.getProtocol();
+        CloudConnectionLifecycle lifecycle = new CloudConnectionLifecycle(
+                timeoutProperties.getFirstEventTimeoutSeconds(),
+                timeoutProperties.getEffectiveIdleTimeoutSeconds(protocol),
+                timeoutProperties.getMaxDurationSeconds(),
+                (timeoutType, elapsedSeconds) -> {
+                    log.warn("[CLOUD_AGENT] Connection timeout: ak={}, traceId={}, type={}, elapsed={}s",
+                            ak, invokeMessage.getTraceId(), timeoutType, elapsedSeconds);
+                    GatewayMessage errorMsg = buildCloudError(invokeMessage, toolSessionId,
+                            new RuntimeException(timeoutType + " (elapsed: " + elapsedSeconds + "s)"));
+                    onRelay.accept(errorMsg);
+                },
+                () -> log.info("[CLOUD_AGENT] Connection closed by lifecycle: ak={}, traceId={}",
+                        ak, invokeMessage.getTraceId())
+        );
+
+        // 5. 连接云端服务
+        try {
+        cloudProtocolClient.connect(protocol, context, lifecycle,
                 event -> {
                     // 注入路由上下文
                     event.setAk(ak);
@@ -132,6 +155,9 @@ public class CloudAgentService {
                     onRelay.accept(errorMsg);
                 }
         );
+        } finally {
+            lifecycle.close();
+        }
     }
 
     /**
