@@ -40,10 +40,13 @@ class MockSS:
         proto = build_skill_auth_protocol(
             self.internal_token, "skill-server", self.instance_id
         )
+        # WebSocket subprotocol token must match RFC 2616 token syntax.
+        # Replace '.' with '-' and strip base64 padding '=' to comply.
+        proto_token = proto.replace(".", "-").replace("=", "")
         for i in range(self.connection_count):
             ws = await websockets.connect(
                 self.gw_skill_url,
-                subprotocols=[proto],
+                subprotocols=[proto_token],
                 open_timeout=10,
             )
             self._connections.append(ws)
