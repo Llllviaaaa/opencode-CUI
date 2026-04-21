@@ -296,6 +296,27 @@ class InboundProcessingServiceTest {
         verify(sessionManager, never()).requestToolSession(any(), any());
     }
 
+    @Test
+    @DisplayName("processRebuild: agent 离线时返回 error(503, offline_msg, sid, wsid)，不创建 session")
+    void processRebuildAgentOfflineReturns503() {
+        when(resolverService.resolve("assist-001"))
+                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线
+
+        SkillSession existing = buildReadySession();
+        when(sessionManager.findSession("im", "direct", "dm-001", "ak-001"))
+                .thenReturn(existing);
+
+        InboundResult result = service.processRebuild(
+                "im", "direct", "dm-001", "assist-001");
+
+        assertFalse(result.success());
+        assertEquals(503, result.code());
+        assertEquals(MOCK_OFFLINE_MSG, result.message());
+        verify(sessionManager, never()).requestToolSession(any(), any());
+        verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
     // ==================== handleAgentOffline ====================
 
     @Test

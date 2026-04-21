@@ -293,6 +293,9 @@ public class InboundProcessingService {
         String ak = resolveResult.ak();
         String ownerWelinkId = resolveResult.ownerWelinkId();
 
+        InboundResult offline = checkAgentOnline(businessDomain, sessionType, sessionId, ak, assistantAccount);
+        if (offline != null) return offline;
+
         SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
         if (session != null) {
             sessionManager.requestToolSession(session, null);
