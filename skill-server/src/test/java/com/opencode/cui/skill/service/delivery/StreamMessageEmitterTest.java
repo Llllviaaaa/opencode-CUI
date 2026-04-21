@@ -107,4 +107,43 @@ class StreamMessageEmitterTest {
 
         assertEquals("2026-01-01T00:00:00Z", msg.getEmittedAt());
     }
+
+    @Test
+    void enrich6_userRole_noMessageContextCall() {
+        SkillSession session = mock(SkillSession.class);
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.MESSAGE_USER)
+                .role("user")
+                .build();
+
+        emitter.emitToSession(session, "101", null, msg);
+
+        verifyNoInteractions(persistenceService);
+    }
+
+    @Test
+    void enrich7_assistantRoleNumericSessionId_prepareMessageContextCalled() {
+        SkillSession session = mock(SkillSession.class);
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA)
+                .role("assistant")
+                .build();
+
+        emitter.emitToSession(session, "101", null, msg);
+
+        verify(persistenceService).prepareMessageContext(eq(101L), eq(msg));
+    }
+
+    @Test
+    void enrich8_assistantRoleNonNumericSessionId_noMessageContextCall() {
+        SkillSession session = mock(SkillSession.class);
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA)
+                .role("assistant")
+                .build();
+
+        emitter.emitToSession(session, "not-numeric", null, msg);
+
+        verifyNoInteractions(persistenceService);
+    }
 }
