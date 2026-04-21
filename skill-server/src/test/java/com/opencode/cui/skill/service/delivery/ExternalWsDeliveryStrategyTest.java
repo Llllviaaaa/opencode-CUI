@@ -10,6 +10,7 @@ import com.opencode.cui.skill.ws.ExternalStreamHandler;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
@@ -112,4 +113,30 @@ class ExternalWsDeliveryStrategyTest {
     @Test
     @DisplayName("order is 2")
     void orderIsTwo() { assertEquals(2, strategy.order()); }
+
+    @Test
+    void deliver_errorEvent_serializedJsonContainsWelinkSessionId() throws Exception {
+        // given: 一条 enrich 过的 error StreamMessage（模拟 emitter 输出状态）
+        SkillSession session = mock(SkillSession.class);
+        when(session.getBusinessSessionDomain()).thenReturn("ext-domain");
+
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.ERROR)
+                .error("agent offline")
+                .build();
+        msg.setSessionId("101");
+        msg.setWelinkSessionId("101");
+
+        when(externalStreamHandler.pushToOne(anyString(), anyString())).thenReturn(true);
+        ArgumentCaptor<String> jsonCap = ArgumentCaptor.forClass(String.class);
+
+        // when
+        strategy.deliver(session, "101", null, msg);
+
+        // then: 捕获发出的 JSON payload，断言含 welinkSessionId
+        verify(externalStreamHandler).pushToOne(anyString(), jsonCap.capture());
+        var payload = new ObjectMapper().readTree(jsonCap.getValue());
+        assertEquals("101", payload.path("welinkSessionId").asText());
+        assertEquals("error", payload.path("type").asText());
+    }
 }
