@@ -839,6 +839,37 @@ class PersonalScopeCloudProtocolIntegrationTest {
     }
 
     @Test
+    @DisplayName("cloud tool.update through router: emits TOOL_UPDATE with status/toolName/toolCallId/output")
+    void routerCloudToolUpdate_emitsToolUpdate() {
+        // running（无 output）
+        router.route("tool_event", AK, USER_ID, buildToolEventNode(
+                buildCloudToolUpdate("m1", "p-tool-1", "call-abc", "web_search", "running", null)));
+        // completed（有 output；按 §5.2 G2，output 是 String）
+        router.route("tool_event", AK, USER_ID, buildToolEventNode(
+                buildCloudToolUpdate("m1", "p-tool-1", "call-abc", "web_search", "completed", "result-text")));
+
+        ArgumentCaptor<StreamMessage> captor = ArgumentCaptor.forClass(StreamMessage.class);
+        verify(emitter, atLeastOnce()).enrich(any(), any(), captor.capture());
+
+        List<StreamMessage> toolUpdates = captor.getAllValues().stream()
+                .filter(m -> StreamMessage.Types.TOOL_UPDATE.equals(m.getType()))
+                .toList();
+        assertEquals(2, toolUpdates.size(), "expected two TOOL_UPDATE emitted by emitter");
+
+        StreamMessage first = toolUpdates.get(0);
+        assertEquals("running", first.getStatus());
+        assertNotNull(first.getTool(), "first TOOL_UPDATE must carry ToolInfo");
+        assertEquals("web_search", first.getTool().getToolName());
+        assertEquals("call-abc", first.getTool().getToolCallId());
+
+        StreamMessage second = toolUpdates.get(1);
+        assertEquals("completed", second.getStatus());
+        assertNotNull(second.getTool(), "second TOOL_UPDATE must carry ToolInfo");
+        assertEquals("result-text", second.getTool().getOutput(),
+                "output is String per §5.2 G2 (CloudEventTranslator.handleToolUpdate uses asText())");
+    }
+
+    @Test
     @DisplayName("opencode event (no protocol field) still routes to OpenCodeEventTranslator path")
     void routerOpencodeEvent_stillWorks() {
         // 构造最小 opencode message.part.updated 事件
@@ -892,6 +923,26 @@ class PersonalScopeCloudProtocolIntegrationTest {
         return event;
     }
 
+    private JsonNode buildCloudToolUpdate(String messageId, String partId, String toolCallId,
+                                          String toolName, String status, String output) {
+        ObjectNode props = objectMapper.createObjectNode();
+        props.put("messageId", messageId);
+        props.put("partId", partId);
+        props.put("toolCallId", toolCallId);
+        props.put("toolName", toolName);
+        props.put("status", status);
+        if (output != null) {
+            props.put("output", output);
+        }
+        // 按 §5.2 G2：input 当前实现走 asText()，规避嵌套对象；本 helper 不设 input
+        // 以避免在测试里隐式引入 G2 行为依赖。
+        ObjectNode event = objectMapper.createObjectNode();
+        event.put("protocol", "cloud");
+        event.put("type", "tool.update");
+        event.set("properties", props);
+        return event;
+    }
+
     private JsonNode buildCloudSessionStatusIdle() {
         // 严格遵循 spec §5.1 当前支持子集——只发 sessionStatus，不发 status。
         // 如果未来实现错误地只依赖 status fallback 分支，该输入会暴露问题。
@@ -917,7 +968,7 @@ Run:
 ```bash
 mvn -pl skill-server -Dtest=PersonalScopeCloudProtocolIntegrationTest test
 ```
-Expected: 3 条测试全部通过。
+Expected: 4 条测试全部通过（cloud text.delta / cloud tool.update / cloud session.status=idle / opencode 穿透）。
 
 若初次失败，常见原因：
 - `StreamMessageEmitter` 的实际方法名/签名与 `.enrich(...)` 不符 → 改用实际的出站方法（查 `StreamMessageEmitter.java` 的 public 方法清单）
@@ -1012,7 +1063,7 @@ Expected: BUILD SUCCESS，所有测试绿。
 
 - **Spec §2.1 目标 1-5**：Task 3（cloud 分派）+ Task 4（warn）+ Task 1-5（零改动 GW / BusinessScope / 两个 Translator 接口签名——由测试回归验证） 全部覆盖。
 - **Spec §4.2 分派矩阵 5 行**：Task 1（null）+ Task 2（缺失 / opencode，含 `countWarnLogs()==0` 断言）+ Task 3（cloud 含大小写，含 `countWarnLogs()==0` 断言）+ Task 4（空串 + 未知值，含 `countWarnLogs()==1` 断言）完整覆盖。
-- **Spec §5.1 支持子集**：Task 5 router-entry integration test 覆盖 `text.delta` + `session.status`（仅用 `sessionStatus` 字段，严格匹配子集契约）+ opencode 穿透路径；其它 event type 通过 `CloudEventTranslator` 本身已有的 handler 自动生效（本 plan 不改 translator，不需要补）。
+- **Spec §5.1 支持子集**：Task 5 router-entry integration test 覆盖子集中的三个代表事件 `text.delta` + `tool.update` + `session.status=idle`（session.status 仅用 `sessionStatus` 字段，严格匹配子集契约）+ opencode 穿透路径。**未列入 §5.1 支持子集的 event type**（`permission.ask` / `permission.reply` / `question` / `planning.*` / `searching` / `search_result` / `reference` / `ask_more`）——即使 `CloudEventTranslator` 已有 handler 仍**不纳入本次支持**；本地 cloud agent **不应**发送这些事件，本 plan 也不对这些事件做测试或实现保证，等后续 spec 补齐时再显式加入。
 - **Spec §5.2 G4 partSeq 语义**：Task 5 集成测试显式锁定"当前实现"行为（`partSeq=0, 1` 递增 + idle 清理后重置为 0），并在测试 Javadoc 和断言 message 中明确标注这是已知 G4 差异。
 - **Spec §6.1 代码实现**：Task 1 + Task 3 + Task 4 迭代叠加，最终形态与 spec §6.1 Java 代码一致。
 - **Spec §6.2 测试基线对齐**：Task 1 Step 5 完成（行号 `EventTranslationScopeTest.java:49`，核实构造器调用实际在该行）。
@@ -1023,14 +1074,23 @@ Expected: BUILD SUCCESS，所有测试绿。
 - **Placeholder 扫描**：无 TBD / TODO / "implement later"。
 - **Type consistency**：`PersonalScopeStrategy` 构造器在 Task 1 落地后全程保持 `(OpenCodeEventTranslator, CloudEventTranslator)` 两参数签名；`translateEvent` 返回 `StreamMessage`；`countWarnLogs()` helper 在 Task 2 Step 1 引入后所有后续测试一致使用；Logback 类型引用统一使用全限定名。
 
-### Plan review 反馈处置记录（v2）
+### Plan review 反馈处置记录
+
+**v2（第一轮审查）**
 
 | Finding | 处置 |
 |---|---|
 | 1. Task 5 应为 router 入口级集成测试，非 strategy-level | **采纳**。Task 5 改为通过 `GatewayMessageRouter.route("tool_event", ...)` 喂事件；scopeDispatcher/两个 Translator 真实；其他 router 依赖 mock；ArgumentCaptor 捕获 emitter 出站 StreamMessage。 |
 | 2. "no warn" 预期未被断言，`countWarnLogs()` 引入过晚 | **采纳**。ListAppender 基础设施前移至 Task 2 Step 1；nullEvent / noProtocolField / protocolOpencode / protocolCloud / protocolCloudUpperCase 五条测试均追加 `assertEquals(0, countWarnLogs())`。 |
 | 3. session.status 集成测试输入同时发 `sessionStatus` 和 `status`，弱化子集契约 | **采纳**。Task 5 `buildCloudSessionStatusIdle()` helper 只发 `sessionStatus`；同时对 idle 输出补 `assertNotNull + "idle".equals(m.getSessionStatus())` 语义断言。 |
-| 4. `EventTranslationScopeTest.java:49` 行号漂移（审查引用 `:47`） | **核实后不改**。`grep -n "personalStrategy = new PersonalScopeStrategy"` 输出 `49:`；`:47` 是 `@BeforeEach` 方法签名行而非构造器调用行。原 plan 引用正确。 |
+| 4. `EventTranslationScopeTest.java:49` 行号漂移（审查引用 `:47`） | **核实后不改**。`grep -n "personalStrategy = new PersonalScopeStrategy"` 输出 `49:`；`:47` 是 `@BeforeEach` 方法签名行而非构造器调用行。审查方 v3 已自行复核并确认 `:49` 可保留。 |
+
+**v3（第二轮审查）**
+
+| Finding | 处置 |
+|---|---|
+| 1. Task 5 缺 `tool.update` 的 router-entry 覆盖（spec §10.2 要求 `text.delta` / `tool.update` / `session.status` 三类） | **采纳**。Task 5 新增第 4 条测试 `routerCloudToolUpdate_emitsToolUpdate` + `buildCloudToolUpdate()` helper：喂 running + completed 两条 `tool.update` 事件走 router，断言 `TOOL_UPDATE` 类型、status、toolName、toolCallId、output；helper 不设 `input`，避免隐式依赖 §5.2 G2 的 asText 行为。Step 2 expected 同步改为 4 条测试。 |
+| 2. Self-Review 残留"其它 event type 通过 CloudEventTranslator 已有 handler 自动生效"的旧表述，与 spec §5.1 "未列入此表的 event type 不纳入支持子集" 矛盾 | **采纳**。改写为："未列入 §5.1 支持子集的 event type（permission.* / question / planning.* / searching / search_result / reference / ask_more）即使 `CloudEventTranslator` 已有 handler 仍**不纳入本次支持**；本地 cloud agent **不应**发送这些事件，本 plan 也不对这些事件做测试或实现保证。" |
 
 ---
 
