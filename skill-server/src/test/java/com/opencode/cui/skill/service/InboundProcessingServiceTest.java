@@ -228,6 +228,43 @@ class InboundProcessingServiceTest {
         assertTrue(captor.getValue().payload().contains("tool-001"));
     }
 
+    @Test
+    @DisplayName("processQuestionReply: session 存在 + agent 离线 → 返回 error(503, offline_msg)")
+    void processQuestionReplyAgentOfflineReturns503() {
+        when(resolverService.resolve("assist-001"))
+                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        SkillSession session = buildReadySession();
+        when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
+        when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线
+
+        InboundResult result = service.processQuestionReply(
+                "im", "direct", "dm-001", "assist-001",
+                "answer", "tool-call-1", null, "EXTERNAL");
+
+        assertFalse(result.success());
+        assertEquals(503, result.code());
+        assertEquals(MOCK_OFFLINE_MSG, result.message());
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any(InvokeCommand.class));
+    }
+
+    @Test
+    @DisplayName("processQuestionReply: session 不存在优先返回 404（即使 agent 离线）")
+    void processQuestionReplyMissingSessionReturns404EvenIfOffline() {
+        when(resolverService.resolve("assist-001"))
+                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(sessionManager.findSession(any(), any(), any(), any())).thenReturn(null);
+        lenient().when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线（场景注释，404 优先不会调用）
+
+        InboundResult result = service.processQuestionReply(
+                "im", "direct", "dm-001", "assist-001",
+                "answer", "tool-call-1", null, "EXTERNAL");
+
+        assertFalse(result.success());
+        assertEquals(404, result.code());
+        assertEquals("Session not found or not ready", result.message());
+        verify(gatewayApiClient, never()).getAgentByAk(anyString()); // 404 优先，未查在线
+    }
+
     // ==================== processPermissionReply ====================
 
     @Test
@@ -257,6 +294,43 @@ class InboundProcessingServiceTest {
         assertEquals(StreamMessage.Types.PERMISSION_REPLY, msgCaptor.getValue().getType());
         assertEquals("perm-001", msgCaptor.getValue().getPermission().getPermissionId());
         assertEquals("allow", msgCaptor.getValue().getPermission().getResponse());
+    }
+
+    @Test
+    @DisplayName("processPermissionReply: session 存在 + agent 离线 → 返回 error(503, offline_msg)")
+    void processPermissionReplyAgentOfflineReturns503() {
+        when(resolverService.resolve("assist-001"))
+                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        SkillSession session = buildReadySession();
+        when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
+        when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线
+
+        InboundResult result = service.processPermissionReply(
+                "im", "direct", "dm-001", "assist-001",
+                "perm-1", "once", null, "EXTERNAL");
+
+        assertFalse(result.success());
+        assertEquals(503, result.code());
+        assertEquals(MOCK_OFFLINE_MSG, result.message());
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any(InvokeCommand.class));
+    }
+
+    @Test
+    @DisplayName("processPermissionReply: session 不存在优先返回 404（即使 agent 离线）")
+    void processPermissionReplyMissingSessionReturns404EvenIfOffline() {
+        when(resolverService.resolve("assist-001"))
+                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(sessionManager.findSession(any(), any(), any(), any())).thenReturn(null);
+        lenient().when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线（场景注释，404 优先不会调用）
+
+        InboundResult result = service.processPermissionReply(
+                "im", "direct", "dm-001", "assist-001",
+                "perm-1", "once", null, "EXTERNAL");
+
+        assertFalse(result.success());
+        assertEquals(404, result.code());
+        assertEquals("Session not found or not ready", result.message());
+        verify(gatewayApiClient, never()).getAgentByAk(anyString());
     }
 
     // ==================== processRebuild ====================

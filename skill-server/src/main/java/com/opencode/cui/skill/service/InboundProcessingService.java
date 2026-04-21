@@ -205,6 +205,10 @@ public class InboundProcessingService {
                     session != null ? String.valueOf(session.getId()) : null);
         }
 
+        // 在线检查（404 后置：保留 session 不存在 → 404 语义；session 存在 + 离线 → 503）
+        InboundResult offline = checkAgentOnline(businessDomain, sessionType, sessionId, ak, assistantAccount);
+        if (offline != null) return offline;
+
         String targetToolSessionId = subagentSessionId != null ? subagentSessionId : session.getToolSessionId();
         Map<String, String> payloadFields = new LinkedHashMap<>();
         payloadFields.put("answer", content);
@@ -247,6 +251,10 @@ public class InboundProcessingService {
             return InboundResult.error(404, "Session not found or not ready", sessionId,
                     session != null ? String.valueOf(session.getId()) : null);
         }
+
+        // 在线检查（404 后置：同 processQuestionReply）
+        InboundResult offline = checkAgentOnline(businessDomain, sessionType, sessionId, ak, assistantAccount);
+        if (offline != null) return offline;
 
         String targetToolSessionId = subagentSessionId != null ? subagentSessionId : session.getToolSessionId();
         Map<String, String> payloadFields = new LinkedHashMap<>();
