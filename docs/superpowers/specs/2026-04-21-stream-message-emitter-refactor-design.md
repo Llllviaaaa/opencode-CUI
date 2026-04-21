@@ -244,11 +244,10 @@ void handleAgentOffline_ExternalWs_shouldRouteViaEmitter() {
     verify(emitter).emitToSession(eq(session), eq("101"), isNull(), cap.capture());
     assertEquals(StreamMessage.Types.ERROR, cap.getValue().getType());
     assertEquals(AGENT_OFFLINE_MESSAGE, cap.getValue().getError());
-
-    // 原代码里直接走 dispatcher 的路径应不再发生
-    verifyNoInteractions(outboundDeliveryDispatcher);
 }
 ```
+
+> **关于旧路径消失的验证**：`InboundProcessingService` 中 `outboundDeliveryDispatcher` 仅在 `handleAgentOffline` 一处使用；迁移后该依赖预期从类的字段、构造器参数、测试 mock 中一同移除。因此**不通过测试断言**（如 `verifyNoInteractions(outboundDeliveryDispatcher)`——那样会引用一个不存在的 mock）来守护旧路径消失，而是由 §5.2b 的 `grep -r "outboundDeliveryDispatcher\.deliver" skill-server/src/main` 仅剩 1 处（emitter 内部）的 checklist + code diff 审阅来保证。
 
 **Bug 闭环的三层分工**：
 - §4.1 `StreamMessageEmitterTest` — 守 enrich 语义（welinkSessionId 被填）
@@ -414,3 +413,5 @@ mvn -pl skill-server test -Dtest=StreamMessageEmitterTest
   - 同步更新迁移表风险级别（§3.2 #12）、风险表（§6）、范围外清单（§9）、checklist（§8）
 - **v3**（Codex 二次审阅后修订）：
   - 修正 §4.2 回归测试设计错误：emitter 为 mock 时，captor 捕获的是 enrich 之前的 msg，`assertEquals("101", ...getWelinkSessionId())` 必然失败。改为只验证调用路径（`verify(emitter).emitToSession(...)` + msg 语义字段 + `verifyNoInteractions(dispatcher)`）；welinkSessionId 填充验证由 §4.1 负责，JSON 出口验证由 §4.3 负责——三层测试各司其职
+- **v4**（Codex 三次审阅后修订）：
+  - 从 §4.2 测试代码中移除 `verifyNoInteractions(outboundDeliveryDispatcher)`。事实核实：`InboundProcessingService` 中 `dispatcher` 仅在 `handleAgentOffline` 一处使用，迁移后整个依赖（字段 + 构造参数 + 测试 mock）会一并删除；保留该断言会引用一个不存在的 mock 导致编译失败。改为用 checklist 的 grep 规则 + code diff 审阅来保证旧路径消失
