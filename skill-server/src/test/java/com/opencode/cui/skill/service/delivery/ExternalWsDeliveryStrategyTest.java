@@ -115,10 +115,10 @@ class ExternalWsDeliveryStrategyTest {
     void orderIsTwo() { assertEquals(2, strategy.order()); }
 
     @Test
+    @DisplayName("serialized JSON preserves welinkSessionId for error events")
     void deliver_errorEvent_serializedJsonContainsWelinkSessionId() throws Exception {
         // given: 一条 enrich 过的 error StreamMessage（模拟 emitter 输出状态）
-        SkillSession session = mock(SkillSession.class);
-        when(session.getBusinessSessionDomain()).thenReturn("ext-domain");
+        SkillSession session = SkillSession.builder().businessSessionDomain("ext-domain").build();
 
         StreamMessage msg = StreamMessage.builder()
                 .type(StreamMessage.Types.ERROR)
@@ -127,6 +127,7 @@ class ExternalWsDeliveryStrategyTest {
         msg.setSessionId("101");
         msg.setWelinkSessionId("101");
 
+        when(redisMessageBroker.nextStreamSeq("101")).thenReturn(1L);
         when(externalStreamHandler.pushToOne(anyString(), anyString())).thenReturn(true);
         ArgumentCaptor<String> jsonCap = ArgumentCaptor.forClass(String.class);
 
@@ -135,7 +136,7 @@ class ExternalWsDeliveryStrategyTest {
 
         // then: 捕获发出的 JSON payload，断言含 welinkSessionId
         verify(externalStreamHandler).pushToOne(anyString(), jsonCap.capture());
-        var payload = new ObjectMapper().readTree(jsonCap.getValue());
+        var payload = objectMapper.readTree(jsonCap.getValue());
         assertEquals("101", payload.path("welinkSessionId").asText());
         assertEquals("error", payload.path("type").asText());
     }
