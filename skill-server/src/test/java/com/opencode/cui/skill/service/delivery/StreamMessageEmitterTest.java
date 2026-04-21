@@ -166,4 +166,42 @@ class StreamMessageEmitterTest {
         // prepareMessageContext 可调 2 次（tracker 内部幂等，不影响可观察状态）
         verify(persistenceService, times(2)).prepareMessageContext(eq(101L), eq(msg));
     }
+
+    // --- emitToSession ---
+
+    @Test
+    void session1_dispatcherDeliverCalled() {
+        SkillSession session = mock(SkillSession.class);
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA).role("assistant").build();
+
+        emitter.emitToSession(session, "101", "user-a", msg);
+
+        verify(dispatcher).deliver(eq(session), eq("101"), eq("user-a"), eq(msg));
+    }
+
+    @Test
+    void session2_emitToSession_noRedisInteraction() {
+        SkillSession session = mock(SkillSession.class);
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA).role("assistant").build();
+
+        emitter.emitToSession(session, "101", "user-a", msg);
+
+        verifyNoInteractions(redisBroker);
+    }
+
+    @Test
+    void session3_dispatcherThrows_emitterDoesNotSwallow() {
+        SkillSession session = mock(SkillSession.class);
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA).role("assistant").build();
+        doThrow(new RuntimeException("dispatcher boom"))
+                .when(dispatcher).deliver(any(), any(), any(), any());
+
+        // emitter 层不新增 try-catch，异常应冒出（仅行为断言，非合约承诺）
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> emitter.emitToSession(session, "101", "user-a", msg));
+        assertEquals("dispatcher boom", ex.getMessage());
+    }
 }
