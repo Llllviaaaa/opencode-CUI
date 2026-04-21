@@ -53,7 +53,7 @@ class OnlineCheckScopeTest {
     @Test
     @DisplayName("S60: personal scope requiresOnlineCheck returns true")
     void personalScope_requiresOnlineCheck_returnsTrue() {
-        PersonalScopeStrategy strategy = new PersonalScopeStrategy(openCodeEventTranslator);
+        PersonalScopeStrategy strategy = new PersonalScopeStrategy(openCodeEventTranslator, cloudEventTranslator);
 
         assertTrue(strategy.requiresOnlineCheck(),
                 "personal scope SHOULD require online check");
@@ -66,7 +66,7 @@ class OnlineCheckScopeTest {
     @DisplayName("S61: dispatcher returns business strategy for business scope with requiresOnlineCheck=false")
     void dispatcher_businessScope_returnsStrategyWithNoOnlineCheck() {
         // 构造 mock 策略
-        AssistantScopeStrategy personalStrategy = new PersonalScopeStrategy(openCodeEventTranslator);
+        AssistantScopeStrategy personalStrategy = new PersonalScopeStrategy(openCodeEventTranslator, cloudEventTranslator);
         BusinessScopeStrategy businessStrategy = new BusinessScopeStrategy(
                 cloudRequestBuilder, cloudEventTranslator, new com.fasterxml.jackson.databind.ObjectMapper());
 

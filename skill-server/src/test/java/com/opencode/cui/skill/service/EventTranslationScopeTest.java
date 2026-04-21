@@ -46,7 +46,7 @@ class EventTranslationScopeTest {
     @BeforeEach
     void setUp() {
         businessStrategy = new BusinessScopeStrategy(cloudRequestBuilder, cloudEventTranslator, objectMapper);
-        personalStrategy = new PersonalScopeStrategy(openCodeEventTranslator);
+        personalStrategy = new PersonalScopeStrategy(openCodeEventTranslator, cloudEventTranslator);
     }
 
     /**
