@@ -61,9 +61,29 @@ public class StreamMessageEmitter {
         this.objectMapper = objectMapper;
     }
 
+    private void enrich(String sessionId, StreamMessage msg) {
+        if (msg == null || sessionId == null) return;
+
+        msg.setSessionId(sessionId);               // 内部字段，始终覆盖
+        msg.setWelinkSessionId(sessionId);          // 协议字段，canonical overwrite
+
+        if (!EMITTED_AT_EXCLUDED_TYPES.contains(msg.getType())
+                && (msg.getEmittedAt() == null || msg.getEmittedAt().isBlank())) {
+            msg.setEmittedAt(Instant.now().toString());
+        }
+
+        if (!"user".equals(ProtocolUtils.normalizeRole(msg.getRole()))) {
+            Long numericId = ProtocolUtils.parseSessionId(sessionId);
+            if (numericId != null) {
+                persistenceService.prepareMessageContext(numericId, msg);
+            }
+        }
+    }
+
     public void emitToSession(SkillSession session, String sessionId,
                               String userId, StreamMessage msg) {
-        throw new UnsupportedOperationException("not yet implemented");
+        enrich(sessionId, msg);
+        dispatcher.deliver(session, sessionId, userId, msg);
     }
 
     public void emitToClient(String sessionId, String userIdHint, StreamMessage msg) {
