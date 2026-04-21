@@ -146,4 +146,24 @@ class StreamMessageEmitterTest {
 
         verifyNoInteractions(persistenceService);
     }
+
+    @Test
+    void enrich9_repeatedEmit_stableFields() {
+        SkillSession session = mock(SkillSession.class);
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA)
+                .role("assistant")
+                .build();
+
+        emitter.emitToSession(session, "101", null, msg);
+        String firstEmittedAt = msg.getEmittedAt();
+
+        emitter.emitToSession(session, "101", null, msg);
+
+        assertEquals(firstEmittedAt, msg.getEmittedAt(), "emittedAt should not be rewritten");
+        assertEquals("101", msg.getWelinkSessionId());
+        assertEquals("101", msg.getSessionId());
+        // prepareMessageContext 可调 2 次（tracker 内部幂等，不影响可观察状态）
+        verify(persistenceService, times(2)).prepareMessageContext(eq(101L), eq(msg));
+    }
 }
