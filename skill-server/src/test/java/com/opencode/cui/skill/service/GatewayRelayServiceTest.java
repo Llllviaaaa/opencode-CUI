@@ -66,6 +66,8 @@ class GatewayRelayServiceTest {
         private AssistantScopeStrategy scopeStrategy;
         @Mock
         private com.opencode.cui.skill.service.delivery.OutboundDeliveryDispatcher outboundDeliveryDispatcher;
+        @Mock
+        com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter;
 
         private GatewayMessageRouter messageRouter;
         private GatewayRelayService service;
@@ -105,6 +107,7 @@ class GatewayRelayServiceTest {
                                 assistantInfoService,
                                 scopeDispatcher,
                                 outboundDeliveryDispatcher,
+                                emitter,
                                 120);
                 service = new GatewayRelayService(
                                 new ObjectMapper(),
@@ -113,7 +116,8 @@ class GatewayRelayServiceTest {
                                 redisMessageBroker,
                                 assistantIdResolverService,
                                 assistantInfoService,
-                                scopeDispatcher);
+                                scopeDispatcher,
+                                emitter);
                 service.setGatewayRelayTarget(gatewayRelayTarget);
         }
 
@@ -131,7 +135,7 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(msg);
 
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher).deliver(any(), eq("123"), eq("user-1"), msgCaptor.capture());
+                verify(emitter).emitToSession(any(), eq("123"), eq("user-1"), msgCaptor.capture());
                 StreamMessage delivered = msgCaptor.getValue();
                 assertEquals(StreamMessage.Types.TEXT_DELTA, delivered.getType());
                 verify(bufferService).accumulate(eq("123"), any(StreamMessage.class));
@@ -157,7 +161,7 @@ class GatewayRelayServiceTest {
                                 "{\"type\":\"tool_event\",\"welinkSessionId\":42,\"event\":{\"type\":\"message.part.updated\"}}");
 
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher).deliver(any(SkillSession.class), eq("42"), any(), msgCaptor.capture());
+                verify(emitter).emitToSession(any(SkillSession.class), eq("42"), any(), msgCaptor.capture());
                 assertEquals(StreamMessage.Types.TEXT_DONE, msgCaptor.getValue().getType());
                 verify(persistenceService).persistIfFinal(eq(42L), any(StreamMessage.class));
         }
@@ -181,7 +185,7 @@ class GatewayRelayServiceTest {
                                 "{\"type\":\"tool_event\",\"welinkSessionId\":42,\"event\":{\"type\":\"message.part.updated\"}}");
 
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher).deliver(any(SkillSession.class), eq("42"), any(), msgCaptor.capture());
+                verify(emitter).emitToSession(any(SkillSession.class), eq("42"), any(), msgCaptor.capture());
                 assertEquals(StreamMessage.Types.TEXT_DONE, msgCaptor.getValue().getType());
                 verify(persistenceService, never()).persistIfFinal(eq(42L), any(StreamMessage.class));
         }
@@ -215,7 +219,7 @@ class GatewayRelayServiceTest {
 
                 verify(interactionStateService).markQuestion(42L, "tool-call-1");
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher).deliver(any(SkillSession.class), eq("42"), any(), msgCaptor.capture());
+                verify(emitter).emitToSession(any(SkillSession.class), eq("42"), any(), msgCaptor.capture());
                 assertEquals(StreamMessage.Types.QUESTION, msgCaptor.getValue().getType());
         }
 
@@ -227,7 +231,7 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(msg);
 
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher).deliver(any(), eq("42"), eq("user-1"), msgCaptor.capture());
+                verify(emitter).emitToSession(any(), eq("42"), eq("user-1"), msgCaptor.capture());
                 assertEquals("session.status", msgCaptor.getValue().getType());
                 assertEquals("idle", msgCaptor.getValue().getSessionStatus());
                 verify(bufferService).accumulate(eq("42"), any(StreamMessage.class));
@@ -250,7 +254,7 @@ class GatewayRelayServiceTest {
                 // user 角色事件在 tool_event 中不再持久化（已由 inbound controller 保存）
                 verify(messageService, never()).saveUserMessage(any(), any());
                 // tool_done delivers idle status, but user echo tool_event should NOT deliver
-                verify(outboundDeliveryDispatcher, times(1)).deliver(any(), any(), any(), any());
+                verify(emitter, times(1)).emitToSession(any(), any(), any(), any());
         }
 
         @Test
@@ -271,7 +275,7 @@ class GatewayRelayServiceTest {
                 verify(redisMessageBroker).publishToUser(eq("user-1"), payloadCaptor.capture());
                 assertTrue(payloadCaptor.getValue().contains("\"sessionStatus\":\"busy\""));
                 // text.delta delivered via dispatcher
-                verify(outboundDeliveryDispatcher).deliver(any(), eq("123"), eq("user-1"), any(StreamMessage.class));
+                verify(emitter).emitToSession(any(), eq("123"), eq("user-1"), any(StreamMessage.class));
         }
 
         @Test
@@ -292,7 +296,7 @@ class GatewayRelayServiceTest {
 
                 verify(messageService).saveSystemMessage(eq(42L), contains("timeout"));
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher).deliver(any(), eq("42"), eq("user-42"), msgCaptor.capture());
+                verify(emitter).emitToSession(any(), eq("42"), eq("user-42"), msgCaptor.capture());
                 assertEquals(StreamMessage.Types.ERROR, msgCaptor.getValue().getType());
                 assertTrue(msgCaptor.getValue().getError().contains("timeout"));
         }
@@ -347,7 +351,7 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(msg);
 
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher).deliver(any(), eq("42"), eq("user-42"), msgCaptor.capture());
+                verify(emitter).emitToSession(any(), eq("42"), eq("user-42"), msgCaptor.capture());
                 assertEquals("permission.ask", msgCaptor.getValue().getType());
         }
 
@@ -372,7 +376,7 @@ class GatewayRelayServiceTest {
 
                 verify(interactionStateService).markPermission(42L, "perm-1");
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher).deliver(any(SkillSession.class), eq("42"), any(), msgCaptor.capture());
+                verify(emitter).emitToSession(any(SkillSession.class), eq("42"), any(), msgCaptor.capture());
                 assertEquals(StreamMessage.Types.PERMISSION_ASK, msgCaptor.getValue().getType());
         }
 
@@ -395,7 +399,7 @@ class GatewayRelayServiceTest {
 
                 verify(sessionService).findByToolSessionId("ts-abc");
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher).deliver(any(), eq("42"), any(), msgCaptor.capture());
+                verify(emitter).emitToSession(any(), eq("42"), any(), msgCaptor.capture());
                 assertEquals(StreamMessage.Types.TEXT_DELTA, msgCaptor.getValue().getType());
         }
 
@@ -474,7 +478,7 @@ class GatewayRelayServiceTest {
 
                 // userId is null in JSON, so it's passed as null to deliver
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher).deliver(any(), eq("123"), any(), msgCaptor.capture());
+                verify(emitter).emitToSession(any(), eq("123"), any(), msgCaptor.capture());
                 assertEquals(StreamMessage.Types.TEXT_DELTA, msgCaptor.getValue().getType());
         }
 
@@ -489,7 +493,7 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage("{\"type\":\"tool_done\",\"toolSessionId\":\"ts-abc\"}");
 
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher).deliver(any(), eq("42"), any(), msgCaptor.capture());
+                verify(emitter).emitToSession(any(), eq("42"), any(), msgCaptor.capture());
                 assertEquals("session.status", msgCaptor.getValue().getType());
                 assertEquals("idle", msgCaptor.getValue().getSessionStatus());
         }
@@ -525,7 +529,7 @@ class GatewayRelayServiceTest {
                                 "{\"type\":\"tool_event\",\"toolSessionId\":\"ts-a\",\"event\":{\"data\":\"hello\"}}");
 
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher).deliver(any(), eq("42"), any(), msgCaptor.capture());
+                verify(emitter).emitToSession(any(), eq("42"), any(), msgCaptor.capture());
                 assertEquals(StreamMessage.Types.TEXT_DELTA, msgCaptor.getValue().getType());
         }
 
@@ -538,7 +542,7 @@ class GatewayRelayServiceTest {
                                 .build());
                 // Step 1: tool_done arrives → delivers idle via dispatcher
                 service.handleGatewayMessage("{\"type\":\"tool_done\",\"userId\":\"user-1\",\"welinkSessionId\":42}");
-                verify(outboundDeliveryDispatcher).deliver(any(), eq("42"), eq("user-1"), any(StreamMessage.class));
+                verify(emitter).emitToSession(any(), eq("42"), eq("user-1"), any(StreamMessage.class));
 
                 // Step 2: stale tool_event arrives after tool_done → should be suppressed
                 service.handleGatewayMessage(
@@ -550,7 +554,7 @@ class GatewayRelayServiceTest {
 
                 // Dispatcher should only have been called once (for tool_done idle), NOT for the
                 // stale tool_event
-                verify(outboundDeliveryDispatcher, times(1)).deliver(any(), any(), any(), any());
+                verify(emitter, times(1)).emitToSession(any(), any(), any(), any());
         }
 
         @Test
@@ -578,7 +582,7 @@ class GatewayRelayServiceTest {
 
                 // Dispatcher called at least 2 times: idle (tool_done) + text.delta (new event)
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher, org.mockito.Mockito.atLeast(2)).deliver(any(), any(), any(),
+                verify(emitter, org.mockito.Mockito.atLeast(2)).emitToSession(any(), any(), any(),
                                 msgCaptor.capture());
                 assertTrue(msgCaptor.getAllValues().stream().anyMatch(m -> StreamMessage.Types.TEXT_DELTA.equals(m.getType())));
         }
@@ -599,7 +603,7 @@ class GatewayRelayServiceTest {
                                 "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":42,\"event\":{\"type\":\"permission.updated\"}}");
 
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher, org.mockito.Mockito.atLeast(2)).deliver(any(), any(), any(),
+                verify(emitter, org.mockito.Mockito.atLeast(2)).emitToSession(any(), any(), any(),
                                 msgCaptor.capture());
                 assertTrue(msgCaptor.getAllValues().stream()
                                 .anyMatch(m -> StreamMessage.Types.PERMISSION_REPLY.equals(m.getType())));
@@ -634,7 +638,7 @@ class GatewayRelayServiceTest {
                                 "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":42,\"event\":{\"type\":\"message.part.updated\"}}");
 
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher).deliver(any(), eq("42"), eq("user-1"), msgCaptor.capture());
+                verify(emitter).emitToSession(any(), eq("42"), eq("user-1"), msgCaptor.capture());
                 StreamMessage delivered = msgCaptor.getValue();
                 assertEquals(StreamMessage.Types.PERMISSION_REPLY, delivered.getType());
                 assertEquals("reject", delivered.getPermission().getResponse());
@@ -670,7 +674,7 @@ class GatewayRelayServiceTest {
                                 "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":42,\"event\":{\"type\":\"message.part.updated\"}}");
 
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher, times(2)).deliver(any(), eq("42"), eq("user-1"), msgCaptor.capture());
+                verify(emitter, times(2)).emitToSession(any(), eq("42"), eq("user-1"), msgCaptor.capture());
                 assertTrue(msgCaptor.getAllValues().stream()
                                 .anyMatch(m -> StreamMessage.Types.PERMISSION_REPLY.equals(m.getType())));
                 assertTrue(msgCaptor.getAllValues().stream()
@@ -696,7 +700,7 @@ class GatewayRelayServiceTest {
                                 "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":42,\"event\":{\"type\":\"message.part.updated\"}}");
 
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
-                verify(outboundDeliveryDispatcher).deliver(any(), eq("42"), eq("user-1"), msgCaptor.capture());
+                verify(emitter).emitToSession(any(), eq("42"), eq("user-1"), msgCaptor.capture());
                 assertEquals(StreamMessage.Types.TOOL_UPDATE, msgCaptor.getValue().getType());
         }
 

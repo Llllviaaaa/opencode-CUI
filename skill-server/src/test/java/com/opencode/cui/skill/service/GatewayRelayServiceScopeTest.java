@@ -47,6 +47,8 @@ class GatewayRelayServiceScopeTest {
     private AssistantScopeStrategy businessStrategy;
     @Mock
     private GatewayRelayService.GatewayRelayTarget gatewayRelayTarget;
+    @Mock
+    com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter;
 
     private GatewayRelayService service;
 
@@ -59,7 +61,8 @@ class GatewayRelayServiceScopeTest {
                 redisMessageBroker,
                 assistantIdResolverService,
                 assistantInfoService,
-                scopeDispatcher);
+                scopeDispatcher,
+                emitter);
         service.setGatewayRelayTarget(gatewayRelayTarget);
 
         lenient().when(gatewayRelayTarget.hasActiveConnection()).thenReturn(true);

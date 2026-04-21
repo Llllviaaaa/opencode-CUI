@@ -60,6 +60,7 @@ class ImOutboundFilterTest {
     @Mock private AssistantScopeStrategy businessScopeStrategy;
     @Mock private AssistantScopeStrategy personalScopeStrategy;
     @Mock private com.opencode.cui.skill.service.delivery.OutboundDeliveryDispatcher outboundDeliveryDispatcher;
+    @Mock com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter;
 
     private GatewayMessageRouter router;
 
@@ -84,6 +85,7 @@ class ImOutboundFilterTest {
                 assistantInfoService,
                 scopeDispatcher,
                 outboundDeliveryDispatcher,
+                emitter,
                 120);
     }
 
@@ -155,7 +157,7 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.TEXT_DONE));
 
-        verify(outboundDeliveryDispatcher).deliver(any(SkillSession.class), eq(SESSION_ID), eq(USER_ID), any(StreamMessage.class));
+        verify(emitter).emitToSession(any(SkillSession.class), eq(SESSION_ID), eq(USER_ID), any(StreamMessage.class));
     }
 
     // ==================== S65: business IM + planning.delta -> filtered ====================
@@ -171,7 +173,7 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.PLANNING_DELTA));
 
-        verify(outboundDeliveryDispatcher, never()).deliver(any(), any(), any(), any());
+        verify(emitter, never()).emitToSession(any(), any(), any(), any());
     }
 
     // ==================== S66: business IM + thinking.delta -> filtered ====================
@@ -187,7 +189,7 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.THINKING_DELTA));
 
-        verify(outboundDeliveryDispatcher, never()).deliver(any(), any(), any(), any());
+        verify(emitter, never()).emitToSession(any(), any(), any(), any());
     }
 
     // ==================== S67: business IM + searching -> filtered ====================
@@ -202,7 +204,7 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.SEARCHING));
 
-        verify(outboundDeliveryDispatcher, never()).deliver(any(), any(), any(), any());
+        verify(emitter, never()).emitToSession(any(), any(), any(), any());
     }
 
     // ==================== S68: business IM + search_result -> filtered ====================
@@ -217,7 +219,7 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.SEARCH_RESULT));
 
-        verify(outboundDeliveryDispatcher, never()).deliver(any(), any(), any(), any());
+        verify(emitter, never()).emitToSession(any(), any(), any(), any());
     }
 
     // ==================== S69: business IM + reference -> filtered ====================
@@ -232,7 +234,7 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.REFERENCE));
 
-        verify(outboundDeliveryDispatcher, never()).deliver(any(), any(), any(), any());
+        verify(emitter, never()).emitToSession(any(), any(), any(), any());
     }
 
     // ==================== S70: business IM + ask_more -> filtered ====================
@@ -247,7 +249,7 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.ASK_MORE));
 
-        verify(outboundDeliveryDispatcher, never()).deliver(any(), any(), any(), any());
+        verify(emitter, never()).emitToSession(any(), any(), any(), any());
     }
 
     // ==================== S71: personal IM + text.done -> not filtered (regression) ====================
@@ -264,6 +266,6 @@ class ImOutboundFilterTest {
 
         router.route("tool_event", AK, USER_ID, buildToolEventNode(StreamMessage.Types.TEXT_DONE));
 
-        verify(outboundDeliveryDispatcher).deliver(any(SkillSession.class), eq(SESSION_ID), eq(USER_ID), any(StreamMessage.class));
+        verify(emitter).emitToSession(any(SkillSession.class), eq(SESSION_ID), eq(USER_ID), any(StreamMessage.class));
     }
 }

@@ -44,6 +44,7 @@ public class GatewayRelayService {
     private final AssistantIdResolverService assistantIdResolverService;
     private final AssistantInfoService assistantInfoService;
     private final AssistantScopeDispatcher scopeDispatcher;
+    private final com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter;
     private volatile GatewayRelayTarget gatewayRelayTarget;
 
     public GatewayRelayService(ObjectMapper objectMapper,
@@ -52,7 +53,8 @@ public class GatewayRelayService {
             RedisMessageBroker redisMessageBroker,
             AssistantIdResolverService assistantIdResolverService,
             AssistantInfoService assistantInfoService,
-            AssistantScopeDispatcher scopeDispatcher) {
+            AssistantScopeDispatcher scopeDispatcher,
+            com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter) {
         this.objectMapper = objectMapper;
         this.messageRouter = messageRouter;
         this.rebuildService = rebuildService;
@@ -60,6 +62,7 @@ public class GatewayRelayService {
         this.assistantIdResolverService = assistantIdResolverService;
         this.assistantInfoService = assistantInfoService;
         this.scopeDispatcher = scopeDispatcher;
+        this.emitter = emitter;
 
         // 向 MessageRouter 注入下行发送能力，避免循环依赖
         messageRouter.setDownstreamSender(this::sendInvokeToGateway);
@@ -336,7 +339,7 @@ public class GatewayRelayService {
                 new SessionRebuildService.RebuildCallback() {
                     @Override
                     public void broadcast(String sid, String uid, StreamMessage msg) {
-                        messageRouter.broadcastStreamMessage(sid, uid, msg);
+                        emitter.emitToClient(sid, uid, msg);
                     }
 
                     @Override

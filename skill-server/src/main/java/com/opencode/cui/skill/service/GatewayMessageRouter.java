@@ -67,6 +67,7 @@ public class GatewayMessageRouter {
     private final ImInteractionStateService interactionStateService;
     private final ImOutboundService imOutboundService;
     private final OutboundDeliveryDispatcher outboundDeliveryDispatcher;
+    private final com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter;
     private final AssistantInfoService assistantInfoService;
     private final AssistantScopeDispatcher scopeDispatcher;
     /** 已完成会话的短期缓存，用于抑制 tool_done 后的残余事件 */
@@ -152,6 +153,7 @@ public class GatewayMessageRouter {
             AssistantInfoService assistantInfoService,
             AssistantScopeDispatcher scopeDispatcher,
             OutboundDeliveryDispatcher outboundDeliveryDispatcher,
+            com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter,
             @Value("${skill.relay.owner-dead-threshold-seconds:120}") int ownerDeadThresholdSeconds) {
         this.objectMapper = objectMapper;
         this.messageService = messageService;
@@ -164,6 +166,7 @@ public class GatewayMessageRouter {
         this.interactionStateService = interactionStateService;
         this.imOutboundService = imOutboundService;
         this.outboundDeliveryDispatcher = outboundDeliveryDispatcher;
+        this.emitter = emitter;
         this.sessionRouteService = sessionRouteService;
         this.skillInstanceRegistry = skillInstanceRegistry;
         this.assistantInfoService = assistantInfoService;
@@ -540,11 +543,8 @@ public class GatewayMessageRouter {
             }
         }
 
-        // 统一填充 welinkSessionId、emittedAt 等公共字段
-        enrichStreamMessage(sessionId, msg);
-
-        // 统一投递
-        outboundDeliveryDispatcher.deliver(session, sessionId, userId, msg);
+        // 统一投递（enrich + deliver）
+        emitter.emitToSession(session, sessionId, userId, msg);
 
         // 缓冲（miniapp 用）
         if (session == null || session.isMiniappDomain()) {
@@ -580,8 +580,7 @@ public class GatewayMessageRouter {
                     .content(accumulated.toString())
                     .role("assistant")
                     .build();
-            enrichStreamMessage(sessionId, textDoneMsg);
-            outboundDeliveryDispatcher.deliver(session, sessionId, userId, textDoneMsg);
+            emitter.emitToSession(session, sessionId, userId, textDoneMsg);
             log.info("Flushed accumulated text.delta as text.done to IM: sessionId={}, length={}",
                     sessionId, accumulated.length());
         }
@@ -589,8 +588,7 @@ public class GatewayMessageRouter {
         StreamMessage msg = StreamMessage.sessionStatus("idle");
         Long numericId = ProtocolUtils.parseSessionId(sessionId);
 
-        enrichStreamMessage(sessionId, msg);
-        outboundDeliveryDispatcher.deliver(session, sessionId, userId, msg);
+        emitter.emitToSession(session, sessionId, userId, msg);
 
         if (session == null || session.isMiniappDomain()) {
             bufferService.accumulate(sessionId, msg);
@@ -640,8 +638,7 @@ public class GatewayMessageRouter {
                 .type(StreamMessage.Types.ERROR)
                 .error(error)
                 .build();
-        enrichStreamMessage(sessionId, errorMsg);
-        outboundDeliveryDispatcher.deliver(session, sessionId, userId, errorMsg);
+        emitter.emitToSession(session, sessionId, userId, errorMsg);
 
         if (numericId != null) {
             try {
@@ -784,8 +781,7 @@ public class GatewayMessageRouter {
                     msg.getPermission().getPermissionId());
         }
 
-        enrichStreamMessage(sessionId, msg);
-        outboundDeliveryDispatcher.deliver(session, sessionId, userId, msg);
+        emitter.emitToSession(session, sessionId, userId, msg);
     }
 
     /**
@@ -1053,8 +1049,7 @@ public class GatewayMessageRouter {
                 .type(StreamMessage.Types.ERROR)
                 .error(CONTEXT_RESET_MESSAGE)
                 .build();
-        enrichStreamMessage(sessionId, resetMsg);
-        outboundDeliveryDispatcher.deliver(session, sessionId, userId, resetMsg);
+        emitter.emitToSession(session, sessionId, userId, resetMsg);
 
         if (session.isImDirectSession()) {
             Long numericId = ProtocolUtils.parseSessionId(sessionId);
