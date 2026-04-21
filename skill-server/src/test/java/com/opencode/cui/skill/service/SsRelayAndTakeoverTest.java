@@ -72,6 +72,8 @@ class SsRelayAndTakeoverTest {
     private AssistantScopeDispatcher scopeDispatcher;
     @Mock
     private com.opencode.cui.skill.service.delivery.OutboundDeliveryDispatcher outboundDeliveryDispatcher;
+    @Mock
+    com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter;
 
     private GatewayMessageRouter router;
 
@@ -94,6 +96,7 @@ class SsRelayAndTakeoverTest {
                 assistantInfoService,
                 scopeDispatcher,
                 outboundDeliveryDispatcher,
+                emitter,
                 DEAD_THRESHOLD_SECONDS);
     }
 

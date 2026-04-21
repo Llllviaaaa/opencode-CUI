@@ -10,6 +10,7 @@ import com.opencode.cui.skill.ws.ExternalStreamHandler;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
@@ -30,9 +31,9 @@ class ExternalWsDeliveryStrategyTest {
     @InjectMocks private ExternalWsDeliveryStrategy strategy;
 
     @Test
-    @DisplayName("supports non-miniapp domain")
+    @DisplayName("supports non-miniapp non-im domain")
     void supportsNonMiniapp() {
-        SkillSession session = SkillSession.builder().businessSessionDomain("im").build();
+        SkillSession session = SkillSession.builder().businessSessionDomain("ext").build();
         assertTrue(strategy.supports(session));
     }
 
@@ -112,4 +113,31 @@ class ExternalWsDeliveryStrategyTest {
     @Test
     @DisplayName("order is 2")
     void orderIsTwo() { assertEquals(2, strategy.order()); }
+
+    @Test
+    @DisplayName("serialized JSON preserves welinkSessionId for error events")
+    void deliver_errorEvent_serializedJsonContainsWelinkSessionId() throws Exception {
+        // given: 一条 enrich 过的 error StreamMessage（模拟 emitter 输出状态）
+        SkillSession session = SkillSession.builder().businessSessionDomain("ext-domain").build();
+
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.ERROR)
+                .error("agent offline")
+                .build();
+        msg.setSessionId("101");
+        msg.setWelinkSessionId("101");
+
+        when(redisMessageBroker.nextStreamSeq("101")).thenReturn(1L);
+        when(externalStreamHandler.pushToOne(anyString(), anyString())).thenReturn(true);
+        ArgumentCaptor<String> jsonCap = ArgumentCaptor.forClass(String.class);
+
+        // when
+        strategy.deliver(session, "101", null, msg);
+
+        // then: 捕获发出的 JSON payload，断言含 welinkSessionId
+        verify(externalStreamHandler).pushToOne(anyString(), jsonCap.capture());
+        var payload = objectMapper.readTree(jsonCap.getValue());
+        assertEquals("101", payload.path("welinkSessionId").asText());
+        assertEquals("error", payload.path("type").asText());
+    }
 }

@@ -9,7 +9,7 @@ import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.InboundProcessingService.InboundResult;
-import com.opencode.cui.skill.service.delivery.OutboundDeliveryDispatcher;
+import com.opencode.cui.skill.service.delivery.StreamMessageEmitter;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,8 +21,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -47,7 +46,7 @@ class InboundProcessingServiceTest {
     @Mock
     private AssistantScopeDispatcher scopeDispatcher;
     @Mock
-    private OutboundDeliveryDispatcher outboundDeliveryDispatcher;
+    private StreamMessageEmitter emitter;
     @Mock
     private RedisMessageBroker redisMessageBroker;
 
@@ -75,7 +74,7 @@ class InboundProcessingServiceTest {
                 new ObjectMapper(),
                 assistantInfoService,
                 scopeDispatcher,
-                outboundDeliveryDispatcher,
+                emitter,
                 deliveryProperties,
                 redisMessageBroker);
 
@@ -104,7 +103,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                "hello", "text", null, null, null);
+                null, "hello", "text", null, null, "IM");
 
         assertTrue(result.success());
         ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
@@ -124,7 +123,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "unknown",
-                "hello", "text", null, null, null);
+                null, "hello", "text", null, null, "IM");
 
         assertFalse(result.success());
         assertEquals(404, result.code());
@@ -143,12 +142,12 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-new", "assist-001",
-                "first msg", "text", null, null, null);
+                null, "first msg", "text", null, null, "IM");
 
         assertTrue(result.success());
         verify(sessionManager).createSessionAsync(
                 "im", "direct", "dm-new", "ak-001",
-                "owner-001", "assist-001", "first msg");
+                "owner-001", "assist-001", null, "first msg");
         verify(gatewayRelayService, never()).sendInvokeToGateway(any());
     }
 
@@ -223,7 +222,7 @@ class InboundProcessingServiceTest {
 
         assertTrue(result.success());
         verify(sessionManager).requestToolSession(session, null);
-        verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any());
+        verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -240,8 +239,32 @@ class InboundProcessingServiceTest {
         assertTrue(result.success());
         verify(sessionManager).createSessionAsync(
                 "im", "direct", "dm-new", "ak-001",
-                "owner-001", "assist-001", null);
+                "owner-001", "assist-001", null, null);
         verify(sessionManager, never()).requestToolSession(any(), any());
+    }
+
+    // ==================== handleAgentOffline ====================
+
+    @Test
+    @DisplayName("handleAgentOffline: external-ws session → routes via emitter (regression for welinkSessionId bug)")
+    void handleAgentOffline_ExternalWs_shouldRouteViaEmitter() {
+        // given: 非 miniapp/IM domain 的 external ws session
+        SkillSession session = mock(SkillSession.class);
+        when(session.getId()).thenReturn(101L);
+        when(session.isImDirectSession()).thenReturn(false);
+        when(sessionManager.findSession(
+                eq("ext"), eq("single"), eq("101"), eq("ak-x")))
+                .thenReturn(session);
+
+        // when
+        service.handleAgentOffline(
+                "ext", "single", "101", "ak-x", "assistant-x");
+
+        // then: 走 emitter.emitToSession，msg 携带 ERROR 类型 + error 非空
+        ArgumentCaptor<StreamMessage> cap = ArgumentCaptor.forClass(StreamMessage.class);
+        verify(emitter).emitToSession(eq(session), eq("101"), isNull(), cap.capture());
+        assertEquals(StreamMessage.Types.ERROR, cap.getValue().getType());
+        assertNotNull(cap.getValue().getError());
     }
 
     // ==================== helper ====================

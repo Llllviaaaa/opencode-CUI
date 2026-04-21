@@ -40,7 +40,7 @@ class ExternalInboundControllerTest {
     @Test
     @DisplayName("chat action dispatches to processChat")
     void chatAction() throws Exception {
-        when(processingService.processChat(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(processingService.processChat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(InboundResult.ok());
         var request = buildRequest("chat", "{\"content\":\"hello\",\"msgType\":\"text\"}");
         var response = controller.invoke(request);
@@ -48,7 +48,7 @@ class ExternalInboundControllerTest {
         assertEquals(0, response.getBody().getCode());
         verify(processingService).processChat(
                 eq("im"), eq("direct"), eq("dm-001"), eq("assist-01"),
-                eq("hello"), eq("text"), isNull(), isNull(), eq("EXTERNAL"));
+                isNull(), eq("hello"), eq("text"), isNull(), isNull(), eq("EXTERNAL"));
     }
 
     @Test

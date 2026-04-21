@@ -8,7 +8,7 @@ import com.opencode.cui.skill.model.ImMessageRequest;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
-import com.opencode.cui.skill.service.delivery.OutboundDeliveryDispatcher;
+import com.opencode.cui.skill.service.delivery.StreamMessageEmitter;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import lombok.extern.slf4j.Slf4j;
@@ -47,7 +47,7 @@ public class InboundProcessingService {
     private final ObjectMapper objectMapper;
     private final AssistantInfoService assistantInfoService;
     private final AssistantScopeDispatcher scopeDispatcher;
-    private final OutboundDeliveryDispatcher outboundDeliveryDispatcher;
+    private final StreamMessageEmitter emitter;
     private final DeliveryProperties deliveryProperties;
     private final RedisMessageBroker redisMessageBroker;
 
@@ -63,7 +63,7 @@ public class InboundProcessingService {
             ObjectMapper objectMapper,
             AssistantInfoService assistantInfoService,
             AssistantScopeDispatcher scopeDispatcher,
-            OutboundDeliveryDispatcher outboundDeliveryDispatcher,
+            StreamMessageEmitter emitter,
             DeliveryProperties deliveryProperties,
             RedisMessageBroker redisMessageBroker) {
         this.resolverService = resolverService;
@@ -77,7 +77,7 @@ public class InboundProcessingService {
         this.objectMapper = objectMapper;
         this.assistantInfoService = assistantInfoService;
         this.scopeDispatcher = scopeDispatcher;
-        this.outboundDeliveryDispatcher = outboundDeliveryDispatcher;
+        this.emitter = emitter;
         this.deliveryProperties = deliveryProperties;
         this.redisMessageBroker = redisMessageBroker;
     }
@@ -140,7 +140,7 @@ public class InboundProcessingService {
             log.info("No existing session found, creating async: domain={}, sessionType={}, sessionId={}, ak={}",
                     businessDomain, sessionType, sessionId, ak);
             sessionManager.createSessionAsync(businessDomain, sessionType, sessionId,
-                    ak, ownerWelinkId, assistantAccount, prompt);
+                    ak, ownerWelinkId, assistantAccount, senderUserAccount, prompt);
             // 异步创建后重新查询获取 session ID
             SkillSession created = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
             writeInvokeSource(created, inboundSource);
@@ -309,7 +309,7 @@ public class InboundProcessingService {
             return InboundResult.ok(sessionId, String.valueOf(session.getId()));
         } else {
             sessionManager.createSessionAsync(businessDomain, sessionType, sessionId,
-                    ak, ownerWelinkId, assistantAccount, null);
+                    ak, ownerWelinkId, assistantAccount, null, null);
             SkillSession created = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
             return InboundResult.ok(sessionId,
                     created != null ? String.valueOf(created.getId()) : null);
@@ -325,10 +325,10 @@ public class InboundProcessingService {
     }
 
     /**
-     * Agent 离线处理：通过 OutboundDeliveryDispatcher 发送离线提示，
+     * Agent 离线处理：通过 StreamMessageEmitter 发送离线提示（enrich + deliver），
      * 并在单聊 session 中持久化系统消息。
      */
-    private void handleAgentOffline(String businessDomain, String sessionType,
+    void handleAgentOffline(String businessDomain, String sessionType,
                                      String sessionId, String ak, String assistantAccount) {
         SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
         if (session != null) {
@@ -336,7 +336,7 @@ public class InboundProcessingService {
                     .type(StreamMessage.Types.ERROR)
                     .error(AGENT_OFFLINE_MESSAGE)
                     .build();
-            outboundDeliveryDispatcher.deliver(session,
+            emitter.emitToSession(session,
                     String.valueOf(session.getId()), null, offlineMsg);
             if (session.isImDirectSession()) {
                 try {

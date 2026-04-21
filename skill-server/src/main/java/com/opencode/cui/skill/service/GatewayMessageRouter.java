@@ -49,13 +49,6 @@ public class GatewayMessageRouter {
 
     /** 上下文溢出时发送给用户的提示消息 */
     private static final String CONTEXT_RESET_MESSAGE = "对话上下文已超出限制，已自动重置，请稍后重试。";
-    /** 不需要 emittedAt 时间戳的消息类型集合 */
-    private static final Set<String> EMITTED_AT_EXCLUDED_TYPES = Set.of(
-            StreamMessage.Types.PERMISSION_REPLY,
-            StreamMessage.Types.AGENT_ONLINE,
-            StreamMessage.Types.AGENT_OFFLINE,
-            StreamMessage.Types.ERROR);
-
     private final ObjectMapper objectMapper;
     private final SkillMessageService messageService;
     private final SkillSessionService sessionService;
@@ -67,6 +60,7 @@ public class GatewayMessageRouter {
     private final ImInteractionStateService interactionStateService;
     private final ImOutboundService imOutboundService;
     private final OutboundDeliveryDispatcher outboundDeliveryDispatcher;
+    private final com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter;
     private final AssistantInfoService assistantInfoService;
     private final AssistantScopeDispatcher scopeDispatcher;
     /** 已完成会话的短期缓存，用于抑制 tool_done 后的残余事件 */
@@ -152,6 +146,7 @@ public class GatewayMessageRouter {
             AssistantInfoService assistantInfoService,
             AssistantScopeDispatcher scopeDispatcher,
             OutboundDeliveryDispatcher outboundDeliveryDispatcher,
+            com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter,
             @Value("${skill.relay.owner-dead-threshold-seconds:120}") int ownerDeadThresholdSeconds) {
         this.objectMapper = objectMapper;
         this.messageService = messageService;
@@ -164,6 +159,7 @@ public class GatewayMessageRouter {
         this.interactionStateService = interactionStateService;
         this.imOutboundService = imOutboundService;
         this.outboundDeliveryDispatcher = outboundDeliveryDispatcher;
+        this.emitter = emitter;
         this.sessionRouteService = sessionRouteService;
         this.skillInstanceRegistry = skillInstanceRegistry;
         this.assistantInfoService = assistantInfoService;
@@ -468,7 +464,7 @@ public class GatewayMessageRouter {
             return;
         }
         if (sessionService.activateSession(numericId)) {
-            broadcastStreamMessage(sessionId, userId, StreamMessage.sessionStatus("busy"));
+            emitter.emitToClient(sessionId, userId, StreamMessage.sessionStatus("busy"));
         }
     }
 
@@ -540,11 +536,8 @@ public class GatewayMessageRouter {
             }
         }
 
-        // 统一填充 welinkSessionId、emittedAt 等公共字段
-        enrichStreamMessage(sessionId, msg);
-
-        // 统一投递
-        outboundDeliveryDispatcher.deliver(session, sessionId, userId, msg);
+        // 统一投递（enrich + deliver）
+        emitter.emitToSession(session, sessionId, userId, msg);
 
         // 缓冲（miniapp 用）
         if (session == null || session.isMiniappDomain()) {
@@ -580,8 +573,7 @@ public class GatewayMessageRouter {
                     .content(accumulated.toString())
                     .role("assistant")
                     .build();
-            enrichStreamMessage(sessionId, textDoneMsg);
-            outboundDeliveryDispatcher.deliver(session, sessionId, userId, textDoneMsg);
+            emitter.emitToSession(session, sessionId, userId, textDoneMsg);
             log.info("Flushed accumulated text.delta as text.done to IM: sessionId={}, length={}",
                     sessionId, accumulated.length());
         }
@@ -589,8 +581,7 @@ public class GatewayMessageRouter {
         StreamMessage msg = StreamMessage.sessionStatus("idle");
         Long numericId = ProtocolUtils.parseSessionId(sessionId);
 
-        enrichStreamMessage(sessionId, msg);
-        outboundDeliveryDispatcher.deliver(session, sessionId, userId, msg);
+        emitter.emitToSession(session, sessionId, userId, msg);
 
         if (session == null || session.isMiniappDomain()) {
             bufferService.accumulate(sessionId, msg);
@@ -640,8 +631,7 @@ public class GatewayMessageRouter {
                 .type(StreamMessage.Types.ERROR)
                 .error(error)
                 .build();
-        enrichStreamMessage(sessionId, errorMsg);
-        outboundDeliveryDispatcher.deliver(session, sessionId, userId, errorMsg);
+        emitter.emitToSession(session, sessionId, userId, errorMsg);
 
         if (numericId != null) {
             try {
@@ -669,7 +659,7 @@ public class GatewayMessageRouter {
         StreamMessage msg = StreamMessage.agentOnline();
         List<SkillSession> activeSessions = sessionService.findActiveByAk(ak);
         log.info("handleAgentOnline: ak={}, activeSessions={}", ak, activeSessions.size());
-        activeSessions.forEach(session -> broadcastStreamMessage(
+        activeSessions.forEach(session -> emitter.emitToClient(
                 session.getId().toString(),
                 userId != null && !userId.isBlank() ? userId : session.getUserId(),
                 msg));
@@ -684,7 +674,7 @@ public class GatewayMessageRouter {
             return;
         }
         StreamMessage msg = StreamMessage.agentOffline();
-        sessionService.findActiveByAk(ak).forEach(session -> broadcastStreamMessage(
+        sessionService.findActiveByAk(ak).forEach(session -> emitter.emitToClient(
                 session.getId().toString(),
                 userId != null && !userId.isBlank() ? userId : session.getUserId(),
                 msg));
@@ -756,7 +746,7 @@ public class GatewayMessageRouter {
         }
 
         log.info("[EXIT] retryPendingMessages: sessionId={}, ak={}, sent={}/{}", sessionId, ak, sent, pendingMessages.size());
-        broadcastStreamMessage(sessionId, userId, StreamMessage.sessionStatus("busy"));
+        emitter.emitToClient(sessionId, userId, StreamMessage.sessionStatus("busy"));
     }
 
     /** 处理 permission_request：统一投递权限请求消息。 */
@@ -784,8 +774,7 @@ public class GatewayMessageRouter {
                     msg.getPermission().getPermissionId());
         }
 
-        enrichStreamMessage(sessionId, msg);
-        outboundDeliveryDispatcher.deliver(session, sessionId, userId, msg);
+        emitter.emitToSession(session, sessionId, userId, msg);
     }
 
     /**
@@ -865,35 +854,20 @@ public class GatewayMessageRouter {
 
     /**
      * 广播 StreamMessage 到前端。
-     * 自动填充 sessionId、emittedAt、消息上下文后通过 Redis 发布。
+     * @deprecated 保留以维持外部测试兼容；内部请直接使用 {@link StreamMessageEmitter#emitToClient}。
      */
+    @Deprecated
     public void broadcastStreamMessage(String sessionId, String userIdHint, StreamMessage msg) {
-        try {
-            enrichStreamMessage(sessionId, msg);
-            String userId = resolveUserId(sessionId, userIdHint);
-            if (userId == null || userId.isBlank()) {
-                log.warn("Failed to broadcast StreamMessage without userId: sessionId={}, type={}",
-                        sessionId, msg.getType());
-                return;
-            }
-
-            ObjectNode envelope = objectMapper.createObjectNode();
-            envelope.put("sessionId", sessionId);
-            envelope.put("userId", userId);
-            envelope.set("message", objectMapper.valueToTree(msg));
-            redisMessageBroker.publishToUser(userId, objectMapper.writeValueAsString(envelope));
-            log.info("[EXIT->FE] Broadcast StreamMessage: sessionId={}, type={}, userId={}",
-                    sessionId, msg.getType(), userId);
-        } catch (Exception e) {
-            log.error("Failed to broadcast StreamMessage to session {}: type={}, error={}",
-                    sessionId, msg.getType(), e.getMessage());
-        }
+        emitter.emitToClient(sessionId, userIdHint, msg);
     }
 
-    /** 发布协议消息（广播 + 缓冲）。 */
+    /**
+     * 发布协议消息（广播 + 缓冲）。
+     * @deprecated 保留以维持外部测试兼容；内部请直接使用 {@link StreamMessageEmitter#emitToClientWithBuffer}。
+     */
+    @Deprecated
     public void publishProtocolMessage(String sessionId, StreamMessage msg) {
-        broadcastStreamMessage(sessionId, null, msg);
-        bufferService.accumulate(sessionId, msg);
+        emitter.emitToClientWithBuffer(sessionId, msg);
     }
 
     /**
@@ -988,22 +962,6 @@ public class GatewayMessageRouter {
         }
     }
 
-    /** 填充消息的 sessionId、emittedAt 和消息上下文信息。 */
-    private void enrichStreamMessage(String sessionId, StreamMessage msg) {
-        msg.setSessionId(sessionId);
-        msg.setWelinkSessionId(sessionId);
-        if (!isEmittedAtExcluded(msg.getType())
-                && (msg.getEmittedAt() == null || msg.getEmittedAt().isBlank())) {
-            msg.setEmittedAt(Instant.now().toString());
-        }
-        if (!"user".equals(ProtocolUtils.normalizeRole(msg.getRole()))) {
-            Long numericId = ProtocolUtils.parseSessionId(sessionId);
-            if (numericId != null) {
-                persistenceService.prepareMessageContext(numericId, msg);
-            }
-        }
-    }
-
     /** 判断错误信息是否表示会话失效（需要重建）。 */
     private boolean isSessionInvalidError(String error) {
         if (error == null) {
@@ -1014,11 +972,6 @@ public class GatewayMessageRouter {
                 || lower.contains("session_not_found")
                 || lower.contains("json parse error")
                 || lower.contains("unexpected eof");
-    }
-
-    /** 判断消息类型是否不需要 emittedAt 时间戳。 */
-    private boolean isEmittedAtExcluded(String type) {
-        return type != null && EMITTED_AT_EXCLUDED_TYPES.contains(type);
     }
 
     /** 根据 sessionId 字符串安全查询会话对象。 */
@@ -1053,8 +1006,7 @@ public class GatewayMessageRouter {
                 .type(StreamMessage.Types.ERROR)
                 .error(CONTEXT_RESET_MESSAGE)
                 .build();
-        enrichStreamMessage(sessionId, resetMsg);
-        outboundDeliveryDispatcher.deliver(session, sessionId, userId, resetMsg);
+        emitter.emitToSession(session, sessionId, userId, resetMsg);
 
         if (session.isImDirectSession()) {
             Long numericId = ProtocolUtils.parseSessionId(sessionId);
@@ -1124,7 +1076,7 @@ public class GatewayMessageRouter {
     private final SessionRebuildService.RebuildCallback rebuildCallback = new SessionRebuildService.RebuildCallback() {
         @Override
         public void broadcast(String sessionId, String userId, StreamMessage msg) {
-            broadcastStreamMessage(sessionId, userId, msg);
+            emitter.emitToClient(sessionId, userId, msg);
         }
 
         @Override
