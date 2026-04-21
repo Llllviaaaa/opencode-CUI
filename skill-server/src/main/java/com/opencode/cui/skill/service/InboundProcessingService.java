@@ -325,7 +325,7 @@ public class InboundProcessingService {
     }
 
     /**
-     * Agent 离线处理：通过 OutboundDeliveryDispatcher 发送离线提示，
+     * Agent 离线处理：通过 StreamMessageEmitter 发送离线提示（enrich + deliver），
      * 并在单聊 session 中持久化系统消息。
      */
     void handleAgentOffline(String businessDomain, String sessionType,
