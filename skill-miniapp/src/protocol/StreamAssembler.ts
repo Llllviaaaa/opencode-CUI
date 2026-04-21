@@ -249,6 +249,72 @@ export class StreamAssembler {
         break;
       }
 
+      case 'planning.delta': {
+        const id = msg.partId || this.findActivePartId('planning') || this.genPartId('planning');
+        const part = this.getOrCreatePart(id, 'planning', msg.partSeq);
+        part.content += msg.content ?? '';
+        part.isStreaming = true;
+        part.subagentSessionId = msg.subagentSessionId ?? part.subagentSessionId;
+        part.subagentName = msg.subagentName ?? part.subagentName;
+        break;
+      }
+
+      case 'planning.done': {
+        const id = msg.partId || this.findActivePartId('planning') || this.genPartId('planning');
+        const part = this.getOrCreatePart(id, 'planning', msg.partSeq);
+        if (msg.content !== undefined) {
+          part.content = msg.content;
+        }
+        part.isStreaming = false;
+        part.subagentSessionId = msg.subagentSessionId ?? part.subagentSessionId;
+        part.subagentName = msg.subagentName ?? part.subagentName;
+        break;
+      }
+
+      case 'searching': {
+        const id = msg.partId || this.genPartId('searching');
+        const part = this.getOrCreatePart(id, 'searching', msg.partSeq);
+        part.keywords = msg.keywords;
+        part.content = msg.content ?? '';
+        part.isStreaming = false;
+        part.subagentSessionId = msg.subagentSessionId ?? part.subagentSessionId;
+        part.subagentName = msg.subagentName ?? part.subagentName;
+        break;
+      }
+
+      case 'search_result': {
+        const id = msg.partId || this.genPartId('search_result');
+        const part = this.getOrCreatePart(id, 'search_result', msg.partSeq);
+        part.searchResults = msg.searchResults;
+        part.content = msg.content ?? '';
+        part.isStreaming = false;
+        part.subagentSessionId = msg.subagentSessionId ?? part.subagentSessionId;
+        part.subagentName = msg.subagentName ?? part.subagentName;
+        break;
+      }
+
+      case 'reference': {
+        const id = msg.partId || this.genPartId('reference');
+        const part = this.getOrCreatePart(id, 'reference', msg.partSeq);
+        part.references = msg.references;
+        part.content = msg.content ?? '';
+        part.isStreaming = false;
+        part.subagentSessionId = msg.subagentSessionId ?? part.subagentSessionId;
+        part.subagentName = msg.subagentName ?? part.subagentName;
+        break;
+      }
+
+      case 'ask_more': {
+        const id = msg.partId || this.genPartId('ask_more');
+        const part = this.getOrCreatePart(id, 'ask_more', msg.partSeq);
+        part.askMoreQuestions = msg.askMoreQuestions;
+        part.content = msg.content ?? '';
+        part.isStreaming = false;
+        part.subagentSessionId = msg.subagentSessionId ?? part.subagentSessionId;
+        part.subagentName = msg.subagentName ?? part.subagentName;
+        break;
+      }
+
       // step.start / step.done / session.status don't create parts
       default:
         break;

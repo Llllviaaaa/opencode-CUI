@@ -10,6 +10,7 @@ import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.config.AssistantIdProperties;
 import com.opencode.cui.skill.model.AgentSummary;
 import com.opencode.cui.skill.model.StreamMessage;
+import com.opencode.cui.skill.service.AssistantInfoService;
 import com.opencode.cui.skill.service.GatewayApiClient;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.ImMessageService;
@@ -17,6 +18,7 @@ import com.opencode.cui.skill.service.GatewayMessageRouter;
 import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillMessageService;
 import com.opencode.cui.skill.service.SkillSessionService;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -54,6 +56,10 @@ class SkillMessageControllerTest {
     private SessionAccessControlService accessControlService;
     @Mock
     private GatewayMessageRouter messageRouter;
+    @Mock
+    private AssistantInfoService assistantInfoService;
+    @Mock
+    private AssistantScopeDispatcher scopeDispatcher;
 
     private AssistantIdProperties assistantIdProperties;
     private SkillMessageController controller;
@@ -66,7 +72,13 @@ class SkillMessageControllerTest {
         controller = new SkillMessageController(
                 messageService, sessionService, gatewayRelayService,
                 gatewayApiClient, assistantIdProperties, imMessageService, new ObjectMapper(),
-                accessControlService, messageRouter);
+                accessControlService, messageRouter, assistantInfoService, scopeDispatcher);
+        // 默认 scopeDispatcher 返回 personal 策略（requiresOnlineCheck=true）
+        com.opencode.cui.skill.service.scope.AssistantScopeStrategy personalStrategy =
+                org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
+        lenient().when(personalStrategy.requiresOnlineCheck()).thenReturn(true);
+        lenient().when(scopeDispatcher.getStrategy(any())).thenReturn(personalStrategy);
+        lenient().when(assistantInfoService.getCachedScope(any())).thenReturn("personal");
         // 默认 Agent 在线，离线场景在专用测试中覆盖
         lenient().when(gatewayApiClient.getAgentByAk(any()))
                 .thenReturn(AgentSummary.builder().ak("99").toolType("assistant").build());
@@ -284,6 +296,56 @@ class SkillMessageControllerTest {
         var response = controller.replyPermission("1", "1", "p-abc", request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(409, response.getBody().getCode());
+    }
+
+    @Test
+    @DisplayName("replyPermission returns 503 when personal agent is offline")
+    void permissionReplyAgentOffline503() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+        when(gatewayApiClient.getAgentByAk("99")).thenReturn(null); // Agent 离线
+
+        var request = new SkillMessageController.PermissionReplyRequest();
+        request.setResponse("once");
+
+        var response = controller.replyPermission("1", "1", "p-abc", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(503, response.getBody().getCode());
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+    }
+
+    @Test
+    @DisplayName("replyPermission skips online check for business assistant (always online)")
+    void permissionReplyBusinessAssistantSkipsOnlineCheck() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("biz-ak");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+
+        // 设置 business scope 策略（requiresOnlineCheck=false）
+        com.opencode.cui.skill.service.scope.AssistantScopeStrategy businessStrategy =
+                org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
+        when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
+        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
+        when(assistantInfoService.getCachedScope("biz-ak")).thenReturn("business");
+
+        var request = new SkillMessageController.PermissionReplyRequest();
+        request.setResponse("once");
+
+        var response = controller.replyPermission("1", "1", "p-abc", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(0, response.getBody().getCode());
+        // 不应调用 getAgentByAk — 云端助手跳过在线检查
+        verify(gatewayApiClient, never()).getAgentByAk("biz-ak");
+        verify(gatewayRelayService).sendInvokeToGateway(any());
     }
 
     @Test

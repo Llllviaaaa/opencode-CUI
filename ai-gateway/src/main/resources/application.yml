@@ -2,6 +2,9 @@ server:
   port: 8081
 
 spring:
+  threads:
+    virtual:
+      enabled: true
   application:
     name: ai-gateway
 
@@ -25,9 +28,9 @@ spring:
       timeout: 3000ms
       lettuce:
         pool:
-          max-active: 50
-          max-idle: 20
-          min-idle: 5
+          max-active: 200
+          max-idle: 50
+          min-idle: 10
 
 mybatis:
   mapper-locations: classpath:mapper/*.xml
@@ -90,6 +93,30 @@ gateway:
   websocket:
     max-text-message-buffer-size-bytes: 1048576
 
+  # 助手账号解析（IM 推送安全校验用）
+  assistant-resolve:
+    api-url: ${ASSISTANT_RESOLVE_URL:http://localhost:9999/assistant-api/integration/v4-1/we-crew/instance/query}
+    bearer-token: ${ASSISTANT_RESOLVE_TOKEN:}
+    cache-ttl-seconds: ${ASSISTANT_RESOLVE_CACHE_TTL:300}
+
+  # 云端连接超时配置
+  cloud:
+    connect-timeout-seconds: ${CLOUD_CONNECT_TIMEOUT:30}
+    first-event-timeout-seconds: ${CLOUD_FIRST_EVENT_TIMEOUT:120}
+    idle-timeout-seconds: ${CLOUD_IDLE_TIMEOUT:90}
+    max-duration-seconds: ${CLOUD_MAX_DURATION:600}
+    sse:
+      idle-timeout-seconds: ${CLOUD_SSE_IDLE_TIMEOUT:90}
+    websocket:
+      idle-timeout-seconds: ${CLOUD_WS_IDLE_TIMEOUT:60}
+      ping-interval-seconds: ${CLOUD_WS_PING_INTERVAL:30}
+
+  # 云端路由信息查询
+  cloud-route:
+    api-url: ${CLOUD_ROUTE_API_URL:http://localhost:9999/appstore/wecodeapi/open/ak/info}
+    bearer-token: ${CLOUD_ROUTE_BEARER_TOKEN:}
+    cache-ttl-seconds: ${CLOUD_ROUTE_CACHE_TTL_SECONDS:300}
+
 skill:
   gateway:
     internal-token: ${SKILL_SERVER_INTERNAL_TOKEN:changeme}
@@ -106,4 +133,4 @@ logging:
   level:
     com.opencode.cui.gateway: INFO
     org.springframework.web.socket: INFO
-  # pattern 和 rollingpolicy 已迁移到 logback-spring.xml
+  # pattern 和 rollingpolicy 已迁移到 log4j2-spring.xml

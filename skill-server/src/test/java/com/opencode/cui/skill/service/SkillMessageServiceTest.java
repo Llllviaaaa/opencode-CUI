@@ -72,7 +72,8 @@ class SkillMessageServiceTest {
         assertEquals("Hello", msg.getContent());
         assertEquals(1, msg.getSeq());
         verify(messageRepository).insert(any(SkillMessage.class));
-        verify(sessionService).touchSession(1L);
+        // touchSession is deferred to session idle (via MessagePersistenceService)
+        verify(sessionService, never()).touchSession(anyLong());
         verify(messageHistoryCacheService).putLatestHistory(eq(1L), eq(50), any());
     }
 

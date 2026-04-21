@@ -61,6 +61,9 @@ public interface SkillSessionRepository {
         /** 按 AK 查询所有会话 */
         List<SkillSession> findByAk(@Param("ak") String ak);
 
+        /** 按 AK 查询活跃会话（ACTIVE 或 IDLE） */
+        List<SkillSession> findActiveByAk(@Param("ak") String ak);
+
         /** 按 OpenCode 工具会话 ID 查询 */
         SkillSession findByToolSessionId(@Param("toolSessionId") String toolSessionId);
 

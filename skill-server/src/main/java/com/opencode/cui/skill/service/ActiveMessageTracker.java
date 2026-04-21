@@ -123,6 +123,13 @@ public class ActiveMessageTracker {
         return active;
     }
 
+    /**
+     * Get the current active message reference for a session (without creating one).
+     */
+    public ActiveMessageRef getActiveMessage(Long sessionId) {
+        return activeMessages.get(sessionId);
+    }
+
     // ==================== Internal Helpers ====================
 
     private void applyMessageContext(StreamMessage msg, ActiveMessageRef active, String role) {

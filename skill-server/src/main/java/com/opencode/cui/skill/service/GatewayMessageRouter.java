@@ -10,6 +10,9 @@ import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.logging.MdcHelper;
+import com.opencode.cui.skill.service.delivery.OutboundDeliveryDispatcher;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
+import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -20,6 +23,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -45,13 +49,6 @@ public class GatewayMessageRouter {
 
     /** 上下文溢出时发送给用户的提示消息 */
     private static final String CONTEXT_RESET_MESSAGE = "对话上下文已超出限制，已自动重置，请稍后重试。";
-    /** 不需要 emittedAt 时间戳的消息类型集合 */
-    private static final Set<String> EMITTED_AT_EXCLUDED_TYPES = Set.of(
-            StreamMessage.Types.PERMISSION_REPLY,
-            StreamMessage.Types.AGENT_ONLINE,
-            StreamMessage.Types.AGENT_OFFLINE,
-            StreamMessage.Types.ERROR);
-
     private final ObjectMapper objectMapper;
     private final SkillMessageService messageService;
     private final SkillSessionService sessionService;
@@ -62,6 +59,10 @@ public class GatewayMessageRouter {
     private final SessionRebuildService rebuildService;
     private final ImInteractionStateService interactionStateService;
     private final ImOutboundService imOutboundService;
+    private final OutboundDeliveryDispatcher outboundDeliveryDispatcher;
+    private final com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter;
+    private final AssistantInfoService assistantInfoService;
+    private final AssistantScopeDispatcher scopeDispatcher;
     /** 已完成会话的短期缓存，用于抑制 tool_done 后的残余事件 */
     private final Cache<String, Instant> completedSessions = Caffeine.newBuilder()
             .expireAfterWrite(Duration.ofSeconds(5))
@@ -119,6 +120,17 @@ public class GatewayMessageRouter {
     /** Owner 被判定为死亡的超时阈值（秒） */
     private final int ownerDeadThresholdSeconds;
 
+    /** 业务助手 IM 场景 text.delta 内容累积器：sessionId → StringBuilder */
+    private final java.util.concurrent.ConcurrentHashMap<String, StringBuilder> cloudImTextBuffer =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 业务助手 IM 场景需过滤的云端扩展事件类型集合 */
+    private static final Set<String> BUSINESS_IM_FILTERED_TYPES = Set.of(
+            StreamMessage.Types.PLANNING_DELTA, StreamMessage.Types.PLANNING_DONE,
+            StreamMessage.Types.THINKING_DELTA, StreamMessage.Types.THINKING_DONE,
+            StreamMessage.Types.SEARCHING, StreamMessage.Types.SEARCH_RESULT,
+            StreamMessage.Types.REFERENCE, StreamMessage.Types.ASK_MORE);
+
     public GatewayMessageRouter(ObjectMapper objectMapper,
             SkillMessageService messageService,
             SkillSessionService sessionService,
@@ -131,6 +143,10 @@ public class GatewayMessageRouter {
             ImOutboundService imOutboundService,
             SessionRouteService sessionRouteService,
             SkillInstanceRegistry skillInstanceRegistry,
+            AssistantInfoService assistantInfoService,
+            AssistantScopeDispatcher scopeDispatcher,
+            OutboundDeliveryDispatcher outboundDeliveryDispatcher,
+            com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter,
             @Value("${skill.relay.owner-dead-threshold-seconds:120}") int ownerDeadThresholdSeconds) {
         this.objectMapper = objectMapper;
         this.messageService = messageService;
@@ -142,8 +158,12 @@ public class GatewayMessageRouter {
         this.rebuildService = rebuildService;
         this.interactionStateService = interactionStateService;
         this.imOutboundService = imOutboundService;
+        this.outboundDeliveryDispatcher = outboundDeliveryDispatcher;
+        this.emitter = emitter;
         this.sessionRouteService = sessionRouteService;
         this.skillInstanceRegistry = skillInstanceRegistry;
+        this.assistantInfoService = assistantInfoService;
+        this.scopeDispatcher = scopeDispatcher;
         this.instanceId = skillInstanceRegistry.getInstanceId();
         this.ownerDeadThresholdSeconds = ownerDeadThresholdSeconds;
     }
@@ -324,13 +344,14 @@ public class GatewayMessageRouter {
      */
     private void dispatchLocally(String type, String sessionId, String ak, String userId, JsonNode node) {
         switch (type) {
-            case "tool_event" -> handleToolEvent(sessionId, userId, node);
+            case "tool_event" -> handleToolEvent(sessionId, ak, userId, node);
             case "tool_done" -> handleToolDone(sessionId, userId, node);
             case "tool_error" -> handleToolError(sessionId, userId, node);
             case "agent_online" -> handleAgentOnline(ak, userId, node);
             case "agent_offline" -> handleAgentOffline(ak, userId);
             case "session_created" -> handleSessionCreated(ak, userId, node);
             case "permission_request" -> handlePermissionRequest(sessionId, userId, node);
+            case "im_push" -> handleImPush(sessionId, node);
             default -> log.warn("[SKIP] GatewayMessageRouter.route: reason=unknown_type, type={}", type);
         }
     }
@@ -384,7 +405,7 @@ public class GatewayMessageRouter {
     }
 
     /** 处理 tool_event：翻译事件、区分用户/助手消息、检测上下文溢出。 */
-    private void handleToolEvent(String sessionId, String userId, JsonNode node) {
+    private void handleToolEvent(String sessionId, String ak, String userId, JsonNode node) {
         if (sessionId == null) {
             log.warn("tool_event missing sessionId, agentId={}, raw keys={}",
                     node.path("agentId").asText(null), node.fieldNames());
@@ -394,8 +415,14 @@ public class GatewayMessageRouter {
         log.info("handleToolEvent: sessionId={}", sessionId);
         activateIdleSession(sessionId, userId);
         SkillSession session = resolveSession(sessionId);
-        StreamMessage msg = translateEvent(node, sessionId);
+
+        // 根据助手类型（scope）选择事件翻译策略
+        String resolvedAk = ak != null ? ak : node.path("ak").asText(node.path("agentId").asText(null));
+        String scope = assistantInfoService.getCachedScope(resolvedAk);
+        AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(scope);
+        StreamMessage msg = strategy.translateEvent(node.get("event"), sessionId);
         if (msg == null) {
+            log.debug("Event ignored by strategy translator for session {}, scope={}", sessionId, scope);
             return;
         }
 
@@ -437,7 +464,7 @@ public class GatewayMessageRouter {
             return;
         }
         if (sessionService.activateSession(numericId)) {
-            broadcastStreamMessage(sessionId, userId, StreamMessage.sessionStatus("busy"));
+            emitter.emitToClient(sessionId, userId, StreamMessage.sessionStatus("busy"));
         }
     }
 
@@ -478,7 +505,7 @@ public class GatewayMessageRouter {
         routeAssistantMessage(sessionId, userId, msg, session, numericId);
     }
 
-    /** 路由助手消息：MiniApp 走广播+缓冲，IM 走出站转发。 */
+    /** 路由助手消息：通过 OutboundDeliveryDispatcher 统一投递。 */
     private void routeAssistantMessage(String sessionId, String userId, StreamMessage msg,
             SkillSession session, Long numericId) {
         // 同步会话标题（标题变化时更新）
@@ -486,14 +513,39 @@ public class GatewayMessageRouter {
             sessionService.updateTitle(numericId, msg.getTitle());
         }
 
-        if (session != null && !isMiniappSession(session)) {
-            handleImAssistantMessage(session, msg, numericId);
-            return;
+        // 业务助手 IM 场景：过滤云端扩展事件
+        if (session != null && !session.isMiniappDomain()) {
+            String sessionAk = session.getAk();
+            if (sessionAk != null) {
+                String sessionScope = assistantInfoService.getCachedScope(sessionAk);
+                if ("business".equals(sessionScope) && BUSINESS_IM_FILTERED_TYPES.contains(msg.getType())) {
+                    log.debug("Filtering business IM extended event: sessionId={}, type={}", session.getId(), msg.getType());
+                    return;
+                }
+            }
+            syncPendingImInteraction(session, msg);
         }
 
-        broadcastStreamMessage(sessionId, userId, msg);
-        bufferService.accumulate(sessionId, msg);
-        if (numericId != null) {
+        // IM 非流式渠道：累积 text.delta，兼容上游不发 text.done 的场景（业务/个人助手通用）
+        if (session != null && session.isImDomain()) {
+            if (StreamMessage.Types.TEXT_DELTA.equals(msg.getType()) && msg.getContent() != null) {
+                cloudImTextBuffer.computeIfAbsent(sessionId, k -> new StringBuilder())
+                        .append(msg.getContent());
+            } else if (StreamMessage.Types.TEXT_DONE.equals(msg.getType())) {
+                cloudImTextBuffer.remove(sessionId);
+            }
+        }
+
+        // 统一投递（enrich + deliver）
+        emitter.emitToSession(session, sessionId, userId, msg);
+
+        // 缓冲（miniapp 用）
+        if (session == null || session.isMiniappDomain()) {
+            bufferService.accumulate(sessionId, msg);
+        }
+
+        // 持久化
+        if (numericId != null && (session == null || session.isMiniappDomain() || session.isImDirectSession())) {
             try {
                 persistenceService.persistIfFinal(numericId, msg);
             } catch (Exception e) {
@@ -502,28 +554,7 @@ public class GatewayMessageRouter {
         }
     }
 
-    /** 处理 IM 渠道的助手消息（同步交互状态 + 出站转发 + 持久化）。 */
-    private void handleImAssistantMessage(SkillSession session, StreamMessage msg, Long numericId) {
-        syncPendingImInteraction(session, msg);
-        String outboundText = buildImText(msg);
-        if (outboundText != null && !outboundText.isBlank()) {
-            imOutboundService.sendTextToIm(
-                    session.getBusinessSessionType(),
-                    session.getBusinessSessionId(),
-                    outboundText,
-                    session.getAssistantAccount());
-        }
-
-        if (session.isImDirectSession() && numericId != null) {
-            try {
-                persistenceService.persistIfFinal(numericId, msg);
-            } catch (Exception e) {
-                log.error("Failed to persist IM direct message for session {}: {}", session.getId(), e.getMessage());
-            }
-        }
-    }
-
-    /** 处理 tool_done：标记会话完成、广播 idle 状态、持久化最终消息。 */
+    /** 处理 tool_done：标记会话完成、统一投递 idle 状态、持久化最终消息。 */
     private void handleToolDone(String sessionId, String userId, JsonNode node) {
         if (sessionId == null) {
             log.warn("tool_done missing sessionId, agentId={}", node.path("agentId").asText(null));
@@ -533,12 +564,26 @@ public class GatewayMessageRouter {
         log.info("handleToolDone: sessionId={}", sessionId);
         completedSessions.put(sessionId, Instant.now());
 
-        StreamMessage msg = StreamMessage.sessionStatus("idle");
+        // 刷出累积的 text.delta 内容（上游未发 text.done 时，用累积内容合成 text.done）
+        StringBuilder accumulated = cloudImTextBuffer.remove(sessionId);
         SkillSession session = resolveSession(sessionId);
+        if (accumulated != null && !accumulated.isEmpty() && session != null && session.isImDomain()) {
+            StreamMessage textDoneMsg = StreamMessage.builder()
+                    .type(StreamMessage.Types.TEXT_DONE)
+                    .content(accumulated.toString())
+                    .role("assistant")
+                    .build();
+            emitter.emitToSession(session, sessionId, userId, textDoneMsg);
+            log.info("Flushed accumulated text.delta as text.done to IM: sessionId={}, length={}",
+                    sessionId, accumulated.length());
+        }
+
+        StreamMessage msg = StreamMessage.sessionStatus("idle");
         Long numericId = ProtocolUtils.parseSessionId(sessionId);
 
-        if (isMiniappSession(session)) {
-            broadcastStreamMessage(sessionId, userId, msg);
+        emitter.emitToSession(session, sessionId, userId, msg);
+
+        if (session == null || session.isMiniappDomain()) {
             bufferService.accumulate(sessionId, msg);
         }
 
@@ -554,7 +599,7 @@ public class GatewayMessageRouter {
         rebuildService.clearPendingMessages(sessionId);
     }
 
-    /** 处理 tool_error：会话重建/错误广播/IM 转发/持久化。 */
+    /** 处理 tool_error：会话重建/统一投递错误消息/持久化。 */
     private void handleToolError(String sessionId, String userId, JsonNode node) {
         String error = node.path("error").asText("Unknown error");
         String reason = node.path("reason").asText("");
@@ -574,32 +619,19 @@ public class GatewayMessageRouter {
         SkillSession session = resolveSession(sessionId);
         Long numericId = ProtocolUtils.parseSessionId(sessionId);
 
-        if (isMiniappSession(session)) {
-            if (numericId != null) {
-                try {
-                    messageService.saveSystemMessage(numericId, "Error: " + error);
-                } catch (Exception e) {
-                    log.error("Failed to persist tool_error for session {}: {}", sessionId, e.getMessage());
-                }
-            }
-            broadcastStreamMessage(sessionId, userId, StreamMessage.builder()
-                    .type(StreamMessage.Types.ERROR)
-                    .error(error)
-                    .build());
-        } else if (session != null) {
-            imOutboundService.sendTextToIm(
-                    session.getBusinessSessionType(),
-                    session.getBusinessSessionId(),
-                    "Error: " + error,
-                    session.getAssistantAccount());
-            if (session.isImDirectSession() && numericId != null) {
-                try {
-                    messageService.saveSystemMessage(numericId, "Error: " + error);
-                } catch (Exception e) {
-                    log.error("Failed to persist IM tool_error for session {}: {}", sessionId, e.getMessage());
-                }
+        if (numericId != null) {
+            try {
+                messageService.saveSystemMessage(numericId, "Error: " + error);
+            } catch (Exception e) {
+                log.error("Failed to persist tool_error for session {}: {}", sessionId, e.getMessage());
             }
         }
+
+        StreamMessage errorMsg = StreamMessage.builder()
+                .type(StreamMessage.Types.ERROR)
+                .error(error)
+                .build();
+        emitter.emitToSession(session, sessionId, userId, errorMsg);
 
         if (numericId != null) {
             try {
@@ -608,7 +640,6 @@ public class GatewayMessageRouter {
                 log.warn("Cannot finalize active message after tool_error: sessionId={}", sessionId);
             }
         }
-
         log.error("Tool error for session {}: {}", sessionId, error);
     }
 
@@ -626,14 +657,16 @@ public class GatewayMessageRouter {
         // Ownership takeover is now message-driven (lazy) — no eager takeoverActiveRoutes needed.
 
         StreamMessage msg = StreamMessage.agentOnline();
-        sessionService.findByAk(ak).forEach(session -> broadcastStreamMessage(
+        List<SkillSession> activeSessions = sessionService.findActiveByAk(ak);
+        log.info("handleAgentOnline: ak={}, activeSessions={}", ak, activeSessions.size());
+        activeSessions.forEach(session -> emitter.emitToClient(
                 session.getId().toString(),
                 userId != null && !userId.isBlank() ? userId : session.getUserId(),
                 msg));
         log.info("[EXIT] handleAgentOnline: ak={}", ak);
     }
 
-    /** 处理 agent_offline：向 AK 关联的所有会话广播离线状态。 */
+    /** 处理 agent_offline：向 AK 关联的活跃会话广播离线状态。 */
     private void handleAgentOffline(String ak, String userId) {
         log.warn("Agent offline: ak={}", ak);
 
@@ -641,7 +674,7 @@ public class GatewayMessageRouter {
             return;
         }
         StreamMessage msg = StreamMessage.agentOffline();
-        sessionService.findByAk(ak).forEach(session -> broadcastStreamMessage(
+        sessionService.findActiveByAk(ak).forEach(session -> emitter.emitToClient(
                 session.getId().toString(),
                 userId != null && !userId.isBlank() ? userId : session.getUserId(),
                 msg));
@@ -713,10 +746,10 @@ public class GatewayMessageRouter {
         }
 
         log.info("[EXIT] retryPendingMessages: sessionId={}, ak={}, sent={}/{}", sessionId, ak, sent, pendingMessages.size());
-        broadcastStreamMessage(sessionId, userId, StreamMessage.sessionStatus("busy"));
+        emitter.emitToClient(sessionId, userId, StreamMessage.sessionStatus("busy"));
     }
 
-    /** 处理 permission_request：MiniApp 广播到前端，IM 转发提示文本。 */
+    /** 处理 permission_request：统一投递权限请求消息。 */
     private void handlePermissionRequest(String sessionId, String userId, JsonNode node) {
         if (sessionId == null) {
             log.warn("permission_request missing sessionId");
@@ -734,57 +767,107 @@ public class GatewayMessageRouter {
         }
 
         SkillSession session = resolveSession(sessionId);
-        if (session != null && !isMiniappSession(session)) {
-            if (session.getId() != null && msg.getPermission() != null) {
-                interactionStateService.markPermission(
-                        session.getId(),
-                        msg.getPermission().getPermissionId());
+        if (session != null && !session.isMiniappDomain() && session.getId() != null
+                && msg.getPermission() != null) {
+            interactionStateService.markPermission(
+                    session.getId(),
+                    msg.getPermission().getPermissionId());
+        }
+
+        emitter.emitToSession(session, sessionId, userId, msg);
+    }
+
+    /**
+     * 处理云端 IM 推送消息（im_push）。
+     *
+     * <p>从 payload 中解析 assistantAccount、userAccount、imGroupId、content，
+     * 通过 topicId（即 toolSessionId）查找 session，验证 assistantAccount 匹配后，
+     * 根据 imGroupId 是否有值判断群聊或单聊，调用 IM 出站服务发送消息。</p>
+     *
+     * @param sessionId 由 topicId 反查得到的 welinkSessionId
+     * @param node      原始 GatewayMessage JSON 节点（含 toolSessionId 和 payload）
+     */
+    private void handleImPush(String sessionId, JsonNode node) {
+        log.info("[ENTRY] handleImPush: sessionId={}", sessionId);
+
+        // 幂等保护：GW 广播时多个 pod 可能同时收到同一条 im_push，用 traceId 去重
+        String traceId = node.path("traceId").asText(null);
+        if (traceId != null) {
+            String dedupKey = "ss:im-push-dedup:" + traceId;
+            Boolean acquired = redisMessageBroker.tryAcquire(dedupKey, java.time.Duration.ofSeconds(30));
+            if (!Boolean.TRUE.equals(acquired)) {
+                log.info("[SKIP] handleImPush: deduplicated by traceId={}", traceId);
+                return;
             }
-            String text = formatPermissionPrompt(msg);
-            if (text != null && !text.isBlank()) {
-                imOutboundService.sendTextToIm(
-                        session.getBusinessSessionType(),
-                        session.getBusinessSessionId(),
-                        text,
-                        session.getAssistantAccount());
-            }
+        }
+
+        // 从顶层节点获取 topicId（即 toolSessionId）
+        String topicId = node.path("toolSessionId").asText(null);
+
+        // 从 payload 中解析请求字段
+        JsonNode payload = node.path("payload");
+        String assistantAccount = payload.path("assistantAccount").asText(null);
+        String userAccount = payload.path("userAccount").asText(null);
+        String imGroupId = payload.path("imGroupId").asText(null);
+        String content = payload.path("content").asText(null);
+
+        if (content == null || content.isBlank()) {
+            log.warn("[SKIP] handleImPush: reason=blank_content, topicId={}", topicId);
             return;
         }
 
-        broadcastStreamMessage(sessionId, userId, msg);
+        if (assistantAccount == null || assistantAccount.isBlank()) {
+            log.warn("[SKIP] handleImPush: reason=blank_assistantAccount, topicId={}", topicId);
+            return;
+        }
+
+        // 通过 sessionId 查 session，验证 assistantAccount 是否匹配
+        if (sessionId == null) {
+            log.warn("[SKIP] handleImPush: reason=session_not_found, topicId={}", topicId);
+            return;
+        }
+        Long numericId = ProtocolUtils.parseSessionId(sessionId);
+        if (numericId != null) {
+            SkillSession session = sessionService.findByIdSafe(numericId);
+            if (session != null && session.getAssistantAccount() != null
+                    && !session.getAssistantAccount().equals(assistantAccount)) {
+                log.warn("[SKIP] handleImPush: reason=assistant_account_mismatch, sessionId={}, expected={}, actual={}",
+                        sessionId, session.getAssistantAccount(), assistantAccount);
+                return;
+            }
+        }
+
+        // 根据 imGroupId 决定单聊 / 群聊
+        boolean isGroup = imGroupId != null && !imGroupId.isBlank();
+        String sessionType = isGroup ? SkillSession.SESSION_TYPE_GROUP : SkillSession.SESSION_TYPE_DIRECT;
+        String imSessionId = isGroup ? imGroupId : userAccount;
+
+        if (imSessionId == null || imSessionId.isBlank()) {
+            log.warn("[SKIP] handleImPush: reason=blank_im_session_id, topicId={}, isGroup={}", topicId, isGroup);
+            return;
+        }
+
+        boolean sent = imOutboundService.sendTextToIm(sessionType, imSessionId, content, assistantAccount);
+        log.info("[EXIT] handleImPush: topicId={}, sessionType={}, imSessionId={}, sent={}",
+                topicId, sessionType, imSessionId, sent);
     }
 
     /**
      * 广播 StreamMessage 到前端。
-     * 自动填充 sessionId、emittedAt、消息上下文后通过 Redis 发布。
+     * @deprecated 保留以维持外部测试兼容；内部请直接使用 {@link StreamMessageEmitter#emitToClient}。
      */
+    @Deprecated
     public void broadcastStreamMessage(String sessionId, String userIdHint, StreamMessage msg) {
-        try {
-            enrichStreamMessage(sessionId, msg);
-            String userId = resolveUserId(sessionId, userIdHint);
-            if (userId == null || userId.isBlank()) {
-                log.warn("Failed to broadcast StreamMessage without userId: sessionId={}, type={}",
-                        sessionId, msg.getType());
-                return;
-            }
-
-            ObjectNode envelope = objectMapper.createObjectNode();
-            envelope.put("sessionId", sessionId);
-            envelope.put("userId", userId);
-            envelope.set("message", objectMapper.valueToTree(msg));
-            redisMessageBroker.publishToUser(userId, objectMapper.writeValueAsString(envelope));
-            log.info("[EXIT->FE] Broadcast StreamMessage: sessionId={}, type={}, userId={}",
-                    sessionId, msg.getType(), userId);
-        } catch (Exception e) {
-            log.error("Failed to broadcast StreamMessage to session {}: type={}, error={}",
-                    sessionId, msg.getType(), e.getMessage());
-        }
+        emitter.emitToClient(sessionId, userIdHint, msg);
     }
 
-    /** 发布协议消息（广播 + 缓冲）。 */
+    /**
+     * 发布协议消息（广播 + 缓冲）。
+     * @deprecated 保留以维持外部测试兼容；内部请直接使用 {@link StreamMessageEmitter#emitToClientWithBuffer}。
+     */
+    @Deprecated
     public void publishProtocolMessage(String sessionId, StreamMessage msg) {
-        broadcastStreamMessage(sessionId, null, msg);
-        bufferService.accumulate(sessionId, msg);
+        emitter.emitToClientWithBuffer(sessionId, msg);
     }
 
     /**
@@ -802,14 +885,28 @@ public class GatewayMessageRouter {
         String toolSessionId = node.path("toolSessionId").asText(null);
         if (toolSessionId != null) {
             try {
+                // 优先查 Redis 缓存
+                String cachedSessionId = redisMessageBroker.getToolSessionMapping(toolSessionId);
+                if (cachedSessionId != null) {
+                    RouteResponseSender sender = routeResponseSender;
+                    if (sender != null) {
+                        sender.sendRouteConfirm(toolSessionId, cachedSessionId);
+                    }
+                    return cachedSessionId;
+                }
+
+                // 缓存未命中，查 DB
                 SkillSession session = sessionService.findByToolSessionId(toolSessionId);
                 if (session != null) {
+                    String resolvedSessionId = session.getId().toString();
+                    // 写入 Redis 缓存
+                    redisMessageBroker.setToolSessionMapping(toolSessionId, resolvedSessionId);
                     // 找到归属 session → 回复 route_confirm
                     RouteResponseSender sender = routeResponseSender;
                     if (sender != null) {
-                        sender.sendRouteConfirm(toolSessionId, session.getId().toString());
+                        sender.sendRouteConfirm(toolSessionId, resolvedSessionId);
                     }
-                    return session.getId().toString();
+                    return resolvedSessionId;
                 }
                 // 未找到 → 回复 route_reject
                 log.warn("Upstream message session not found: type={}, toolSessionId={}, reason=session_not_found",
@@ -839,7 +936,7 @@ public class GatewayMessageRouter {
     /** 判断消息类型是否需要会话亲和性（需要 sessionId 才能处理）。 */
     private boolean requiresSessionAffinity(String messageType) {
         return switch (messageType) {
-            case "tool_event", "tool_done", "tool_error", "permission_request" -> true;
+            case "tool_event", "tool_done", "tool_error", "permission_request", "im_push" -> true;
             default -> false;
         };
     }
@@ -865,22 +962,6 @@ public class GatewayMessageRouter {
         }
     }
 
-    /** 填充消息的 sessionId、emittedAt 和消息上下文信息。 */
-    private void enrichStreamMessage(String sessionId, StreamMessage msg) {
-        msg.setSessionId(sessionId);
-        msg.setWelinkSessionId(sessionId);
-        if (!isEmittedAtExcluded(msg.getType())
-                && (msg.getEmittedAt() == null || msg.getEmittedAt().isBlank())) {
-            msg.setEmittedAt(Instant.now().toString());
-        }
-        if (!"user".equals(ProtocolUtils.normalizeRole(msg.getRole()))) {
-            Long numericId = ProtocolUtils.parseSessionId(sessionId);
-            if (numericId != null) {
-                persistenceService.prepareMessageContext(numericId, msg);
-            }
-        }
-    }
-
     /** 判断错误信息是否表示会话失效（需要重建）。 */
     private boolean isSessionInvalidError(String error) {
         if (error == null) {
@@ -891,11 +972,6 @@ public class GatewayMessageRouter {
                 || lower.contains("session_not_found")
                 || lower.contains("json parse error")
                 || lower.contains("unexpected eof");
-    }
-
-    /** 判断消息类型是否不需要 emittedAt 时间戳。 */
-    private boolean isEmittedAtExcluded(String type) {
-        return type != null && EMITTED_AT_EXCLUDED_TYPES.contains(type);
     }
 
     /** 根据 sessionId 字符串安全查询会话对象。 */
@@ -921,15 +997,17 @@ public class GatewayMessageRouter {
                 eventNode.path("properties").path("error").path("name").asText(""));
     }
 
-    /** 处理上下文溢出：清除交互状态、触发重建、发送重置提示。 */
+    /** 处理上下文溢出：清除交互状态、触发重建、统一投递重置提示。 */
     private void handleContextOverflow(String sessionId, String userId, SkillSession session) {
         clearPendingImInteractionState(sessionId);
         rebuildService.handleContextOverflow(sessionId, userId, rebuildCallback());
-        imOutboundService.sendTextToIm(
-                session.getBusinessSessionType(),
-                session.getBusinessSessionId(),
-                CONTEXT_RESET_MESSAGE,
-                session.getAssistantAccount());
+
+        StreamMessage resetMsg = StreamMessage.builder()
+                .type(StreamMessage.Types.ERROR)
+                .error(CONTEXT_RESET_MESSAGE)
+                .build();
+        emitter.emitToSession(session, sessionId, userId, resetMsg);
+
         if (session.isImDirectSession()) {
             Long numericId = ProtocolUtils.parseSessionId(sessionId);
             if (numericId != null) {
@@ -940,23 +1018,6 @@ public class GatewayMessageRouter {
                 }
             }
         }
-    }
-
-    /** 将 StreamMessage 转换为 IM 可发送的纯文本（仅 TEXT_DONE/ERROR/QUESTION/PERMISSION 类型）。 */
-    private String buildImText(StreamMessage msg) {
-        if (msg == null) {
-            return null;
-        }
-        return switch (msg.getType()) {
-            case StreamMessage.Types.TEXT_DONE -> msg.getContent();
-            case StreamMessage.Types.ERROR, StreamMessage.Types.SESSION_ERROR -> msg.getError();
-            case StreamMessage.Types.PERMISSION_ASK ->
-                msg.getTitle() != null && !msg.getTitle().isBlank()
-                        ? "Permission required: " + msg.getTitle()
-                        : null;
-            case StreamMessage.Types.QUESTION -> formatQuestionMessage(msg);
-            default -> null;
-        };
     }
 
     /** 同步 IM 交互状态：question 和 permission 的标记与清除。 */
@@ -998,40 +1059,6 @@ public class GatewayMessageRouter {
         }
     }
 
-    /** 格式化权限请求提示文本。 */
-    private String formatPermissionPrompt(StreamMessage msg) {
-        if (msg == null || msg.getTitle() == null || msg.getTitle().isBlank()) {
-            return null;
-        }
-        return msg.getTitle() + "\n请回复: once / always / reject";
-    }
-
-    /** 格式化提问消息为 IM 文本（含标题、问题、选项）。 */
-    private String formatQuestionMessage(StreamMessage msg) {
-        if (msg.getQuestionInfo() == null) {
-            return null;
-        }
-        String status = msg.getStatus();
-        if (status != null && !"running".equals(status) && !"pending".equals(status)) {
-            return null;
-        }
-
-        StringBuilder text = new StringBuilder();
-        if (msg.getQuestionInfo().getHeader() != null && !msg.getQuestionInfo().getHeader().isBlank()) {
-            text.append(msg.getQuestionInfo().getHeader()).append('\n');
-        }
-        if (msg.getQuestionInfo().getQuestion() != null && !msg.getQuestionInfo().getQuestion().isBlank()) {
-            text.append(msg.getQuestionInfo().getQuestion());
-        }
-        if (msg.getQuestionInfo().getOptions() != null && !msg.getQuestionInfo().getOptions().isEmpty()) {
-            if (text.length() > 0) {
-                text.append('\n');
-            }
-            text.append("选项: ").append(String.join(" / ", msg.getQuestionInfo().getOptions()));
-        }
-        return text.toString();
-    }
-
     /** 提取 JSON 节点的所有字段名（逗号分隔，用于日志）。 */
     private String fieldNames(JsonNode node) {
         StringBuilder names = new StringBuilder();
@@ -1049,7 +1076,7 @@ public class GatewayMessageRouter {
     private final SessionRebuildService.RebuildCallback rebuildCallback = new SessionRebuildService.RebuildCallback() {
         @Override
         public void broadcast(String sessionId, String userId, StreamMessage msg) {
-            broadcastStreamMessage(sessionId, userId, msg);
+            emitter.emitToClient(sessionId, userId, msg);
         }
 
         @Override

@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.model.SkillSession;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
+import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -16,6 +18,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -56,6 +59,16 @@ class GatewayRelayServiceTest {
         private GatewayRelayService.GatewayRelayTarget gatewayRelayTarget;
         @Mock
         private AssistantIdResolverService assistantIdResolverService;
+        @Mock
+        private AssistantInfoService assistantInfoService;
+        @Mock
+        private AssistantScopeDispatcher scopeDispatcher;
+        @Mock
+        private AssistantScopeStrategy scopeStrategy;
+        @Mock
+        private com.opencode.cui.skill.service.delivery.OutboundDeliveryDispatcher outboundDeliveryDispatcher;
+        @Mock
+        com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter;
 
         private GatewayMessageRouter messageRouter;
         private GatewayRelayService service;
@@ -71,6 +84,13 @@ class GatewayRelayServiceTest {
                 // Make getOwnerInstance return LOCAL_INSTANCE so route() processes locally
                 org.mockito.Mockito.lenient().when(sessionRouteService.getOwnerInstance(any())).thenReturn(LOCAL_INSTANCE);
                 org.mockito.Mockito.lenient().when(skillInstanceRegistry.getInstanceId()).thenReturn(LOCAL_INSTANCE);
+                // scopeDispatcher always returns a lenient strategy to avoid NPE in tool_event handling
+                org.mockito.Mockito.lenient().when(scopeDispatcher.getStrategy(any())).thenReturn(scopeStrategy);
+                // scopeStrategy.translateEvent 默认委派给 translator.translate（模拟 PersonalScopeStrategy 行为）
+                org.mockito.Mockito.lenient().when(scopeStrategy.translateEvent(any(), any()))
+                        .thenAnswer(invocation -> translator.translate(invocation.getArgument(0)));
+                // scopeStrategy.requiresOnlineCheck 默认返回 true（personal 策略行为）
+                org.mockito.Mockito.lenient().when(scopeStrategy.requiresOnlineCheck()).thenReturn(true);
 
                 messageRouter = new GatewayMessageRouter(
                                 new ObjectMapper(),
@@ -85,13 +105,20 @@ class GatewayRelayServiceTest {
                                 imOutboundService,
                                 sessionRouteService,
                                 skillInstanceRegistry,
+                                assistantInfoService,
+                                scopeDispatcher,
+                                outboundDeliveryDispatcher,
+                                emitter,
                                 120);
                 service = new GatewayRelayService(
                                 new ObjectMapper(),
                                 messageRouter,
                                 rebuildService,
                                 redisMessageBroker,
-                                assistantIdResolverService);
+                                assistantIdResolverService,
+                                assistantInfoService,
+                                scopeDispatcher,
+                                emitter);
                 service.setGatewayRelayTarget(gatewayRelayTarget);
         }
 
@@ -108,11 +135,10 @@ class GatewayRelayServiceTest {
 
                 service.handleGatewayMessage(msg);
 
-                ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-                verify(redisMessageBroker).publishToUser(eq("user-1"), payloadCaptor.capture());
-                JsonNode published = readPublishedMessage(payloadCaptor.getValue());
-                assertEquals("123", published.path("sessionId").asText());
-                assertEquals(123L, published.path("message").path("welinkSessionId").asLong());
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToSession(any(), eq("123"), eq("user-1"), msgCaptor.capture());
+                StreamMessage delivered = msgCaptor.getValue();
+                assertEquals(StreamMessage.Types.TEXT_DELTA, delivered.getType());
                 verify(bufferService).accumulate(eq("123"), any(StreamMessage.class));
                 verify(persistenceService).persistIfFinal(eq(123L), any(StreamMessage.class));
         }
@@ -135,9 +161,10 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(
                                 "{\"type\":\"tool_event\",\"welinkSessionId\":42,\"event\":{\"type\":\"message.part.updated\"}}");
 
-                verify(imOutboundService).sendTextToIm("direct", "dm-001", "Agent reply", "assist-001");
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToSession(any(SkillSession.class), eq("42"), any(), msgCaptor.capture());
+                assertEquals(StreamMessage.Types.TEXT_DONE, msgCaptor.getValue().getType());
                 verify(persistenceService).persistIfFinal(eq(42L), any(StreamMessage.class));
-                verify(redisMessageBroker, never()).publishToUser(any(), contains("Agent reply"));
         }
 
         @Test
@@ -158,7 +185,9 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(
                                 "{\"type\":\"tool_event\",\"welinkSessionId\":42,\"event\":{\"type\":\"message.part.updated\"}}");
 
-                verify(imOutboundService).sendTextToIm("group", "grp-001", "Group reply", "assist-001");
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToSession(any(SkillSession.class), eq("42"), any(), msgCaptor.capture());
+                assertEquals(StreamMessage.Types.TEXT_DONE, msgCaptor.getValue().getType());
                 verify(persistenceService, never()).persistIfFinal(eq(42L), any(StreamMessage.class));
         }
 
@@ -190,8 +219,9 @@ class GatewayRelayServiceTest {
                                 "{\"type\":\"tool_event\",\"welinkSessionId\":42,\"event\":{\"type\":\"question.asked\"}}");
 
                 verify(interactionStateService).markQuestion(42L, "tool-call-1");
-                verify(imOutboundService).sendTextToIm(eq("direct"), eq("dm-001"), contains("Continue?"),
-                                eq("assist-001"));
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToSession(any(SkillSession.class), eq("42"), any(), msgCaptor.capture());
+                assertEquals(StreamMessage.Types.QUESTION, msgCaptor.getValue().getType());
         }
 
         @Test
@@ -201,14 +231,17 @@ class GatewayRelayServiceTest {
 
                 service.handleGatewayMessage(msg);
 
-                verify(redisMessageBroker).publishToUser(eq("user-1"), contains("session.status"));
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToSession(any(), eq("42"), eq("user-1"), msgCaptor.capture());
+                assertEquals("session.status", msgCaptor.getValue().getType());
+                assertEquals("idle", msgCaptor.getValue().getSessionStatus());
                 verify(bufferService).accumulate(eq("42"), any(StreamMessage.class));
                 verify(persistenceService).persistIfFinal(eq(42L), any(StreamMessage.class));
         }
 
         @Test
-        @DisplayName("user text echo after tool_done is not suppressed")
-        void userTextEchoAfterToolDoneIsNotSuppressed() {
+        @DisplayName("user text echo from tool_event is silently skipped (user messages are persisted at inbound)")
+        void userTextEchoFromToolEventIsSkipped() {
                 when(translator.translate(any())).thenReturn(StreamMessage.builder()
                                 .type(StreamMessage.Types.TEXT_DONE)
                                 .role("user")
@@ -219,8 +252,10 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(
                                 "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":42,\"event\":{\"type\":\"message.part.updated\"}}");
 
-                verify(messageService).saveUserMessage(42L, "CLI user message");
-                verify(redisMessageBroker, times(2)).publishToUser(eq("user-1"), any(String.class));
+                // user 角色事件在 tool_event 中不再持久化（已由 inbound controller 保存）
+                verify(messageService, never()).saveUserMessage(any(), any());
+                // tool_done delivers idle status, but user echo tool_event should NOT deliver
+                verify(emitter, times(1)).emitToSession(any(), any(), any(), any());
         }
 
         @Test
@@ -236,11 +271,13 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(
                                 "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":123,\"event\":{\"data\":\"hello\"}}");
 
-                ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-                verify(redisMessageBroker, org.mockito.Mockito.atLeast(2)).publishToUser(eq("user-1"),
-                                payloadCaptor.capture());
-                assertTrue(payloadCaptor.getAllValues().stream()
-                                .anyMatch(payload -> payload.contains("\"sessionStatus\":\"busy\"")));
+                // busy status broadcast via emitter.emitToClient (broadcastStreamMessage now delegates to emitter)
+                ArgumentCaptor<StreamMessage> busyCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToClient(eq("123"), eq("user-1"), busyCaptor.capture());
+                assertEquals("session.status", busyCaptor.getValue().getType());
+                assertEquals("busy", busyCaptor.getValue().getSessionStatus());
+                // text.delta delivered via dispatcher
+                verify(emitter).emitToSession(any(), eq("123"), eq("user-1"), any(StreamMessage.class));
         }
 
         @Test
@@ -260,7 +297,10 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(msg);
 
                 verify(messageService).saveSystemMessage(eq(42L), contains("timeout"));
-                verify(redisMessageBroker).publishToUser(eq("user-42"), contains("error"));
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToSession(any(), eq("42"), eq("user-42"), msgCaptor.capture());
+                assertEquals(StreamMessage.Types.ERROR, msgCaptor.getValue().getType());
+                assertTrue(msgCaptor.getValue().getError().contains("timeout"));
         }
 
         @Test
@@ -269,12 +309,13 @@ class GatewayRelayServiceTest {
                 SkillSession session = new SkillSession();
                 session.setId(1L);
                 session.setUserId("user-1");
-                when(sessionService.findByAk("99")).thenReturn(java.util.List.of(session));
+                when(sessionService.findActiveByAk("99")).thenReturn(java.util.List.of(session));
 
                 String msg = "{\"type\":\"agent_online\",\"ak\":\"99\",\"toolType\":\"channel\",\"toolVersion\":\"1.0\"}";
                 service.handleGatewayMessage(msg);
 
-                verify(redisMessageBroker).publishToUser(eq("user-1"), contains("agent.online"));
+                verify(emitter).emitToClient(eq("1"), eq("user-1"), argThat(m ->
+                        StreamMessage.Types.AGENT_ONLINE.equals(m.getType())));
         }
 
         @Test
@@ -283,12 +324,13 @@ class GatewayRelayServiceTest {
                 SkillSession session = new SkillSession();
                 session.setId(2L);
                 session.setUserId("user-2");
-                when(sessionService.findByAk("99")).thenReturn(java.util.List.of(session));
+                when(sessionService.findActiveByAk("99")).thenReturn(java.util.List.of(session));
 
                 String msg = "{\"type\":\"agent_offline\",\"ak\":\"99\"}";
                 service.handleGatewayMessage(msg);
 
-                verify(redisMessageBroker).publishToUser(eq("user-2"), contains("agent.offline"));
+                verify(emitter).emitToClient(eq("2"), eq("user-2"), argThat(m ->
+                        StreamMessage.Types.AGENT_OFFLINE.equals(m.getType())));
         }
 
         @Test
@@ -312,11 +354,9 @@ class GatewayRelayServiceTest {
                 String msg = "{\"type\":\"permission_request\",\"userId\":\"user-42\",\"welinkSessionId\":42,\"permissionId\":\"p-1\",\"command\":\"rm -rf /\",\"workingDirectory\":\"/tmp\"}";
                 service.handleGatewayMessage(msg);
 
-                ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-                verify(redisMessageBroker).publishToUser(eq("user-42"), payloadCaptor.capture());
-                JsonNode published = readPublishedMessage(payloadCaptor.getValue());
-                assertEquals("permission.ask", published.path("message").path("type").asText());
-                assertEquals(42L, published.path("message").path("welinkSessionId").asLong());
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToSession(any(), eq("42"), eq("user-42"), msgCaptor.capture());
+                assertEquals("permission.ask", msgCaptor.getValue().getType());
         }
 
         @Test
@@ -339,12 +379,9 @@ class GatewayRelayServiceTest {
                                 "{\"type\":\"permission_request\",\"welinkSessionId\":42,\"permissionId\":\"perm-1\"}");
 
                 verify(interactionStateService).markPermission(42L, "perm-1");
-                verify(imOutboundService).sendTextToIm(
-                                eq("group"),
-                                eq("grp-001"),
-                                contains("once / always / reject"),
-                                eq("assist-001"));
-                verify(redisMessageBroker, never()).publishToUser(any(), any());
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToSession(any(SkillSession.class), eq("42"), any(), msgCaptor.capture());
+                assertEquals(StreamMessage.Types.PERMISSION_ASK, msgCaptor.getValue().getType());
         }
 
         @Test
@@ -354,7 +391,6 @@ class GatewayRelayServiceTest {
                 session.setId(42L);
                 session.setUserId("user-42");
                 when(sessionService.findByToolSessionId("ts-abc")).thenReturn(session);
-                when(sessionService.getSession(42L)).thenReturn(session);
                 when(translator.translate(any())).thenReturn(StreamMessage.builder()
                                 .type(StreamMessage.Types.TEXT_DELTA)
                                 .partId("part-1")
@@ -366,11 +402,9 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(msg);
 
                 verify(sessionService).findByToolSessionId("ts-abc");
-                ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-                verify(redisMessageBroker).publishToUser(eq("user-42"), payloadCaptor.capture());
-                JsonNode published = readPublishedMessage(payloadCaptor.getValue());
-                assertEquals("42", published.path("sessionId").asText());
-                assertEquals(42L, published.path("message").path("welinkSessionId").asLong());
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToSession(any(), eq("42"), any(), msgCaptor.capture());
+                assertEquals(StreamMessage.Types.TEXT_DELTA, msgCaptor.getValue().getType());
         }
 
         @Test
@@ -437,10 +471,6 @@ class GatewayRelayServiceTest {
         @Test
         @DisplayName("tool_event resolves userId from session when message omits it")
         void toolEventResolvesUserIdFromSession() {
-                SkillSession session = new SkillSession();
-                session.setId(123L);
-                session.setUserId("user-123");
-                when(sessionService.getSession(123L)).thenReturn(session);
                 when(translator.translate(any())).thenReturn(StreamMessage.builder()
                                 .type(StreamMessage.Types.TEXT_DELTA)
                                 .partId("part-1")
@@ -450,7 +480,10 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(
                                 "{\"type\":\"tool_event\",\"welinkSessionId\":123,\"event\":{\"data\":\"hello\"}}");
 
-                verify(redisMessageBroker).publishToUser(eq("user-123"), contains("text.delta"));
+                // userId is null in JSON, so it's passed as null to deliver
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToSession(any(), eq("123"), any(), msgCaptor.capture());
+                assertEquals(StreamMessage.Types.TEXT_DELTA, msgCaptor.getValue().getType());
         }
 
         @Test
@@ -460,16 +493,13 @@ class GatewayRelayServiceTest {
                 session.setId(42L);
                 session.setUserId("user-42");
                 when(sessionService.findByToolSessionId("ts-abc")).thenReturn(session);
-                when(sessionService.getSession(42L)).thenReturn(session);
 
                 service.handleGatewayMessage("{\"type\":\"tool_done\",\"toolSessionId\":\"ts-abc\"}");
 
-                ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-                verify(redisMessageBroker).publishToUser(eq("user-42"), payloadCaptor.capture());
-                JsonNode published = readPublishedMessage(payloadCaptor.getValue());
-                assertEquals("42", published.path("sessionId").asText());
-                assertEquals(42L, published.path("message").path("welinkSessionId").asLong());
-                assertEquals("idle", published.path("message").path("sessionStatus").asText());
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToSession(any(), eq("42"), any(), msgCaptor.capture());
+                assertEquals("session.status", msgCaptor.getValue().getType());
+                assertEquals("idle", msgCaptor.getValue().getSessionStatus());
         }
 
         @Test
@@ -492,7 +522,6 @@ class GatewayRelayServiceTest {
                 session.setId(42L);
                 session.setUserId("user-a");
                 when(sessionService.findByToolSessionId("ts-a")).thenReturn(session);
-                when(sessionService.getSession(42L)).thenReturn(session);
                 when(translator.translate(any())).thenReturn(StreamMessage.builder()
                                 .type(StreamMessage.Types.TEXT_DELTA)
                                 .sessionId("999")
@@ -503,11 +532,9 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(
                                 "{\"type\":\"tool_event\",\"toolSessionId\":\"ts-a\",\"event\":{\"data\":\"hello\"}}");
 
-                ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-                verify(redisMessageBroker).publishToUser(eq("user-a"), payloadCaptor.capture());
-                JsonNode published = readPublishedMessage(payloadCaptor.getValue());
-                assertEquals("42", published.path("sessionId").asText());
-                assertEquals(42L, published.path("message").path("welinkSessionId").asLong());
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToSession(any(), eq("42"), any(), msgCaptor.capture());
+                assertEquals(StreamMessage.Types.TEXT_DELTA, msgCaptor.getValue().getType());
         }
 
         @Test
@@ -517,21 +544,21 @@ class GatewayRelayServiceTest {
                                 .type(StreamMessage.Types.TEXT_DELTA)
                                 .content("stale")
                                 .build());
-                // Step 1: tool_done arrives → broadcasts idle
+                // Step 1: tool_done arrives → delivers idle via dispatcher
                 service.handleGatewayMessage("{\"type\":\"tool_done\",\"userId\":\"user-1\",\"welinkSessionId\":42}");
-                verify(redisMessageBroker).publishToUser(eq("user-1"), contains("session.status"));
+                verify(emitter).emitToSession(any(), eq("42"), eq("user-1"), any(StreamMessage.class));
 
                 // Step 2: stale tool_event arrives after tool_done → should be suppressed
                 service.handleGatewayMessage(
                                 "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":42,\"event\":{\"data\":\"stale\"}}");
 
                 // Translator may still be called so the router can inspect role/type, but the
-                // stale assistant event must not be broadcast.
+                // stale assistant event must not be delivered again.
                 verify(translator).translate(any());
 
-                // Redis should only have been called once (for tool_done idle), NOT for the
+                // Dispatcher should only have been called once (for tool_done idle), NOT for the
                 // stale tool_event
-                verify(redisMessageBroker, org.mockito.Mockito.times(1)).publishToUser(any(), any());
+                verify(emitter, times(1)).emitToSession(any(), any(), any(), any());
         }
 
         @Test
@@ -557,15 +584,11 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(
                                 "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":42,\"event\":{\"data\":\"new\"}}");
 
-                // Redis should have been called 3 times: idle (tool_done) + busy (activate) +
-                // text.delta
-                // Note: activateSession defaults to false in mock, so no "busy" broadcast from
-                // activation
-                // But text.delta event should be broadcast
-                ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-                verify(redisMessageBroker, org.mockito.Mockito.atLeast(2)).publishToUser(eq("user-1"),
-                                payloadCaptor.capture());
-                assertTrue(payloadCaptor.getAllValues().stream().anyMatch(p -> p.contains("text.delta")));
+                // Dispatcher called at least 2 times: idle (tool_done) + text.delta (new event)
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter, org.mockito.Mockito.atLeast(2)).emitToSession(any(), any(), any(),
+                                msgCaptor.capture());
+                assertTrue(msgCaptor.getAllValues().stream().anyMatch(m -> StreamMessage.Types.TEXT_DELTA.equals(m.getType())));
         }
 
         @Test
@@ -583,10 +606,11 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(
                                 "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":42,\"event\":{\"type\":\"permission.updated\"}}");
 
-                ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-                verify(redisMessageBroker, org.mockito.Mockito.atLeast(2)).publishToUser(eq("user-1"),
-                                payloadCaptor.capture());
-                assertTrue(payloadCaptor.getAllValues().stream().anyMatch(p -> p.contains("permission.reply")));
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter, org.mockito.Mockito.atLeast(2)).emitToSession(any(), any(), any(),
+                                msgCaptor.capture());
+                assertTrue(msgCaptor.getAllValues().stream()
+                                .anyMatch(m -> StreamMessage.Types.PERMISSION_REPLY.equals(m.getType())));
         }
 
         @Test
@@ -617,11 +641,11 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(
                                 "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":42,\"event\":{\"type\":\"message.part.updated\"}}");
 
-                ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-                verify(redisMessageBroker).publishToUser(eq("user-1"), payloadCaptor.capture());
-                JsonNode published = readPublishedMessage(payloadCaptor.getValue());
-                assertEquals("permission.reply", published.path("message").path("type").asText());
-                assertEquals("reject", published.path("message").path("response").asText());
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToSession(any(), eq("42"), eq("user-1"), msgCaptor.capture());
+                StreamMessage delivered = msgCaptor.getValue();
+                assertEquals(StreamMessage.Types.PERMISSION_REPLY, delivered.getType());
+                assertEquals("reject", delivered.getPermission().getResponse());
                 verify(persistenceService).persistIfFinal(eq(42L), any(StreamMessage.class));
         }
 
@@ -653,10 +677,12 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(
                                 "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":42,\"event\":{\"type\":\"message.part.updated\"}}");
 
-                ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-                verify(redisMessageBroker, times(2)).publishToUser(eq("user-1"), payloadCaptor.capture());
-                assertTrue(payloadCaptor.getAllValues().stream().anyMatch(p -> p.contains("permission.reply")));
-                assertTrue(payloadCaptor.getAllValues().stream().anyMatch(p -> p.contains("tool.update")));
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter, times(2)).emitToSession(any(), eq("42"), eq("user-1"), msgCaptor.capture());
+                assertTrue(msgCaptor.getAllValues().stream()
+                                .anyMatch(m -> StreamMessage.Types.PERMISSION_REPLY.equals(m.getType())));
+                assertTrue(msgCaptor.getAllValues().stream()
+                                .anyMatch(m -> StreamMessage.Types.TOOL_UPDATE.equals(m.getType())));
         }
 
         @Test
@@ -677,10 +703,9 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(
                                 "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":42,\"event\":{\"type\":\"message.part.updated\"}}");
 
-                ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-                verify(redisMessageBroker).publishToUser(eq("user-1"), payloadCaptor.capture());
-                JsonNode published = readPublishedMessage(payloadCaptor.getValue());
-                assertEquals("tool.update", published.path("message").path("type").asText());
+                ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToSession(any(), eq("42"), eq("user-1"), msgCaptor.capture());
+                assertEquals(StreamMessage.Types.TOOL_UPDATE, msgCaptor.getValue().getType());
         }
 
         @Test

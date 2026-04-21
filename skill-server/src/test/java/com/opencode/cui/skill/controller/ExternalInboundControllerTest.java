@@ -1,0 +1,118 @@
+package com.opencode.cui.skill.controller;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.model.ExternalInvokeRequest;
+import com.opencode.cui.skill.service.InboundProcessingService;
+import com.opencode.cui.skill.service.InboundProcessingService.InboundResult;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class ExternalInboundControllerTest {
+
+    @Mock private InboundProcessingService processingService;
+    private ObjectMapper objectMapper;
+    private ExternalInboundController controller;
+
+    @BeforeEach
+    void setUp() {
+        objectMapper = new ObjectMapper();
+        controller = new ExternalInboundController(processingService, objectMapper);
+    }
+
+    private ExternalInvokeRequest buildRequest(String action, String payload) throws Exception {
+        String json = "{\"action\":\"" + action + "\","
+                + "\"businessDomain\":\"im\",\"sessionType\":\"direct\","
+                + "\"sessionId\":\"dm-001\",\"assistantAccount\":\"assist-01\","
+                + "\"payload\":" + payload + "}";
+        return objectMapper.readValue(json, ExternalInvokeRequest.class);
+    }
+
+    @Test
+    @DisplayName("chat action dispatches to processChat")
+    void chatAction() throws Exception {
+        when(processingService.processChat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(InboundResult.ok());
+        var request = buildRequest("chat", "{\"content\":\"hello\",\"msgType\":\"text\"}");
+        var response = controller.invoke(request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(0, response.getBody().getCode());
+        verify(processingService).processChat(
+                eq("im"), eq("direct"), eq("dm-001"), eq("assist-01"),
+                isNull(), eq("hello"), eq("text"), isNull(), isNull(), eq("EXTERNAL"));
+    }
+
+    @Test
+    @DisplayName("missing action returns 400")
+    void missingAction() {
+        ExternalInvokeRequest request = new ExternalInvokeRequest();
+        request.setBusinessDomain("im");
+        request.setSessionType("direct");
+        request.setSessionId("dm-001");
+        request.setAssistantAccount("assist-01");
+        var response = controller.invoke(request);
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("chat without content returns 400")
+    void chatWithoutContent() throws Exception {
+        var request = buildRequest("chat", "{\"msgType\":\"text\"}");
+        var response = controller.invoke(request);
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("question_reply dispatches correctly")
+    void questionReplyAction() throws Exception {
+        when(processingService.processQuestionReply(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(InboundResult.ok());
+        var request = buildRequest("question_reply", "{\"content\":\"A\",\"toolCallId\":\"tc-1\"}");
+        var response = controller.invoke(request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        verify(processingService).processQuestionReply(
+                eq("im"), eq("direct"), eq("dm-001"), eq("assist-01"),
+                eq("A"), eq("tc-1"), isNull(), eq("EXTERNAL"));
+    }
+
+    @Test
+    @DisplayName("permission_reply dispatches correctly")
+    void permissionReplyAction() throws Exception {
+        when(processingService.processPermissionReply(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(InboundResult.ok());
+        var request = buildRequest("permission_reply", "{\"permissionId\":\"perm-1\",\"response\":\"once\"}");
+        var response = controller.invoke(request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        verify(processingService).processPermissionReply(
+                eq("im"), eq("direct"), eq("dm-001"), eq("assist-01"),
+                eq("perm-1"), eq("once"), isNull(), eq("EXTERNAL"));
+    }
+
+    @Test
+    @DisplayName("rebuild dispatches correctly")
+    void rebuildAction() throws Exception {
+        when(processingService.processRebuild(any(), any(), any(), any()))
+                .thenReturn(InboundResult.ok());
+        var request = buildRequest("rebuild", "{}");
+        var response = controller.invoke(request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        verify(processingService).processRebuild("im", "direct", "dm-001", "assist-01");
+    }
+
+    @Test
+    @DisplayName("invalid permission response returns 400")
+    void invalidPermissionResponse() throws Exception {
+        var request = buildRequest("permission_reply", "{\"permissionId\":\"perm-1\",\"response\":\"invalid\"}");
+        var response = controller.invoke(request);
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+}

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.gateway.logging.MdcHelper;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.model.RelayMessage;
+import com.opencode.cui.gateway.ws.AsyncSessionSender;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -30,6 +31,7 @@ public class EventRelayService {
 
     /** 已连接 Agent 的 WebSocket 会话映射：ak → session */
     private final Map<String, WebSocketSession> agentSessions = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AsyncSessionSender> sessionSenders = new ConcurrentHashMap<>();
     private final Map<String, Boolean> opencodeStatusCache = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<Boolean>> pendingStatusQueries = new ConcurrentHashMap<>();
 
@@ -151,15 +153,13 @@ public class EventRelayService {
         WebSocketSession session = skillRelayService.findLocalSourceConnection(
                 targetSourceType, targetSourceInstanceId);
         if (session != null) {
-            try {
-                synchronized (session) {
-                    session.sendMessage(new TextMessage(payload));
-                }
+            boolean enqueued = getOrCreateSender(session).enqueue(new TextMessage(payload));
+            if (!enqueued) {
+                log.warn("[EXIT->SOURCE] Failed to enqueue to-source relay: sourceType={}, sourceInstanceId={}",
+                        targetSourceType, targetSourceInstanceId);
+            } else {
                 log.info("[EXIT->SOURCE] Delivered to-source relay: sourceType={}, sourceInstanceId={}",
                         targetSourceType, targetSourceInstanceId);
-            } catch (IOException e) {
-                log.error("[ERROR] Failed to deliver to-source relay: sourceType={}, sourceInstanceId={}",
-                        targetSourceType, targetSourceInstanceId, e);
             }
         } else {
             log.debug("No local connection for source {}/{}, discarding relay",
@@ -185,11 +185,14 @@ public class EventRelayService {
 
     public void removeAgentSession(String ak) {
         WebSocketSession session = agentSessions.remove(ak);
-        if (session != null && session.isOpen()) {
-            try {
-                session.close();
-            } catch (IOException e) {
-                log.warn("Error closing session during removal for ak={}", ak, e);
+        if (session != null) {
+            removeSessionSender(session.getId());
+            if (session.isOpen()) {
+                try {
+                    session.close();
+                } catch (IOException e) {
+                    log.warn("Error closing session during removal for ak={}", ak, e);
+                }
             }
         }
 
@@ -269,14 +272,17 @@ public class EventRelayService {
 
         try {
             String json = objectMapper.writeValueAsString(message);
-            synchronized (session) {
-                session.sendMessage(new TextMessage(json));
+            boolean enqueued = getOrCreateSender(session).enqueue(new TextMessage(json));
+            if (!enqueued) {
+                log.warn("[EXIT->AGENT] Failed to enqueue message for local agent (V2 direct): ak={}, type={}",
+                        ak, message.getType());
+                return false;
             }
             log.info("[EXIT->AGENT] Sent to local agent (V2 direct): ak={}, type={}",
                     ak, message.getType());
             return true;
         } catch (IOException e) {
-            log.error("[ERROR] Failed to send to local agent (V2 direct): ak={}, type={}",
+            log.error("[ERROR] Failed to serialize message for local agent (V2 direct): ak={}, type={}",
                     ak, message.getType(), e);
             return false;
         }
@@ -292,13 +298,16 @@ public class EventRelayService {
 
         try {
             String json = objectMapper.writeValueAsString(message.withoutRoutingContext());
-            synchronized (session) {
-                session.sendMessage(new TextMessage(json));
+            boolean enqueued = getOrCreateSender(session).enqueue(new TextMessage(json));
+            if (!enqueued) {
+                log.warn("[EXIT->AGENT] Failed to enqueue message for local agent: ak={}, type={}",
+                        ak, message.getType());
+            } else {
+                log.info("[EXIT->AGENT] Sent to local agent: type={}, seq={}",
+                        message.getType(), message.getSequenceNumber());
             }
-            log.info("[EXIT->AGENT] Sent to local agent: type={}, seq={}",
-                    message.getType(), message.getSequenceNumber());
         } catch (IOException e) {
-            log.error("Failed to send to local agent: ak={}, type={}",
+            log.error("Failed to serialize message for local agent: ak={}, type={}",
                     ak, message.getType(), e);
         }
     }
@@ -365,5 +374,20 @@ public class EventRelayService {
         return (int) agentSessions.values().stream()
                 .filter(WebSocketSession::isOpen)
                 .count();
+    }
+
+    private AsyncSessionSender getOrCreateSender(WebSocketSession session) {
+        return sessionSenders.computeIfAbsent(session.getId(), k -> {
+            AsyncSessionSender sender = new AsyncSessionSender(session);
+            sender.start();
+            return sender;
+        });
+    }
+
+    public void removeSessionSender(String sessionId) {
+        AsyncSessionSender sender = sessionSenders.remove(sessionId);
+        if (sender != null) {
+            sender.shutdown();
+        }
     }
 }

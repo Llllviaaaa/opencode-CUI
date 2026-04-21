@@ -63,6 +63,12 @@ public class StreamMessage {
     private String subagentSessionId;
     private String subagentName;
 
+    // 云端扩展字段
+    private List<String> keywords;                  // searching
+    private List<SearchResultItem> searchResults;   // search_result
+    private List<ReferenceItem> references;         // reference
+    private List<String> askMoreQuestions;           // ask_more
+
     // ==================== 嵌套分组 ====================
 
     @JsonUnwrapped
@@ -144,6 +150,28 @@ public class StreamMessage {
         private String fileMime;
     }
 
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SearchResultItem {
+        private String index;
+        private String title;
+        private String source;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ReferenceItem {
+        private String index;
+        private String title;
+        private String source;
+        private String url;
+        private String content;
+    }
+
     // ==================== 类型常量 ====================
 
     public static final class Types {
@@ -171,6 +199,14 @@ public class StreamMessage {
 
         public static final String SNAPSHOT = "snapshot";
         public static final String STREAMING = "streaming";
+
+        // 云端扩展
+        public static final String PLANNING_DELTA = "planning.delta";
+        public static final String PLANNING_DONE = "planning.done";
+        public static final String SEARCHING = "searching";
+        public static final String SEARCH_RESULT = "search_result";
+        public static final String REFERENCE = "reference";
+        public static final String ASK_MORE = "ask_more";
 
         private Types() {
         }

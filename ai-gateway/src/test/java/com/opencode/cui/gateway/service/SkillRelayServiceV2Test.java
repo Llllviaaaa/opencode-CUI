@@ -15,6 +15,7 @@ import org.springframework.web.socket.WebSocketSession;
 
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -64,8 +65,13 @@ class SkillRelayServiceV2Test {
     @BeforeEach
     void setUp() {
         routingTable = new UpstreamRoutingTable(100000, 30);
-        service = new SkillRelayService(redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, legacyStrategy);
+        service = new SkillRelayService(redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, legacyStrategy, List.of());
         service.setEventRelayService(eventRelayService);
+    }
+
+    /** Wait for AsyncSessionSender background thread to flush the send queue. */
+    private static void awaitSend() throws InterruptedException {
+        Thread.sleep(200);
     }
 
     private static Map<String, Object> mutableAttrs(String source, String instanceId) {
@@ -134,6 +140,7 @@ class SkillRelayServiceV2Test {
             boolean result = service.relayToSkill(upstreamMsg);
 
             assertTrue(result);
+            awaitSend();
             // At least one session should receive the message (hash-selected)
             int sendCount = 0;
             try {
@@ -171,6 +178,7 @@ class SkillRelayServiceV2Test {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             // Both groups should receive the message (one session per group)
             verify(ss1Session).sendMessage(any(TextMessage.class));
             verify(bpSession).sendMessage(any(TextMessage.class));
@@ -191,6 +199,7 @@ class SkillRelayServiceV2Test {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             verify(ss1Session).sendMessage(any(TextMessage.class));
             verify(bpSession, never()).sendMessage(any(TextMessage.class));
         }

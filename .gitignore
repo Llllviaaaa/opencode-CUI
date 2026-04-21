@@ -8,15 +8,6 @@ target/
 build/
 dist/
 node_modules/
-!.planning/
-.planning/*
-!.planning/PROJECT.md
-!.planning/REQUIREMENTS.md
-!.planning/ROADMAP.md
-!.planning/STATE.md
-!.planning/config.json
-!.planning/phases/
-!.planning/phases/**
 
 # OS
 .DS_Store
@@ -43,3 +34,11 @@ documents/.obsidian/
 .ace-tool/
 .trellis/
 .gstack/
+bench/
+benchmark/
+tools/
+bench_results/
+.pytest_cache/
+.planning/
+tests/
+__pycache__/

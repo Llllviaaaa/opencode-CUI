@@ -45,6 +45,11 @@ class LegacySkillRelayStrategyTest {
     private static final String INSTANCE_ID = "gw-test";
     private static final String SOURCE = "skill-server";
 
+    /** Wait for AsyncSessionSender background thread to flush the send queue. */
+    private static void awaitSend() throws InterruptedException {
+        Thread.sleep(200);
+    }
+
     @BeforeEach
     void setUp() {
         strategy = new LegacySkillRelayStrategy(redisMessageBroker, objectMapper, INSTANCE_ID, 30);
@@ -131,6 +136,7 @@ class LegacySkillRelayStrategyTest {
             boolean result = strategy.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             verify(ss1).sendMessage(any(TextMessage.class));
         }
 

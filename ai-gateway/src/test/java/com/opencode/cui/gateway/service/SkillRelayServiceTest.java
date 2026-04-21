@@ -13,6 +13,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -52,7 +53,12 @@ class SkillRelayServiceTest {
     @BeforeEach
     void setUp() {
         routingTable = new UpstreamRoutingTable(100000, 30);
-        service = new SkillRelayService(redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, legacyStrategy);
+        service = new SkillRelayService(redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, legacyStrategy, List.of());
+    }
+
+    /** Wait for AsyncSessionSender background thread to flush the send queue. */
+    private static void awaitSend() throws InterruptedException {
+        Thread.sleep(200);
     }
 
     private static Map<String, Object> mutableAttrs(String source, String instanceId) {
@@ -131,6 +137,7 @@ class SkillRelayServiceTest {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             verify(ss1Session).sendMessage(any(TextMessage.class));
         }
     }
@@ -156,6 +163,7 @@ class SkillRelayServiceTest {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             // V2: hash-selects one connection from the source type's ring (not broadcast)
             int sendCount = 0;
             try { verify(ss1Session).sendMessage(any(TextMessage.class)); sendCount++; } catch (AssertionError ignored) {}
@@ -177,6 +185,7 @@ class SkillRelayServiceTest {
 
             service.relayToSkill(msg);
 
+            awaitSend();
             verify(ss1Session).sendMessage(any(TextMessage.class));
             verify(bpSession, never()).sendMessage(any(TextMessage.class));
         }
@@ -219,6 +228,7 @@ class SkillRelayServiceTest {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             // At least one skill-server session should receive
             int sendCount = 0;
             try { verify(ss1Session).sendMessage(any(TextMessage.class)); sendCount++; } catch (AssertionError ignored) {}
@@ -241,6 +251,7 @@ class SkillRelayServiceTest {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             verify(ss1Session).sendMessage(any(TextMessage.class));
         }
 
@@ -279,6 +290,7 @@ class SkillRelayServiceTest {
 
             service.relayToSkill(msg);
 
+            awaitSend();
             verify(ss1Session).sendMessage(any(TextMessage.class));
             verify(ss2Session, never()).sendMessage(any(TextMessage.class));
         }
@@ -320,6 +332,7 @@ class SkillRelayServiceTest {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             verify(newSession).sendMessage(any(TextMessage.class));
             verify(oldSession, never()).sendMessage(any(TextMessage.class));
         }
@@ -346,6 +359,7 @@ class SkillRelayServiceTest {
                     .toolSessionId("T1")
                     .build();
             service.relayToSkill(msg1);
+            awaitSend();
             verify(ss1Session).sendMessage(any(TextMessage.class));
             verify(bpSession, never()).sendMessage(any(TextMessage.class));
 
@@ -354,6 +368,7 @@ class SkillRelayServiceTest {
                     .toolSessionId("T3")
                     .build();
             service.relayToSkill(msg2);
+            awaitSend();
             verify(bpSession).sendMessage(any(TextMessage.class));
         }
     }

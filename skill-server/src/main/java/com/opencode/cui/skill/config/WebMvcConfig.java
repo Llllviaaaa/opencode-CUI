@@ -34,6 +34,6 @@ public class WebMvcConfig implements WebMvcConfigurer {
         registry.addInterceptor(mdcRequestInterceptor)
                 .addPathPatterns("/api/**");
         registry.addInterceptor(imTokenAuthInterceptor)
-                .addPathPatterns("/api/inbound/**");
+                .addPathPatterns("/api/inbound/**", "/api/external/**");
     }
 }

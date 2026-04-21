@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+    <Properties>
+        <Property name="SERVICE_NAME">skill-server</Property>
+        <Property name="LOG_FILE">${sys:opencode.logging.file:-./logs/skill-server/skill-server.log}</Property>
+        <Property name="ARCHIVE_DIR">${sys:opencode.logging.archive-dir:-./logs/skill-server/archive}</Property>
+        <Property name="LOG_PATTERN">%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [${SERVICE_NAME}] [%X{traceId}] [%X{sessionId}] [%X{ak}] %logger{36}.%method - %msg%n</Property>
+    </Properties>
+
+    <Appenders>
+        <RollingFile name="FILE"
+                     fileName="${LOG_FILE}"
+                     filePattern="${ARCHIVE_DIR}/${SERVICE_NAME}.%d{yyyy-MM-dd}.%i.log.gz">
+            <PatternLayout pattern="${LOG_PATTERN}" charset="UTF-8"/>
+            <Policies>
+                <SizeBasedTriggeringPolicy size="200MB"/>
+                <TimeBasedTriggeringPolicy interval="1"/>
+            </Policies>
+            <DefaultRolloverStrategy max="30">
+                <Delete basePath="${ARCHIVE_DIR}" maxDepth="1">
+                    <IfAccumulatedFileSize exceeds="2GB"/>
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingFile>
+
+        <Console name="CONSOLE" target="SYSTEM_OUT">
+            <PatternLayout pattern="${LOG_PATTERN}" charset="UTF-8"/>
+        </Console>
+    </Appenders>
+
+    <Loggers>
+        <Root level="INFO">
+            <AppenderRef ref="FILE"/>
+            <AppenderRef ref="CONSOLE"/>
+        </Root>
+    </Loggers>
+</Configuration>

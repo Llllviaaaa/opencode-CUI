@@ -2,6 +2,9 @@ server:
   port: 8082
 
 spring:
+  threads:
+    virtual:
+      enabled: true
   application:
     name: skill-server
 
@@ -26,9 +29,9 @@ spring:
       timeout: 3000ms
       lettuce:
         pool:
-          max-active: 50
-          max-idle: 20
-          min-idle: 5
+          max-active: 200
+          max-idle: 50
+          min-idle: 10
 
 mybatis:
   mapper-locations: classpath:mapper/*.xml
@@ -52,19 +55,19 @@ skill:
     allowed-origins: ${CORS_ORIGINS:*}
   gateway:
     ws-url: ${SKILL_GATEWAY_WS_URL:ws://localhost:8081/ws/skill}
-    connection-count: ${SKILL_GATEWAY_CONNECTION_COUNT:3}
+    connection-count: ${SKILL_GATEWAY_CONNECTION_COUNT:8}
     # Internal token for Skill Server -> AI-Gateway authentication
     internal-token: ${SKILL_SERVER_INTERNAL_TOKEN:changeme}
     reconnect-initial-delay-ms: 1000
     reconnect-max-delay-ms: 30000
   im:
     # IM platform API base URL for sending messages
-    api-url: ${IM_API_URL:http://localhost:8080/api/im}
+    api-url: ${IM_API_URL:http://localhost:9999}
     token: ${IM_TOKEN:}
-    inbound-token: ${IM_INBOUND_TOKEN:}
+    inbound-token: ${IM_INBOUND_TOKEN:e2e-test-token}
     reply-state-ttl-minutes: 30
   assistant:
-    resolve-url: ${ASSISTANT_RESOLVE_URL:http://localhost:8080/assistant-api/integration/v4-1/we-crew/instance/query}
+    resolve-url: ${ASSISTANT_RESOLVE_URL:http://localhost:9999/assistant-api/integration/v4-1/we-crew/instance/query}
     resolve-token: ${ASSISTANT_RESOLVE_TOKEN:}
     cache-ttl-minutes: 30
   context:
@@ -90,12 +93,21 @@ skill:
     auto-create-timeout-seconds: ${SKILL_SESSION_AUTO_CREATE_TIMEOUT_SECONDS:30}
     rebuild-max-attempts: ${SKILL_SESSION_REBUILD_MAX_ATTEMPTS:3}
     rebuild-cooldown-seconds: ${SKILL_SESSION_REBUILD_COOLDOWN_SECONDS:30}
+  assistant-info:
+    api-url: ${ASSISTANT_INFO_API_URL:http://localhost:9999/appstore/wecodeapi/open/ak/info}
+    api-token: ${ASSISTANT_INFO_API_TOKEN:}
+    cache-ttl-seconds: ${ASSISTANT_INFO_CACHE_TTL_SECONDS:300}
   assistant-id:
     enabled: ${SKILL_ASSISTANT_ID_ENABLED:true}
     target-tool-type: ${SKILL_ASSISTANT_ID_TARGET_TOOL_TYPE:assistant}
     persona-base-url: ${SKILL_ASSISTANT_ID_PERSONA_BASE_URL:}
     cache-ttl-minutes: ${SKILL_ASSISTANT_ID_CACHE_TTL_MINUTES:30}
     match-ak: ${SKILL_ASSISTANT_ID_MATCH_AK:false}
+  delivery:
+    mode: ${SKILL_DELIVERY_MODE:rest}
+    invoke-source-ttl-seconds: ${SKILL_DELIVERY_INVOKE_SOURCE_TTL_SECONDS:300}
+    registry-ttl-seconds: ${SKILL_DELIVERY_REGISTRY_TTL_SECONDS:30}
+    registry-heartbeat-interval-ms: ${SKILL_DELIVERY_REGISTRY_HEARTBEAT_INTERVAL_MS:10000}
 
 opencode:
   logging:
@@ -109,4 +121,4 @@ logging:
   level:
     com.opencode.cui.skill: INFO
     org.springframework.web.socket: INFO
-  # pattern 和 rollingpolicy 已迁移到 logback-spring.xml
+  # pattern 和 rollingpolicy 已迁移到 log4j2-spring.xml

@@ -16,6 +16,7 @@ import com.opencode.cui.skill.service.GatewayApiClient;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.ImMessageService;
 
+import com.opencode.cui.skill.service.AssistantInfoService;
 import com.opencode.cui.skill.service.ProtocolUtils;
 import com.opencode.cui.skill.service.PayloadBuilder;
 import com.opencode.cui.skill.service.ProtocolMessageMapper;
@@ -23,6 +24,8 @@ import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillMessageService;
 import com.opencode.cui.skill.service.GatewayMessageRouter;
 import com.opencode.cui.skill.service.SkillSessionService;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
+import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -35,6 +38,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -64,6 +68,8 @@ public class SkillMessageController {
     private final ObjectMapper objectMapper;
     private final SessionAccessControlService accessControlService;
     private final GatewayMessageRouter messageRouter;
+    private final AssistantInfoService assistantInfoService;
+    private final AssistantScopeDispatcher scopeDispatcher;
 
     public SkillMessageController(SkillMessageService messageService,
             SkillSessionService sessionService,
@@ -73,7 +79,9 @@ public class SkillMessageController {
             ImMessageService imMessageService,
             ObjectMapper objectMapper,
             SessionAccessControlService accessControlService,
-            GatewayMessageRouter messageRouter) {
+            GatewayMessageRouter messageRouter,
+            AssistantInfoService assistantInfoService,
+            AssistantScopeDispatcher scopeDispatcher) {
         this.messageService = messageService;
         this.sessionService = sessionService;
         this.gatewayRelayService = gatewayRelayService;
@@ -83,6 +91,8 @@ public class SkillMessageController {
         this.objectMapper = objectMapper;
         this.accessControlService = accessControlService;
         this.messageRouter = messageRouter;
+        this.assistantInfoService = assistantInfoService;
+        this.scopeDispatcher = scopeDispatcher;
     }
 
     /**
@@ -127,7 +137,7 @@ public class SkillMessageController {
                         sessionId));
 
         // 路由到 AI-Gateway
-        routeToGateway(session, sessionId, numericSessionId, request);
+        routeToGateway(session, sessionId, numericSessionId, request, userIdCookie);
 
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
         log.info("[EXIT] SkillMessageController.sendMessage: sessionId={}, ak={}, durationMs={}", sessionId,
@@ -140,14 +150,16 @@ public class SkillMessageController {
      * 根据会话状态和请求类型将用户消息路由到 AI-Gateway。
      */
     private void routeToGateway(SkillSession session, String sessionId,
-            Long numericSessionId, SendMessageRequest request) {
+            Long numericSessionId, SendMessageRequest request, String userIdCookie) {
         if (session.getAk() == null) {
             log.warn("[SKIP] SkillMessageController.routeToGateway: reason=no_agent, sessionId={}", sessionId);
             return;
         }
 
-        // Agent 在线检查：开关开启时，先判断 toolType 是否为目标值，是目标值且离线时通知客户端
-        if (assistantIdProperties.isEnabled()) {
+        // Agent 在线检查：开关开启时，业务助手跳过检查
+        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
+                assistantInfoService.getCachedScope(session.getAk()));
+        if (assistantIdProperties.isEnabled() && scopeStrategy.requiresOnlineCheck()) {
             AgentSummary agent = gatewayApiClient.getAgentByAk(session.getAk());
             if (agent == null) {
                 // Agent 离线：保存系统错误消息 + WebSocket 广播
@@ -189,15 +201,23 @@ public class SkillMessageController {
                     "toolSessionId", targetToolSessionId));
         } else {
             action = GatewayActions.CHAT;
-            payload = PayloadBuilder.buildPayload(objectMapper, Map.of(
-                    "text", request.getContent(),
-                    "toolSessionId", session.getToolSessionId()));
+            Map<String, String> payloadFields = new LinkedHashMap<>();
+            payloadFields.put("text", request.getContent());
+            payloadFields.put("toolSessionId", session.getToolSessionId());
+            // 优先使用实际操作用户（cookie），兜底用 session 创建人
+            payloadFields.put("sendUserAccount",
+                    userIdCookie != null && !userIdCookie.isBlank() ? userIdCookie : session.getUserId());
+            payloadFields.put("assistantAccount", session.getAssistantAccount());
+            payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
+            payload = PayloadBuilder.buildPayload(objectMapper, payloadFields);
         }
 
         log.info("SkillMessageController.routeToGateway: sessionId={}, action={}, ak={}",
                 sessionId, action, session.getAk());
+        String effectiveUserId = userIdCookie != null && !userIdCookie.isBlank()
+                ? userIdCookie : session.getUserId();
         gatewayRelayService.sendInvokeToGateway(
-                new InvokeCommand(session.getAk(), session.getUserId(), sessionId, action, payload));
+                new InvokeCommand(session.getAk(), effectiveUserId, sessionId, action, payload));
     }
 
     /**
@@ -355,6 +375,18 @@ public class SkillMessageController {
 
         if (session.getAk() == null) {
             return ResponseEntity.ok(ApiResponse.error(400, "No agent associated with this session"));
+        }
+
+        // Agent 在线检查：云端助手永远在线（跳过），个人助手需要检查
+        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
+                assistantInfoService.getCachedScope(session.getAk()));
+        if (assistantIdProperties.isEnabled() && scopeStrategy.requiresOnlineCheck()) {
+            AgentSummary agent = gatewayApiClient.getAgentByAk(session.getAk());
+            if (agent == null) {
+                log.warn("[SKIP] replyPermission: reason=agent_offline, sessionId={}, ak={}",
+                        sessionId, session.getAk());
+                return ResponseEntity.ok(ApiResponse.error(503, AGENT_OFFLINE_MESSAGE));
+            }
         }
 
         if (session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {

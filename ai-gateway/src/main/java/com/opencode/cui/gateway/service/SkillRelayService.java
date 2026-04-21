@@ -12,14 +12,19 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
+import com.opencode.cui.gateway.ws.AsyncSessionSender;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+
+import com.opencode.cui.gateway.service.cloud.InvokeRouteStrategy;
 
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -55,6 +60,9 @@ public class SkillRelayService {
     /** 旧版路由策略（兼容不带 instanceId 的 Source 服务） */
     private final LegacySkillRelayStrategy legacyStrategy;
 
+    /** Invoke 路由策略 Map：scope → strategy */
+    private final Map<String, InvokeRouteStrategy> routeStrategyMap;
+
     /**
      * [Mesh] Source 实例连接池：source_type → { ssInstanceId → { sessionId → WebSocketSession } }
      */
@@ -81,6 +89,8 @@ public class SkillRelayService {
 
     @Value("${gateway.upstream-routing.broadcast-timeout-ms:200}")
     private int broadcastTimeoutMs;
+
+    private final ConcurrentHashMap<String, AsyncSessionSender> sessionSenders = new ConcurrentHashMap<>();
 
     @Value("${gateway.legacy-relay.enabled:false}")
     private boolean legacyRelayEnabled;
@@ -119,12 +129,18 @@ public class SkillRelayService {
             ObjectMapper objectMapper,
             @Value("${gateway.instance-id:${HOSTNAME:gateway-local}}") String gatewayInstanceId,
             UpstreamRoutingTable routingTable,
-            LegacySkillRelayStrategy legacyStrategy) {
+            LegacySkillRelayStrategy legacyStrategy,
+            List<InvokeRouteStrategy> invokeRouteStrategies) {
         this.redisMessageBroker = redisMessageBroker;
         this.objectMapper = objectMapper;
         this.gatewayInstanceId = gatewayInstanceId;
         this.routingTable = routingTable;
         this.legacyStrategy = legacyStrategy;
+        Map<String, InvokeRouteStrategy> strategyMap = new HashMap<>();
+        for (InvokeRouteStrategy s : invokeRouteStrategies) {
+            strategyMap.put(s.getScope(), s);
+        }
+        this.routeStrategyMap = strategyMap;
     }
 
     /**
@@ -194,8 +210,10 @@ public class SkillRelayService {
      * 根据策略标记委托到 Mesh / Legacy。
      */
     public void removeSourceSession(WebSocketSession session) {
+        removeSessionSender(session.getId());
         if (isLegacySession(session)) {
             legacyStrategy.removeSession(session);
+            legacyStrategy.removeSessionSender(session.getId());
             return;
         }
 
@@ -667,11 +685,61 @@ public class SkillRelayService {
             return;
         }
 
+        // 业务助手走云端路由策略，个人助手保持现有逻辑
+        String scope = Optional.ofNullable(message.getAssistantScope()).orElse("personal");
+        if ("business".equals(scope) && routeBusinessInvoke(session, message)) {
+            return;
+        }
+
         GatewayMessage tracedMessage = message.ensureTraceId();
 
         log.info("[ENTRY] SkillRelayService.handleInvokeFromSkill: ak={}, action={}, linkId={}",
                 tracedMessage.getAk(), tracedMessage.getAction(), session.getId());
 
+        if (!validateInvokeMessage(session, tracedMessage)) {
+            return;
+        }
+
+        String messageSource = tracedMessage.getSource();
+
+        // Learn route and write session route to Redis
+        routingTable.learnRoute(tracedMessage, messageSource);
+        learnRouteFromInvoke(tracedMessage, session);
+        writeSessionRouteToRedis(tracedMessage, messageSource, session);
+
+        // 3-tier delivery — local → remote GW relay → pending queue
+        dispatchToAgent(tracedMessage, messageSource);
+    }
+
+    /**
+     * 业务助手云端路由。
+     *
+     * @return true 表示已由云端路由策略处理
+     */
+    private boolean routeBusinessInvoke(WebSocketSession session, GatewayMessage message) {
+        InvokeRouteStrategy strategy = routeStrategyMap.get("business");
+        if (strategy == null) {
+            return false;
+        }
+        GatewayMessage tracedMsg = message.ensureTraceId();
+        String source = tracedMsg.getSource();
+
+        if (source != null && !source.isBlank()) {
+            routingTable.learnRoute(tracedMsg, source);
+            learnRouteFromInvoke(tracedMsg, session);
+            writeSessionRouteToRedis(tracedMsg, source, session);
+        }
+
+        strategy.route(tracedMsg, this::relayToSkill);
+        return true;
+    }
+
+    /**
+     * 校验上行 invoke 消息的 source、ak、userId。
+     *
+     * @return true 表示校验通过
+     */
+    private boolean validateInvokeMessage(WebSocketSession session, GatewayMessage tracedMessage) {
         // Validate source
         String boundSource = resolveBoundSource(session);
         String messageSource = tracedMessage.getSource();
@@ -679,21 +747,21 @@ public class SkillRelayService {
             log.warn("[SKIP] SkillRelayService.handleInvokeFromSkill: reason=missing_source, linkId={}",
                     session.getId());
             sendProtocolError(session, ERROR_SOURCE_NOT_ALLOWED);
-            return;
+            return false;
         }
         if (boundSource == null || !boundSource.equals(messageSource)) {
             log.warn(
                     "[SKIP] SkillRelayService.handleInvokeFromSkill: reason=source_mismatch, bound={}, message={}, linkId={}",
                     boundSource, messageSource, session.getId());
             sendProtocolError(session, ERROR_SOURCE_MISMATCH);
-            return;
+            return false;
         }
 
         // Validate ak
         if (tracedMessage.getAk() == null || tracedMessage.getAk().isBlank()) {
             log.warn("[SKIP] SkillRelayService.handleInvokeFromSkill: reason=missing_ak, linkId={}",
                     session.getId());
-            return;
+            return false;
         }
 
         // Validate userId
@@ -701,38 +769,43 @@ public class SkillRelayService {
         if (tracedMessage.getUserId() == null || tracedMessage.getUserId().isBlank()) {
             log.warn("[SKIP] SkillRelayService.handleInvokeFromSkill: reason=missing_userId, linkId={}, ak={}",
                     session.getId(), tracedMessage.getAk());
-            return;
+            return false;
         }
         if (expectedUserId == null || !tracedMessage.getUserId().equals(expectedUserId)) {
             log.warn(
                     "[SKIP] SkillRelayService.handleInvokeFromSkill: reason=userId_mismatch, expected={}, actual={}, ak={}",
                     expectedUserId, tracedMessage.getUserId(), tracedMessage.getAk());
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * 将 session 路由信息写入 Redis，用于跨集群路由。
+     */
+    private void writeSessionRouteToRedis(GatewayMessage tracedMessage, String source,
+                                          WebSocketSession session) {
+        String ssInstanceId = resolveSsInstanceId(session);
+        if (ssInstanceId == null) {
             return;
         }
-
-        // V2: Learn route in UpstreamRoutingTable
-        routingTable.learnRoute(tracedMessage, messageSource);
-
-        // V2: Also learn in legacy route cache for backward compatibility
-        learnRouteFromInvoke(tracedMessage, session);
-
-        // Write session route to Redis for cross-cluster routing
-        String ssInstanceId = resolveSsInstanceId(session);
-        if (ssInstanceId != null) {
-            String toolSessionId = extractToolSessionIdFromPayload(tracedMessage);
-            if (toolSessionId != null && !toolSessionId.isBlank()) {
-                redisMessageBroker.setSessionRoute(toolSessionId, messageSource, ssInstanceId);
-            }
-            String welinkSessionId = tracedMessage.getWelinkSessionId();
-            if (welinkSessionId != null && !welinkSessionId.isBlank()) {
-                redisMessageBroker.setWelinkSessionRoute(welinkSessionId, messageSource, ssInstanceId);
-            }
+        String toolSessionId = extractToolSessionIdFromPayload(tracedMessage);
+        if (toolSessionId != null && !toolSessionId.isBlank()) {
+            redisMessageBroker.setSessionRoute(toolSessionId, source, ssInstanceId);
         }
+        String welinkSessionId = tracedMessage.getWelinkSessionId();
+        if (welinkSessionId != null && !welinkSessionId.isBlank()) {
+            redisMessageBroker.setWelinkSessionRoute(welinkSessionId, source, ssInstanceId);
+        }
+    }
 
+    /**
+     * 3-tier delivery：local → remote GW relay → pending queue。
+     */
+    private void dispatchToAgent(GatewayMessage tracedMessage, String messageSource) {
         String ak = tracedMessage.getAk();
         GatewayMessage agentMessage = tracedMessage.withoutRoutingContext();
 
-        // V2: 3-tier delivery — local → remote GW relay → pending queue
         if (deliverToLocalAgent(ak, agentMessage)) {
             relayLocalCount.incrementAndGet();
             log.info("[EXIT->AGENT] Delivered invoke locally: ak={}, action={}, source={}",
@@ -747,13 +820,11 @@ public class SkillRelayService {
             return;
         }
 
-        // Agent not found anywhere → enqueue pending
         enqueueToPending(ak, agentMessage);
         relayPendingCount.incrementAndGet();
         log.info("[EXIT->PENDING] Enqueued invoke to pending: ak={}, action={}, source={}",
                 ak, tracedMessage.getAction(), messageSource);
 
-        // Legacy fallback: also publish to agent pub/sub channel if legacy-relay is enabled
         if (legacyRelayEnabled) {
             redisMessageBroker.publishToAgent(ak, agentMessage);
             log.info("[EXIT->LEGACY] Also published to legacy agent channel: ak={}", ak);
@@ -964,16 +1035,33 @@ public class SkillRelayService {
                 .count();
     }
 
+    private AsyncSessionSender getOrCreateSender(WebSocketSession session) {
+        return sessionSenders.computeIfAbsent(session.getId(), k -> {
+            AsyncSessionSender sender = new AsyncSessionSender(session);
+            sender.start();
+            return sender;
+        });
+    }
+
+    public void removeSessionSender(String sessionId) {
+        AsyncSessionSender sender = sessionSenders.remove(sessionId);
+        if (sender != null) {
+            sender.shutdown();
+        }
+    }
+
     private boolean sendToSession(WebSocketSession session, GatewayMessage message) {
         try {
             String json = objectMapper.writeValueAsString(message);
-            synchronized (session) {
-                session.sendMessage(new TextMessage(json));
+            AsyncSessionSender sender = getOrCreateSender(session);
+            boolean enqueued = sender.enqueue(new TextMessage(json));
+            if (enqueued) {
+                log.info("[EXIT->SS] Enqueued to skill session: linkId={}, type={}, pending={}",
+                        session.getId(), message.getType(), sender.pendingCount());
             }
-            log.info("[EXIT->SS] Sent to skill session: linkId={}, type={}", session.getId(), message.getType());
-            return true;
+            return enqueued;
         } catch (IOException e) {
-            log.error("[EXIT->SS] Failed to send to skill session: linkId={}, type={}",
+            log.error("[EXIT->SS] Failed to serialize message: linkId={}, type={}",
                     session.getId(), message.getType(), e);
             return false;
         }
@@ -992,11 +1080,10 @@ public class SkillRelayService {
     private void sendProtocolError(WebSocketSession session, String reason) {
         try {
             String json = objectMapper.writeValueAsString(GatewayMessage.registerRejected(reason));
-            synchronized (session) {
-                session.sendMessage(new TextMessage(json));
-            }
+            AsyncSessionSender sender = getOrCreateSender(session);
+            sender.enqueue(new TextMessage(json));
         } catch (IOException e) {
-            log.error("Failed to send protocol error: linkId={}, reason={}", session.getId(), reason, e);
+            log.error("Failed to serialize protocol error: linkId={}, reason={}", session.getId(), reason, e);
         }
     }
 

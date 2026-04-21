@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -82,6 +83,47 @@ public class RedisMessageBroker {
     public void unsubscribeFromUser(String userId) {
         String channel = "user-stream:" + userId;
         unsubscribe(channel);
+    }
+
+    // ========== Generic channel pub/sub ==========
+
+    /**
+     * Publish a message to a named channel.
+     *
+     * @param channel the full channel name (e.g. "stream:im")
+     * @param message the message to publish (as JSON string)
+     */
+    public void publishToChannel(String channel, String message) {
+        publishMessage(channel, message);
+    }
+
+    /**
+     * Subscribe to a named channel.
+     *
+     * @param channel the full channel name
+     * @param handler callback to handle received messages
+     */
+    public void subscribeToChannel(String channel, Consumer<String> handler) {
+        subscribe(channel, handler);
+    }
+
+    /**
+     * Unsubscribe from a named channel.
+     *
+     * @param channel the full channel name
+     */
+    public void unsubscribeFromChannel(String channel) {
+        unsubscribe(channel);
+    }
+
+    /**
+     * Check if a channel is currently subscribed.
+     *
+     * @param channel the full channel name
+     * @return true if subscribed
+     */
+    public boolean isChannelSubscribed(String channel) {
+        return activeListeners.containsKey(channel);
     }
 
     // ========== Internal methods ==========
@@ -192,6 +234,22 @@ public class RedisMessageBroker {
         return redisTemplate.opsForValue().get("conn:ak:" + ak);
     }
 
+    // ==================== toolSessionId → sessionId 缓存 ====================
+
+    private static final String TOOL_SESSION_PREFIX = "ss:tool-session:";
+    private static final long TOOL_SESSION_TTL_HOURS = 24;
+
+    public String getToolSessionMapping(String toolSessionId) {
+        return redisTemplate.opsForValue().get(TOOL_SESSION_PREFIX + toolSessionId);
+    }
+
+    public void setToolSessionMapping(String toolSessionId, String sessionId) {
+        redisTemplate.opsForValue().set(
+                TOOL_SESSION_PREFIX + toolSessionId,
+                sessionId,
+                TOOL_SESSION_TTL_HOURS, TimeUnit.HOURS);
+    }
+
     // ==================== 跨实例消息序号（Task 2.8） ====================
 
     private static final String STREAM_SEQ_KEY_PREFIX = "ss:stream-seq:";
@@ -207,6 +265,98 @@ public class RedisMessageBroker {
         String key = STREAM_SEQ_KEY_PREFIX + welinkSessionId;
         Long seq = redisTemplate.opsForValue().increment(key);
         return seq != null ? seq : 1L;
+    }
+
+    // ==================== invoke-source 标记 ====================
+
+    private static final String INVOKE_SOURCE_PREFIX = "invoke-source:";
+
+    public void setInvokeSource(String sessionId, String source, int ttlSeconds) {
+        try {
+            redisTemplate.opsForValue().set(
+                    INVOKE_SOURCE_PREFIX + sessionId, source, ttlSeconds, TimeUnit.SECONDS);
+            log.debug("Set invoke-source: sessionId={}, source={}, ttl={}s", sessionId, source, ttlSeconds);
+        } catch (Exception e) {
+            log.error("Failed to set invoke-source: sessionId={}, error={}", sessionId, e.getMessage());
+        }
+    }
+
+    public String getInvokeSource(String sessionId) {
+        try {
+            return redisTemplate.opsForValue().get(INVOKE_SOURCE_PREFIX + sessionId);
+        } catch (Exception e) {
+            log.error("Failed to get invoke-source: sessionId={}, error={}", sessionId, e.getMessage());
+            return null;
+        }
+    }
+
+    public void expireInvokeSource(String sessionId, int ttlSeconds) {
+        try {
+            redisTemplate.expire(INVOKE_SOURCE_PREFIX + sessionId, ttlSeconds, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.error("Failed to expire invoke-source: sessionId={}, error={}", sessionId, e.getMessage());
+        }
+    }
+
+    // ==================== WS 连接注册表 ====================
+
+    private static final String WS_REGISTRY_PREFIX = "external-ws:registry:";
+
+    public void registerWsConnection(String domain, String instanceId, int connectionCount, int ttlSeconds) {
+        try {
+            String key = WS_REGISTRY_PREFIX + domain;
+            redisTemplate.opsForHash().put(key, instanceId, String.valueOf(connectionCount));
+            redisTemplate.expire(key, ttlSeconds, TimeUnit.SECONDS);
+            log.debug("Registered WS connection: domain={}, instanceId={}, count={}", domain, instanceId, connectionCount);
+        } catch (Exception e) {
+            log.error("Failed to register WS connection: domain={}, error={}", domain, e.getMessage());
+        }
+    }
+
+    public void unregisterWsConnection(String domain, String instanceId) {
+        try {
+            redisTemplate.opsForHash().delete(WS_REGISTRY_PREFIX + domain, instanceId);
+            log.debug("Unregistered WS connection: domain={}, instanceId={}", domain, instanceId);
+        } catch (Exception e) {
+            log.error("Failed to unregister WS connection: domain={}, error={}", domain, e.getMessage());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public Map<String, String> getWsRegistry(String domain) {
+        try {
+            Map<Object, Object> entries = redisTemplate.opsForHash().entries(WS_REGISTRY_PREFIX + domain);
+            Map<String, String> result = new java.util.HashMap<>();
+            entries.forEach((k, v) -> result.put(k.toString(), v.toString()));
+            return result;
+        } catch (Exception e) {
+            log.error("Failed to get WS registry: domain={}, error={}", domain, e.getMessage());
+            return java.util.Collections.emptyMap();
+        }
+    }
+
+    public void expireWsRegistry(String domain, int ttlSeconds) {
+        try {
+            redisTemplate.expire(WS_REGISTRY_PREFIX + domain, ttlSeconds, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.error("Failed to expire WS registry: domain={}, error={}", domain, e.getMessage());
+        }
+    }
+
+    /**
+     * 尝试获取分布式去重锁（SET NX + TTL）。
+     *
+     * @param key 去重 key
+     * @param ttl 锁超时时间
+     * @return true 表示获取成功（首次处理），false 表示已被其他实例处理
+     */
+    public Boolean tryAcquire(String key, java.time.Duration ttl) {
+        try {
+            return redisTemplate.opsForValue().setIfAbsent(key, "1", ttl);
+        } catch (Exception e) {
+            log.warn("tryAcquire failed, allowing through: key={}, error={}", key, e.getMessage());
+            return true; // Redis 异常时放行，避免消息丢失
+        }
     }
 
 }

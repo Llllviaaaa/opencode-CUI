@@ -764,6 +764,12 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
       case 'tool.update':
       case 'permission.ask':
       case 'file':
+      case 'planning.delta':
+      case 'planning.done':
+      case 'searching':
+      case 'search_result':
+      case 'reference':
+      case 'ask_more':
         applyStreamedMessage(msg);
         break;
 

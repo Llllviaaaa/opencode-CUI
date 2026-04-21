@@ -20,6 +20,7 @@ public record ImMessageRequest(
         String sessionType,
         String sessionId,
         String assistantAccount,
+        String senderUserAccount,
         String content,
         String msgType,
         String imageUrl,

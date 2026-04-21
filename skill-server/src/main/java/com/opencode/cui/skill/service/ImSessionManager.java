@@ -3,11 +3,14 @@ package com.opencode.cui.skill.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
+import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -32,6 +35,8 @@ public class ImSessionManager {
     private final SessionRebuildService rebuildService; // toolSession 重建服务
     private final StringRedisTemplate redisTemplate; // Redis 操作模板（用于分布式锁）
     private final ObjectMapper objectMapper; // JSON 序列化
+    private final AssistantInfoService assistantInfoService; // 助手信息查询服务
+    private final AssistantScopeDispatcher scopeDispatcher; // 助手作用域调度器
     private final int autoCreateTimeoutSeconds; // 同步创建模式的超时秒数
 
     public ImSessionManager(
@@ -40,12 +45,16 @@ public class ImSessionManager {
             SessionRebuildService rebuildService,
             StringRedisTemplate redisTemplate,
             ObjectMapper objectMapper,
+            AssistantInfoService assistantInfoService,
+            AssistantScopeDispatcher scopeDispatcher,
             @org.springframework.beans.factory.annotation.Value("${skill.session.auto-create-timeout-seconds:30}") int autoCreateTimeoutSeconds) {
         this.sessionService = sessionService;
         this.gatewayRelayService = gatewayRelayService;
         this.rebuildService = rebuildService;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
+        this.assistantInfoService = assistantInfoService;
+        this.scopeDispatcher = scopeDispatcher;
         this.autoCreateTimeoutSeconds = autoCreateTimeoutSeconds;
     }
 
@@ -85,7 +94,8 @@ public class ImSessionManager {
      */
     public void createSessionAsync(String businessDomain, String sessionType,
             String sessionId, String ak, String ownerWelinkId,
-            String assistantAccount, String pendingMessage) {
+            String assistantAccount, String senderUserAccount,
+            String pendingMessage) {
         // 构建分布式锁 key
         String lockKey = buildCreateLockKey(businessDomain, sessionType, sessionId, ak);
         String lockValue = UUID.randomUUID().toString();
@@ -124,7 +134,40 @@ public class ImSessionManager {
             log.info("Session created: skillSessionId={}, userId={}, ak={}, sessionId={}",
                     created.getId(), ownerWelinkId, ak, sessionId);
 
-            requestToolSession(created, pendingMessage); // 向 Gateway 请求创建 toolSession
+            // 根据助手类型决定 toolSession 创建方式
+            String scope = assistantInfoService.getCachedScope(ak);
+            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(scope);
+            String generatedToolSessionId = strategy.generateToolSessionId();
+            if (generatedToolSessionId != null) {
+                // 业务助手：本地预生成 toolSessionId，跳过 Gateway create_session
+                sessionService.updateToolSessionId(created.getId(), generatedToolSessionId);
+                log.info("Business assistant: toolSessionId pre-generated locally, skillSessionId={}, toolSessionId={}, ak={}",
+                        created.getId(), generatedToolSessionId, ak);
+                // 会话直接就绪，立即发送待发消息（不经过 session_created 回调）
+                if (pendingMessage != null && !pendingMessage.isBlank()) {
+                    Map<String, String> payloadFields = new LinkedHashMap<>();
+                    payloadFields.put("text", pendingMessage);
+                    payloadFields.put("toolSessionId", generatedToolSessionId);
+                    payloadFields.put("assistantAccount", assistantAccount);
+                    String effectiveSender = "group".equals(sessionType)
+                            && senderUserAccount != null && !senderUserAccount.isBlank()
+                            ? senderUserAccount : ownerWelinkId;
+                    payloadFields.put("sendUserAccount", effectiveSender);
+                    payloadFields.put("imGroupId", "group".equals(sessionType) ? sessionId : null);
+                    payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
+                    gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
+                            ak,
+                            ownerWelinkId,
+                            String.valueOf(created.getId()),
+                            GatewayActions.CHAT,
+                            PayloadBuilder.buildPayload(objectMapper, payloadFields)));
+                    log.info("Business assistant: chat invoke sent immediately, skillSessionId={}, ak={}",
+                            created.getId(), ak);
+                }
+            } else {
+                // 个人助手：向 Gateway 请求创建 toolSession，等待 session_created 回调
+                requestToolSession(created, pendingMessage);
+            }
         } finally {
             releaseCreateLock(lockKey, lockValue, locked);
         }

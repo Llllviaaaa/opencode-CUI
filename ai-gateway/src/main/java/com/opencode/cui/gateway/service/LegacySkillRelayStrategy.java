@@ -2,6 +2,7 @@ package com.opencode.cui.gateway.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.gateway.model.GatewayMessage;
+import com.opencode.cui.gateway.ws.AsyncSessionSender;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -52,6 +53,8 @@ public class LegacySkillRelayStrategy implements SkillRelayStrategy {
 
     /** Redis relay 订阅状态 */
     private final AtomicBoolean relaySubscribed = new AtomicBoolean(false);
+
+    private final ConcurrentHashMap<String, AsyncSessionSender> sessionSenders = new ConcurrentHashMap<>();
 
     public LegacySkillRelayStrategy(
             RedisMessageBroker redisMessageBroker,
@@ -261,15 +264,33 @@ public class LegacySkillRelayStrategy implements SkillRelayStrategy {
         return sendToSession(session, message);
     }
 
+    private AsyncSessionSender getOrCreateSender(WebSocketSession session) {
+        return sessionSenders.computeIfAbsent(session.getId(), k -> {
+            AsyncSessionSender sender = new AsyncSessionSender(session);
+            sender.start();
+            return sender;
+        });
+    }
+
+    public void removeSessionSender(String sessionId) {
+        AsyncSessionSender sender = sessionSenders.remove(sessionId);
+        if (sender != null) {
+            sender.shutdown();
+        }
+    }
+
     private boolean sendToSession(WebSocketSession session, GatewayMessage message) {
         try {
             String json = objectMapper.writeValueAsString(message);
-            synchronized (session) {
-                session.sendMessage(new TextMessage(json));
+            AsyncSessionSender sender = getOrCreateSender(session);
+            boolean enqueued = sender.enqueue(new TextMessage(json));
+            if (enqueued) {
+                log.info("[Legacy] Enqueued to source session: linkId={}, type={}, pending={}",
+                        session.getId(), message.getType(), sender.pendingCount());
             }
-            return true;
+            return enqueued;
         } catch (IOException e) {
-            log.error("[Legacy] Failed to send to source session: linkId={}, type={}",
+            log.error("[Legacy] Failed to serialize message: linkId={}, type={}",
                     session.getId(), message.getType(), e);
             return false;
         }
@@ -409,11 +430,10 @@ public class LegacySkillRelayStrategy implements SkillRelayStrategy {
     private void sendProtocolError(WebSocketSession session, String reason) {
         try {
             String json = objectMapper.writeValueAsString(GatewayMessage.registerRejected(reason));
-            synchronized (session) {
-                session.sendMessage(new TextMessage(json));
-            }
+            AsyncSessionSender sender = getOrCreateSender(session);
+            sender.enqueue(new TextMessage(json));
         } catch (IOException e) {
-            log.error("[Legacy] Failed to send protocol error: linkId={}, reason={}", session.getId(), reason, e);
+            log.error("[Legacy] Failed to serialize protocol error: linkId={}, reason={}", session.getId(), reason, e);
         }
     }
 }

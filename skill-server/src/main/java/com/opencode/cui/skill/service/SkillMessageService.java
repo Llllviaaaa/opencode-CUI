@@ -28,7 +28,7 @@ import java.util.stream.Collectors;
  * 支持多种消息角色（user / assistant / tool / system）和内容类型。
  *
  * <p>
- * 消息 seq 在每个 session 内自增，保存时同步刷新会话的 last_active_at。
+ * 消息 seq 在每个 session 内自增。last_active_at 的刷新已延迟到 session idle 时执行。
  * </p>
  */
 @Slf4j
@@ -61,7 +61,7 @@ public class SkillMessageService {
 
     /**
      * 保存消息，session 内 seq 自动递增。
-     * 同时刷新父会话的 last_active_at。
+     * last_active_at 的刷新已延迟到 session idle 时由 MessagePersistenceService 触发。
      */
     @Transactional
     SkillMessage saveMessage(SaveMessageCommand cmd) {
@@ -83,7 +83,6 @@ public class SkillMessageService {
                 .build();
 
         messageRepository.insert(message);
-        sessionService.touchSession(cmd.sessionId());
         scheduleLatestHistoryRefreshAfterCommit(cmd.sessionId());
 
         log.info("Saved message: sessionId={}, messageId={}, seq={}, role={}",
@@ -93,7 +92,6 @@ public class SkillMessageService {
 
     /**
      * 保存消息（重载方法），session 内 seq 自动递增。
-     * 同时刷新父会话的 last_active_at。
      */
     @Transactional
     SkillMessage saveMessage(Long sessionId, SkillMessage.Role role, String content,

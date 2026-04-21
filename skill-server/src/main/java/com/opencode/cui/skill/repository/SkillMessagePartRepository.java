@@ -42,6 +42,9 @@ public interface SkillMessagePartRepository {
      */
     String findConcatenatedTextByMessageId(@Param("messageId") Long messageId);
 
+    /** 批量 upsert：一次性写入多个分片 */
+    int batchUpsert(@Param("parts") List<SkillMessagePart> parts);
+
     /** 按所属消息 ID 删除所有分片 */
     int deleteByMessageId(@Param("messageId") Long messageId);
 }
