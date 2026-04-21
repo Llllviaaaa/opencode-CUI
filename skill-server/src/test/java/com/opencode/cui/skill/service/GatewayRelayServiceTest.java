@@ -18,6 +18,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -270,10 +271,11 @@ class GatewayRelayServiceTest {
                 service.handleGatewayMessage(
                                 "{\"type\":\"tool_event\",\"userId\":\"user-1\",\"welinkSessionId\":123,\"event\":{\"data\":\"hello\"}}");
 
-                // busy status is still broadcast via broadcastStreamMessage -> redisMessageBroker
-                ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-                verify(redisMessageBroker).publishToUser(eq("user-1"), payloadCaptor.capture());
-                assertTrue(payloadCaptor.getValue().contains("\"sessionStatus\":\"busy\""));
+                // busy status broadcast via emitter.emitToClient (broadcastStreamMessage now delegates to emitter)
+                ArgumentCaptor<StreamMessage> busyCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(emitter).emitToClient(eq("123"), eq("user-1"), busyCaptor.capture());
+                assertEquals("session.status", busyCaptor.getValue().getType());
+                assertEquals("busy", busyCaptor.getValue().getSessionStatus());
                 // text.delta delivered via dispatcher
                 verify(emitter).emitToSession(any(), eq("123"), eq("user-1"), any(StreamMessage.class));
         }
@@ -312,7 +314,8 @@ class GatewayRelayServiceTest {
                 String msg = "{\"type\":\"agent_online\",\"ak\":\"99\",\"toolType\":\"channel\",\"toolVersion\":\"1.0\"}";
                 service.handleGatewayMessage(msg);
 
-                verify(redisMessageBroker).publishToUser(eq("user-1"), contains("agent.online"));
+                verify(emitter).emitToClient(eq("1"), eq("user-1"), argThat(m ->
+                        StreamMessage.Types.AGENT_ONLINE.equals(m.getType())));
         }
 
         @Test
@@ -326,7 +329,8 @@ class GatewayRelayServiceTest {
                 String msg = "{\"type\":\"agent_offline\",\"ak\":\"99\"}";
                 service.handleGatewayMessage(msg);
 
-                verify(redisMessageBroker).publishToUser(eq("user-2"), contains("agent.offline"));
+                verify(emitter).emitToClient(eq("2"), eq("user-2"), argThat(m ->
+                        StreamMessage.Types.AGENT_OFFLINE.equals(m.getType())));
         }
 
         @Test
