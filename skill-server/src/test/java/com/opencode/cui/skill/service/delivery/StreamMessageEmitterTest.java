@@ -204,4 +204,56 @@ class StreamMessageEmitterTest {
                 () -> emitter.emitToSession(session, "101", "user-a", msg));
         assertEquals("dispatcher boom", ex.getMessage());
     }
+
+    // --- emitToClient ---
+
+    @Test
+    void client1_userIdHintPresent_publishToUserCalledOnce() throws Exception {
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.SESSION_STATUS).sessionStatus("busy").build();
+
+        emitter.emitToClient("101", "user-a", msg);
+
+        org.mockito.ArgumentCaptor<String> payloadCap = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(redisBroker).publishToUser(eq("user-a"), payloadCap.capture());
+        var envelope = objectMapper.readTree(payloadCap.getValue());
+        assertEquals("101", envelope.path("sessionId").asText());
+        assertEquals("user-a", envelope.path("userId").asText());
+        assertEquals("session.status", envelope.path("message").path("type").asText());
+    }
+
+    @Test
+    void client2_hintNullAndSessionFound_usesSessionUserId() {
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.SESSION_STATUS).sessionStatus("busy").build();
+        SkillSession s = mock(SkillSession.class);
+        when(s.getUserId()).thenReturn("user-from-session");
+        when(sessionService.findByIdSafe(101L)).thenReturn(s);
+
+        emitter.emitToClient("101", null, msg);
+
+        verify(redisBroker).publishToUser(eq("user-from-session"), anyString());
+    }
+
+    @Test
+    void client3_hintNullAndSessionNull_publishToUserNotCalled() {
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.SESSION_STATUS).sessionStatus("busy").build();
+        when(sessionService.findByIdSafe(any())).thenReturn(null);
+
+        emitter.emitToClient("101", null, msg);
+
+        verifyNoInteractions(redisBroker);
+    }
+
+    @Test
+    void client4_publishThrows_emitterSwallowsException() {
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.SESSION_STATUS).sessionStatus("busy").build();
+        doThrow(new RuntimeException("redis down"))
+                .when(redisBroker).publishToUser(anyString(), anyString());
+
+        // 不应抛
+        assertDoesNotThrow(() -> emitter.emitToClient("101", "user-a", msg));
+    }
 }

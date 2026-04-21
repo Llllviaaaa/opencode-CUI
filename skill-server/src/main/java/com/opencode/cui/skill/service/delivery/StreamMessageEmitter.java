@@ -87,10 +87,46 @@ public class StreamMessageEmitter {
     }
 
     public void emitToClient(String sessionId, String userIdHint, StreamMessage msg) {
-        throw new UnsupportedOperationException("not yet implemented");
+        try {
+            enrich(sessionId, msg);
+            String userId = resolveUserId(sessionId, userIdHint);
+            if (userId == null || userId.isBlank()) {
+                log.warn("emitToClient skipped: no userId resolvable, sessionId={}, type={}",
+                        sessionId, msg != null ? msg.getType() : null);
+                return;
+            }
+            sendToUserChannel(sessionId, userId, msg);
+            log.info("[EMIT->CLIENT] sessionId={}, type={}, userId={}",
+                    sessionId, msg.getType(), userId);
+        } catch (Exception e) {
+            log.error("emitToClient failed: sessionId={}, type={}, error={}",
+                    sessionId, msg != null ? msg.getType() : null, e.getMessage());
+        }
     }
 
     public void emitToClientWithBuffer(String sessionId, StreamMessage msg) {
         throw new UnsupportedOperationException("not yet implemented");
+    }
+
+    private void sendToUserChannel(String sessionId, String userId, StreamMessage msg)
+            throws JsonProcessingException {
+        ObjectNode envelope = objectMapper.createObjectNode();
+        envelope.put("sessionId", sessionId);
+        envelope.put("userId", userId);
+        envelope.set("message", objectMapper.valueToTree(msg));
+        redisBroker.publishToUser(userId, objectMapper.writeValueAsString(envelope));
+    }
+
+    private String resolveUserId(String sessionId, String hint) {
+        if (hint != null && !hint.isBlank()) return hint;
+        try {
+            Long numericId = ProtocolUtils.parseSessionId(sessionId);
+            if (numericId == null) return null;
+            SkillSession s = sessionService.findByIdSafe(numericId);
+            return s != null ? s.getUserId() : null;
+        } catch (Exception e) {
+            log.warn("resolveUserId failed for sessionId={}: {}", sessionId, e.getMessage());
+            return null;
+        }
     }
 }
