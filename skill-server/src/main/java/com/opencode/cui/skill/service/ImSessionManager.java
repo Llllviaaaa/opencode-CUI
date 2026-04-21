@@ -94,7 +94,8 @@ public class ImSessionManager {
      */
     public void createSessionAsync(String businessDomain, String sessionType,
             String sessionId, String ak, String ownerWelinkId,
-            String assistantAccount, String pendingMessage) {
+            String assistantAccount, String senderUserAccount,
+            String pendingMessage) {
         // 构建分布式锁 key
         String lockKey = buildCreateLockKey(businessDomain, sessionType, sessionId, ak);
         String lockValue = UUID.randomUUID().toString();
@@ -148,7 +149,11 @@ public class ImSessionManager {
                     payloadFields.put("text", pendingMessage);
                     payloadFields.put("toolSessionId", generatedToolSessionId);
                     payloadFields.put("assistantAccount", assistantAccount);
-                    payloadFields.put("sendUserAccount", ownerWelinkId);
+                    String effectiveSender = "group".equals(sessionType)
+                            && senderUserAccount != null && !senderUserAccount.isBlank()
+                            ? senderUserAccount : ownerWelinkId;
+                    payloadFields.put("sendUserAccount", effectiveSender);
+                    payloadFields.put("imGroupId", "group".equals(sessionType) ? sessionId : null);
                     payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
                     gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
                             ak,

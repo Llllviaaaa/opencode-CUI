@@ -104,7 +104,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                "hello", "text", null, null, null);
+                null, "hello", "text", null, null, "IM");
 
         assertTrue(result.success());
         ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
@@ -124,7 +124,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "unknown",
-                "hello", "text", null, null, null);
+                null, "hello", "text", null, null, "IM");
 
         assertFalse(result.success());
         assertEquals(404, result.code());
@@ -143,12 +143,12 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-new", "assist-001",
-                "first msg", "text", null, null, null);
+                null, "first msg", "text", null, null, "IM");
 
         assertTrue(result.success());
         verify(sessionManager).createSessionAsync(
                 "im", "direct", "dm-new", "ak-001",
-                "owner-001", "assist-001", "first msg");
+                "owner-001", "assist-001", null, "first msg");
         verify(gatewayRelayService, never()).sendInvokeToGateway(any());
     }
 
@@ -223,7 +223,7 @@ class InboundProcessingServiceTest {
 
         assertTrue(result.success());
         verify(sessionManager).requestToolSession(session, null);
-        verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any());
+        verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -240,7 +240,7 @@ class InboundProcessingServiceTest {
         assertTrue(result.success());
         verify(sessionManager).createSessionAsync(
                 "im", "direct", "dm-new", "ak-001",
-                "owner-001", "assist-001", null);
+                "owner-001", "assist-001", null, null);
         verify(sessionManager, never()).requestToolSession(any(), any());
     }
 

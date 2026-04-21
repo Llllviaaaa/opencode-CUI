@@ -140,7 +140,7 @@ public class InboundProcessingService {
             log.info("No existing session found, creating async: domain={}, sessionType={}, sessionId={}, ak={}",
                     businessDomain, sessionType, sessionId, ak);
             sessionManager.createSessionAsync(businessDomain, sessionType, sessionId,
-                    ak, ownerWelinkId, assistantAccount, prompt);
+                    ak, ownerWelinkId, assistantAccount, senderUserAccount, prompt);
             // 异步创建后重新查询获取 session ID
             SkillSession created = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
             writeInvokeSource(created, inboundSource);
@@ -309,7 +309,7 @@ public class InboundProcessingService {
             return InboundResult.ok(sessionId, String.valueOf(session.getId()));
         } else {
             sessionManager.createSessionAsync(businessDomain, sessionType, sessionId,
-                    ak, ownerWelinkId, assistantAccount, null);
+                    ak, ownerWelinkId, assistantAccount, null, null);
             SkillSession created = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
             return InboundResult.ok(sessionId,
                     created != null ? String.valueOf(created.getId()) : null);
