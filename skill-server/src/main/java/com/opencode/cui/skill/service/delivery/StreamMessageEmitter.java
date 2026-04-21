@@ -82,11 +82,13 @@ public class StreamMessageEmitter {
 
     public void emitToSession(SkillSession session, String sessionId,
                               String userId, StreamMessage msg) {
+        if (sessionId == null || msg == null) return;
         enrich(sessionId, msg);
         dispatcher.deliver(session, sessionId, userId, msg);
     }
 
     public void emitToClient(String sessionId, String userIdHint, StreamMessage msg) {
+        if (sessionId == null || msg == null) return;
         try {
             enrich(sessionId, msg);
             String userId = resolveUserId(sessionId, userIdHint);
@@ -105,7 +107,9 @@ public class StreamMessageEmitter {
     }
 
     public void emitToClientWithBuffer(String sessionId, StreamMessage msg) {
-        throw new UnsupportedOperationException("not yet implemented");
+        emitToClient(sessionId, null, msg);
+        if (msg == null || sessionId == null) return;
+        bufferService.accumulate(sessionId, msg);
     }
 
     private void sendToUserChannel(String sessionId, String userId, StreamMessage msg)

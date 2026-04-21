@@ -256,4 +256,54 @@ class StreamMessageEmitterTest {
         // 不应抛
         assertDoesNotThrow(() -> emitter.emitToClient("101", "user-a", msg));
     }
+
+    // --- emitToClientWithBuffer ---
+
+    @Test
+    void buffer1_normalCase_publishAndAccumulate() {
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.PERMISSION_REPLY).build();
+        SkillSession s = mock(SkillSession.class);
+        when(s.getUserId()).thenReturn("user-a");
+        when(sessionService.findByIdSafe(101L)).thenReturn(s);
+
+        emitter.emitToClientWithBuffer("101", msg);
+
+        verify(redisBroker).publishToUser(eq("user-a"), anyString());
+        verify(bufferService).accumulate(eq("101"), eq(msg));
+    }
+
+    @Test
+    void buffer2_publishThrows_bufferStillAccumulates() {
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.PERMISSION_REPLY).build();
+        SkillSession s = mock(SkillSession.class);
+        when(s.getUserId()).thenReturn("user-a");
+        when(sessionService.findByIdSafe(101L)).thenReturn(s);
+        doThrow(new RuntimeException("redis down"))
+                .when(redisBroker).publishToUser(anyString(), anyString());
+
+        emitter.emitToClientWithBuffer("101", msg);
+
+        // 沿袭原 publishProtocolMessage 语义：broadcast 吞异常 → buffer 仍执行
+        verify(bufferService).accumulate(eq("101"), eq(msg));
+    }
+
+    // --- null-input boundary ---
+
+    @Test
+    void boundary1_nullInputs_noOpAllMethods() {
+        SkillSession session = mock(SkillSession.class);
+
+        assertDoesNotThrow(() -> {
+            emitter.emitToSession(session, null, null, null);
+            emitter.emitToClient(null, null, null);
+            emitter.emitToClientWithBuffer(null, null);
+        });
+
+        verifyNoInteractions(dispatcher);
+        verifyNoInteractions(redisBroker);
+        verifyNoInteractions(bufferService);
+        verifyNoInteractions(persistenceService);
+    }
 }
