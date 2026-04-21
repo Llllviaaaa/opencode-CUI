@@ -321,6 +321,7 @@ class SkillMessageControllerTest {
         var response = controller.replyPermission("1", "1", "p-abc", request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(503, response.getBody().getCode());
+        assertEquals("MOCK_OFFLINE_MSG", response.getBody().getErrormsg());
         verify(gatewayRelayService, never()).sendInvokeToGateway(any());
     }
 
@@ -398,6 +399,7 @@ class SkillMessageControllerTest {
         ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
         verify(gatewayRelayService).publishProtocolMessage(eq("1"), msgCaptor.capture());
         assertEquals(StreamMessage.Types.ERROR, msgCaptor.getValue().getType());
+        assertEquals("MOCK_OFFLINE_MSG", msgCaptor.getValue().getError());
         // 验证没有调用 Gateway 发送 invoke
         verify(gatewayRelayService, never()).sendInvokeToGateway(any());
     }
