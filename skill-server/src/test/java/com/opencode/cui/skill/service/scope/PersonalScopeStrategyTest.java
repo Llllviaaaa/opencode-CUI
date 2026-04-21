@@ -21,9 +21,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.util.ArrayList;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.Mockito.verify;
@@ -47,7 +47,7 @@ class PersonalScopeStrategyTest {
     // ---- Log4j2 in-memory appender infrastructure ----
 
     private static class CapturingAppender extends AbstractAppender {
-        private final List<LogEvent> events = new ArrayList<>();
+        private final List<LogEvent> events = new java.util.concurrent.CopyOnWriteArrayList<>();
 
         CapturingAppender() {
             super("CapturingAppender", null, PatternLayout.createDefaultLayout(), true, Property.EMPTY_ARRAY);
@@ -104,7 +104,7 @@ class PersonalScopeStrategyTest {
         assertNull(result);
         verifyNoInteractions(openCodeEventTranslator);
         verifyNoInteractions(cloudEventTranslator);
-        org.junit.jupiter.api.Assertions.assertEquals(0, countWarnLogs(),
+        assertEquals(0, countWarnLogs(),
                 "null event must not produce any WARN log");
     }
 
@@ -122,7 +122,7 @@ class PersonalScopeStrategyTest {
         assertSame(expected, result);
         verify(openCodeEventTranslator).translate(event);
         verifyNoInteractions(cloudEventTranslator);
-        org.junit.jupiter.api.Assertions.assertEquals(0, countWarnLogs(),
+        assertEquals(0, countWarnLogs(),
                 "missing protocol field must not produce a WARN log");
     }
 
@@ -141,7 +141,7 @@ class PersonalScopeStrategyTest {
         assertSame(expected, result);
         verify(openCodeEventTranslator).translate(event);
         verifyNoInteractions(cloudEventTranslator);
-        org.junit.jupiter.api.Assertions.assertEquals(0, countWarnLogs(),
+        assertEquals(0, countWarnLogs(),
                 "explicit protocol=opencode must not produce a WARN log");
     }
 }
