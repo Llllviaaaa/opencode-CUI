@@ -56,6 +56,8 @@ class InboundProcessingServiceTest {
     private DeliveryProperties deliveryProperties;
     private InboundProcessingService service;
 
+    private static final String MOCK_OFFLINE_MSG = "MOCK_OFFLINE_MSG";
+
     @BeforeEach
     void setUp() {
         assistantIdProperties = new AssistantIdProperties();
@@ -89,7 +91,7 @@ class InboundProcessingServiceTest {
         // 默认 Agent 在线
         lenient().when(gatewayApiClient.getAgentByAk(any()))
                 .thenReturn(AgentSummary.builder().ak("ak-001").toolType("assistant").build());
-        lenient().when(offlineMessageProvider.get()).thenReturn("MOCK_OFFLINE_MSG");
+        lenient().when(offlineMessageProvider.get()).thenReturn(MOCK_OFFLINE_MSG);
     }
 
     // ==================== processChat ====================
@@ -153,6 +155,53 @@ class InboundProcessingServiceTest {
                 "im", "direct", "dm-new", "ak-001",
                 "owner-001", "assist-001", null, "first msg");
         verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+    }
+
+    @Test
+    @DisplayName("processChat: agent 离线时返回 error(503, offline_msg, sid, wsid) 且调用 handleAgentOffline 副作用")
+    void processChatAgentOfflineReturns503() {
+        when(resolverService.resolve("assist-001"))
+                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线
+
+        SkillSession existing = buildReadySession();
+        when(sessionManager.findSession("im", "direct", "dm-001", "ak-001"))
+                .thenReturn(existing);
+
+        InboundResult result = service.processChat(
+                "im", "direct", "dm-001", "assist-001",
+                null, "hello", "text", null, null, "EXTERNAL");
+
+        assertFalse(result.success());
+        assertEquals(503, result.code());
+        assertEquals(MOCK_OFFLINE_MSG, result.message());
+        assertEquals("dm-001", result.businessSessionId());
+        assertEquals(String.valueOf(existing.getId()), result.welinkSessionId());
+
+        verify(emitter).emitToSession(eq(existing), anyString(), isNull(), any(StreamMessage.class));
+    }
+
+    @Test
+    @DisplayName("processChat: business 助手（requiresOnlineCheck=false）跳过在线检查，正常转发")
+    void processChatBusinessScopeSkipsOnlineCheck() {
+        AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
+        lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
+        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
+        when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
+
+        when(resolverService.resolve("assist-001"))
+                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        SkillSession session = buildReadySession();
+        when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
+        when(contextInjectionService.resolvePrompt("direct", "hello", null)).thenReturn("hello");
+
+        InboundResult result = service.processChat(
+                "im", "direct", "dm-001", "assist-001",
+                null, "hello", "text", null, null, "EXTERNAL");
+
+        assertTrue(result.success());
+        verify(gatewayApiClient, never()).getAgentByAk(anyString()); // 关键：没查在线状态
+        verify(gatewayRelayService).sendInvokeToGateway(any(InvokeCommand.class));
     }
 
     // ==================== processQuestionReply ====================
@@ -268,7 +317,7 @@ class InboundProcessingServiceTest {
         ArgumentCaptor<StreamMessage> cap = ArgumentCaptor.forClass(StreamMessage.class);
         verify(emitter).emitToSession(eq(session), eq("101"), isNull(), cap.capture());
         assertEquals(StreamMessage.Types.ERROR, cap.getValue().getType());
-        assertEquals("MOCK_OFFLINE_MSG", cap.getValue().getError());
+        assertEquals(MOCK_OFFLINE_MSG, cap.getValue().getError());
     }
 
     // ==================== helper ====================

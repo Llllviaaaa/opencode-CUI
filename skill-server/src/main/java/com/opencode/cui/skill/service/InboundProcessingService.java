@@ -114,19 +114,8 @@ public class InboundProcessingService {
                 assistantAccount, ak, ownerWelinkId);
 
         // 第 2 步：Agent 在线检查（开关控制，业务助手跳过）
-        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
-                assistantInfoService.getCachedScope(ak));
-        if (assistantIdProperties.isEnabled() && scopeStrategy.requiresOnlineCheck()) {
-            if (gatewayApiClient.getAgentByAk(ak) == null) {
-                log.warn("[SKIP] processChat: reason=agent_offline, ak={}, sessionType={}, sessionId={}",
-                        ak, sessionType, sessionId);
-                handleAgentOffline(businessDomain, sessionType, sessionId, ak, assistantAccount);
-                // 离线时查找已有 session 返回其 ID
-                SkillSession offlineSession = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
-                return InboundResult.ok(sessionId,
-                        offlineSession != null ? String.valueOf(offlineSession.getId()) : null);
-            }
-        }
+        InboundResult offline = checkAgentOnline(businessDomain, sessionType, sessionId, ak, assistantAccount);
+        if (offline != null) return offline;
 
         // 第 3 步：上下文注入
         String prompt = contextInjectionService.resolvePrompt(sessionType, content, chatHistory);
@@ -323,6 +312,31 @@ public class InboundProcessingService {
                     String.valueOf(session.getId()), inboundSource,
                     deliveryProperties.getInvokeSourceTtlSeconds());
         }
+    }
+
+    /**
+     * 返回 null 表示在线（或跳过检查），调用方继续主流程。
+     * 返回非 null 表示离线，调用方直接 return 该结果
+     * （已带好 code=503、errormsg、session IDs，并已执行 handleAgentOffline 副作用）。
+     */
+    private InboundResult checkAgentOnline(String businessDomain, String sessionType,
+                                           String sessionId, String ak,
+                                           String assistantAccount) {
+        if (!assistantIdProperties.isEnabled()) return null;
+        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
+                assistantInfoService.getCachedScope(ak));
+        if (!scopeStrategy.requiresOnlineCheck()) return null;
+        if (gatewayApiClient.getAgentByAk(ak) != null) return null;
+
+        log.warn("[SKIP] checkAgentOnline: reason=agent_offline, ak={}, domain={}, sessionType={}, sessionId={}",
+                ak, businessDomain, sessionType, sessionId);
+        SkillSession existing = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
+        handleAgentOffline(businessDomain, sessionType, sessionId, ak, assistantAccount);
+        return InboundResult.error(
+                503,
+                offlineMessageProvider.get(),
+                sessionId,
+                existing != null ? String.valueOf(existing.getId()) : null);
     }
 
     /**
