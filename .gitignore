@@ -35,6 +35,8 @@ documents/.obsidian/
 .trellis/
 .gstack/
 bench/
+benchmark/
+tools/
 bench_results/
 .pytest_cache/
 .planning/
