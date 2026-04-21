@@ -244,6 +244,8 @@ class InboundProcessingServiceTest {
         assertFalse(result.success());
         assertEquals(503, result.code());
         assertEquals(MOCK_OFFLINE_MSG, result.message());
+        assertEquals("dm-001", result.businessSessionId());
+        assertEquals(String.valueOf(session.getId()), result.welinkSessionId());
         verify(gatewayRelayService, never()).sendInvokeToGateway(any(InvokeCommand.class));
     }
 
@@ -262,6 +264,8 @@ class InboundProcessingServiceTest {
         assertFalse(result.success());
         assertEquals(404, result.code());
         assertEquals("Session not found or not ready", result.message());
+        assertEquals("dm-001", result.businessSessionId());
+        assertNull(result.welinkSessionId());
         verify(gatewayApiClient, never()).getAgentByAk(anyString()); // 404 优先，未查在线
     }
 
@@ -312,6 +316,8 @@ class InboundProcessingServiceTest {
         assertFalse(result.success());
         assertEquals(503, result.code());
         assertEquals(MOCK_OFFLINE_MSG, result.message());
+        assertEquals("dm-001", result.businessSessionId());
+        assertEquals(String.valueOf(session.getId()), result.welinkSessionId());
         verify(gatewayRelayService, never()).sendInvokeToGateway(any(InvokeCommand.class));
     }
 
@@ -330,6 +336,8 @@ class InboundProcessingServiceTest {
         assertFalse(result.success());
         assertEquals(404, result.code());
         assertEquals("Session not found or not ready", result.message());
+        assertEquals("dm-001", result.businessSessionId());
+        assertNull(result.welinkSessionId());
         verify(gatewayApiClient, never()).getAgentByAk(anyString());
     }
 
