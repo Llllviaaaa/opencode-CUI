@@ -224,25 +224,38 @@ Mock：`OutboundDeliveryDispatcher`、`RedisMessageBroker`、`BufferService`、`
 |------|------|
 | boundary-1 | sessionId==null 或 msg==null → 三方法均 no-op，所有依赖零交互 |
 
-### 4.2 回归测试：agent-offline welinksessionid（bug 闭环）
+### 4.2 回归测试：agent-offline 调用路径
 
 位置：`InboundProcessingServiceTest`（已有文件追加）
 
+**职责边界**：这条测试只验证"`handleAgentOffline` 正确走了 emitter 路径"——即从原来"直接 `dispatcher.deliver`，跳过 enrich"改为"走 `emitter.emitToSession`，由 emitter 完成 enrich"。由于 emitter 是 mock，captor 捕获的是 enrich **之前** 的 msg，断言 welinkSessionId 的值毫无意义；那部分语义由 §4.1 emitter 单测 + §4.3 序列化守护覆盖。
+
 ```java
 @Test
-void handleAgentOffline_ExternalWs_shouldIncludeWelinkSessionId() {
+void handleAgentOffline_ExternalWs_shouldRouteViaEmitter() {
     SkillSession session = mockExternalWsSession(id=101L, businessDomain="ext");
     when(sessionManager.findSession(...)).thenReturn(session);
     // 触发 agent offline
 
     inboundProcessingService.process(...);
 
+    // 只验证调用路径与 msg 语义字段（非 enrich 填充字段）
     ArgumentCaptor<StreamMessage> cap = ArgumentCaptor.forClass(StreamMessage.class);
     verify(emitter).emitToSession(eq(session), eq("101"), isNull(), cap.capture());
     assertEquals(StreamMessage.Types.ERROR, cap.getValue().getType());
-    assertEquals("101", cap.getValue().getWelinkSessionId());
+    assertEquals(AGENT_OFFLINE_MESSAGE, cap.getValue().getError());
+
+    // 原代码里直接走 dispatcher 的路径应不再发生
+    verifyNoInteractions(outboundDeliveryDispatcher);
 }
 ```
+
+**Bug 闭环的三层分工**：
+- §4.1 `StreamMessageEmitterTest` — 守 enrich 语义（welinkSessionId 被填）
+- §4.2 `InboundProcessingServiceTest`（本节）— 守调用路径（不再绕过 emitter）
+- §4.3 `ExternalWsDeliveryStrategyTest` — 守 JSON 出口（序列化后字段仍在）
+
+三者叠加，才是完整的回归防线。
 
 ### 4.3 序列化守护：`ExternalWsDeliveryStrategyTest` 追加 1 条
 
@@ -399,3 +412,5 @@ mvn -pl skill-server test -Dtest=StreamMessageEmitterTest
   - 降低 `emitToSession` 异常契约措辞（§2.5）：从"让 handler 感知投递失败"改为"emitter 不引入额外 try-catch；strategy 层保持 best-effort"；session-3 用例从"契约"降为"行为断言"
   - 新增 §4.3 `ExternalWsDeliveryStrategyTest` 序列化守护用例，覆盖 bug 真实出口（JSON payload 含 `welinkSessionId`）
   - 同步更新迁移表风险级别（§3.2 #12）、风险表（§6）、范围外清单（§9）、checklist（§8）
+- **v3**（Codex 二次审阅后修订）：
+  - 修正 §4.2 回归测试设计错误：emitter 为 mock 时，captor 捕获的是 enrich 之前的 msg，`assertEquals("101", ...getWelinkSessionId())` 必然失败。改为只验证调用路径（`verify(emitter).emitToSession(...)` + msg 语义字段 + `verifyNoInteractions(dispatcher)`）；welinkSessionId 填充验证由 §4.1 负责，JSON 出口验证由 §4.3 负责——三层测试各司其职
