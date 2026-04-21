@@ -34,8 +34,6 @@ import java.util.Map;
 @Service
 public class InboundProcessingService {
 
-    private static final String AGENT_OFFLINE_MESSAGE = "任务下发失败，请检查助理是否离线，确保助理在线后重试";
-
     private final AssistantAccountResolverService resolverService;
     private final AssistantIdProperties assistantIdProperties;
     private final GatewayApiClient gatewayApiClient;
@@ -50,6 +48,7 @@ public class InboundProcessingService {
     private final StreamMessageEmitter emitter;
     private final DeliveryProperties deliveryProperties;
     private final RedisMessageBroker redisMessageBroker;
+    private final AssistantOfflineMessageProvider offlineMessageProvider;
 
     public InboundProcessingService(
             AssistantAccountResolverService resolverService,
@@ -65,7 +64,8 @@ public class InboundProcessingService {
             AssistantScopeDispatcher scopeDispatcher,
             StreamMessageEmitter emitter,
             DeliveryProperties deliveryProperties,
-            RedisMessageBroker redisMessageBroker) {
+            RedisMessageBroker redisMessageBroker,
+            AssistantOfflineMessageProvider offlineMessageProvider) {
         this.resolverService = resolverService;
         this.assistantIdProperties = assistantIdProperties;
         this.gatewayApiClient = gatewayApiClient;
@@ -80,6 +80,7 @@ public class InboundProcessingService {
         this.emitter = emitter;
         this.deliveryProperties = deliveryProperties;
         this.redisMessageBroker = redisMessageBroker;
+        this.offlineMessageProvider = offlineMessageProvider;
     }
 
     /**
@@ -332,15 +333,16 @@ public class InboundProcessingService {
                                      String sessionId, String ak, String assistantAccount) {
         SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
         if (session != null) {
+            String offlineMessage = offlineMessageProvider.get();
             StreamMessage offlineMsg = StreamMessage.builder()
                     .type(StreamMessage.Types.ERROR)
-                    .error(AGENT_OFFLINE_MESSAGE)
+                    .error(offlineMessage)
                     .build();
             emitter.emitToSession(session,
                     String.valueOf(session.getId()), null, offlineMsg);
             if (session.isImDirectSession()) {
                 try {
-                    messageService.saveSystemMessage(session.getId(), AGENT_OFFLINE_MESSAGE);
+                    messageService.saveSystemMessage(session.getId(), offlineMessage);
                 } catch (Exception e) {
                     log.error("Failed to persist agent_offline message: {}", e.getMessage());
                 }

@@ -49,6 +49,8 @@ class InboundProcessingServiceTest {
     private StreamMessageEmitter emitter;
     @Mock
     private RedisMessageBroker redisMessageBroker;
+    @Mock
+    private AssistantOfflineMessageProvider offlineMessageProvider;
 
     private AssistantIdProperties assistantIdProperties;
     private DeliveryProperties deliveryProperties;
@@ -76,7 +78,8 @@ class InboundProcessingServiceTest {
                 scopeDispatcher,
                 emitter,
                 deliveryProperties,
-                redisMessageBroker);
+                redisMessageBroker,
+                offlineMessageProvider);
 
         // 默认 scope 策略：personal（requiresOnlineCheck=true）
         AssistantScopeStrategy personalStrategy = mock(AssistantScopeStrategy.class);
@@ -86,6 +89,7 @@ class InboundProcessingServiceTest {
         // 默认 Agent 在线
         lenient().when(gatewayApiClient.getAgentByAk(any()))
                 .thenReturn(AgentSummary.builder().ak("ak-001").toolType("assistant").build());
+        lenient().when(offlineMessageProvider.get()).thenReturn("MOCK_OFFLINE_MSG");
     }
 
     // ==================== processChat ====================
@@ -260,11 +264,11 @@ class InboundProcessingServiceTest {
         service.handleAgentOffline(
                 "ext", "single", "101", "ak-x", "assistant-x");
 
-        // then: 走 emitter.emitToSession，msg 携带 ERROR 类型 + error 非空
+        // then: 走 emitter.emitToSession，msg 携带 ERROR 类型 + error 来自 provider
         ArgumentCaptor<StreamMessage> cap = ArgumentCaptor.forClass(StreamMessage.class);
         verify(emitter).emitToSession(eq(session), eq("101"), isNull(), cap.capture());
         assertEquals(StreamMessage.Types.ERROR, cap.getValue().getType());
-        assertNotNull(cap.getValue().getError());
+        assertEquals("MOCK_OFFLINE_MSG", cap.getValue().getError());
     }
 
     // ==================== helper ====================
