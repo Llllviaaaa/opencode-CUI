@@ -78,18 +78,14 @@ public class StreamMessageEmitter {
 - **保留 `userIdHint`**：多数 handler 上下文里 userId 已在手，免去反查；null 时触发 fallback
 - **放在 `service.delivery` 包**：与 dispatcher 同栖，出站聚合点
 
-### 2.4 enrich 语义（含 Bug 修正）
+### 2.4 enrich 语义
 
 ```java
 private void enrich(String sessionId, StreamMessage msg) {
     if (msg == null || sessionId == null) return;
 
-    msg.setSessionId(sessionId);  // 内部字段，始终覆盖
-
-    // welinkSessionId —— only-if-blank（修正原"无条件覆盖"的潜伏 bug）
-    if (msg.getWelinkSessionId() == null || msg.getWelinkSessionId().isBlank()) {
-        msg.setWelinkSessionId(sessionId);
-    }
+    msg.setSessionId(sessionId);           // 内部字段，始终覆盖
+    msg.setWelinkSessionId(sessionId);      // 协议字段，始终覆盖（canonical 语义）
 
     // emittedAt —— 按白名单 + only-if-blank（与原逻辑一致）
     if (!EMITTED_AT_EXCLUDED_TYPES.contains(msg.getType())
@@ -107,17 +103,17 @@ private void enrich(String sessionId, StreamMessage msg) {
 }
 ```
 
-**关键改动**：`welinkSessionId` 从原来的"无条件覆盖"改为 **only-if-blank**。原行为是潜在不一致点 —— `StreamMessage.userMessage(messageId, seq, content, welinkSessionId)` 工厂允许调用方显式传入 welinkSessionId，但进 enrich 即被覆盖成 router 参数；当前代码下两者恰好等值所以未暴露，但语义上违反"尊重调用方显式值"。本次顺手修正。
+**`welinkSessionId` 保持 canonical overwrite**：当前协议语义下 `welinkSessionId` 是内部会话 ID 的权威表达（即 `SkillSession.id`），全仓搜索未发现任何"显式传异值"的调用场景（`StreamMessage.userMessage` 在 `SkillMessageController:131` 传入的值与上下文 `sessionId` 同一变量）。本次重构仅做"统一出口"，**不调整** welinkSessionId 的覆盖语义——避免把"sessionId ≠ welinkSessionId 合法"写成被测试保护的契约。如果未来要放宽为 caller-overridable 字段，需独立协议变更说明 + 跨端验证，不走本 PR。
 
-**幂等性**：三个 setter 对于既存值的处理使多次 enrich 行为稳定；`prepareMessageContext` 内部通过 `tracker.resolveActiveMessage` 实现幂等（该方法在 `persistIfFinal` 中本就会多次调用）。
+**幂等性**：setter 对相同入参稳定；`prepareMessageContext` 内部通过 `tracker.resolveActiveMessage` 幂等（该方法在 `persistIfFinal` 中本就多次调用）。
 
 ### 2.5 错误处理契约
 
 | 方法 | 异常行为 | 理由 |
 |------|---------|------|
-| `emitToSession` | **不吞**，让异常上冒 | 与现有 `dispatcher.deliver` 合约一致；handler 层需感知投递失败 |
+| `emitToSession` | **emitter 层不引入额外 try-catch**；异常策略由下游 strategy 自行决定（当前 `MiniappDeliveryStrategy` / `ImRestDeliveryStrategy` / `ExternalWsDeliveryStrategy` 内部均 best-effort 吞异常） | 与现状一致；emitter 不承诺"handler 可感知投递失败"这种强合约——strategy 层已吞，承诺了也做不到；strategy 层异常策略改造不在本次范围 |
 | `emitToClient` | **try-catch 吞并**，仅 log.error | 与原 `broadcastStreamMessage` 行为一致；广播失败不应中断调用链 |
-| `emitToClientWithBuffer` | `emitToClient` 已吞异常 → `bufferService.accumulate` 无条件执行 | **沿袭原 `publishProtocolMessage` 既成语义**，不改变 |
+| `emitToClientWithBuffer` | `emitToClient` 已吞异常 → `bufferService.accumulate` 无条件执行 | 沿袭原 `publishProtocolMessage` 既成语义，不改变 |
 
 ---
 
@@ -145,7 +141,7 @@ private void enrich(String sessionId, StreamMessage msg) {
 | 9 | `GatewayMessageRouter.java:672` | agent.online 广播 | 低 |
 | 10 | `GatewayMessageRouter.java:687` | agent.offline 广播 | 低 |
 | 11 | `GatewayMessageRouter.java:759` | retryPendingMessages 后 "busy" | 低 |
-| 12 | `SkillMessageController.java:131` | 用户消息多端同步广播 | 中 — 含 welinkSessionId 显式传入场景，由 only-if-blank 改动保护 |
+| 12 | `SkillMessageController.java:131` | 用户消息多端同步广播 | 低 |
 | 13 | `GatewayMessageRouter.java:1127` (`RebuildCallback` 实现) | rebuild broadcast | 低 |
 | 14 | `GatewayRelayService.java:339` (`RebuildCallback` 实现) | 同上另一份实现 | 低 |
 
@@ -188,8 +184,8 @@ Mock：`OutboundDeliveryDispatcher`、`RedisMessageBroker`、`BufferService`、`
 
 | 用例 | 断言 |
 |------|------|
-| enrich-1 | welinkSessionId 已预填 `"business-123"` → 不被 sessionId 覆盖（bug 防护核心） |
-| enrich-2 | welinkSessionId null → 被 sessionId 兜底 |
+| enrich-1 | welinkSessionId 已预填任意值 → 被 sessionId 参数**覆盖**（canonical 语义守护） |
+| enrich-2 | welinkSessionId null → 被 sessionId 填充 |
 | enrich-3 | emittedAt 在白名单类型 → 保持 null |
 | enrich-4 | emittedAt 非白名单类型 + null → 被填当前时间 |
 | enrich-5 | emittedAt 已预填 → 保持原值 |
@@ -204,7 +200,7 @@ Mock：`OutboundDeliveryDispatcher`、`RedisMessageBroker`、`BufferService`、`
 |------|------|
 | session-1 | dispatcher.deliver 调用 1 次 |
 | session-2 | redisBroker.publishToUser 零交互 |
-| session-3 契约 | dispatcher 抛 RuntimeException → emitToSession 向上抛（不吞） |
+| session-3 | dispatcher 抛 RuntimeException → emitToSession 不新增吞异常逻辑（异常冒到调用方；不是合约承诺，仅行为断言） |
 
 #### emitToClient（4 条）
 
@@ -248,7 +244,41 @@ void handleAgentOffline_ExternalWs_shouldIncludeWelinkSessionId() {
 }
 ```
 
-### 4.3 现有测试更新
+### 4.3 序列化守护：`ExternalWsDeliveryStrategyTest` 追加 1 条
+
+原 bug 的**真实出口**是 `ExternalWsDeliveryStrategy.deliver` 的 `objectMapper.writeValueAsString(msg)`——单测层面只校验 msg 对象字段不足以守护 JSON 序列化的产物（`@JsonIgnore` / getter / 嵌套 `@JsonUnwrapped` 任一偏差都可能让 `welinkSessionId` 再次丢失）。
+
+位置：`skill-server/src/test/java/com/opencode/cui/skill/service/delivery/ExternalWsDeliveryStrategyTest.java`（已存在）
+
+```java
+@Test
+void deliver_errorEvent_serializedJsonContainsWelinkSessionId() {
+    // given: 一条 enrich 过的 error StreamMessage
+    SkillSession session = mockExternalWsSession(id=101L);
+    StreamMessage msg = StreamMessage.builder()
+            .type(StreamMessage.Types.ERROR)
+            .error("agent offline")
+            .build();
+    msg.setSessionId("101");
+    msg.setWelinkSessionId("101");   // 模拟 emitter 已 enrich 的态
+
+    when(externalStreamHandler.pushToOne(anyString(), anyString())).thenReturn(true);
+    ArgumentCaptor<String> jsonCap = ArgumentCaptor.forClass(String.class);
+
+    // when
+    strategy.deliver(session, "101", null, msg);
+
+    // then: 捕获实际发出的 JSON payload，断言含 welinkSessionId
+    verify(externalStreamHandler).pushToOne(anyString(), jsonCap.capture());
+    JsonNode payload = new ObjectMapper().readTree(jsonCap.getValue());
+    assertEquals("101", payload.path("welinkSessionId").asText());
+    assertEquals("error", payload.path("type").asText());
+}
+```
+
+这条测试直接贴近 bug 出口——将来任何改动（Jackson 注解、getter 行为、strategy 的 wrapper 逻辑）只要让 `welinkSessionId` 从 JSON 里掉出去，就会在 CI 被抓。
+
+### 4.4 现有测试更新
 
 | 测试 | 改动 |
 |------|------|
@@ -259,9 +289,9 @@ void handleAgentOffline_ExternalWs_shouldIncludeWelinkSessionId() {
 
 `InboundProcessingServiceTest` 构造函数需新增 `StreamMessageEmitter` mock 依赖。
 
-### 4.4 不做：新增集成测试
+### 4.5 不做：新增跨组件集成测试
 
-理由：Emitter 是纯内部组装层，ExternalWsDeliveryStrategy 本身未改。welinkSessionId 从 emitter → dispatcher → strategy 的链路由单测 mock 充分证明。`tools/e2e-test-field-consistency.py` 作为 ship 前人工验收已足够。
+理由：Emitter 是纯内部组装层；§4.3 的序列化守护测试已在 `ExternalWsDeliveryStrategyTest` 层抓住 bug 真实出口；`tools/e2e-test-field-consistency.py` 作为 ship 前人工验收覆盖端到端。跨组件 SpringBootTest 成本高收益低。
 
 ---
 
@@ -313,12 +343,11 @@ mvn -pl skill-server test -Dtest=StreamMessageEmitterTest
 
 | 风险 | 概率 | 影响 | 缓解 |
 |------|------|------|------|
-| `prepareMessageContext` 调用路径从"仅 enrich 点"扩大到"每次 emit"，引入非幂等副作用 | 低 | 中 | 已确认 `tracker.resolveActiveMessage` 是"查或取"语义；`persistIfFinal` 已多次调用该方法；enrich-8 用例守护 |
-| `welinkSessionId` only-if-blank 暴露先前被覆盖掩盖的脏数据 | 中 | 中 | enrich-1 用例锁语义；`GatewayMessageRouter.resolveSessionId` 入站解析不动；暴露优于继续掩盖 |
+| `prepareMessageContext` 调用路径从"仅 enrich 点"扩大到"每次 emit"，引入非幂等副作用 | 低 | 中 | 已确认 `tracker.resolveActiveMessage` 是"查或取"语义；`persistIfFinal` 已多次调用该方法；enrich-9 用例守护 |
 | 外部 API wrapper 行为差异破坏 controller 测试 | 中 | 低 | 外部 API 签名不变，controller 层 mock 不受影响；内部 delegate 由 Step 2 全量测试覆盖 |
 | `emitToClientWithBuffer` buffer 语义偏差 | 低 | 中 | buffer-1/2 直接守护；沿袭原"无条件 buffer"不变化 |
 | 日志前缀改动影响线上 grep 告警 | 中 | 低 | PR 描述必须列出；观测团队同步更新查询 |
-| `SkillMessageController:131` 多端同步用户消息改动后行为不一致 | 低 | 高 | enrich-1 用例锁该场景；SkillMessageControllerTest 已有覆盖；Step 3 手工验 miniapp 多端发消息 |
+| 未来 Jackson 序列化 / getter 行为 / strategy 包装偏差导致再次漏字段（bug 出口盲区） | 低 | 高 | §4.3 新增 `ExternalWsDeliveryStrategyTest` 序列化快照用例，在 bug 真实出口处守护 JSON payload 含 `welinkSessionId` |
 
 ---
 
@@ -341,7 +370,7 @@ mvn -pl skill-server test -Dtest=StreamMessageEmitterTest
 - [ ] `grep -r "enrichStreamMessage" skill-server/src` 为空
 - [ ] `grep -r "outboundDeliveryDispatcher\.deliver" skill-server/src/main` 仅 1 处
 - [ ] `grep -r "redisMessageBroker\.publishToUser" skill-server/src/main` 仅 2 处
-- [ ] 新增 19 条 emitter 用例 + 1 条 agent-offline 回归
+- [ ] 新增 19 条 emitter 用例 + 1 条 agent-offline 回归 + 1 条 ExternalWs 序列化守护
 - [ ] `tools/e2e-test-field-consistency.py` 本地通过
 - [ ] 手工验 agent offline：external ws JSON 含 `welinkSessionId`
 - [ ] PR 描述含"`[EXIT->FE]` → `[EMIT->CLIENT]`"日志变更说明
@@ -357,3 +386,16 @@ mvn -pl skill-server test -Dtest=StreamMessageEmitterTest
 - **不改 miniapp 前端**：协议字段无增减
 - **不清理外部 API wrapper**：`GatewayRelayService.publishProtocolMessage` / `Router.broadcastStreamMessage` / `Router.publishProtocolMessage` 保留；API 收敛留作后续独立 PR
 - **不合并三种出站语义**：emitToSession / emitToClient / emitToClientWithBuffer 服务不同用途，方法分离是设计意图
+- **不放宽 `welinkSessionId` 覆盖语义**：保持现有"canonical overwrite"；若未来需要 caller-overridable，独立协议变更 PR 处理
+- **不改造 strategy 层异常策略**：本次 emitter 不引入额外 try-catch，strategy 层保持 best-effort
+
+---
+
+## 10. Revisions
+
+- **v1**（初稿）
+- **v2**（Codex 静态审阅后修订）：
+  - 撤回 `welinkSessionId` only-if-blank 改动，保持 canonical overwrite（§2.4）。理由：当前调用链不存在显式传异值场景，原稿改动属范围蔓延 + 协议语义变更
+  - 降低 `emitToSession` 异常契约措辞（§2.5）：从"让 handler 感知投递失败"改为"emitter 不引入额外 try-catch；strategy 层保持 best-effort"；session-3 用例从"契约"降为"行为断言"
+  - 新增 §4.3 `ExternalWsDeliveryStrategyTest` 序列化守护用例，覆盖 bug 真实出口（JSON payload 含 `welinkSessionId`）
+  - 同步更新迁移表风险级别（§3.2 #12）、风险表（§6）、范围外清单（§9）、checklist（§8）
