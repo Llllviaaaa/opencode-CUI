@@ -115,4 +115,24 @@ class ExternalInboundControllerTest {
         var response = controller.invoke(request);
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
     }
+
+    @Test
+    @DisplayName("chat action: 离线 InboundResult 被组装为 HTTP 200 + code=503 + errormsg + data(sid,wsid)")
+    void chatActionOfflineReturns503WithSessionData() throws Exception {
+        when(processingService.processChat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(InboundResult.error(503, "msg-x", "ext-sid", "123"));
+
+        var request = buildRequest("chat", "{\"content\":\"hello\",\"msgType\":\"text\"}");
+        var response = controller.invoke(request);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(503, response.getBody().getCode());
+        assertEquals("msg-x", response.getBody().getErrormsg());
+
+        @SuppressWarnings("unchecked")
+        var data = (java.util.Map<String, String>) response.getBody().getData();
+        assertNotNull(data);
+        assertEquals("ext-sid", data.get("businessSessionId"));
+        assertEquals("123", data.get("welinkSessionId"));
+    }
 }
