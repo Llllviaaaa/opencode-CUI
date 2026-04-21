@@ -87,7 +87,12 @@ public class PersonalScopeStrategy implements AssistantScopeStrategy {
                     event.path("type").asText(""), sessionId);
             return cloudEventTranslator.translate(event, sessionId);
         }
-        // Task 3：显式 opencode / 未知值 都走 opencode（未知值的 warn 将在 Task 4 引入）
+        if ("opencode".equalsIgnoreCase(protocol)) {
+            return openCodeEventTranslator.translate(event);
+        }
+        // 空串或其它非空未知值 → warn + fallback opencode
+        log.warn("[PersonalScope] unknown protocol value=\"{}\", fallback to OpenCodeEventTranslator, type={}, sessionId={}",
+                protocol, event.path("type").asText(""), sessionId);
         return openCodeEventTranslator.translate(event);
     }
 }

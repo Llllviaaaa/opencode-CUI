@@ -50,7 +50,9 @@ class PersonalScopeStrategyTest {
         private final List<LogEvent> events = new java.util.concurrent.CopyOnWriteArrayList<>();
 
         CapturingAppender() {
-            super("CapturingAppender", null, PatternLayout.createDefaultLayout(), true, Property.EMPTY_ARRAY);
+            // 每个实例用唯一 name，避免 Log4j2 按 name 去重导致 addAppender 丢弃新 instance。
+            super("CapturingAppender-" + java.util.UUID.randomUUID(),
+                    null, PatternLayout.createDefaultLayout(), true, Property.EMPTY_ARRAY);
         }
 
         @Override
@@ -66,13 +68,18 @@ class PersonalScopeStrategyTest {
     private CapturingAppender capturingAppender;
     private org.apache.logging.log4j.core.Logger strategyLog4jLogger;
 
+    // 用单个 @BeforeEach 合并 Mockito mock 装配 + appender 挂载，避免 JUnit 5 对多个
+    // @BeforeEach 无排序保证带来的时序不稳（在全量测试下前序类可能已初始化 Logger 缓存）。
     @BeforeEach
-    void attachLogAppender() {
+    void beforeEach() {
         LoggerContext ctx = (LoggerContext) LogManager.getContext(false);
         strategyLog4jLogger = ctx.getLogger(PersonalScopeStrategy.class.getName());
         capturingAppender = new CapturingAppender();
         capturingAppender.start();
         strategyLog4jLogger.addAppender(capturingAppender);
+        // logger level 由 src/test/resources/log4j2.xml 声明为 TRACE（WARN/DEBUG 都穿透）。
+
+        strategy = new PersonalScopeStrategy(openCodeEventTranslator, cloudEventTranslator);
     }
 
     @AfterEach
@@ -84,17 +91,22 @@ class PersonalScopeStrategyTest {
     }
 
     private long countWarnLogs() {
-        return capturingAppender.getEvents().stream()
-                .filter(e -> e.getLevel() == Level.WARN)
-                .count();
+        // 容忍 Log4j2 异步 append（disruptor 在 classpath 时可能触发）：
+        // 轮询至计数稳定或 200ms 超时。snapshot-based CopyOnWriteArrayList 读没副作用。
+        long deadline = System.currentTimeMillis() + 200;
+        long last = -1;
+        while (true) {
+            long cur = capturingAppender.getEvents().stream()
+                    .filter(e -> e.getLevel() == Level.WARN)
+                    .count();
+            if (cur == last) return cur;
+            last = cur;
+            if (System.currentTimeMillis() >= deadline) return cur;
+            try { Thread.sleep(10); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); return cur; }
+        }
     }
 
     // ---- end log appender infrastructure ----
-
-    @BeforeEach
-    void setUp() {
-        strategy = new PersonalScopeStrategy(openCodeEventTranslator, cloudEventTranslator);
-    }
 
     @Test
     @DisplayName("null event returns null and invokes neither translator")
@@ -181,5 +193,43 @@ class PersonalScopeStrategyTest {
         verifyNoInteractions(openCodeEventTranslator);
         assertEquals(0, countWarnLogs(),
                 "protocol=CLOUD must not produce WARN (DEBUG only)");
+    }
+
+    @Test
+    @DisplayName("protocol='' emits WARN and falls back to OpenCodeEventTranslator")
+    void translateEvent_protocolEmptyString_warnsAndFallsBackToOpenCode() {
+        ObjectNode event = objectMapper.createObjectNode();
+        event.put("protocol", "");
+        event.put("type", "message.part.updated");
+        StreamMessage expected = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA).content("fb").build();
+        when(openCodeEventTranslator.translate(event)).thenReturn(expected);
+
+        StreamMessage result = strategy.translateEvent(event, "session-E");
+
+        assertSame(expected, result);
+        verify(openCodeEventTranslator).translate(event);
+        verifyNoInteractions(cloudEventTranslator);
+        assertEquals(1, countWarnLogs(),
+                "expected exactly one WARN log for empty protocol");
+    }
+
+    @Test
+    @DisplayName("protocol=mcp (unknown) emits WARN and falls back to OpenCodeEventTranslator")
+    void translateEvent_protocolUnknownValue_warnsAndFallsBackToOpenCode() {
+        ObjectNode event = objectMapper.createObjectNode();
+        event.put("protocol", "mcp");
+        event.put("type", "message.part.updated");
+        StreamMessage expected = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA).content("fb").build();
+        when(openCodeEventTranslator.translate(event)).thenReturn(expected);
+
+        StreamMessage result = strategy.translateEvent(event, "session-U");
+
+        assertSame(expected, result);
+        verify(openCodeEventTranslator).translate(event);
+        verifyNoInteractions(cloudEventTranslator);
+        assertEquals(1, countWarnLogs(),
+                "expected exactly one WARN log for unknown protocol value");
     }
 }

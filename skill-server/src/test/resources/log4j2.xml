@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  测试用 Log4j2 配置。目的：让 PersonalScopeStrategyTest 里的 CapturingAppender
+  能捕获 log.warn/log.debug 事件（默认 DefaultConfiguration root=ERROR 会过滤掉）。
+
+  - root 保持 ERROR，避免其他测试 noise
+  - PersonalScopeStrategy logger 显式设 TRACE，允许所有级别路由到 addAppender 挂载的
+    CapturingAppender
+-->
+<Configuration status="WARN">
+  <Appenders>
+    <Console name="Console" target="SYSTEM_OUT">
+      <PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n"/>
+    </Console>
+  </Appenders>
+  <Loggers>
+    <Logger name="com.opencode.cui.skill.service.scope.PersonalScopeStrategy" level="TRACE" additivity="true"/>
+    <Root level="ERROR">
+      <AppenderRef ref="Console"/>
+    </Root>
+  </Loggers>
+</Configuration>
