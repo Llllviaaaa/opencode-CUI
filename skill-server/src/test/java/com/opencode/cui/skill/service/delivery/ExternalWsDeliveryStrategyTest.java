@@ -30,9 +30,9 @@ class ExternalWsDeliveryStrategyTest {
     @InjectMocks private ExternalWsDeliveryStrategy strategy;
 
     @Test
-    @DisplayName("supports non-miniapp domain")
+    @DisplayName("supports non-miniapp non-im domain")
     void supportsNonMiniapp() {
-        SkillSession session = SkillSession.builder().businessSessionDomain("im").build();
+        SkillSession session = SkillSession.builder().businessSessionDomain("ext").build();
         assertTrue(strategy.supports(session));
     }
 
