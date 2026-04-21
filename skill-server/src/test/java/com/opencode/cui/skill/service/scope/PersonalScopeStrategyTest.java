@@ -144,4 +144,42 @@ class PersonalScopeStrategyTest {
         assertEquals(0, countWarnLogs(),
                 "explicit protocol=opencode must not produce a WARN log");
     }
+
+    @Test
+    @DisplayName("protocol=cloud delegates to CloudEventTranslator with sessionId passthrough, no warn")
+    void translateEvent_protocolCloud_delegatesToCloud() {
+        ObjectNode event = objectMapper.createObjectNode();
+        event.put("protocol", "cloud");
+        event.put("type", StreamMessage.Types.TEXT_DELTA);
+        StreamMessage expected = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA).content("cloud-content").build();
+        when(cloudEventTranslator.translate(event, "session-X")).thenReturn(expected);
+
+        StreamMessage result = strategy.translateEvent(event, "session-X");
+
+        assertSame(expected, result);
+        verify(cloudEventTranslator).translate(event, "session-X");
+        verifyNoInteractions(openCodeEventTranslator);
+        assertEquals(0, countWarnLogs(),
+                "protocol=cloud must not produce WARN (DEBUG only)");
+    }
+
+    @Test
+    @DisplayName("protocol=CLOUD (uppercase) also delegates to CloudEventTranslator, no warn")
+    void translateEvent_protocolCloudUpperCase_caseInsensitive() {
+        ObjectNode event = objectMapper.createObjectNode();
+        event.put("protocol", "CLOUD");
+        event.put("type", StreamMessage.Types.TEXT_DELTA);
+        StreamMessage expected = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA).content("c").build();
+        when(cloudEventTranslator.translate(event, "session-Y")).thenReturn(expected);
+
+        StreamMessage result = strategy.translateEvent(event, "session-Y");
+
+        assertSame(expected, result);
+        verify(cloudEventTranslator).translate(event, "session-Y");
+        verifyNoInteractions(openCodeEventTranslator);
+        assertEquals(0, countWarnLogs(),
+                "protocol=CLOUD must not produce WARN (DEBUG only)");
+    }
 }

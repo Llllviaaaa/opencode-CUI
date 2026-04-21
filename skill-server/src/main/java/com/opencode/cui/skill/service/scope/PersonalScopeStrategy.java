@@ -76,7 +76,18 @@ public class PersonalScopeStrategy implements AssistantScopeStrategy {
         if (event == null) {
             return null;
         }
-        // Task 1：保守实现，non-null 统一走 opencode；cloud/warn 分支在后续 Task 引入。
+        JsonNode protocolNode = event.path("protocol");
+        // 缺失字段（含 missing/null 节点）→ opencode，不 warn
+        if (protocolNode.isMissingNode() || protocolNode.isNull()) {
+            return openCodeEventTranslator.translate(event);
+        }
+        String protocol = protocolNode.asText("");
+        if ("cloud".equalsIgnoreCase(protocol)) {
+            log.debug("[PersonalScope] dispatch: protocol=cloud, type={}, sessionId={}",
+                    event.path("type").asText(""), sessionId);
+            return cloudEventTranslator.translate(event, sessionId);
+        }
+        // Task 3：显式 opencode / 未知值 都走 opencode（未知值的 warn 将在 Task 4 引入）
         return openCodeEventTranslator.translate(event);
     }
 }
