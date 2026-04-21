@@ -66,4 +66,45 @@ class StreamMessageEmitterTest {
 
         assertEquals("101", msg.getWelinkSessionId());
     }
+
+    @Test
+    void enrich3_emittedAt_excludedTypesKeepNull() {
+        SkillSession session = mock(SkillSession.class);
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.ERROR)      // 在白名单内
+                .error("oops")
+                .build();
+
+        emitter.emitToSession(session, "101", null, msg);
+
+        assertNull(msg.getEmittedAt());
+    }
+
+    @Test
+    void enrich4_emittedAt_nonExcludedAndBlank_filled() {
+        SkillSession session = mock(SkillSession.class);
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA)  // 非白名单
+                .role("assistant")
+                .build();
+
+        emitter.emitToSession(session, "101", null, msg);
+
+        assertNotNull(msg.getEmittedAt());
+        assertFalse(msg.getEmittedAt().isBlank());
+    }
+
+    @Test
+    void enrich5_emittedAt_alreadySet_preserved() {
+        SkillSession session = mock(SkillSession.class);
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA)
+                .emittedAt("2026-01-01T00:00:00Z")
+                .role("assistant")
+                .build();
+
+        emitter.emitToSession(session, "101", null, msg);
+
+        assertEquals("2026-01-01T00:00:00Z", msg.getEmittedAt());
+    }
 }
