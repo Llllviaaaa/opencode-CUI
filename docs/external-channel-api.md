@@ -1,7 +1,7 @@
 # External Channel 接口文档
 
-> ⚠️ **协议变更**：`senderUserAccount` 已从 `chat` 的 payload 移到信封层，且所有 action 必填。
-> 调用方必须在信封层传该字段，否则返回 HTTP 400。具体版本号见本次 release / changelog。
+> ⚠️ **协议变更（v1.4.0 起生效）**：`senderUserAccount` 已从 `chat` 的 payload 移到信封层，且所有 action 必填。
+> 调用方必须在信封层传该字段，否则返回 HTTP 400。
 
 > 为 IM 及其他业务模块提供的 WebSocket 推送通道 + REST 入站接口。
 
