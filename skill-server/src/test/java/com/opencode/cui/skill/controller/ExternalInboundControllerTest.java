@@ -63,6 +63,7 @@ class ExternalInboundControllerTest {
         request.setSessionType("direct");
         request.setSessionId("dm-001");
         request.setAssistantAccount("assist-01");
+        request.setSenderUserAccount("user-001");
         var response = controller.invoke(request);
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
     }

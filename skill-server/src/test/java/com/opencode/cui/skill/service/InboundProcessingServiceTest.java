@@ -175,7 +175,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                null, "hello", "text", null, null, "EXTERNAL");
+                "user-001", "hello", "text", null, null, "EXTERNAL");
 
         assertFalse(result.success());
         assertEquals(503, result.code());
@@ -202,7 +202,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                null, "hello", "text", null, null, "EXTERNAL");
+                "user-001", "hello", "text", null, null, "EXTERNAL");
 
         assertTrue(result.success());
         verify(gatewayApiClient, never()).getAgentByAk(anyString()); // 关键：没查在线状态
