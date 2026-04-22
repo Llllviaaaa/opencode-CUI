@@ -281,7 +281,7 @@ class InboundProcessingServiceTest {
 
     @Test
     @DisplayName("processPermissionReply: session ready → sends PERMISSION_REPLY invoke + broadcasts")
-    void processPermissionReplySessionReady() {
+    void processPermissionReplySessionReady() throws Exception {
         SkillSession session = buildReadySession();
         when(resolverService.resolve("assist-001"))
                 .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
@@ -290,6 +290,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processPermissionReply(
                 "im", "direct", "dm-001", "assist-001",
+                "user-001",
                 "perm-001", "allow", null, null);
 
         assertTrue(result.success());
@@ -299,6 +300,9 @@ class InboundProcessingServiceTest {
         assertEquals(GatewayActions.PERMISSION_REPLY, invokeCaptor.getValue().action());
         assertTrue(invokeCaptor.getValue().payload().contains("perm-001"));
         assertTrue(invokeCaptor.getValue().payload().contains("allow"));
+        JsonNode permissionPayload = objectMapper.readTree(invokeCaptor.getValue().payload());
+        assertEquals("user-001", permissionPayload.get("sendUserAccount").asText(),
+                "gateway payload should bind sendUserAccount=user-001");
 
         // 验证广播
         ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
@@ -319,6 +323,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processPermissionReply(
                 "im", "direct", "dm-001", "assist-001",
+                "user-001",
                 "perm-1", "once", null, "EXTERNAL");
 
         assertFalse(result.success());
@@ -339,6 +344,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processPermissionReply(
                 "im", "direct", "dm-001", "assist-001",
+                "user-001",
                 "perm-1", "once", null, "EXTERNAL");
 
         assertFalse(result.success());

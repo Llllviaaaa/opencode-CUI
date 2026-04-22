@@ -93,13 +93,15 @@ class ExternalInboundControllerTest {
     @Test
     @DisplayName("permission_reply dispatches correctly")
     void permissionReplyAction() throws Exception {
-        when(processingService.processPermissionReply(any(), any(), any(), any(), any(), any(), any(), any()))
+        when(processingService.processPermissionReply(
+                any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(InboundResult.ok());
         var request = buildRequest("permission_reply", "{\"permissionId\":\"perm-1\",\"response\":\"once\"}");
         var response = controller.invoke(request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
         verify(processingService).processPermissionReply(
                 eq("im"), eq("direct"), eq("dm-001"), eq("assist-01"),
+                eq("user-001"),
                 eq("perm-1"), eq("once"), isNull(), eq("EXTERNAL"));
     }
 
