@@ -367,7 +367,7 @@ class InboundProcessingServiceTest {
                 .thenReturn(session);
 
         InboundResult result = service.processRebuild(
-                "im", "direct", "dm-001", "assist-001");
+                "im", "direct", "dm-001", "assist-001", "user-001");
 
         assertTrue(result.success());
         verify(sessionManager).requestToolSession(session, null);
@@ -383,12 +383,12 @@ class InboundProcessingServiceTest {
                 .thenReturn(null);
 
         InboundResult result = service.processRebuild(
-                "im", "direct", "dm-new", "assist-001");
+                "im", "direct", "dm-new", "assist-001", "user-001");
 
         assertTrue(result.success());
         verify(sessionManager).createSessionAsync(
                 "im", "direct", "dm-new", "ak-001",
-                "owner-001", "assist-001", null, null);
+                "owner-001", "assist-001", "user-001", null);
         verify(sessionManager, never()).requestToolSession(any(), any());
     }
 
@@ -404,7 +404,7 @@ class InboundProcessingServiceTest {
                 .thenReturn(existing);
 
         InboundResult result = service.processRebuild(
-                "im", "direct", "dm-001", "assist-001");
+                "im", "direct", "dm-001", "assist-001", "user-001");
 
         assertFalse(result.success());
         assertEquals(503, result.code());

@@ -78,7 +78,8 @@ public class ExternalInboundController {
                     request.payloadString("subagentSessionId"), "EXTERNAL");
             case "rebuild" -> processingService.processRebuild(
                     request.getBusinessDomain(), request.getSessionType(),
-                    request.getSessionId(), request.getAssistantAccount());
+                    request.getSessionId(), request.getAssistantAccount(),
+                    request.getSenderUserAccount());
             default -> InboundResult.error(400, "Unknown action: " + request.getAction());
         };
 

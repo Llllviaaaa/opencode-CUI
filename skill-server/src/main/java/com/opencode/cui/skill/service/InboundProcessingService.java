@@ -292,14 +292,16 @@ public class InboundProcessingService {
      * 处理会话重建请求。
      * session 存在时请求新的 toolSession，不存在时异步创建。
      *
-     * @param businessDomain   业务域
-     * @param sessionType      会话类型
-     * @param sessionId        业务侧会话 ID
-     * @param assistantAccount 助手账号
+     * @param businessDomain    业务域
+     * @param sessionType       会话类型
+     * @param sessionId         业务侧会话 ID
+     * @param assistantAccount  助手账号
+     * @param senderUserAccount 发送者账号（信封层必填）
      * @return 处理结果
      */
     public InboundResult processRebuild(String businessDomain, String sessionType,
-                                         String sessionId, String assistantAccount) {
+                                         String sessionId, String assistantAccount,
+                                         String senderUserAccount) {
         AssistantResolveResult resolveResult = resolverService.resolve(assistantAccount);
         if (resolveResult == null) {
             return InboundResult.error(404, "Invalid assistant account");
@@ -316,7 +318,7 @@ public class InboundProcessingService {
             return InboundResult.ok(sessionId, String.valueOf(session.getId()));
         } else {
             sessionManager.createSessionAsync(businessDomain, sessionType, sessionId,
-                    ak, ownerWelinkId, assistantAccount, null, null);
+                    ak, ownerWelinkId, assistantAccount, senderUserAccount, null);
             SkillSession created = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
             return InboundResult.ok(sessionId,
                     created != null ? String.valueOf(created.getId()) : null);

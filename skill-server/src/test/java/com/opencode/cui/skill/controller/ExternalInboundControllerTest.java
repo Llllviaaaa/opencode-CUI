@@ -108,12 +108,12 @@ class ExternalInboundControllerTest {
     @Test
     @DisplayName("rebuild dispatches correctly")
     void rebuildAction() throws Exception {
-        when(processingService.processRebuild(any(), any(), any(), any()))
+        when(processingService.processRebuild(any(), any(), any(), any(), any()))
                 .thenReturn(InboundResult.ok());
         var request = buildRequest("rebuild", "{}");
         var response = controller.invoke(request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
-        verify(processingService).processRebuild("im", "direct", "dm-001", "assist-01");
+        verify(processingService).processRebuild("im", "direct", "dm-001", "assist-01", "user-001");
     }
 
     @Test
