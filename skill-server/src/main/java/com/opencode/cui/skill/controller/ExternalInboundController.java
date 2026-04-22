@@ -60,7 +60,7 @@ public class ExternalInboundController {
             case "chat" -> processingService.processChat(
                     request.getBusinessDomain(), request.getSessionType(),
                     request.getSessionId(), request.getAssistantAccount(),
-                    request.payloadString("senderUserAccount"),
+                    request.getSenderUserAccount(),
                     request.payloadString("content"), request.payloadString("msgType"),
                     request.payloadString("imageUrl"), parseChatHistory(request.getPayload()),
                     "EXTERNAL");

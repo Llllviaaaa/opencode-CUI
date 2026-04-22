@@ -51,7 +51,8 @@ class ExternalInboundControllerTest {
         assertEquals(0, response.getBody().getCode());
         verify(processingService).processChat(
                 eq("im"), eq("direct"), eq("dm-001"), eq("assist-01"),
-                isNull(), eq("hello"), eq("text"), isNull(), isNull(), eq("EXTERNAL"));
+                eq("user-001"),
+                eq("hello"), eq("text"), isNull(), isNull(), eq("EXTERNAL"));
     }
 
     @Test
