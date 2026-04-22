@@ -12,6 +12,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -107,6 +109,39 @@ class ExternalInboundControllerTest {
         var response = controller.invoke(request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
         verify(processingService).processRebuild("im", "direct", "dm-001", "assist-01");
+    }
+
+    @Test
+    @DisplayName("missing senderUserAccount returns 400 for all actions")
+    void missingSenderUserAccountReturns400() throws Exception {
+        // 不使用 buildRequest helper：这些测试需要故意 omit 或 mislocate senderUserAccount
+        for (String action : List.of("chat", "question_reply", "permission_reply", "rebuild")) {
+            String json = "{\"action\":\"" + action + "\","
+                    + "\"businessDomain\":\"im\",\"sessionType\":\"direct\","
+                    + "\"sessionId\":\"dm-001\",\"assistantAccount\":\"assist-01\","
+                    + "\"payload\":{}}";
+            var request = objectMapper.readValue(json, ExternalInvokeRequest.class);
+            var response = controller.invoke(request);
+            assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode(), "action=" + action);
+            assertEquals("senderUserAccount is required",
+                    response.getBody().getErrormsg(), "action=" + action);
+        }
+    }
+
+    @Test
+    @DisplayName("D1 hard cut: payload.senderUserAccount is ignored, envelope required")
+    void legacyPayloadSenderUserAccountIsIgnored() throws Exception {
+        // 不使用 buildRequest helper：这些测试需要故意 omit 或 mislocate senderUserAccount
+        String json = "{\"action\":\"chat\","
+                + "\"businessDomain\":\"im\",\"sessionType\":\"direct\","
+                + "\"sessionId\":\"dm-001\",\"assistantAccount\":\"assist-01\","
+                + "\"payload\":{\"content\":\"hello\",\"senderUserAccount\":\"legacy-user\"}}";
+        var request = objectMapper.readValue(json, ExternalInvokeRequest.class);
+        var response = controller.invoke(request);
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals("senderUserAccount is required",
+                response.getBody().getErrormsg());
+        verifyNoInteractions(processingService);
     }
 
     @Test

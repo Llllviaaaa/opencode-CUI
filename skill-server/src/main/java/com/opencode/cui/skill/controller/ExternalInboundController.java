@@ -108,6 +108,7 @@ public class ExternalInboundController {
         if (request.getSessionType() == null || !VALID_SESSION_TYPES.contains(request.getSessionType())) return "Invalid sessionType";
         if (request.getSessionId() == null || request.getSessionId().isBlank()) return "sessionId is required";
         if (request.getAssistantAccount() == null || request.getAssistantAccount().isBlank()) return "assistantAccount is required";
+        if (request.getSenderUserAccount() == null || request.getSenderUserAccount().isBlank()) return "senderUserAccount is required";
         return null;
     }
 
