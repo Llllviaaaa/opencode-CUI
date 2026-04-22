@@ -1,5 +1,6 @@
 package com.opencode.cui.skill.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.config.AssistantIdProperties;
 import com.opencode.cui.skill.config.DeliveryProperties;
@@ -55,6 +56,7 @@ class InboundProcessingServiceTest {
     private AssistantIdProperties assistantIdProperties;
     private DeliveryProperties deliveryProperties;
     private InboundProcessingService service;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final String MOCK_OFFLINE_MSG = "MOCK_OFFLINE_MSG";
 
@@ -75,7 +77,7 @@ class InboundProcessingServiceTest {
                 gatewayRelayService,
                 messageService,
                 rebuildService,
-                new ObjectMapper(),
+                objectMapper,
                 assistantInfoService,
                 scopeDispatcher,
                 emitter,
@@ -208,7 +210,7 @@ class InboundProcessingServiceTest {
 
     @Test
     @DisplayName("processQuestionReply: session ready → sends QUESTION_REPLY invoke")
-    void processQuestionReplySessionReady() {
+    void processQuestionReplySessionReady() throws Exception {
         SkillSession session = buildReadySession();
         when(resolverService.resolve("assist-001"))
                 .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
@@ -217,6 +219,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processQuestionReply(
                 "im", "direct", "dm-001", "assist-001",
+                "user-001",
                 "yes", "tc-001", null, null);
 
         assertTrue(result.success());
@@ -226,6 +229,9 @@ class InboundProcessingServiceTest {
         assertTrue(captor.getValue().payload().contains("yes"));
         assertTrue(captor.getValue().payload().contains("tc-001"));
         assertTrue(captor.getValue().payload().contains("tool-001"));
+        JsonNode payload = objectMapper.readTree(captor.getValue().payload());
+        assertEquals("user-001", payload.get("sendUserAccount").asText(),
+                "gateway payload should bind sendUserAccount=user-001");
     }
 
     @Test
@@ -239,6 +245,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processQuestionReply(
                 "im", "direct", "dm-001", "assist-001",
+                "user-001",
                 "answer", "tool-call-1", null, "EXTERNAL");
 
         assertFalse(result.success());
@@ -259,6 +266,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processQuestionReply(
                 "im", "direct", "dm-001", "assist-001",
+                "user-001",
                 "answer", "tool-call-1", null, "EXTERNAL");
 
         assertFalse(result.success());

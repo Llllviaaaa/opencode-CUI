@@ -78,13 +78,15 @@ class ExternalInboundControllerTest {
     @Test
     @DisplayName("question_reply dispatches correctly")
     void questionReplyAction() throws Exception {
-        when(processingService.processQuestionReply(any(), any(), any(), any(), any(), any(), any(), any()))
+        when(processingService.processQuestionReply(
+                any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(InboundResult.ok());
         var request = buildRequest("question_reply", "{\"content\":\"A\",\"toolCallId\":\"tc-1\"}");
         var response = controller.invoke(request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
         verify(processingService).processQuestionReply(
                 eq("im"), eq("direct"), eq("dm-001"), eq("assist-01"),
+                eq("user-001"),
                 eq("A"), eq("tc-1"), isNull(), eq("EXTERNAL"));
     }
 

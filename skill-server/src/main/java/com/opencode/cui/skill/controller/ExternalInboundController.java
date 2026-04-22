@@ -67,6 +67,7 @@ public class ExternalInboundController {
             case "question_reply" -> processingService.processQuestionReply(
                     request.getBusinessDomain(), request.getSessionType(),
                     request.getSessionId(), request.getAssistantAccount(),
+                    request.getSenderUserAccount(),
                     request.payloadString("content"), request.payloadString("toolCallId"),
                     request.payloadString("subagentSessionId"), "EXTERNAL");
             case "permission_reply" -> processingService.processPermissionReply(

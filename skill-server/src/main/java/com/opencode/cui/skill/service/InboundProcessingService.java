@@ -183,6 +183,7 @@ public class InboundProcessingService {
      * @param sessionType       会话类型
      * @param sessionId         业务侧会话 ID
      * @param assistantAccount  助手账号
+     * @param senderUserAccount 发送者账号（信封层必填）
      * @param content           回复内容
      * @param toolCallId        工具调用 ID
      * @param subagentSessionId 子代理会话 ID（可为 null）
@@ -190,6 +191,7 @@ public class InboundProcessingService {
      */
     public InboundResult processQuestionReply(String businessDomain, String sessionType,
                                                String sessionId, String assistantAccount,
+                                               String senderUserAccount,
                                                String content, String toolCallId,
                                                String subagentSessionId, String inboundSource) {
         AssistantResolveResult resolveResult = resolverService.resolve(assistantAccount);
@@ -214,6 +216,7 @@ public class InboundProcessingService {
         payloadFields.put("answer", content);
         payloadFields.put("toolCallId", toolCallId);
         payloadFields.put("toolSessionId", targetToolSessionId);
+        payloadFields.put("sendUserAccount", senderUserAccount);
         gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
                 ak, ownerWelinkId, String.valueOf(session.getId()),
                 GatewayActions.QUESTION_REPLY,
