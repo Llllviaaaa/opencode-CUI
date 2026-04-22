@@ -100,7 +100,7 @@ class InboundProcessingServiceTest {
 
     @Test
     @DisplayName("processChat: session ready → sends CHAT invoke")
-    void processChatSessionReady() {
+    void processChatSessionReady() throws Exception {
         SkillSession session = buildReadySession();
         when(resolverService.resolve("assist-001"))
                 .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
@@ -122,6 +122,9 @@ class InboundProcessingServiceTest {
         assertTrue(captor.getValue().payload().contains("tool-001"));
         verify(messageService).saveUserMessage(101L, "hello");
         verify(rebuildService).appendPendingMessage("101", "hello");
+        JsonNode chatPayload = objectMapper.readTree(captor.getValue().payload());
+        assertEquals("owner-001", chatPayload.get("sendUserAccount").asText(),
+                "direct chat should put ownerWelinkId as sendUserAccount");
     }
 
     @Test
@@ -204,6 +207,30 @@ class InboundProcessingServiceTest {
         assertTrue(result.success());
         verify(gatewayApiClient, never()).getAgentByAk(anyString()); // 关键：没查在线状态
         verify(gatewayRelayService).sendInvokeToGateway(any(InvokeCommand.class));
+    }
+
+    @Test
+    @DisplayName("processChat: group + null sender → sendUserAccount falls back to ownerWelinkId")
+    void processChatGroupNullSenderFallsBackToOwner() throws Exception {
+        SkillSession session = buildReadySession();
+        when(resolverService.resolve("assist-001"))
+                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(sessionManager.findSession("im", "group", "grp-001", "ak-001"))
+                .thenReturn(session);
+        when(contextInjectionService.resolvePrompt(eq("group"), eq("hello"), any()))
+                .thenReturn("hello");
+
+        InboundResult result = service.processChat(
+                "im", "group", "grp-001", "assist-001",
+                null,
+                "hello", "text", null, null, "IM");
+
+        assertTrue(result.success());
+        ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
+        JsonNode payload = objectMapper.readTree(captor.getValue().payload());
+        assertEquals("owner-001", payload.get("sendUserAccount").asText(),
+                "group chat with null sender should fall back to ownerWelinkId");
     }
 
     // ==================== processQuestionReply ====================
