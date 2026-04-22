@@ -33,6 +33,7 @@ class ExternalInboundControllerTest {
         String json = "{\"action\":\"" + action + "\","
                 + "\"businessDomain\":\"im\",\"sessionType\":\"direct\","
                 + "\"sessionId\":\"dm-001\",\"assistantAccount\":\"assist-01\","
+                + "\"senderUserAccount\":\"user-001\","
                 + "\"payload\":" + payload + "}";
         return objectMapper.readValue(json, ExternalInvokeRequest.class);
     }
