@@ -9,7 +9,9 @@ import com.opencode.cui.skill.model.SkillMessage;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.config.AssistantIdProperties;
 import com.opencode.cui.skill.model.AgentSummary;
+import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.StreamMessage;
+import com.opencode.cui.skill.service.AssistantAccountResolverService;
 import com.opencode.cui.skill.service.AssistantInfoService;
 import com.opencode.cui.skill.service.AssistantOfflineMessageProvider;
 import com.opencode.cui.skill.service.GatewayApiClient;
@@ -63,6 +65,8 @@ class SkillMessageControllerTest {
     private AssistantScopeDispatcher scopeDispatcher;
     @Mock
     private AssistantOfflineMessageProvider offlineMessageProvider;
+    @Mock
+    private AssistantAccountResolverService assistantAccountResolverService;
 
     private AssistantIdProperties assistantIdProperties;
     private SkillMessageController controller;
@@ -73,11 +77,16 @@ class SkillMessageControllerTest {
         assistantIdProperties.setEnabled(true);
         assistantIdProperties.setTargetToolType("assistant");
         lenient().when(offlineMessageProvider.get()).thenReturn("MOCK_OFFLINE_MSG");
+        // 默认 resolver 行为：开关 ON（null 放行），非 null 默认 EXISTS
+        lenient().when(assistantAccountResolverService.isSkipOnNullAssistantAccount()).thenReturn(true);
+        lenient().when(assistantAccountResolverService.getDeletionMessage()).thenReturn("该助理已被删除");
+        lenient().when(assistantAccountResolverService.check(any())).thenReturn(ExistenceStatus.EXISTS);
+
         controller = new SkillMessageController(
                 messageService, sessionService, gatewayRelayService,
                 gatewayApiClient, assistantIdProperties, imMessageService, new ObjectMapper(),
                 accessControlService, messageRouter, assistantInfoService, scopeDispatcher,
-                offlineMessageProvider);
+                offlineMessageProvider, assistantAccountResolverService);
         // 默认 scopeDispatcher 返回 personal 策略（requiresOnlineCheck=true）
         com.opencode.cui.skill.service.scope.AssistantScopeStrategy personalStrategy =
                 org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
@@ -369,6 +378,240 @@ class SkillMessageControllerTest {
         var response = controller.sendToIm("1", "1", request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(true, response.getBody().getData().get("success"));
+    }
+
+    // ==================== 助理删除校验 ====================
+
+    @Test
+    @DisplayName("sendMessage: null assistantAccount + 开关 ON → 放行 200")
+    void sendMessageNullAssistantAccountSkipOnAllows() {
+        when(assistantAccountResolverService.isSkipOnNullAssistantAccount()).thenReturn(true);
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        // assistantAccount 为 null
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+        SkillMessage msg = SkillMessage.builder()
+                .id(1L).sessionId(1L).role(SkillMessage.Role.USER).content("Hello").build();
+        when(messageService.saveUserMessage(eq(1L), eq("Hello"))).thenReturn(msg);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("Hello");
+
+        ResponseEntity<?> response = controller.sendMessage("1", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(0, ((com.opencode.cui.skill.model.ApiResponse<?>) response.getBody()).getCode());
+        verify(messageService).saveUserMessage(eq(1L), eq("Hello"));
+    }
+
+    @Test
+    @DisplayName("sendMessage: null assistantAccount + 开关 OFF → 400 'assistantAccount is required'")
+    void sendMessageNullAssistantAccountSkipOffReturns400() {
+        when(assistantAccountResolverService.isSkipOnNullAssistantAccount()).thenReturn(false);
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        // assistantAccount 为 null
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("Hello");
+
+        ResponseEntity<?> response = controller.sendMessage("1", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(400, ((com.opencode.cui.skill.model.ApiResponse<?>) response.getBody()).getCode());
+        verify(messageService, never()).saveUserMessage(anyLong(), anyString());
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+    }
+
+    @Test
+    @DisplayName("sendMessage: NOT_EXISTS → 410（不 saveUserMessage / 不广播 / 不 routeToGateway）")
+    void sendMessageAssistantNotExistsReturns410() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setAssistantAccount("deleted-acc");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+        when(assistantAccountResolverService.check("deleted-acc")).thenReturn(ExistenceStatus.NOT_EXISTS);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("Hello");
+
+        ResponseEntity<?> response = controller.sendMessage("1", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(410, ((com.opencode.cui.skill.model.ApiResponse<?>) response.getBody()).getCode());
+        assertEquals("该助理已被删除",
+                ((com.opencode.cui.skill.model.ApiResponse<?>) response.getBody()).getErrormsg());
+        verify(messageService, never()).saveUserMessage(anyLong(), anyString());
+        verify(messageRouter, never()).broadcastStreamMessage(anyString(), anyString(), any());
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+    }
+
+    @Test
+    @DisplayName("sendMessage: UNKNOWN → 放行 200（best-effort 阻断）")
+    void sendMessageAssistantUnknownAllows() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setAssistantAccount("unknown-acc");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+        when(assistantAccountResolverService.check("unknown-acc")).thenReturn(ExistenceStatus.UNKNOWN);
+        SkillMessage msg = SkillMessage.builder()
+                .id(1L).sessionId(1L).role(SkillMessage.Role.USER).content("Hello").build();
+        when(messageService.saveUserMessage(eq(1L), eq("Hello"))).thenReturn(msg);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("Hello");
+
+        ResponseEntity<?> response = controller.sendMessage("1", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(0, ((com.opencode.cui.skill.model.ApiResponse<?>) response.getBody()).getCode());
+        verify(messageService).saveUserMessage(eq(1L), eq("Hello"));
+    }
+
+    @Test
+    @DisplayName("sendMessage: EXISTS → 放行 200（happy path）")
+    void sendMessageAssistantExistsAllows() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setAssistantAccount("exists-acc");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+        when(assistantAccountResolverService.check("exists-acc")).thenReturn(ExistenceStatus.EXISTS);
+        SkillMessage msg = SkillMessage.builder()
+                .id(1L).sessionId(1L).role(SkillMessage.Role.USER).content("Hello").build();
+        when(messageService.saveUserMessage(eq(1L), eq("Hello"))).thenReturn(msg);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("Hello");
+
+        ResponseEntity<?> response = controller.sendMessage("1", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(0, ((com.opencode.cui.skill.model.ApiResponse<?>) response.getBody()).getCode());
+    }
+
+    @Test
+    @DisplayName("replyPermission: null assistantAccount + 开关 ON → 放行 200")
+    void replyPermissionNullAssistantAccountSkipOnAllows() {
+        when(assistantAccountResolverService.isSkipOnNullAssistantAccount()).thenReturn(true);
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+
+        var request = new SkillMessageController.PermissionReplyRequest();
+        request.setResponse("once");
+
+        var response = controller.replyPermission("1", "1", "p-abc", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(0, response.getBody().getCode());
+    }
+
+    @Test
+    @DisplayName("replyPermission: null assistantAccount + 开关 OFF → 400")
+    void replyPermissionNullAssistantAccountSkipOffReturns400() {
+        when(assistantAccountResolverService.isSkipOnNullAssistantAccount()).thenReturn(false);
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+
+        var request = new SkillMessageController.PermissionReplyRequest();
+        request.setResponse("once");
+
+        var response = controller.replyPermission("1", "1", "p-abc", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(400, response.getBody().getCode());
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+    }
+
+    @Test
+    @DisplayName("replyPermission: NOT_EXISTS → 410（不发 invoke / 不广播）")
+    void replyPermissionAssistantNotExistsReturns410() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setAssistantAccount("deleted-acc");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+        when(assistantAccountResolverService.check("deleted-acc")).thenReturn(ExistenceStatus.NOT_EXISTS);
+
+        var request = new SkillMessageController.PermissionReplyRequest();
+        request.setResponse("once");
+
+        var response = controller.replyPermission("1", "1", "p-abc", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(410, response.getBody().getCode());
+        assertEquals("该助理已被删除", response.getBody().getErrormsg());
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+        verify(gatewayRelayService, never()).publishProtocolMessage(anyString(), any());
+    }
+
+    @Test
+    @DisplayName("replyPermission: NOT_EXISTS 优先于 online check（agent 离线也返 410 而非 503）")
+    void replyPermissionNotExistsBeatsAgentOffline() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setAssistantAccount("deleted-acc");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+        when(assistantAccountResolverService.check("deleted-acc")).thenReturn(ExistenceStatus.NOT_EXISTS);
+        lenient().when(gatewayApiClient.getAgentByAk("99")).thenReturn(null); // 离线（但永远不被查）
+
+        var request = new SkillMessageController.PermissionReplyRequest();
+        request.setResponse("once");
+
+        var response = controller.replyPermission("1", "1", "p-abc", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(410, response.getBody().getCode());
+        verify(gatewayApiClient, never()).getAgentByAk(anyString());
+    }
+
+    @Test
+    @DisplayName("replyPermission: UNKNOWN → 放行")
+    void replyPermissionAssistantUnknownAllows() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setAssistantAccount("unknown-acc");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+        when(assistantAccountResolverService.check("unknown-acc")).thenReturn(ExistenceStatus.UNKNOWN);
+
+        var request = new SkillMessageController.PermissionReplyRequest();
+        request.setResponse("once");
+
+        var response = controller.replyPermission("1", "1", "p-abc", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(0, response.getBody().getCode());
     }
 
     @Test

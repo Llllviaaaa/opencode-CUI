@@ -5,8 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.config.AssistantIdProperties;
 import com.opencode.cui.skill.config.DeliveryProperties;
 import com.opencode.cui.skill.model.AgentSummary;
-import com.opencode.cui.skill.model.AssistantResolveResult;
+import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.InvokeCommand;
+import com.opencode.cui.skill.model.ResolveOutcome;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.InboundProcessingService.InboundResult;
@@ -116,6 +117,9 @@ class InboundProcessingServiceTest {
                 .thenReturn(true);
         lenient().when(rebuildService.consumePendingMessages(anyString()))
                 .thenReturn(Collections.emptyList());
+
+        // 助理删除文案（用于 NOT_EXISTS 410 分支）
+        lenient().when(resolverService.getDeletionMessage()).thenReturn("该助理已被删除");
     }
 
     // ==================== processChat ====================
@@ -124,8 +128,8 @@ class InboundProcessingServiceTest {
     @DisplayName("processChat: session ready → sends CHAT invoke")
     void processChatSessionReady() throws Exception {
         SkillSession session = buildReadySession();
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001"))
                 .thenReturn(session);
         when(contextInjectionService.resolvePrompt("direct", "hello", null))
@@ -150,9 +154,10 @@ class InboundProcessingServiceTest {
     }
 
     @Test
-    @DisplayName("processChat: invalid assistant → returns error(404)")
-    void processChatInvalidAssistant() {
-        when(resolverService.resolve("unknown")).thenReturn(null);
+    @DisplayName("processChat: UNKNOWN → 保留现今 404 'Invalid assistant account' 语义")
+    void processChatAssistantUnknownReturns404() {
+        when(resolverService.resolveWithStatus("unknown"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.UNKNOWN, null, null));
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "unknown",
@@ -164,10 +169,81 @@ class InboundProcessingServiceTest {
     }
 
     @Test
+    @DisplayName("processChat: NOT_EXISTS → 返回 410 + deletion message + businessSessionId 信封")
+    void processChatAssistantNotExistsReturns410() {
+        when(resolverService.resolveWithStatus("deleted"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.NOT_EXISTS, null, null));
+
+        InboundResult result = service.processChat(
+                "im", "direct", "dm-001", "deleted",
+                null, "hello", "text", null, null, "IM");
+
+        assertFalse(result.success());
+        assertEquals(410, result.code());
+        assertEquals("该助理已被删除", result.message());
+        assertEquals("dm-001", result.businessSessionId());
+        // ak 未知，无法从 findSession 反查 skillSession
+        assertNull(result.welinkSessionId());
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+        verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("processQuestionReply: NOT_EXISTS → 返回 410 + deletion message")
+    void processQuestionReplyAssistantNotExistsReturns410() {
+        when(resolverService.resolveWithStatus("deleted"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.NOT_EXISTS, null, null));
+
+        InboundResult result = service.processQuestionReply(
+                "im", "direct", "dm-001", "deleted",
+                "user-001", "answer", "tc-001", null, "EXTERNAL");
+
+        assertFalse(result.success());
+        assertEquals(410, result.code());
+        assertEquals("该助理已被删除", result.message());
+        assertEquals("dm-001", result.businessSessionId());
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+    }
+
+    @Test
+    @DisplayName("processPermissionReply: NOT_EXISTS → 返回 410 + deletion message")
+    void processPermissionReplyAssistantNotExistsReturns410() {
+        when(resolverService.resolveWithStatus("deleted"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.NOT_EXISTS, null, null));
+
+        InboundResult result = service.processPermissionReply(
+                "im", "direct", "dm-001", "deleted",
+                "user-001", "perm-1", "once", null, "EXTERNAL");
+
+        assertFalse(result.success());
+        assertEquals(410, result.code());
+        assertEquals("该助理已被删除", result.message());
+        assertEquals("dm-001", result.businessSessionId());
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+    }
+
+    @Test
+    @DisplayName("processRebuild: NOT_EXISTS → 返回 410 + deletion message（不创建 session）")
+    void processRebuildAssistantNotExistsReturns410() {
+        when(resolverService.resolveWithStatus("deleted"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.NOT_EXISTS, null, null));
+
+        InboundResult result = service.processRebuild(
+                "im", "direct", "dm-001", "deleted", "user-001");
+
+        assertFalse(result.success());
+        assertEquals(410, result.code());
+        assertEquals("该助理已被删除", result.message());
+        assertEquals("dm-001", result.businessSessionId());
+        verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(sessionManager, never()).requestToolSession(any(), any());
+    }
+
+    @Test
     @DisplayName("processChat: session not found → calls createSessionAsync")
     void processChatNoSession() {
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         when(sessionManager.findSession("im", "direct", "dm-new", "ak-001"))
                 .thenReturn(null);
         when(contextInjectionService.resolvePrompt("direct", "first msg", null))
@@ -187,8 +263,8 @@ class InboundProcessingServiceTest {
     @Test
     @DisplayName("processChat: agent 离线时返回 error(503, offline_msg, sid, wsid) 且调用 handleAgentOffline 副作用")
     void processChatAgentOfflineReturns503() {
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线
 
         SkillSession existing = buildReadySession();
@@ -216,8 +292,8 @@ class InboundProcessingServiceTest {
         when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
         when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
 
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession session = buildReadySession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
         when(contextInjectionService.resolvePrompt("direct", "hello", null)).thenReturn("hello");
@@ -235,8 +311,8 @@ class InboundProcessingServiceTest {
     @DisplayName("processChat: group + null sender → sendUserAccount falls back to ownerWelinkId")
     void processChatGroupNullSenderFallsBackToOwner() throws Exception {
         SkillSession session = buildReadySession();
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         when(sessionManager.findSession("im", "group", "grp-001", "ak-001"))
                 .thenReturn(session);
         when(contextInjectionService.resolvePrompt(eq("group"), eq("hello"), any()))
@@ -261,8 +337,8 @@ class InboundProcessingServiceTest {
     @DisplayName("processQuestionReply: session ready → sends QUESTION_REPLY invoke")
     void processQuestionReplySessionReady() throws Exception {
         SkillSession session = buildReadySession();
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001"))
                 .thenReturn(session);
 
@@ -286,8 +362,8 @@ class InboundProcessingServiceTest {
     @Test
     @DisplayName("processQuestionReply: session 存在 + agent 离线 → 返回 error(503, offline_msg)")
     void processQuestionReplyAgentOfflineReturns503() {
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession session = buildReadySession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
         when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线
@@ -308,8 +384,8 @@ class InboundProcessingServiceTest {
     @Test
     @DisplayName("processQuestionReply: session 不存在优先返回 404（即使 agent 离线）")
     void processQuestionReplyMissingSessionReturns404EvenIfOffline() {
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         when(sessionManager.findSession(any(), any(), any(), any())).thenReturn(null);
         lenient().when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线（场景注释，404 优先不会调用）
 
@@ -332,8 +408,8 @@ class InboundProcessingServiceTest {
     @DisplayName("processPermissionReply: session ready → sends PERMISSION_REPLY invoke + broadcasts")
     void processPermissionReplySessionReady() throws Exception {
         SkillSession session = buildReadySession();
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001"))
                 .thenReturn(session);
 
@@ -364,8 +440,8 @@ class InboundProcessingServiceTest {
     @Test
     @DisplayName("processPermissionReply: session 存在 + agent 离线 → 返回 error(503, offline_msg)")
     void processPermissionReplyAgentOfflineReturns503() {
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession session = buildReadySession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
         when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线
@@ -386,8 +462,8 @@ class InboundProcessingServiceTest {
     @Test
     @DisplayName("processPermissionReply: session 不存在优先返回 404（即使 agent 离线）")
     void processPermissionReplyMissingSessionReturns404EvenIfOffline() {
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         when(sessionManager.findSession(any(), any(), any(), any())).thenReturn(null);
         lenient().when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线（场景注释，404 优先不会调用）
 
@@ -410,8 +486,8 @@ class InboundProcessingServiceTest {
     @DisplayName("processRebuild: session exists → calls requestToolSession")
     void processRebuildSessionExists() {
         SkillSession session = buildReadySession();
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001"))
                 .thenReturn(session);
 
@@ -426,8 +502,8 @@ class InboundProcessingServiceTest {
     @Test
     @DisplayName("processRebuild: session not found → calls createSessionAsync")
     void processRebuildNoSession() {
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         when(sessionManager.findSession("im", "direct", "dm-new", "ak-001"))
                 .thenReturn(null);
 
@@ -444,8 +520,8 @@ class InboundProcessingServiceTest {
     @Test
     @DisplayName("processRebuild: agent 离线时返回 error(503, offline_msg, sid, wsid)，不创建 session")
     void processRebuildAgentOfflineReturns503() {
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线
 
         SkillSession existing = buildReadySession();
@@ -473,8 +549,8 @@ class InboundProcessingServiceTest {
         when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
         when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
 
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession session = buildSessionWithoutToolSession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
         when(sessionService.findByIdSafe(101L)).thenReturn(session); // 二次检查仍然为空
@@ -505,8 +581,8 @@ class InboundProcessingServiceTest {
         when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
         when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
 
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession stale = buildSessionWithoutToolSession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(stale);
         // 二次检查拿到另一个实例已补齐的值
@@ -533,8 +609,8 @@ class InboundProcessingServiceTest {
     @DisplayName("processChat: personal 助手 session 存在但 toolSessionId 缺失 → 保持 requestToolSession 路径")
     void processChatPersonalSessionMissingToolSessionId_keepsRequestToolSession() {
         // 默认 setUp 即为 personal（generateToolSessionId 返回 null）
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession session = buildSessionWithoutToolSession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
         when(contextInjectionService.resolvePrompt("direct", "hello", null)).thenReturn("hello");
@@ -557,8 +633,8 @@ class InboundProcessingServiceTest {
         when(assistantInfoService.getCachedScope("ak-001")).thenReturn("personal");
         // setUp 中的默认 personalStrategy 已经 generateToolSessionId() == null (未 stub)
 
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession session = buildSessionWithoutToolSession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
         when(contextInjectionService.resolvePrompt("direct", "hello", null)).thenReturn("hello");
@@ -584,8 +660,8 @@ class InboundProcessingServiceTest {
         when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
         when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
 
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession session = buildReadySession(); // 已有 tool-001
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
 
@@ -607,8 +683,8 @@ class InboundProcessingServiceTest {
         when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
         when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
 
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession session = buildSessionWithoutToolSession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
 
@@ -625,8 +701,8 @@ class InboundProcessingServiceTest {
     @DisplayName("processRebuild: personal 助手 session 存在 → 保持 requestToolSession 路径")
     void processRebuildPersonalExistingSession_callsRequestToolSession() {
         // 默认 setUp 是 personal
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession session = buildReadySession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
 
@@ -657,8 +733,8 @@ class InboundProcessingServiceTest {
         latest.setToolSessionId("cloud-peer-healed");
         when(sessionService.findByIdSafe(101L)).thenReturn(latest);
 
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession session = buildSessionWithoutToolSession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
         when(contextInjectionService.resolvePrompt("direct", "hello", null)).thenReturn("hello");
@@ -688,8 +764,8 @@ class InboundProcessingServiceTest {
 
         // session 已就绪 → 进 case C
         SkillSession session = buildReadySession();
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
         when(contextInjectionService.resolvePrompt("direct", "hello", null)).thenReturn("hello");
 
@@ -713,8 +789,8 @@ class InboundProcessingServiceTest {
         when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
 
         SkillSession session = buildSessionWithoutToolSession();
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
         when(sessionService.findByIdSafe(101L)).thenReturn(session);
         when(contextInjectionService.resolvePrompt("direct", "hello", null)).thenReturn("hello");
@@ -738,8 +814,8 @@ class InboundProcessingServiceTest {
         when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
         when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
 
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession session = buildSessionWithoutToolSession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
         when(sessionService.findByIdSafe(101L)).thenReturn(session);
@@ -781,8 +857,8 @@ class InboundProcessingServiceTest {
         when(valueOperations.setIfAbsent(startsWith("skill:im-session:heal:"), anyString(), any(Duration.class)))
                 .thenReturn(false);
 
-        when(resolverService.resolve("assist-001"))
-                .thenReturn(new AssistantResolveResult("ak-001", "owner-001"));
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession session = buildReadySession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
 

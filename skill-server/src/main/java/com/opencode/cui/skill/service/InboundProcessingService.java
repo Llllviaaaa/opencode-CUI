@@ -3,9 +3,10 @@ package com.opencode.cui.skill.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.config.AssistantIdProperties;
 import com.opencode.cui.skill.config.DeliveryProperties;
-import com.opencode.cui.skill.model.AssistantResolveResult;
+import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.ImMessageRequest;
 import com.opencode.cui.skill.model.InvokeCommand;
+import com.opencode.cui.skill.model.ResolveOutcome;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.delivery.StreamMessageEmitter;
@@ -120,14 +121,21 @@ public class InboundProcessingService {
                                       String content, String msgType,
                                       String imageUrl, List<ImMessageRequest.ChatMessage> chatHistory,
                                       String inboundSource) {
-        // 第 1 步：解析助手账号 → 获取 ak 和 ownerWelinkId
-        AssistantResolveResult resolveResult = resolverService.resolve(assistantAccount);
-        if (resolveResult == null) {
-            log.warn("[SKIP] processChat: reason=resolve_failed, assistantAccount={}", assistantAccount);
+        // 第 1 步：解析助手账号 → 三态 existence 判定
+        ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
+        if (outcome.status() == ExistenceStatus.NOT_EXISTS) {
+            // NOT_EXISTS：保留 businessSessionId 信封（ak 未知，findSession 无法定位 skillSession）
+            log.info("[SKIP] processChat: reason=assistant_not_exists, decision=block, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                    assistantAccount, businessDomain, sessionType, sessionId);
+            return InboundResult.error(410, resolverService.getDeletionMessage(), sessionId, null);
+        }
+        if (outcome.status() == ExistenceStatus.UNKNOWN) {
+            log.warn("[SKIP] processChat: reason=assistant_check_unknown, decision=block-unknown, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                    assistantAccount, businessDomain, sessionType, sessionId);
             return InboundResult.error(404, "Invalid assistant account");
         }
-        String ak = resolveResult.ak();
-        String ownerWelinkId = resolveResult.ownerWelinkId();
+        String ak = outcome.ak();
+        String ownerWelinkId = outcome.ownerWelinkId();
         log.info("processChat: resolved assistant={}, ak={}, ownerWelinkId={}",
                 assistantAccount, ak, ownerWelinkId);
 
@@ -345,12 +353,19 @@ public class InboundProcessingService {
                                                String senderUserAccount,
                                                String content, String toolCallId,
                                                String subagentSessionId, String inboundSource) {
-        AssistantResolveResult resolveResult = resolverService.resolve(assistantAccount);
-        if (resolveResult == null) {
+        ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
+        if (outcome.status() == ExistenceStatus.NOT_EXISTS) {
+            log.info("[SKIP] processQuestionReply: reason=assistant_not_exists, decision=block, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                    assistantAccount, businessDomain, sessionType, sessionId);
+            return InboundResult.error(410, resolverService.getDeletionMessage(), sessionId, null);
+        }
+        if (outcome.status() == ExistenceStatus.UNKNOWN) {
+            log.warn("[SKIP] processQuestionReply: reason=assistant_check_unknown, decision=block-unknown, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                    assistantAccount, businessDomain, sessionType, sessionId);
             return InboundResult.error(404, "Invalid assistant account");
         }
-        String ak = resolveResult.ak();
-        String ownerWelinkId = resolveResult.ownerWelinkId();
+        String ak = outcome.ak();
+        String ownerWelinkId = outcome.ownerWelinkId();
 
         SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
         if (session == null || session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
@@ -395,12 +410,19 @@ public class InboundProcessingService {
                                                  String senderUserAccount,
                                                  String permissionId, String response,
                                                  String subagentSessionId, String inboundSource) {
-        AssistantResolveResult resolveResult = resolverService.resolve(assistantAccount);
-        if (resolveResult == null) {
+        ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
+        if (outcome.status() == ExistenceStatus.NOT_EXISTS) {
+            log.info("[SKIP] processPermissionReply: reason=assistant_not_exists, decision=block, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                    assistantAccount, businessDomain, sessionType, sessionId);
+            return InboundResult.error(410, resolverService.getDeletionMessage(), sessionId, null);
+        }
+        if (outcome.status() == ExistenceStatus.UNKNOWN) {
+            log.warn("[SKIP] processPermissionReply: reason=assistant_check_unknown, decision=block-unknown, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                    assistantAccount, businessDomain, sessionType, sessionId);
             return InboundResult.error(404, "Invalid assistant account");
         }
-        String ak = resolveResult.ak();
-        String ownerWelinkId = resolveResult.ownerWelinkId();
+        String ak = outcome.ak();
+        String ownerWelinkId = outcome.ownerWelinkId();
 
         SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
         if (session == null || session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
@@ -453,12 +475,19 @@ public class InboundProcessingService {
     public InboundResult processRebuild(String businessDomain, String sessionType,
                                          String sessionId, String assistantAccount,
                                          String senderUserAccount) {
-        AssistantResolveResult resolveResult = resolverService.resolve(assistantAccount);
-        if (resolveResult == null) {
+        ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
+        if (outcome.status() == ExistenceStatus.NOT_EXISTS) {
+            log.info("[SKIP] processRebuild: reason=assistant_not_exists, decision=block, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                    assistantAccount, businessDomain, sessionType, sessionId);
+            return InboundResult.error(410, resolverService.getDeletionMessage(), sessionId, null);
+        }
+        if (outcome.status() == ExistenceStatus.UNKNOWN) {
+            log.warn("[SKIP] processRebuild: reason=assistant_check_unknown, decision=block-unknown, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                    assistantAccount, businessDomain, sessionType, sessionId);
             return InboundResult.error(404, "Invalid assistant account");
         }
-        String ak = resolveResult.ak();
-        String ownerWelinkId = resolveResult.ownerWelinkId();
+        String ak = outcome.ak();
+        String ownerWelinkId = outcome.ownerWelinkId();
 
         InboundResult offline = checkAgentOnline(businessDomain, sessionType, sessionId, ak, assistantAccount);
         if (offline != null) return offline;

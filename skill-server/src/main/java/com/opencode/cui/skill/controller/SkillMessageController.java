@@ -2,6 +2,7 @@ package com.opencode.cui.skill.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.ApiResponse;
+import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.MessageHistoryResult;
 import com.opencode.cui.skill.model.PageResult;
 import com.opencode.cui.skill.model.ProtocolMessageView;
@@ -12,6 +13,7 @@ import com.opencode.cui.skill.model.AgentSummary;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.config.AssistantIdProperties;
+import com.opencode.cui.skill.service.AssistantAccountResolverService;
 import com.opencode.cui.skill.service.GatewayApiClient;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.ImMessageService;
@@ -70,6 +72,7 @@ public class SkillMessageController {
     private final AssistantInfoService assistantInfoService;
     private final AssistantScopeDispatcher scopeDispatcher;
     private final AssistantOfflineMessageProvider offlineMessageProvider;
+    private final AssistantAccountResolverService assistantAccountResolverService;
 
     public SkillMessageController(SkillMessageService messageService,
             SkillSessionService sessionService,
@@ -82,7 +85,8 @@ public class SkillMessageController {
             GatewayMessageRouter messageRouter,
             AssistantInfoService assistantInfoService,
             AssistantScopeDispatcher scopeDispatcher,
-            AssistantOfflineMessageProvider offlineMessageProvider) {
+            AssistantOfflineMessageProvider offlineMessageProvider,
+            AssistantAccountResolverService assistantAccountResolverService) {
         this.messageService = messageService;
         this.sessionService = sessionService;
         this.gatewayRelayService = gatewayRelayService;
@@ -95,6 +99,7 @@ public class SkillMessageController {
         this.assistantInfoService = assistantInfoService;
         this.scopeDispatcher = scopeDispatcher;
         this.offlineMessageProvider = offlineMessageProvider;
+        this.assistantAccountResolverService = assistantAccountResolverService;
     }
 
     /**
@@ -124,6 +129,13 @@ public class SkillMessageController {
 
         if (session.getStatus() == SkillSession.Status.CLOSED) {
             return ResponseEntity.ok(ApiResponse.error(409, "Session is closed"));
+        }
+
+        // 助理删除校验（在 saveUserMessage 之前；不写用户消息 / 不广播 / 不 routeToGateway）
+        ApiResponse<ProtocolMessageView> deletionBlock = checkAssistantDeletion(
+                session.getAssistantAccount(), sessionId, "sendMessage");
+        if (deletionBlock != null) {
+            return ResponseEntity.ok(deletionBlock);
         }
 
         // 持久化用户消息
@@ -379,6 +391,13 @@ public class SkillMessageController {
             return ResponseEntity.ok(ApiResponse.error(400, "No agent associated with this session"));
         }
 
+        // 助理删除校验（必须在 online check 之前，否则 agent 离线 503 会掩盖删除态 410）
+        ApiResponse<Map<String, Object>> deletionBlock = checkAssistantDeletionForMap(
+                session.getAssistantAccount(), sessionId, "replyPermission");
+        if (deletionBlock != null) {
+            return ResponseEntity.ok(deletionBlock);
+        }
+
         // Agent 在线检查：云端助手永远在线（跳过），个人助手需要检查
         AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
                 assistantInfoService.getCachedScope(session.getAk()));
@@ -432,6 +451,64 @@ public class SkillMessageController {
                 "welinkSessionId", sessionId,
                 "permissionId", permId,
                 "response", request.getResponse())));
+    }
+
+    /**
+     * 助理删除校验（ProtocolMessageView 返回类型）。
+     * null/blank → 按 skip 开关决定：ON 放行；OFF 返 400
+     * EXISTS / UNKNOWN → 放行（UNKNOWN 打 WARN 日志）
+     * NOT_EXISTS → 返 410（不 saveUserMessage / 不广播 / 不 routeToGateway）
+     *
+     * @return null 表示放行；非 null 表示调用方应立刻短路 return
+     */
+    private ApiResponse<ProtocolMessageView> checkAssistantDeletion(
+            String assistantAccount, String sessionId, String action) {
+        if (assistantAccount == null || assistantAccount.isBlank()) {
+            if (!assistantAccountResolverService.isSkipOnNullAssistantAccount()) {
+                log.warn("[BLOCK] {}: reason=no_assistant_account, decision=block, sessionId={}", action, sessionId);
+                return ApiResponse.error(400, "assistantAccount is required");
+            }
+            log.info("[SKIP] {}: reason=no_assistant_account, decision=allow, sessionId={}", action, sessionId);
+            return null;
+        }
+        ExistenceStatus status = assistantAccountResolverService.check(assistantAccount);
+        if (status == ExistenceStatus.NOT_EXISTS) {
+            log.info("[SKIP] {}: reason=assistant_not_exists, decision=block, sessionId={}, assistantAccount={}",
+                    action, sessionId, assistantAccount);
+            return ApiResponse.error(410, assistantAccountResolverService.getDeletionMessage());
+        }
+        if (status == ExistenceStatus.UNKNOWN) {
+            log.warn("[WARN] {}: reason=assistant_check_unknown, decision=allow-unknown, sessionId={}, assistantAccount={}",
+                    action, sessionId, assistantAccount);
+        }
+        return null;
+    }
+
+    /**
+     * 助理删除校验（Map 返回类型，供 replyPermission 使用）。
+     * 语义同 {@link #checkAssistantDeletion}。
+     */
+    private ApiResponse<Map<String, Object>> checkAssistantDeletionForMap(
+            String assistantAccount, String sessionId, String action) {
+        if (assistantAccount == null || assistantAccount.isBlank()) {
+            if (!assistantAccountResolverService.isSkipOnNullAssistantAccount()) {
+                log.warn("[BLOCK] {}: reason=no_assistant_account, decision=block, sessionId={}", action, sessionId);
+                return ApiResponse.error(400, "assistantAccount is required");
+            }
+            log.info("[SKIP] {}: reason=no_assistant_account, decision=allow, sessionId={}", action, sessionId);
+            return null;
+        }
+        ExistenceStatus status = assistantAccountResolverService.check(assistantAccount);
+        if (status == ExistenceStatus.NOT_EXISTS) {
+            log.info("[SKIP] {}: reason=assistant_not_exists, decision=block, sessionId={}, assistantAccount={}",
+                    action, sessionId, assistantAccount);
+            return ApiResponse.error(410, assistantAccountResolverService.getDeletionMessage());
+        }
+        if (status == ExistenceStatus.UNKNOWN) {
+            log.warn("[WARN] {}: reason=assistant_check_unknown, decision=allow-unknown, sessionId={}, assistantAccount={}",
+                    action, sessionId, assistantAccount);
+        }
+        return null;
     }
 
     /** 发送消息请求体。 */
