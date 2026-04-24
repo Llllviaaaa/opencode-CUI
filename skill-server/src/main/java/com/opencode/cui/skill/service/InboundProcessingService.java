@@ -12,11 +12,14 @@ import com.opencode.cui.skill.service.delivery.StreamMessageEmitter;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 入站消息处理服务。
@@ -34,6 +37,15 @@ import java.util.Map;
 @Service
 public class InboundProcessingService {
 
+    /** business 助手 toolSessionId 自愈 / 重生分布式锁：防止并发生成多个 cloud- ID 覆盖彼此 Redis mapping。 */
+    private static final String BUSINESS_HEAL_LOCK_PREFIX = "skill:im-session:heal:";
+    /** 锁 TTL：避免进程崩溃锁永久残留。 */
+    private static final Duration BUSINESS_HEAL_LOCK_TTL = Duration.ofSeconds(10);
+    /** self-heal 等待别人完成的总超时时间。 */
+    private static final long BUSINESS_HEAL_LOCK_TIMEOUT_MS = 2000L;
+    /** self-heal 轮询别人完成的间隔。 */
+    private static final long BUSINESS_HEAL_LOCK_RETRY_MILLIS = 200L;
+
     private final AssistantAccountResolverService resolverService;
     private final AssistantIdProperties assistantIdProperties;
     private final GatewayApiClient gatewayApiClient;
@@ -49,6 +61,8 @@ public class InboundProcessingService {
     private final DeliveryProperties deliveryProperties;
     private final RedisMessageBroker redisMessageBroker;
     private final AssistantOfflineMessageProvider offlineMessageProvider;
+    private final SkillSessionService sessionService;
+    private final StringRedisTemplate redisTemplate;
 
     public InboundProcessingService(
             AssistantAccountResolverService resolverService,
@@ -65,7 +79,9 @@ public class InboundProcessingService {
             StreamMessageEmitter emitter,
             DeliveryProperties deliveryProperties,
             RedisMessageBroker redisMessageBroker,
-            AssistantOfflineMessageProvider offlineMessageProvider) {
+            AssistantOfflineMessageProvider offlineMessageProvider,
+            SkillSessionService sessionService,
+            StringRedisTemplate redisTemplate) {
         this.resolverService = resolverService;
         this.assistantIdProperties = assistantIdProperties;
         this.gatewayApiClient = gatewayApiClient;
@@ -81,6 +97,8 @@ public class InboundProcessingService {
         this.deliveryProperties = deliveryProperties;
         this.redisMessageBroker = redisMessageBroker;
         this.offlineMessageProvider = offlineMessageProvider;
+        this.sessionService = sessionService;
+        this.redisTemplate = redisTemplate;
     }
 
     /**
@@ -140,6 +158,39 @@ public class InboundProcessingService {
 
         // 情况 B：session 存在但 toolSessionId 尚未就绪
         if (session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
+            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(
+                    assistantInfoService.getCachedScope(ak));
+            String generated = strategy.generateToolSessionId();
+            if (generated != null) {
+                // business 自愈：加锁 + 二次检查，失败则降级到 rebuild 路径避免丢消息
+                if (!tryHealBusinessToolSessionId(session, strategy)) {
+                    log.warn("[WARN] business self-heal timeout, falling back to rebuild path: welinkSessionId={}, ak={}",
+                            session.getId(), ak);
+                    sessionManager.requestToolSession(session, prompt);
+                    writeInvokeSource(session, inboundSource);
+                    return InboundResult.ok(sessionId, String.valueOf(session.getId()));
+                }
+                log.warn("[WARN] business toolSessionId missing, self-healing: welinkSessionId={}, ak={}, assistantAccount={}, newToolSessionId={}, inboundSource={}",
+                        session.getId(), ak, assistantAccount, session.getToolSessionId(), inboundSource);
+
+                // 重放 pending list 中的历史消息（可能由 handleSessionNotFound / handleContextOverflow 路径遗留）
+                // business 路径发送不再 appendToPending，避免并发下 peer 把本请求的 prompt 误当 legacy 重放。
+                List<String> legacyPending = rebuildService.consumePendingMessages(String.valueOf(session.getId()));
+                if (!legacyPending.isEmpty()) {
+                    log.warn("[WARN] business self-heal: replaying pending messages, welinkSessionId={}, count={}",
+                            session.getId(), legacyPending.size());
+                    for (String legacyMsg : legacyPending) {
+                        if (legacyMsg == null || legacyMsg.isBlank() || legacyMsg.equals(prompt)) {
+                            continue;
+                        }
+                        dispatchChatToGateway(session, legacyMsg, ak, ownerWelinkId, assistantAccount,
+                                senderUserAccount, sessionType, sessionId, inboundSource, legacyMsg, false);
+                    }
+                }
+                return dispatchChatToGateway(session, prompt, ak, ownerWelinkId, assistantAccount,
+                        senderUserAccount, sessionType, sessionId, inboundSource, content, false);
+            }
+            // personal / scope 识别降级：保持现行 rebuild 路径
             log.info("Session exists but toolSessionId not ready, requesting rebuild: skillSessionId={}",
                     session.getId());
             sessionManager.requestToolSession(session, prompt);
@@ -148,13 +199,113 @@ public class InboundProcessingService {
         }
 
         // 情况 C：session 就绪，转发消息到 AI Gateway
+        // append pending 仅对 personal 有意义（rebuild 链路消费者），business 不写避免并发重放放大
+        AssistantScopeStrategy caseCStrategy = scopeDispatcher.getStrategy(
+                assistantInfoService.getCachedScope(ak));
+        boolean appendToPending = caseCStrategy.generateToolSessionId() == null;
+        return dispatchChatToGateway(session, prompt, ak, ownerWelinkId, assistantAccount,
+                senderUserAccount, sessionType, sessionId, inboundSource, content, appendToPending);
+    }
+
+    /**
+     * business 助手 toolSessionId 缺失自愈（带分布式锁）。
+     *
+     * <p>流程：
+     * <ol>
+     *   <li>申请 Redis 锁 {@code skill:im-session:heal:{sessionId}}</li>
+     *   <li>拿到锁 → 二次检查 DB：若已被别人补齐则复用；否则生成新 cloud- ID 持久化</li>
+     *   <li>拿不到锁 → 轮询 DB 等别人完成，读到就绪状态即复用</li>
+     *   <li>超时仍未就绪 → 返回 false，由调用方降级到 rebuild 路径保留消息</li>
+     * </ol>
+     *
+     * <p>成功时刷新 {@code session.toolSessionId} 并返回 true；失败返回 false。
+     */
+    private boolean tryHealBusinessToolSessionId(SkillSession session, AssistantScopeStrategy strategy) {
+        String lockKey = BUSINESS_HEAL_LOCK_PREFIX + session.getId();
+        String lockValue = UUID.randomUUID().toString();
+        long deadline = System.currentTimeMillis() + BUSINESS_HEAL_LOCK_TIMEOUT_MS;
+
+        while (System.currentTimeMillis() < deadline) {
+            Boolean acquired = redisTemplate.opsForValue()
+                    .setIfAbsent(lockKey, lockValue, BUSINESS_HEAL_LOCK_TTL);
+            if (Boolean.TRUE.equals(acquired)) {
+                try {
+                    SkillSession latest = sessionService.findByIdSafe(session.getId());
+                    if (latest != null && latest.getToolSessionId() != null
+                            && !latest.getToolSessionId().isBlank()) {
+                        session.setToolSessionId(latest.getToolSessionId());
+                        return true;
+                    }
+                    String newId = strategy.generateToolSessionId();
+                    sessionService.updateToolSessionId(session.getId(), newId);
+                    session.setToolSessionId(newId);
+                    return true;
+                } finally {
+                    releaseBusinessHealLock(lockKey, lockValue);
+                }
+            }
+
+            // 锁被别人持有：先查 DB 看对方是否已完成
+            SkillSession latest = sessionService.findByIdSafe(session.getId());
+            if (latest != null && latest.getToolSessionId() != null
+                    && !latest.getToolSessionId().isBlank()) {
+                session.setToolSessionId(latest.getToolSessionId());
+                return true;
+            }
+
+            try {
+                Thread.sleep(BUSINESS_HEAL_LOCK_RETRY_MILLIS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+
+        // 超时后最后一次查 DB
+        SkillSession latest = sessionService.findByIdSafe(session.getId());
+        if (latest != null && latest.getToolSessionId() != null
+                && !latest.getToolSessionId().isBlank()) {
+            session.setToolSessionId(latest.getToolSessionId());
+            return true;
+        }
+        return false;
+    }
+
+    /** 释放 business heal 锁：仅删除自己持有的锁（CAS 语义由 value 比对保证）。 */
+    private void releaseBusinessHealLock(String lockKey, String lockValue) {
+        try {
+            String current = redisTemplate.opsForValue().get(lockKey);
+            if (lockValue.equals(current)) {
+                redisTemplate.delete(lockKey);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to release business heal lock: key={}, error={}", lockKey, e.getMessage());
+        }
+    }
+
+    /**
+     * session 就绪后的统一 chat 投递入口。
+     * 负责：单聊消息持久化 → pending 追加（可选） → payload 构建 → Gateway 转发 → invoke source 记录。
+     *
+     * @param appendToPending 是否追加当前 prompt 到 {@code ss:pending-rebuild:*} 列表。
+     *     该列表的消费者是 {@code GatewayMessageRouter#handleSessionCreated} → {@code retryPendingMessages}，
+     *     仅在 personal 助手的 create_session → session_created 回调链路上真正被消费。
+     *     business 助手不走该链路，写入只会积累无人消费，并在 self-heal consume 时被当作 legacy 误重放——
+     *     因此 business 路径必须传 false。
+     */
+    private InboundResult dispatchChatToGateway(SkillSession session, String prompt,
+            String ak, String ownerWelinkId, String assistantAccount,
+            String senderUserAccount, String sessionType, String sessionId,
+            String inboundSource, String content, boolean appendToPending) {
         log.info("Session ready, forwarding to gateway: skillSessionId={}, toolSessionId={}, sessionType={}",
                 session.getId(), session.getToolSessionId(), sessionType);
 
         if (session.isImDirectSession()) {
             messageService.saveUserMessage(session.getId(), content);
         }
-        rebuildService.appendPendingMessage(String.valueOf(session.getId()), prompt);
+        if (appendToPending) {
+            rebuildService.appendPendingMessage(String.valueOf(session.getId()), prompt);
+        }
 
         Map<String, String> payloadFields = new LinkedHashMap<>();
         payloadFields.put("text", prompt);
@@ -314,6 +465,32 @@ public class InboundProcessingService {
 
         SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
         if (session != null) {
+            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(
+                    assistantInfoService.getCachedScope(ak));
+            String generated = strategy.generateToolSessionId();
+            if (generated != null) {
+                // business rebuild：加锁防止并发覆盖 Redis mapping；锁未拿到视为"合并重复请求"直接返回 ok
+                String lockKey = BUSINESS_HEAL_LOCK_PREFIX + session.getId();
+                String lockValue = UUID.randomUUID().toString();
+                Boolean acquired = redisTemplate.opsForValue()
+                        .setIfAbsent(lockKey, lockValue, BUSINESS_HEAL_LOCK_TTL);
+                if (!Boolean.TRUE.equals(acquired)) {
+                    log.info("business rebuild merged with concurrent heal/rebuild: welinkSessionId={}, ak={}",
+                            session.getId(), ak);
+                    return InboundResult.ok(sessionId, String.valueOf(session.getId()));
+                }
+                try {
+                    String oldToolSessionId = session.getToolSessionId();
+                    sessionService.updateToolSessionId(session.getId(), generated);
+                    session.setToolSessionId(generated);
+                    log.warn("[WARN] business rebuild: regenerating toolSessionId, welinkSessionId={}, ak={}, oldToolSessionId={}, newToolSessionId={}",
+                            session.getId(), ak, oldToolSessionId, generated);
+                    return InboundResult.ok(sessionId, String.valueOf(session.getId()));
+                } finally {
+                    releaseBusinessHealLock(lockKey, lockValue);
+                }
+            }
+            // personal / scope 识别降级：保持现行 rebuild 路径
             sessionManager.requestToolSession(session, null);
             return InboundResult.ok(sessionId, String.valueOf(session.getId()));
         } else {
