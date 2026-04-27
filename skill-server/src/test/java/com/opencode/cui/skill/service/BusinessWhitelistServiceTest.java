@@ -150,6 +150,15 @@ class BusinessWhitelistServiceTest {
         assertTrue(service.allowsCloud("tag-foo"));
     }
 
+    @Test
+    @DisplayName("switch read exception → fail-open (true)")
+    void switchReadException_failOpen_true() {
+        when(sysConfigService.getValue("cloud_route", "business_whitelist_enabled"))
+                .thenThrow(new RuntimeException("config service down"));
+        assertTrue(service.allowsCloud("tag-foo"));
+        verify(sysConfigMapper, never()).findByType(anyString());
+    }
+
     // ================== 缓存 ==================
 
     @Test
