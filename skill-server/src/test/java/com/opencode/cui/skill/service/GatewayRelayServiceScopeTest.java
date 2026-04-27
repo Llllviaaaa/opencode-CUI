@@ -75,7 +75,7 @@ class GatewayRelayServiceScopeTest {
         // arrange: business assistant info
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-001");
+        info.setBusinessTag("app-001");
         when(assistantInfoService.getAssistantInfo("ak-biz")).thenReturn(info);
         when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
 
@@ -133,7 +133,7 @@ class GatewayRelayServiceScopeTest {
         // arrange
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-001");
+        info.setBusinessTag("app-001");
         when(assistantInfoService.getAssistantInfo("ak-biz")).thenReturn(info);
         when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
 
