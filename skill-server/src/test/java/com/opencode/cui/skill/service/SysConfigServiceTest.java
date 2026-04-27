@@ -220,7 +220,6 @@ class SysConfigServiceTest {
     void getValue_cachesUsingPropertiesTtl() {
         when(properties.getCacheTtlMinutes()).thenReturn(15L);
         when(sysConfigMapper.findByTypeAndKey("t", "k")).thenReturn(buildConfig(1L, "t", "k", "x", 1));
-        when(redisTemplate.opsForValue()).thenReturn(valueOps);
         when(valueOps.get("ss:config:t:k")).thenReturn(null);
 
         String result = service.getValue("t", "k");

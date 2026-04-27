@@ -118,7 +118,7 @@ public class SysConfigService {
     }
 
     /**
-     * 删除配置。仅删除 DB 记录，缓存依赖自然过期（TTL 30min）。
+     * 删除配置。仅删除 DB 记录，缓存依赖自然过期（TTL 由 SysConfigProperties.cacheTtlMinutes 配置）。
      *
      * @param id 配置主键
      */
