@@ -86,7 +86,7 @@ class AssistantInfoServiceTest {
     @DisplayName("getAssistantInfo: 缓存命中时直接返回，不调用上游")
     void getAssistantInfo_cacheHit_returnsCachedValue() throws Exception {
         // 缓存中存有 JSON
-        String cachedJson = "{\"assistantScope\":\"business\",\"appId\":\"app_001\"," +
+        String cachedJson = "{\"assistantScope\":\"business\",\"businessTag\":\"app_001\"," +
                 "\"cloudEndpoint\":\"https://cloud.example.com/chat\"," +
                 "\"cloudProtocol\":\"sse\",\"authType\":\"soa\"}";
 
@@ -97,7 +97,7 @@ class AssistantInfoServiceTest {
 
         assertNotNull(result);
         assertEquals("business", result.getAssistantScope());
-        assertEquals("app_001", result.getAppId());
+        assertEquals("app_001", result.getBusinessTag());
         assertTrue(result.isBusiness());
 
         // 缓存命中时不应写缓存（set 不应被调用）
@@ -116,7 +116,7 @@ class AssistantInfoServiceTest {
 
         AssistantInfo upstream = new AssistantInfo();
         upstream.setAssistantScope("business");
-        upstream.setAppId("app_36209");
+        upstream.setBusinessTag("app_36209");
         upstream.setCloudEndpoint("https://cloud.example.com/chat");
         upstream.setCloudProtocol("sse");
         upstream.setAuthType("soa");
@@ -161,7 +161,7 @@ class AssistantInfoServiceTest {
         // 为保持测试简洁，使用专用 stub service 验证解析逻辑
         String json = String.format(
                 "{\"code\":\"200\",\"data\":{\"identityType\":\"%s\"," +
-                        "\"hisAppId\":\"app_test\",\"endpoint\":\"https://cloud.example.com\"," +
+                        "\"businessTag\":\"app_test\",\"endpoint\":\"https://cloud.example.com\"," +
                         "\"protocol\":\"sse\",\"authType\":\"soa\"}}",
                 identityType);
 
@@ -240,5 +240,38 @@ class AssistantInfoServiceTest {
         String scope = service.getCachedScope(AK);
 
         assertEquals("personal", scope);
+    }
+
+    // ------------------------------------------------------------------ //
+    //  parseApiResponse bug 回归测试：读 data.businessTag，不读 hisAppId
+    // ------------------------------------------------------------------ //
+
+    @Test
+    @DisplayName("parseApiResponse reads data.businessTag (not legacy hisAppId)")
+    void parseApiResponse_readsBusinessTag_notHisAppId() {
+        String body = "{\"code\":\"200\",\"data\":{" +
+                "\"identityType\":\"3\"," +
+                "\"businessTag\":\"tag-foo\"," +
+                "\"endpoint\":\"https://cloud.example.com/chat\"," +
+                "\"protocol\":\"2\"," +
+                "\"authType\":\"1\"" +
+                "}}";
+
+        AssistantInfo info = service.parseApiResponse(body);
+
+        assertNotNull(info);
+        assertEquals("business", info.getAssistantScope());
+        assertEquals("tag-foo", info.getBusinessTag());
+    }
+
+    @Test
+    @DisplayName("parseApiResponse: businessTag absent → AssistantInfo.businessTag = null")
+    void parseApiResponse_businessTagAbsent_returnsNull() {
+        String body = "{\"code\":\"200\",\"data\":{\"identityType\":\"3\"}}";
+
+        AssistantInfo info = service.parseApiResponse(body);
+
+        assertNotNull(info);
+        assertNull(info.getBusinessTag());
     }
 }

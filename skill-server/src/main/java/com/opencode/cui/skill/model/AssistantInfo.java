@@ -6,7 +6,7 @@ import lombok.Data;
 @Data
 public class AssistantInfo {
     private String assistantScope;    // "business" | "personal"
-    private String appId;
+    private String businessTag;       // 原 appId（误读 bug 修复 + 重命名）
     private String cloudEndpoint;
     private String cloudProtocol;     // "sse" | "websocket"
     private String authType;          // "soa" | "apig"
