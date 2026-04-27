@@ -43,3 +43,4 @@ bench_results/
 tests/
 __pycache__/
 .gitnexus
+.abcoder/
