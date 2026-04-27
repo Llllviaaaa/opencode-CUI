@@ -98,7 +98,7 @@ class BusinessScopeStrategyTest {
         InvokeCommand command = new InvokeCommand("ak-1", "user-1", "session-1", "chat", "{\"content\":\"hello\"}");
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-123");
+        info.setBusinessTag("app-123");
 
         ObjectNode cloudRequest = objectMapper.createObjectNode();
         cloudRequest.put("message", "hello");
@@ -121,7 +121,7 @@ class BusinessScopeStrategyTest {
         InvokeCommand command = new InvokeCommand("ak-1", "owner-1", "session-1", "chat", payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-123");
+        info.setBusinessTag("app-123");
         when(cloudRequestBuilder.buildCloudRequest(any(), any(CloudRequestContext.class)))
                 .thenReturn(objectMapper.createObjectNode());
 
@@ -145,7 +145,7 @@ class BusinessScopeStrategyTest {
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "chat", payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-001");
+        info.setBusinessTag("app-001");
 
         when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
                 .thenReturn(objectMapper.createObjectNode());
@@ -173,7 +173,7 @@ class BusinessScopeStrategyTest {
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "chat", payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-001");
+        info.setBusinessTag("app-001");
 
         when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
                 .thenReturn(objectMapper.createObjectNode());
@@ -200,7 +200,7 @@ class BusinessScopeStrategyTest {
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "question_reply", payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-001");
+        info.setBusinessTag("app-001");
 
         when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
                 .thenReturn(objectMapper.createObjectNode());
@@ -223,7 +223,7 @@ class BusinessScopeStrategyTest {
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "question_reply", payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-001");
+        info.setBusinessTag("app-001");
 
         when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
                 .thenReturn(objectMapper.createObjectNode());
@@ -244,7 +244,7 @@ class BusinessScopeStrategyTest {
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "permission_reply", payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-001");
+        info.setBusinessTag("app-001");
 
         when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
                 .thenReturn(objectMapper.createObjectNode());
@@ -267,7 +267,7 @@ class BusinessScopeStrategyTest {
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "permission_reply", payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-001");
+        info.setBusinessTag("app-001");
 
         when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
                 .thenReturn(objectMapper.createObjectNode());
@@ -289,7 +289,7 @@ class BusinessScopeStrategyTest {
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "chat", payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-001");
+        info.setBusinessTag("app-001");
 
         when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
                 .thenReturn(objectMapper.createObjectNode());
@@ -310,7 +310,7 @@ class BusinessScopeStrategyTest {
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "chat", payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-001");
+        info.setBusinessTag("app-001");
 
         when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
                 .thenReturn(objectMapper.createObjectNode());
@@ -330,7 +330,7 @@ class BusinessScopeStrategyTest {
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "chat", "not-a-json");
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-001");
+        info.setBusinessTag("app-001");
 
         when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
                 .thenReturn(objectMapper.createObjectNode());
