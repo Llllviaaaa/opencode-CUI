@@ -79,4 +79,11 @@ class PayloadBuilderTest {
         assertFalse(node.has("k"));
         assertEquals("y", node.get("x").asText());
     }
+
+    @Test
+    @DisplayName("buildPayloadWithObjects: fields 为 null 时返回 \"{}\"，不抛 NPE")
+    void nullFieldsReturnsEmptyJson() {
+        String json = PayloadBuilder.buildPayloadWithObjects(objectMapper, null);
+        assertEquals("{}", json);
+    }
 }

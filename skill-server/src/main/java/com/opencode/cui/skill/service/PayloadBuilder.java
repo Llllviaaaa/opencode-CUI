@@ -40,6 +40,7 @@ public final class PayloadBuilder {
     /**
      * 支持嵌套对象 value 的 payload 构建工具。
      * 处理规则：
+     * - fields 为 null → 返回 "{}"
      * - null 跳过（key 不写入）
      * - JsonNode.isNull() 跳过（NullNode 与 null 等价）
      * - JsonNode 其他形态（含 ObjectNode/ArrayNode/TextNode 等）→ node.set
@@ -50,6 +51,9 @@ public final class PayloadBuilder {
      * 透传 businessExtParam（自由 JSON 对象）所需。
      */
     public static String buildPayloadWithObjects(ObjectMapper objectMapper, Map<String, Object> fields) {
+        if (fields == null) {
+            return "{}";
+        }
         ObjectNode node = objectMapper.createObjectNode();
         fields.forEach((k, v) -> {
             if (v == null) return;
