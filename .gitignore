@@ -44,3 +44,5 @@ tests/
 __pycache__/
 .gitnexus
 .abcoder/
+.codex-runs/
+*.rar
