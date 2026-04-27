@@ -1,5 +1,6 @@
 package com.opencode.cui.skill.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.config.AssistantIdProperties;
 import com.opencode.cui.skill.config.DeliveryProperties;
@@ -120,7 +121,8 @@ public class InboundProcessingService {
                                       String assistantAccount, String senderUserAccount,
                                       String content, String msgType,
                                       String imageUrl, List<ImMessageRequest.ChatMessage> chatHistory,
-                                      String inboundSource) {
+                                      String inboundSource,
+                                      JsonNode businessExtParam) {
         // 第 1 步：解析助手账号 → 三态 existence 判定
         ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
         if (outcome.status() == ExistenceStatus.NOT_EXISTS) {
@@ -156,7 +158,8 @@ public class InboundProcessingService {
             log.info("No existing session found, creating async: domain={}, sessionType={}, sessionId={}, ak={}",
                     businessDomain, sessionType, sessionId, ak);
             sessionManager.createSessionAsync(businessDomain, sessionType, sessionId,
-                    ak, ownerWelinkId, assistantAccount, senderUserAccount, prompt);
+                    ak, ownerWelinkId, assistantAccount, senderUserAccount, prompt,
+                    businessExtParam);
             // 异步创建后重新查询获取 session ID
             SkillSession created = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
             writeInvokeSource(created, inboundSource);
@@ -192,11 +195,13 @@ public class InboundProcessingService {
                             continue;
                         }
                         dispatchChatToGateway(session, legacyMsg, ak, ownerWelinkId, assistantAccount,
-                                senderUserAccount, sessionType, sessionId, inboundSource, legacyMsg, false);
+                                senderUserAccount, sessionType, sessionId, inboundSource, legacyMsg, false,
+                                null);
                     }
                 }
                 return dispatchChatToGateway(session, prompt, ak, ownerWelinkId, assistantAccount,
-                        senderUserAccount, sessionType, sessionId, inboundSource, content, false);
+                        senderUserAccount, sessionType, sessionId, inboundSource, content, false,
+                        businessExtParam);
             }
             // personal / scope 识别降级：保持现行 rebuild 路径
             log.info("Session exists but toolSessionId not ready, requesting rebuild: skillSessionId={}",
@@ -212,7 +217,8 @@ public class InboundProcessingService {
                 assistantInfoService.getCachedScope(ak));
         boolean appendToPending = caseCStrategy.generateToolSessionId() == null;
         return dispatchChatToGateway(session, prompt, ak, ownerWelinkId, assistantAccount,
-                senderUserAccount, sessionType, sessionId, inboundSource, content, appendToPending);
+                senderUserAccount, sessionType, sessionId, inboundSource, content, appendToPending,
+                businessExtParam);
     }
 
     /**
@@ -304,7 +310,8 @@ public class InboundProcessingService {
     private InboundResult dispatchChatToGateway(SkillSession session, String prompt,
             String ak, String ownerWelinkId, String assistantAccount,
             String senderUserAccount, String sessionType, String sessionId,
-            String inboundSource, String content, boolean appendToPending) {
+            String inboundSource, String content, boolean appendToPending,
+            JsonNode businessExtParam) {
         log.info("Session ready, forwarding to gateway: skillSessionId={}, toolSessionId={}, sessionType={}",
                 session.getId(), session.getToolSessionId(), sessionType);
 
@@ -315,7 +322,7 @@ public class InboundProcessingService {
             rebuildService.appendPendingMessage(String.valueOf(session.getId()), prompt);
         }
 
-        Map<String, String> payloadFields = new LinkedHashMap<>();
+        Map<String, Object> payloadFields = new LinkedHashMap<>();
         payloadFields.put("text", prompt);
         payloadFields.put("toolSessionId", session.getToolSessionId());
         payloadFields.put("assistantAccount", assistantAccount);
@@ -326,10 +333,11 @@ public class InboundProcessingService {
         payloadFields.put("sendUserAccount", effectiveSender);
         payloadFields.put("imGroupId", "group".equals(sessionType) ? sessionId : null);
         payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
+        payloadFields.put("businessExtParam", businessExtParam);
         gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
                 ak, ownerWelinkId, String.valueOf(session.getId()),
                 GatewayActions.CHAT,
-                PayloadBuilder.buildPayload(objectMapper, payloadFields)));
+                PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields)));
 
         writeInvokeSource(session, inboundSource);
         return InboundResult.ok(sessionId, String.valueOf(session.getId()));
@@ -352,7 +360,8 @@ public class InboundProcessingService {
                                                String sessionId, String assistantAccount,
                                                String senderUserAccount,
                                                String content, String toolCallId,
-                                               String subagentSessionId, String inboundSource) {
+                                               String subagentSessionId, String inboundSource,
+                                               JsonNode businessExtParam) {
         ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
         if (outcome.status() == ExistenceStatus.NOT_EXISTS) {
             log.info("[SKIP] processQuestionReply: reason=assistant_not_exists, decision=block, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
@@ -378,15 +387,16 @@ public class InboundProcessingService {
         if (offline != null) return offline;
 
         String targetToolSessionId = subagentSessionId != null ? subagentSessionId : session.getToolSessionId();
-        Map<String, String> payloadFields = new LinkedHashMap<>();
+        Map<String, Object> payloadFields = new LinkedHashMap<>();
         payloadFields.put("answer", content);
         payloadFields.put("toolCallId", toolCallId);
         payloadFields.put("toolSessionId", targetToolSessionId);
         payloadFields.put("sendUserAccount", senderUserAccount);
+        payloadFields.put("businessExtParam", businessExtParam);
         gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
                 ak, ownerWelinkId, String.valueOf(session.getId()),
                 GatewayActions.QUESTION_REPLY,
-                PayloadBuilder.buildPayload(objectMapper, payloadFields)));
+                PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields)));
 
         writeInvokeSource(session, inboundSource);
         return InboundResult.ok(sessionId, String.valueOf(session.getId()));
@@ -409,7 +419,8 @@ public class InboundProcessingService {
                                                  String sessionId, String assistantAccount,
                                                  String senderUserAccount,
                                                  String permissionId, String response,
-                                                 String subagentSessionId, String inboundSource) {
+                                                 String subagentSessionId, String inboundSource,
+                                                 JsonNode businessExtParam) {
         ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
         if (outcome.status() == ExistenceStatus.NOT_EXISTS) {
             log.info("[SKIP] processPermissionReply: reason=assistant_not_exists, decision=block, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
@@ -435,15 +446,16 @@ public class InboundProcessingService {
         if (offline != null) return offline;
 
         String targetToolSessionId = subagentSessionId != null ? subagentSessionId : session.getToolSessionId();
-        Map<String, String> payloadFields = new LinkedHashMap<>();
+        Map<String, Object> payloadFields = new LinkedHashMap<>();
         payloadFields.put("permissionId", permissionId);
         payloadFields.put("response", response);
         payloadFields.put("toolSessionId", targetToolSessionId);
         payloadFields.put("sendUserAccount", senderUserAccount);
+        payloadFields.put("businessExtParam", businessExtParam);
         gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
                 ak, ownerWelinkId, String.valueOf(session.getId()),
                 GatewayActions.PERMISSION_REPLY,
-                PayloadBuilder.buildPayload(objectMapper, payloadFields)));
+                PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields)));
 
         // 广播权限回复消息到前端
         StreamMessage replyMsg = StreamMessage.builder()
@@ -524,7 +536,8 @@ public class InboundProcessingService {
             return InboundResult.ok(sessionId, String.valueOf(session.getId()));
         } else {
             sessionManager.createSessionAsync(businessDomain, sessionType, sessionId,
-                    ak, ownerWelinkId, assistantAccount, senderUserAccount, null);
+                    ak, ownerWelinkId, assistantAccount, senderUserAccount, null,
+                    null);
             SkillSession created = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
             return InboundResult.ok(sessionId,
                     created != null ? String.valueOf(created.getId()) : null);

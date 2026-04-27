@@ -63,19 +63,22 @@ public class ExternalInboundController {
                     request.getSenderUserAccount(),
                     request.payloadString("content"), request.payloadString("msgType"),
                     request.payloadString("imageUrl"), parseChatHistory(request.getPayload()),
-                    "EXTERNAL");
+                    "EXTERNAL",
+                    null);  // businessExtParam: Task 4 will wire actual value
             case "question_reply" -> processingService.processQuestionReply(
                     request.getBusinessDomain(), request.getSessionType(),
                     request.getSessionId(), request.getAssistantAccount(),
                     request.getSenderUserAccount(),
                     request.payloadString("content"), request.payloadString("toolCallId"),
-                    request.payloadString("subagentSessionId"), "EXTERNAL");
+                    request.payloadString("subagentSessionId"), "EXTERNAL",
+                    null);  // businessExtParam: Task 4 will wire actual value
             case "permission_reply" -> processingService.processPermissionReply(
                     request.getBusinessDomain(), request.getSessionType(),
                     request.getSessionId(), request.getAssistantAccount(),
                     request.getSenderUserAccount(),
                     request.payloadString("permissionId"), request.payloadString("response"),
-                    request.payloadString("subagentSessionId"), "EXTERNAL");
+                    request.payloadString("subagentSessionId"), "EXTERNAL",
+                    null);  // businessExtParam: Task 4 will wire actual value
             case "rebuild" -> processingService.processRebuild(
                     request.getBusinessDomain(), request.getSessionType(),
                     request.getSessionId(), request.getAssistantAccount(),

@@ -137,7 +137,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                null, "hello", "text", null, null, "IM");
+                null, "hello", "text", null, null, "IM", null);
 
         assertTrue(result.success());
         ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
@@ -161,7 +161,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "unknown",
-                null, "hello", "text", null, null, "IM");
+                null, "hello", "text", null, null, "IM", null);
 
         assertFalse(result.success());
         assertEquals(404, result.code());
@@ -176,7 +176,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "deleted",
-                null, "hello", "text", null, null, "IM");
+                null, "hello", "text", null, null, "IM", null);
 
         assertFalse(result.success());
         assertEquals(410, result.code());
@@ -185,7 +185,7 @@ class InboundProcessingServiceTest {
         // ak 未知，无法从 findSession 反查 skillSession
         assertNull(result.welinkSessionId());
         verify(gatewayRelayService, never()).sendInvokeToGateway(any());
-        verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -196,7 +196,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processQuestionReply(
                 "im", "direct", "dm-001", "deleted",
-                "user-001", "answer", "tc-001", null, "EXTERNAL");
+                "user-001", "answer", "tc-001", null, "EXTERNAL", null);
 
         assertFalse(result.success());
         assertEquals(410, result.code());
@@ -213,7 +213,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processPermissionReply(
                 "im", "direct", "dm-001", "deleted",
-                "user-001", "perm-1", "once", null, "EXTERNAL");
+                "user-001", "perm-1", "once", null, "EXTERNAL", null);
 
         assertFalse(result.success());
         assertEquals(410, result.code());
@@ -235,7 +235,7 @@ class InboundProcessingServiceTest {
         assertEquals(410, result.code());
         assertEquals("该助理已被删除", result.message());
         assertEquals("dm-001", result.businessSessionId());
-        verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(sessionManager, never()).requestToolSession(any(), any());
     }
 
@@ -251,12 +251,12 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-new", "assist-001",
-                null, "first msg", "text", null, null, "IM");
+                null, "first msg", "text", null, null, "IM", null);
 
         assertTrue(result.success());
         verify(sessionManager).createSessionAsync(
                 "im", "direct", "dm-new", "ak-001",
-                "owner-001", "assist-001", null, "first msg");
+                "owner-001", "assist-001", null, "first msg", null);
         verify(gatewayRelayService, never()).sendInvokeToGateway(any());
     }
 
@@ -273,7 +273,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                "user-001", "hello", "text", null, null, "EXTERNAL");
+                "user-001", "hello", "text", null, null, "EXTERNAL", null);
 
         assertFalse(result.success());
         assertEquals(503, result.code());
@@ -300,7 +300,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                "user-001", "hello", "text", null, null, "EXTERNAL");
+                "user-001", "hello", "text", null, null, "EXTERNAL", null);
 
         assertTrue(result.success());
         verify(gatewayApiClient, never()).getAgentByAk(anyString()); // 关键：没查在线状态
@@ -321,7 +321,7 @@ class InboundProcessingServiceTest {
         InboundResult result = service.processChat(
                 "im", "group", "grp-001", "assist-001",
                 null,
-                "hello", "text", null, null, "IM");
+                "hello", "text", null, null, "IM", null);
 
         assertTrue(result.success());
         ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
@@ -345,7 +345,7 @@ class InboundProcessingServiceTest {
         InboundResult result = service.processQuestionReply(
                 "im", "direct", "dm-001", "assist-001",
                 "user-001",
-                "yes", "tc-001", null, null);
+                "yes", "tc-001", null, null, null);
 
         assertTrue(result.success());
         ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
@@ -371,7 +371,7 @@ class InboundProcessingServiceTest {
         InboundResult result = service.processQuestionReply(
                 "im", "direct", "dm-001", "assist-001",
                 "user-001",
-                "answer", "tool-call-1", null, "EXTERNAL");
+                "answer", "tool-call-1", null, "EXTERNAL", null);
 
         assertFalse(result.success());
         assertEquals(503, result.code());
@@ -392,7 +392,7 @@ class InboundProcessingServiceTest {
         InboundResult result = service.processQuestionReply(
                 "im", "direct", "dm-001", "assist-001",
                 "user-001",
-                "answer", "tool-call-1", null, "EXTERNAL");
+                "answer", "tool-call-1", null, "EXTERNAL", null);
 
         assertFalse(result.success());
         assertEquals(404, result.code());
@@ -416,7 +416,7 @@ class InboundProcessingServiceTest {
         InboundResult result = service.processPermissionReply(
                 "im", "direct", "dm-001", "assist-001",
                 "user-001",
-                "perm-001", "allow", null, null);
+                "perm-001", "allow", null, null, null);
 
         assertTrue(result.success());
         // 验证 invoke
@@ -449,7 +449,7 @@ class InboundProcessingServiceTest {
         InboundResult result = service.processPermissionReply(
                 "im", "direct", "dm-001", "assist-001",
                 "user-001",
-                "perm-1", "once", null, "EXTERNAL");
+                "perm-1", "once", null, "EXTERNAL", null);
 
         assertFalse(result.success());
         assertEquals(503, result.code());
@@ -470,7 +470,7 @@ class InboundProcessingServiceTest {
         InboundResult result = service.processPermissionReply(
                 "im", "direct", "dm-001", "assist-001",
                 "user-001",
-                "perm-1", "once", null, "EXTERNAL");
+                "perm-1", "once", null, "EXTERNAL", null);
 
         assertFalse(result.success());
         assertEquals(404, result.code());
@@ -496,7 +496,7 @@ class InboundProcessingServiceTest {
 
         assertTrue(result.success());
         verify(sessionManager).requestToolSession(session, null);
-        verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -513,7 +513,7 @@ class InboundProcessingServiceTest {
         assertTrue(result.success());
         verify(sessionManager).createSessionAsync(
                 "im", "direct", "dm-new", "ak-001",
-                "owner-001", "assist-001", "user-001", null);
+                "owner-001", "assist-001", "user-001", null, null);
         verify(sessionManager, never()).requestToolSession(any(), any());
     }
 
@@ -535,7 +535,7 @@ class InboundProcessingServiceTest {
         assertEquals(503, result.code());
         assertEquals(MOCK_OFFLINE_MSG, result.message());
         verify(sessionManager, never()).requestToolSession(any(), any());
-        verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     // ==================== business self-heal (R1) ====================
@@ -558,7 +558,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                null, "hello", "text", null, null, "IM");
+                null, "hello", "text", null, null, "IM", null);
 
         assertTrue(result.success());
         verify(sessionService).updateToolSessionId(eq(101L), argThat((String s) -> s != null && s.startsWith("cloud-")));
@@ -593,7 +593,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                null, "hello", "text", null, null, "IM");
+                null, "hello", "text", null, null, "IM", null);
 
         assertTrue(result.success());
         // 关键：不再调用 updateToolSessionId
@@ -617,7 +617,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                null, "hello", "text", null, null, "IM");
+                null, "hello", "text", null, null, "IM", null);
 
         assertTrue(result.success());
         verify(sessionManager).requestToolSession(session, "hello");
@@ -641,7 +641,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                null, "hello", "text", null, null, "IM");
+                null, "hello", "text", null, null, "IM", null);
 
         assertTrue(result.success());
         verify(sessionManager).requestToolSession(session, "hello");
@@ -741,7 +741,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                null, "hello", "text", null, null, "IM");
+                null, "hello", "text", null, null, "IM", null);
 
         assertTrue(result.success());
         // 关键：复用对方 heal 结果，不再自己 update
@@ -771,7 +771,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                null, "hello", "text", null, null, "IM");
+                null, "hello", "text", null, null, "IM", null);
 
         assertTrue(result.success());
         verify(gatewayRelayService).sendInvokeToGateway(any());
@@ -797,7 +797,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                null, "hello", "text", null, null, "IM");
+                null, "hello", "text", null, null, "IM", null);
 
         assertTrue(result.success());
         verify(gatewayRelayService).sendInvokeToGateway(any());
@@ -827,7 +827,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                null, "hello", "text", null, null, "IM");
+                null, "hello", "text", null, null, "IM", null);
 
         assertTrue(result.success());
         // 3 次 invoke：legacy-1 + legacy-2 + 当前 prompt（重复的 "hello" 被跳过）

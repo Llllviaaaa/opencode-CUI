@@ -43,7 +43,7 @@ class ExternalInboundControllerTest {
     @Test
     @DisplayName("chat action dispatches to processChat")
     void chatAction() throws Exception {
-        when(processingService.processChat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(processingService.processChat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(InboundResult.ok());
         var request = buildRequest("chat", "{\"content\":\"hello\",\"msgType\":\"text\"}");
         var response = controller.invoke(request);
@@ -52,7 +52,7 @@ class ExternalInboundControllerTest {
         verify(processingService).processChat(
                 eq("im"), eq("direct"), eq("dm-001"), eq("assist-01"),
                 eq("user-001"),
-                eq("hello"), eq("text"), isNull(), isNull(), eq("EXTERNAL"));
+                eq("hello"), eq("text"), isNull(), isNull(), eq("EXTERNAL"), isNull());
     }
 
     @Test
@@ -80,7 +80,7 @@ class ExternalInboundControllerTest {
     @DisplayName("question_reply dispatches correctly")
     void questionReplyAction() throws Exception {
         when(processingService.processQuestionReply(
-                any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(InboundResult.ok());
         var request = buildRequest("question_reply", "{\"content\":\"A\",\"toolCallId\":\"tc-1\"}");
         var response = controller.invoke(request);
@@ -88,14 +88,14 @@ class ExternalInboundControllerTest {
         verify(processingService).processQuestionReply(
                 eq("im"), eq("direct"), eq("dm-001"), eq("assist-01"),
                 eq("user-001"),
-                eq("A"), eq("tc-1"), isNull(), eq("EXTERNAL"));
+                eq("A"), eq("tc-1"), isNull(), eq("EXTERNAL"), isNull());
     }
 
     @Test
     @DisplayName("permission_reply dispatches correctly")
     void permissionReplyAction() throws Exception {
         when(processingService.processPermissionReply(
-                any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(InboundResult.ok());
         var request = buildRequest("permission_reply", "{\"permissionId\":\"perm-1\",\"response\":\"once\"}");
         var response = controller.invoke(request);
@@ -103,7 +103,7 @@ class ExternalInboundControllerTest {
         verify(processingService).processPermissionReply(
                 eq("im"), eq("direct"), eq("dm-001"), eq("assist-01"),
                 eq("user-001"),
-                eq("perm-1"), eq("once"), isNull(), eq("EXTERNAL"));
+                eq("perm-1"), eq("once"), isNull(), eq("EXTERNAL"), isNull());
     }
 
     @Test
@@ -161,7 +161,7 @@ class ExternalInboundControllerTest {
     @Test
     @DisplayName("chat action: 离线 InboundResult 被组装为 HTTP 200 + code=503 + errormsg + data(sid,wsid)")
     void chatActionOfflineReturns503WithSessionData() throws Exception {
-        when(processingService.processChat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(processingService.processChat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(InboundResult.error(503, "msg-x", "ext-sid", "123"));
 
         var request = buildRequest("chat", "{\"content\":\"hello\",\"msgType\":\"text\"}");

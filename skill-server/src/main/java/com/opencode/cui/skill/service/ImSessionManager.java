@@ -1,5 +1,6 @@
 package com.opencode.cui.skill.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
@@ -95,7 +96,8 @@ public class ImSessionManager {
     public void createSessionAsync(String businessDomain, String sessionType,
             String sessionId, String ak, String ownerWelinkId,
             String assistantAccount, String senderUserAccount,
-            String pendingMessage) {
+            String pendingMessage,
+            JsonNode businessExtParam) {
         // 构建分布式锁 key
         String lockKey = buildCreateLockKey(businessDomain, sessionType, sessionId, ak);
         String lockValue = UUID.randomUUID().toString();

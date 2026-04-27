@@ -68,7 +68,8 @@ public class ImInboundController {
                 request.msgType(),
                 request.imageUrl(),
                 request.chatHistory(),
-                "IM");
+                "IM",
+                null);  // businessExtParam: Task 3 will wire actual value
 
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
