@@ -91,7 +91,7 @@ class SkillMessageControllerTest {
         com.opencode.cui.skill.service.scope.AssistantScopeStrategy personalStrategy =
                 org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
         lenient().when(personalStrategy.requiresOnlineCheck()).thenReturn(true);
-        lenient().when(scopeDispatcher.getStrategy(any())).thenReturn(personalStrategy);
+        lenient().when(scopeDispatcher.getStrategy(anyString())).thenReturn(personalStrategy);
         lenient().when(assistantInfoService.getCachedScope(any())).thenReturn("personal");
         // 默认 Agent 在线，离线场景在专用测试中覆盖
         lenient().when(gatewayApiClient.getAgentByAk(any()))

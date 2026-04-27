@@ -22,7 +22,9 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -100,7 +102,7 @@ class GatewayMessageRouterTest {
         // 让路由总是本地处理
         lenient().when(sessionRouteService.getOwnerInstance(any())).thenReturn(LOCAL_INSTANCE);
         // scope 默认放行
-        lenient().when(scopeDispatcher.getStrategy(any())).thenReturn(scopeStrategy);
+        lenient().when(scopeDispatcher.getStrategy(nullable(String.class))).thenReturn(scopeStrategy);
         lenient().when(scopeStrategy.translateEvent(any(), any()))
                 .thenAnswer(inv -> translator.translate(inv.getArgument(0)));
         lenient().when(translator.translate(any())).thenReturn(StreamMessage.builder()

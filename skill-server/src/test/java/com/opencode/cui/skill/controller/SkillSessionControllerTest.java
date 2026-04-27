@@ -52,7 +52,7 @@ class SkillSessionControllerTest {
                 org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
         org.mockito.Mockito.lenient().when(personalStrategy.generateToolSessionId()).thenReturn(null);
         org.mockito.Mockito.lenient().when(personalStrategy.requiresOnlineCheck()).thenReturn(true);
-        org.mockito.Mockito.lenient().when(scopeDispatcher.getStrategy(any())).thenReturn(personalStrategy);
+        org.mockito.Mockito.lenient().when(scopeDispatcher.getStrategy(anyString())).thenReturn(personalStrategy);
         org.mockito.Mockito.lenient().when(assistantInfoService.getCachedScope(any())).thenReturn("personal");
         // 默认 resolver 行为：开关 ON（null 放行），非 null 返 EXISTS
         org.mockito.Mockito.lenient().when(assistantAccountResolverService.isSkipOnNullAssistantAccount()).thenReturn(true);

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.AssistantInfoService;
+import com.opencode.cui.skill.service.BusinessWhitelistService;
 import com.opencode.cui.skill.service.CloudEventTranslator;
 import com.opencode.cui.skill.service.GatewayMessageRouter;
 import com.opencode.cui.skill.service.ImInteractionStateService;
@@ -66,6 +67,7 @@ class PersonalScopeCloudProtocolIntegrationTest {
     @Mock private AssistantInfoService assistantInfoService;
     @Mock private OutboundDeliveryDispatcher outboundDeliveryDispatcher;
     @Mock private StreamMessageEmitter emitter;
+    @Mock private BusinessWhitelistService whitelistService;
 
     private AssistantScopeDispatcher scopeDispatcher;
     private PersonalScopeStrategy personalStrategy;
@@ -83,7 +85,7 @@ class PersonalScopeCloudProtocolIntegrationTest {
 
         openCodeEventTranslator = new OpenCodeEventTranslator(objectMapper, new TranslatorSessionCache());
         personalStrategy = new PersonalScopeStrategy(openCodeEventTranslator, cloudEventTranslator);
-        scopeDispatcher = new AssistantScopeDispatcher(List.of(personalStrategy));
+        scopeDispatcher = new AssistantScopeDispatcher(List.of(personalStrategy), whitelistService);
 
         lenient().when(skillInstanceRegistry.getInstanceId()).thenReturn(LOCAL_INSTANCE);
         lenient().when(sessionRouteService.getOwnerInstance(any())).thenReturn(LOCAL_INSTANCE);
