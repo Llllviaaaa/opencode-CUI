@@ -105,8 +105,8 @@ public class GatewayRelayService {
         // 根据助手类型（scope）选择构建策略
         String messageText;
         AssistantInfo info = assistantInfoService.getAssistantInfo(command.ak());
-        if (info != null && info.isBusiness()) {
-            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(info.getAssistantScope());
+        AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(info);
+        if ("business".equals(strategy.getScope())) {
             messageText = strategy.buildInvoke(command, info);
             if (messageText == null) {
                 log.warn("[SKIP] GatewayRelayService.sendInvokeToGateway: reason=strategy_build_null, ak={}, scope=business",
@@ -114,7 +114,7 @@ public class GatewayRelayService {
                 return;
             }
         } else {
-            // personal 策略（默认）：使用原有构建逻辑
+            // personal 策略（含白名单未命中降级 / 上游故障兜底）：保留本地 buildInvokeMessage
             messageText = buildInvokeMessage(command);
             if (messageText == null) {
                 return;
