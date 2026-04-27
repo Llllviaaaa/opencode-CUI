@@ -1,5 +1,6 @@
 package com.opencode.cui.skill.controller;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.ApiResponse;
 import com.opencode.cui.skill.model.ExistenceStatus;
@@ -121,8 +122,10 @@ public class SkillMessageController {
             return ResponseEntity.ok(ApiResponse.error(400, "Invalid session ID"));
         }
 
-        log.info("[ENTRY] SkillMessageController.sendMessage: sessionId={}, contentLength={}", sessionId,
-                request.getContent() != null ? request.getContent().length() : 0);
+        log.info("[ENTRY] SkillMessageController.sendMessage: sessionId={}, contentLength={}, businessExtParam={}",
+                sessionId,
+                request.getContent() != null ? request.getContent().length() : 0,
+                request.getBusinessExtParam());
         long start = System.nanoTime();
 
         SkillSession session = accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
@@ -209,13 +212,15 @@ public class SkillMessageController {
             String targetToolSessionId = request.getSubagentSessionId() != null
                     ? request.getSubagentSessionId()
                     : session.getToolSessionId();
-            payload = PayloadBuilder.buildPayload(objectMapper, Map.of(
-                    "answer", request.getContent(),
-                    "toolCallId", request.getToolCallId(),
-                    "toolSessionId", targetToolSessionId));
+            Map<String, Object> qr = new LinkedHashMap<>();
+            qr.put("answer", request.getContent());
+            qr.put("toolCallId", request.getToolCallId());
+            qr.put("toolSessionId", targetToolSessionId);
+            qr.put("businessExtParam", request.getBusinessExtParam());
+            payload = PayloadBuilder.buildPayloadWithObjects(objectMapper, qr);
         } else {
             action = GatewayActions.CHAT;
-            Map<String, String> payloadFields = new LinkedHashMap<>();
+            Map<String, Object> payloadFields = new LinkedHashMap<>();
             payloadFields.put("text", request.getContent());
             payloadFields.put("toolSessionId", session.getToolSessionId());
             // 优先使用实际操作用户（cookie），兜底用 session 创建人
@@ -223,7 +228,8 @@ public class SkillMessageController {
                     userIdCookie != null && !userIdCookie.isBlank() ? userIdCookie : session.getUserId());
             payloadFields.put("assistantAccount", session.getAssistantAccount());
             payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
-            payload = PayloadBuilder.buildPayload(objectMapper, payloadFields);
+            payloadFields.put("businessExtParam", request.getBusinessExtParam());
+            payload = PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields);
         }
 
         log.info("SkillMessageController.routeToGateway: sessionId={}, action={}, ak={}",
@@ -377,8 +383,8 @@ public class SkillMessageController {
         }
 
         long start = System.nanoTime();
-        log.info("[ENTRY] SkillMessageController.replyPermission: sessionId={}, permId={}, response={}",
-                sessionId, permId, request.getResponse());
+        log.info("[ENTRY] SkillMessageController.replyPermission: sessionId={}, permId={}, response={}, businessExtParam={}",
+                sessionId, permId, request.getResponse(), request.getBusinessExtParam());
 
         SkillSession session;
         session = accessControlService.requireSessionAccess(numericSessionId, userIdCookie);
@@ -419,10 +425,12 @@ public class SkillMessageController {
                 ? request.getSubagentSessionId()
                 : session.getToolSessionId();
 
-        String payload = PayloadBuilder.buildPayload(objectMapper, Map.of(
-                "permissionId", permId,
-                "response", request.getResponse(),
-                "toolSessionId", targetToolSessionId));
+        Map<String, Object> pr = new LinkedHashMap<>();
+        pr.put("permissionId", permId);
+        pr.put("response", request.getResponse());
+        pr.put("toolSessionId", targetToolSessionId);
+        pr.put("businessExtParam", request.getBusinessExtParam());
+        String payload = PayloadBuilder.buildPayloadWithObjects(objectMapper, pr);
 
         // 向 AI-Gateway 发送 permission_reply invoke 命令
         gatewayRelayService.sendInvokeToGateway(
@@ -519,6 +527,8 @@ public class SkillMessageController {
         private String toolCallId;
         /** 可选：subagent 的真实 toolSessionId，用于将 question reply 路由到正确的子会话 */
         private String subagentSessionId;
+        /** 可选：业务扩展参数，透传到云端 extParameters.businessExtParam */
+        private JsonNode businessExtParam;
     }
 
     /** 发送到 IM 请求体。 */
@@ -535,5 +545,7 @@ public class SkillMessageController {
         private String response;
         /** 可选：subagent 的真实 toolSessionId，用于将 permission reply 路由到正确的子会话 */
         private String subagentSessionId;
+        /** 可选：业务扩展参数，透传到云端 extParameters.businessExtParam */
+        private JsonNode businessExtParam;
     }
 }

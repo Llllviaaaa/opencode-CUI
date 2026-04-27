@@ -646,4 +646,96 @@ class SkillMessageControllerTest {
         // 验证没有调用 Gateway 发送 invoke
         verify(gatewayRelayService, never()).sendInvokeToGateway(any());
     }
+
+    // ==================== businessExtParam 透传 ====================
+
+    @Test
+    @DisplayName("T-6: sendMessage chat 分支透传 businessExtParam")
+    void sendMessageChatPassesBusinessExtParam() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.JsonNode bep = om.readTree("{\"k\":\"v\"}");
+
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+
+        SkillMessage msg = SkillMessage.builder()
+                .id(1L).sessionId(1L).role(SkillMessage.Role.USER).content("hi").build();
+        when(messageService.saveUserMessage(eq(1L), eq("hi"))).thenReturn(msg);
+
+        SkillMessageController.SendMessageRequest request = new SkillMessageController.SendMessageRequest();
+        request.setContent("hi");
+        request.setBusinessExtParam(bep);
+
+        controller.sendMessage("1", "1", request);
+
+        ArgumentCaptor<InvokeCommand> capt = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(capt.capture());
+        com.fasterxml.jackson.databind.JsonNode payload = om.readTree(capt.getValue().payload());
+        assertNotNull(payload.get("businessExtParam"));
+        assertEquals("v", payload.get("businessExtParam").get("k").asText());
+    }
+
+    @Test
+    @DisplayName("T-7: sendMessage question_reply 分支透传 businessExtParam")
+    void sendMessageQuestionReplyPassesBusinessExtParam() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.JsonNode bep = om.readTree("{\"q\":\"x\"}");
+
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+
+        SkillMessage msg = SkillMessage.builder()
+                .id(2L).sessionId(1L).role(SkillMessage.Role.USER).content("reply").build();
+        when(messageService.saveUserMessage(eq(1L), eq("reply"))).thenReturn(msg);
+
+        SkillMessageController.SendMessageRequest request = new SkillMessageController.SendMessageRequest();
+        request.setContent("reply");
+        request.setToolCallId("tc-1");
+        request.setBusinessExtParam(bep);
+
+        controller.sendMessage("1", "1", request);
+
+        ArgumentCaptor<InvokeCommand> capt = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(capt.capture());
+        com.fasterxml.jackson.databind.JsonNode payload = om.readTree(capt.getValue().payload());
+        assertNotNull(payload.get("businessExtParam"));
+        assertEquals("x", payload.get("businessExtParam").get("q").asText());
+    }
+
+    @Test
+    @DisplayName("T-8: replyPermission 透传 businessExtParam")
+    void replyPermissionPassesBusinessExtParam() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.JsonNode bep = om.readTree("{\"p\":true}");
+
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("tool-session-1");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
+
+        SkillMessageController.PermissionReplyRequest request = new SkillMessageController.PermissionReplyRequest();
+        request.setResponse("once");
+        request.setBusinessExtParam(bep);
+
+        controller.replyPermission("1", "1", "perm-1", request);
+
+        ArgumentCaptor<InvokeCommand> capt = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(capt.capture());
+        com.fasterxml.jackson.databind.JsonNode payload = om.readTree(capt.getValue().payload());
+        assertNotNull(payload.get("businessExtParam"));
+        assertTrue(payload.get("businessExtParam").get("p").asBoolean());
+    }
 }
