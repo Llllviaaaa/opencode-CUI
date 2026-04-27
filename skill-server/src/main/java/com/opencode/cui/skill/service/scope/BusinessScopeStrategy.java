@@ -60,12 +60,12 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
         String toolSessionId = extractField(command.payload(), "toolSessionId");
 
         // 取业务方扩展参数（缺省 / 非 object → null，由下方兜底为 {}）
-        JsonNode bep = extractObjectField(command.payload(), "businessExtParam");
+        JsonNode businessExtParam = extractObjectField(command.payload(), "businessExtParam");
 
-        // 组装 extParameters：保证 businessExtParam / platformExtParam 两个子字段永远存在
+        // 用 LinkedHashMap 保证 businessExtParam 序列化在 platformExtParam 之前（与协议文档示例一致）
         Map<String, Object> extParameters = new LinkedHashMap<>();
         extParameters.put("businessExtParam",
-                bep != null ? bep : objectMapper.createObjectNode());
+                businessExtParam != null ? businessExtParam : objectMapper.createObjectNode());
         extParameters.put("platformExtParam", objectMapper.createObjectNode());
 
         CloudRequestContext context = CloudRequestContext.builder()
@@ -170,7 +170,7 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
                 return null;
             }
             if (!field.isObject()) {
-                log.warn("[WARN] {} is not a JSON object, treating as empty: actualType={}, value={}",
+                log.warn("{} is not a JSON object, treating as empty: actualType={}, value={}",
                         fieldName, field.getNodeType(), field);
                 return null;
             }

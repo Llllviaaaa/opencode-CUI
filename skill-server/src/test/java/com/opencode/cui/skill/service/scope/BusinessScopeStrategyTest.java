@@ -211,6 +211,9 @@ class BusinessScopeStrategyTest {
         verify(cloudRequestBuilder).buildCloudRequest(eq("app-001"), captor.capture());
         JsonNode bep = (JsonNode) captor.getValue().getExtParameters().get("businessExtParam");
         assertEquals("x", bep.get("q").asText());
+        JsonNode pep = (JsonNode) captor.getValue().getExtParameters().get("platformExtParam");
+        assertTrue(pep.isObject());
+        assertEquals(0, pep.size());
     }
 
     @Test
@@ -252,6 +255,9 @@ class BusinessScopeStrategyTest {
         verify(cloudRequestBuilder).buildCloudRequest(eq("app-001"), captor.capture());
         JsonNode bep = (JsonNode) captor.getValue().getExtParameters().get("businessExtParam");
         assertTrue(bep.get("p").asBoolean());
+        JsonNode pep = (JsonNode) captor.getValue().getExtParameters().get("platformExtParam");
+        assertTrue(pep.isObject());
+        assertEquals(0, pep.size());
     }
 
     @Test
