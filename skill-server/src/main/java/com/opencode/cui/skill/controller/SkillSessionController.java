@@ -15,6 +15,7 @@ import com.opencode.cui.skill.service.PayloadBuilder;
 import com.opencode.cui.skill.service.ProtocolUtils;
 import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillSessionService;
+import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import lombok.Data;
@@ -111,8 +112,8 @@ public class SkillSessionController {
 
         if (request.getAk() != null) {
             // 根据助手类型决定 toolSession 创建方式
-            String scope = assistantInfoService.getCachedScope(request.getAk());
-            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(scope);
+            AssistantInfo info = assistantInfoService.getAssistantInfo(request.getAk());
+            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(info);
             String generatedToolSessionId = strategy.generateToolSessionId();
             if (generatedToolSessionId != null) {
                 // 业务助手：本地预生成 toolSessionId，跳过 Gateway create_session
