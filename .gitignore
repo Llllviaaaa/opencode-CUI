@@ -42,3 +42,4 @@ bench_results/
 .planning/
 tests/
 __pycache__/
+.gitnexus
