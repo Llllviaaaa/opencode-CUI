@@ -69,7 +69,7 @@ class AssistantScopeDispatcherTest {
     @DisplayName("getStrategy(null info) → personalStrategy")
     void getStrategy_nullInfo_returnsPersonal() {
         AssistantScopeStrategy result = dispatcher.getStrategy((AssistantInfo) null);
-        assertEquals("personal", result.getScope());
+        assertSame(personalStrategy, result);
         verifyNoInteractions(whitelistService);
     }
 
@@ -81,7 +81,7 @@ class AssistantScopeDispatcherTest {
 
         AssistantScopeStrategy result = dispatcher.getStrategy(info);
 
-        assertEquals("personal", result.getScope());
+        assertSame(personalStrategy, result);
         verifyNoInteractions(whitelistService);
     }
 
@@ -95,7 +95,7 @@ class AssistantScopeDispatcherTest {
 
         AssistantScopeStrategy result = dispatcher.getStrategy(info);
 
-        assertEquals("business", result.getScope());
+        assertSame(businessStrategy, result);
     }
 
     @Test
@@ -108,6 +108,6 @@ class AssistantScopeDispatcherTest {
 
         AssistantScopeStrategy result = dispatcher.getStrategy(info);
 
-        assertEquals("personal", result.getScope());
+        assertSame(personalStrategy, result);
     }
 }

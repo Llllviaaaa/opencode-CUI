@@ -34,7 +34,7 @@ public class AssistantScopeDispatcher {
 
     /**
      * 根据 scope 字符串纯 lookup 获取策略（不走白名单 gate）。
-     * 仅用于内部 / 测试场景；业务路径请使用 {@link #getStrategy(AssistantInfo)}。
+     * 主要由 dispatcher 内部递归使用；外部调用应优先 {@link #getStrategy(AssistantInfo)}。
      */
     public AssistantScopeStrategy getStrategy(String scope) {
         if (scope == null) {
