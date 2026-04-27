@@ -1,5 +1,6 @@
 package com.opencode.cui.skill.service;
 
+import com.opencode.cui.skill.config.SysConfigProperties;
 import com.opencode.cui.skill.repository.SysConfigMapper;
 import com.opencode.cui.skill.model.SysConfig;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,12 +36,16 @@ class SysConfigServiceTest {
     @Mock
     private ValueOperations<String, String> valueOps;
 
+    @Mock
+    private SysConfigProperties properties;
+
     private SysConfigService service;
 
     @BeforeEach
     void setUp() {
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        service = new SysConfigService(sysConfigMapper, redisTemplate);
+        lenient().when(properties.getCacheTtlMinutes()).thenReturn(30L);
+        service = new SysConfigService(sysConfigMapper, redisTemplate, properties);
     }
 
     // ------------------------------------------------------------------ getValue
@@ -206,6 +211,22 @@ class SysConfigServiceTest {
         assertDoesNotThrow(() -> service.update(config));
 
         verify(sysConfigMapper).update(config);
+    }
+
+    // ------------------------------------------------------------------ TTL from properties
+
+    @Test
+    @DisplayName("Cache TTL uses configured value from SysConfigProperties")
+    void getValue_cachesUsingPropertiesTtl() {
+        when(properties.getCacheTtlMinutes()).thenReturn(15L);
+        when(sysConfigMapper.findByTypeAndKey("t", "k")).thenReturn(buildConfig(1L, "t", "k", "x", 1));
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.get("ss:config:t:k")).thenReturn(null);
+
+        String result = service.getValue("t", "k");
+
+        assertEquals("x", result);
+        verify(valueOps).set(eq("ss:config:t:k"), eq("x"), eq(15L), eq(TimeUnit.MINUTES));
     }
 
     // ------------------------------------------------------------------ helper

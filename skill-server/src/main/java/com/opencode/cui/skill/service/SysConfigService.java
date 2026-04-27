@@ -1,5 +1,6 @@
 package com.opencode.cui.skill.service;
 
+import com.opencode.cui.skill.config.SysConfigProperties;
 import com.opencode.cui.skill.repository.SysConfigMapper;
 import com.opencode.cui.skill.model.SysConfig;
 import lombok.RequiredArgsConstructor;
@@ -19,7 +20,7 @@ import java.util.concurrent.TimeUnit;
  * 缓存策略：
  * <ul>
  *   <li>缓存 key 格式：{@code ss:config:{configType}:{configKey}}</li>
- *   <li>TTL：30 分钟</li>
+ *   <li>TTL：由 SysConfigProperties.cacheTtlMinutes 配置，默认 5 分钟</li>
  *   <li>仅缓存 status=1（启用）的配置值</li>
  *   <li>create/update 时主动删除对应缓存，delete 时缓存自然过期</li>
  * </ul>
@@ -31,10 +32,10 @@ import java.util.concurrent.TimeUnit;
 public class SysConfigService {
 
     private static final String CACHE_PREFIX = "ss:config:";
-    private static final long CACHE_TTL_MINUTES = 30L;
 
     private final SysConfigMapper sysConfigMapper;
     private final StringRedisTemplate redisTemplate;
+    private final SysConfigProperties properties;
 
     /**
      * 获取配置值。优先读 Redis 缓存，未命中时查 DB。
@@ -74,7 +75,7 @@ public class SysConfigService {
         // 4. status=1，写缓存并返回（Redis 故障时静默）
         String value = config.getConfigValue();
         try {
-            redisTemplate.opsForValue().set(cacheKey, value, CACHE_TTL_MINUTES, TimeUnit.MINUTES);
+            redisTemplate.opsForValue().set(cacheKey, value, properties.getCacheTtlMinutes(), TimeUnit.MINUTES);
             log.debug("Config loaded from DB and cached: {}", cacheKey);
         } catch (RuntimeException e) {
             log.warn("Redis write failed for {}: {}", cacheKey, e.getMessage());

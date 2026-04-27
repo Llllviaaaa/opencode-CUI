@@ -112,6 +112,8 @@ skill:
     api-url: ${ASSISTANT_INFO_API_URL:http://localhost:9999/appstore/wecodeapi/open/ak/info}
     api-token: ${ASSISTANT_INFO_API_TOKEN:}
     cache-ttl-seconds: ${ASSISTANT_INFO_CACHE_TTL_SECONDS:300}
+  sys-config:
+    cache-ttl-minutes: ${SKILL_SYS_CONFIG_CACHE_TTL_MINUTES:5}
   assistant-id:
     enabled: ${SKILL_ASSISTANT_ID_ENABLED:true}
     target-tool-type: ${SKILL_ASSISTANT_ID_TARGET_TOOL_TYPE:assistant}
