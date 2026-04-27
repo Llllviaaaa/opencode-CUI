@@ -194,6 +194,9 @@ public class InboundProcessingService {
                         if (legacyMsg == null || legacyMsg.isBlank() || legacyMsg.equals(prompt)) {
                             continue;
                         }
+                        // D17: pending 队列仅含纯文本，无原消息绑定的 businessExtParam，
+                        // 显式传 null 避免把当前请求的 ext 错绑到 legacy 消息上；
+                        // 云端报文 extParameters.businessExtParam 由 BusinessScopeStrategy 兜底为 {}
                         dispatchChatToGateway(session, legacyMsg, ak, ownerWelinkId, assistantAccount,
                                 senderUserAccount, sessionType, sessionId, inboundSource, legacyMsg, false,
                                 null);
