@@ -42,12 +42,13 @@ public class ImInboundController {
     public ResponseEntity<ApiResponse<Void>> receiveMessage(@RequestBody ImMessageRequest request) {
         long start = System.nanoTime();
         log.info(
-                "[ENTRY] ImInboundController.receiveMessage: domain={}, sessionType={}, sessionId={}, assistant={}, msgType={}",
+                "[ENTRY] ImInboundController.receiveMessage: domain={}, sessionType={}, sessionId={}, assistant={}, msgType={}, businessExtParam={}",
                 request != null ? request.businessDomain() : null,
                 request != null ? request.sessionType() : null,
                 request != null ? request.sessionId() : null,
                 request != null ? request.assistantAccount() : null,
-                request != null ? request.msgType() : null);
+                request != null ? request.msgType() : null,
+                request != null ? request.businessExtParam() : null);
 
         // ========== 参数校验（控制器级别：仅 IM 域 + 仅文本消息） ==========
         String validationError = validate(request);
@@ -69,7 +70,7 @@ public class ImInboundController {
                 request.imageUrl(),
                 request.chatHistory(),
                 "IM",
-                null);  // businessExtParam: Task 3 will wire actual value
+                request.businessExtParam());
 
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
