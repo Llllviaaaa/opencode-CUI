@@ -2,6 +2,7 @@ package com.opencode.cui.skill.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
@@ -127,8 +128,12 @@ class ImOutboundFilterTest {
      * 配置 business scope 的公共 mock。
      */
     private void setupBusinessScope(String eventType, StreamMessage translatedMsg) {
+        AssistantInfo bizInfo = new AssistantInfo();
+        bizInfo.setAssistantScope("business");
+        when(assistantInfoService.getAssistantInfo(AK)).thenReturn(bizInfo);
+        // getCachedScope 仍被 routeAssistantMessage IM 过滤路径使用
         when(assistantInfoService.getCachedScope(AK)).thenReturn("business");
-        when(scopeDispatcher.getStrategy("business")).thenReturn(businessScopeStrategy);
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessScopeStrategy);
         lenient().when(businessScopeStrategy.translateEvent(any(), eq(SESSION_ID))).thenReturn(translatedMsg);
         when(sessionService.findByIdSafe(100L)).thenReturn(buildImSession());
     }
@@ -137,8 +142,11 @@ class ImOutboundFilterTest {
      * 配置 personal scope 的公共 mock。
      */
     private void setupPersonalScope(String eventType, StreamMessage translatedMsg) {
+        AssistantInfo personalInfo = new AssistantInfo();
+        personalInfo.setAssistantScope("personal");
+        when(assistantInfoService.getAssistantInfo(AK)).thenReturn(personalInfo);
         when(assistantInfoService.getCachedScope(AK)).thenReturn("personal");
-        when(scopeDispatcher.getStrategy("personal")).thenReturn(personalScopeStrategy);
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(personalScopeStrategy);
         lenient().when(personalScopeStrategy.translateEvent(any(), eq(SESSION_ID))).thenReturn(translatedMsg);
         when(sessionService.findByIdSafe(100L)).thenReturn(buildImSession());
     }

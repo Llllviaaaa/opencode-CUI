@@ -1,6 +1,7 @@
 package com.opencode.cui.skill.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.model.MessageHistoryResult;
 import com.opencode.cui.skill.model.PageResult;
 import com.opencode.cui.skill.model.ProtocolMessageView;
@@ -91,8 +92,10 @@ class SkillMessageControllerTest {
         com.opencode.cui.skill.service.scope.AssistantScopeStrategy personalStrategy =
                 org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
         lenient().when(personalStrategy.requiresOnlineCheck()).thenReturn(true);
-        lenient().when(scopeDispatcher.getStrategy(anyString())).thenReturn(personalStrategy);
-        lenient().when(assistantInfoService.getCachedScope(any())).thenReturn("personal");
+        lenient().when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(personalStrategy);
+        AssistantInfo defaultPersonalInfo = new AssistantInfo();
+        defaultPersonalInfo.setAssistantScope("personal");
+        lenient().when(assistantInfoService.getAssistantInfo(any())).thenReturn(defaultPersonalInfo);
         // 默认 Agent 在线，离线场景在专用测试中覆盖
         lenient().when(gatewayApiClient.getAgentByAk(any()))
                 .thenReturn(AgentSummary.builder().ak("99").toolType("assistant").build());
@@ -349,8 +352,10 @@ class SkillMessageControllerTest {
         com.opencode.cui.skill.service.scope.AssistantScopeStrategy businessStrategy =
                 org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
         when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
-        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
-        when(assistantInfoService.getCachedScope("biz-ak")).thenReturn("business");
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        AssistantInfo bizInfo = new AssistantInfo();
+        bizInfo.setAssistantScope("business");
+        when(assistantInfoService.getAssistantInfo("biz-ak")).thenReturn(bizInfo);
 
         var request = new SkillMessageController.PermissionReplyRequest();
         request.setResponse("once");

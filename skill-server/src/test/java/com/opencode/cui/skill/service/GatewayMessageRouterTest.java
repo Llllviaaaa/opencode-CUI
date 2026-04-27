@@ -3,6 +3,7 @@ package com.opencode.cui.skill.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.github.benmanes.caffeine.cache.Ticker;
+import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
@@ -101,8 +102,8 @@ class GatewayMessageRouterTest {
         lenient().when(skillInstanceRegistry.getInstanceId()).thenReturn(LOCAL_INSTANCE);
         // 让路由总是本地处理
         lenient().when(sessionRouteService.getOwnerInstance(any())).thenReturn(LOCAL_INSTANCE);
-        // scope 默认放行
-        lenient().when(scopeDispatcher.getStrategy(nullable(String.class))).thenReturn(scopeStrategy);
+        // scope 默认放行（nullable 覆盖 getAssistantInfo 返回 null 的情况）
+        lenient().when(scopeDispatcher.getStrategy(nullable(AssistantInfo.class))).thenReturn(scopeStrategy);
         lenient().when(scopeStrategy.translateEvent(any(), any()))
                 .thenAnswer(inv -> translator.translate(inv.getArgument(0)));
         lenient().when(translator.translate(any())).thenReturn(StreamMessage.builder()
