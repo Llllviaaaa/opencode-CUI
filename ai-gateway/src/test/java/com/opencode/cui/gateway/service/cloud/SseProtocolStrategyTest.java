@@ -74,7 +74,7 @@ class SseProtocolStrategyTest {
 
     private CloudConnectionContext buildContext() {
         return CloudConnectionContext.builder()
-                .endpoint("https://cloud.example.com/sse")
+                .channelAddress("https://cloud.example.com/sse")
                 .cloudRequest(objectMapper.valueToTree(java.util.Map.of("prompt", "hello")))
                 .appId("app_test")
                 .authType("soa")

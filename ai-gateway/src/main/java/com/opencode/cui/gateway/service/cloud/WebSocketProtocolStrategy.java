@@ -60,10 +60,10 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
             wsBuilder.header("X-App-Id", context.getAppId() != null ? context.getAppId() : "");
 
             log.info("[WS] Connecting: endpoint={}, appId={}, traceId={}",
-                    context.getEndpoint(), context.getAppId(), context.getTraceId());
+                    context.getChannelAddress(), context.getAppId(), context.getTraceId());
 
             WebSocket ws = wsBuilder
-                    .buildAsync(URI.create(context.getEndpoint()), listener)
+                    .buildAsync(URI.create(context.getChannelAddress()), listener)
                     .get(timeoutProperties.getConnectTimeoutSeconds(), TimeUnit.SECONDS);
 
             if (lifecycle != null) lifecycle.onConnected();
@@ -91,11 +91,11 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
 
         } catch (TimeoutException e) {
             log.error("[WS] Connect timeout: endpoint={}, traceId={}",
-                    context.getEndpoint(), context.getTraceId());
+                    context.getChannelAddress(), context.getTraceId());
             onError.accept(new RuntimeException("WebSocket connect timeout"));
         } catch (Exception e) {
             log.error("[WS] Connection error: endpoint={}, traceId={}, error={}",
-                    context.getEndpoint(), context.getTraceId(), e.getMessage());
+                    context.getChannelAddress(), context.getTraceId(), e.getMessage());
             onError.accept(e);
         } finally {
             if (pingScheduler != null) {

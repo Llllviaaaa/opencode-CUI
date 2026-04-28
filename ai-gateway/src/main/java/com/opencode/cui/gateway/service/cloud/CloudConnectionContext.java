@@ -11,16 +11,22 @@ import lombok.Data;
 @Builder
 public class CloudConnectionContext {
 
-    /** 云端服务地址 */
-    private String endpoint;
+    /** 云端服务地址（v1: endpoint；v2: channelAddress） */
+    private String channelAddress;
+
+    /** 通道类型："webhook" / "sse" / "websocket" */
+    private String channelType;
+
+    /** 回调 scope（仅 v2 模式有值，例如 "callback:weagent:chat"） */
+    private String scope;
 
     /** 发送给云端的请求体（JSON） */
     private JsonNode cloudRequest;
 
-    /** 云端应用 ID */
+    /** 云端应用 ID（v1 由 hisAppId 映射；v2 为 null） */
     private String appId;
 
-    /** 认证类型（soa / apig） */
+    /** 鉴权类型："none" / "soa" / "apig" */
     private String authType;
 
     /** 跨服务追踪 ID */

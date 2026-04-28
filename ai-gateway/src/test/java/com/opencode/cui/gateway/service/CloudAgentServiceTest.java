@@ -112,7 +112,7 @@ class CloudAgentServiceTest {
             );
 
             CloudConnectionContext ctx = contextCaptor.getValue();
-            assertEquals("https://cloud.example.com/chat", ctx.getEndpoint());
+            assertEquals("https://cloud.example.com/chat", ctx.getChannelAddress());
             assertEquals("app_36209", ctx.getAppId());
             assertEquals("soa", ctx.getAuthType());
             assertEquals("trace-001", ctx.getTraceId());

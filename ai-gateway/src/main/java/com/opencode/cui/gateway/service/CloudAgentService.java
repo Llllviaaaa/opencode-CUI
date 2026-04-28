@@ -73,7 +73,7 @@ public class CloudAgentService {
 
         // 2. 构建连接上下文
         CloudConnectionContext context = CloudConnectionContext.builder()
-                .endpoint(routeInfo.getEndpoint())
+                .channelAddress(routeInfo.getEndpoint())
                 .cloudRequest(cloudRequest)
                 .appId(routeInfo.getAppId())
                 .authType(routeInfo.getAuthType())

@@ -63,7 +63,7 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
 
             // 2. 构建 HTTP POST 请求
             HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(context.getEndpoint()))
+                    .uri(URI.create(context.getChannelAddress()))
                     .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
                     .header("Content-Type", "application/json")
                     .header("Accept", "text/event-stream")
@@ -79,7 +79,7 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
             // 4. 发送请求
             HttpRequest request = requestBuilder.build();
             log.info("[SSE] Connecting: endpoint={}, appId={}, traceId={}",
-                    context.getEndpoint(), context.getAppId(), context.getTraceId());
+                    context.getChannelAddress(), context.getAppId(), context.getTraceId());
 
             HttpResponse<InputStream> response = sendRequest(request);
 
@@ -99,7 +99,7 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
 
         } catch (Exception e) {
             log.error("[SSE] Connection error: endpoint={}, traceId={}, error={}",
-                    context.getEndpoint(), context.getTraceId(), e.getMessage());
+                    context.getChannelAddress(), context.getTraceId(), e.getMessage());
             onError.accept(e);
         }
     }
