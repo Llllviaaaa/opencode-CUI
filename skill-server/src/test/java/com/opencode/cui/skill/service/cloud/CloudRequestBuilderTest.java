@@ -203,6 +203,54 @@ class CloudRequestBuilderTest {
         }
 
         @Test
+        @DisplayName("question_reply：写入 replyContext 嵌套对象（type/toolCallId/answers）")
+        void buildCloudRequest_questionReply_writesReplyContext() {
+            CloudRequestContext ctx = CloudRequestContext.builder()
+                    .content("").contentType("text").topicId("ts-1")
+                    .replyToolCallId("call-q")
+                    .replyAnswers(List.of(List.of("A"), List.of("B", "C")))
+                    .build();
+
+            ObjectNode result = defaultStrategy.build(ctx);
+
+            com.fasterxml.jackson.databind.JsonNode rc = result.path("replyContext");
+            assertEquals("question_reply", rc.path("type").asText());
+            assertEquals("call-q", rc.path("toolCallId").asText());
+            assertTrue(rc.path("answers").isArray());
+            assertEquals("A", rc.path("answers").get(0).get(0).asText());
+            assertEquals("C", rc.path("answers").get(1).get(1).asText());
+        }
+
+        @Test
+        @DisplayName("permission_reply：写入 replyContext 嵌套对象（type/permissionId/response）")
+        void buildCloudRequest_permissionReply_writesReplyContext() {
+            CloudRequestContext ctx = CloudRequestContext.builder()
+                    .topicId("ts-1")
+                    .replyPermissionId("perm-1")
+                    .replyResponse("once")
+                    .build();
+
+            ObjectNode result = defaultStrategy.build(ctx);
+
+            com.fasterxml.jackson.databind.JsonNode rc = result.path("replyContext");
+            assertEquals("permission_reply", rc.path("type").asText());
+            assertEquals("perm-1", rc.path("permissionId").asText());
+            assertEquals("once", rc.path("response").asText());
+        }
+
+        @Test
+        @DisplayName("chat：cloudRequest 不含 replyContext 字段")
+        void buildCloudRequest_chat_noReplyContext() {
+            CloudRequestContext ctx = CloudRequestContext.builder()
+                    .content("hi").contentType("text").topicId("ts-1").build();
+
+            ObjectNode result = defaultStrategy.build(ctx);
+
+            assertFalse(result.has("replyContext"));
+            assertEquals("hi", result.path("content").asText());
+        }
+
+        @Test
         @DisplayName("extParameters 含 businessExtParam/platformExtParam 嵌套结构正确序列化")
         void buildsNestedExtParametersStructure() {
             ObjectNode bepNode = objectMapper.createObjectNode();
