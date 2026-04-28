@@ -3,6 +3,7 @@ package com.opencode.cui.skill.service.cloud;
 import lombok.Builder;
 import lombok.Data;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -41,4 +42,16 @@ public class CloudRequestContext {
 
     /** 扩展参数 */
     private Map<String, Object> extParameters;
+
+    /** 仅 question_reply：关联回云端 question 事件的 toolCallId */
+    private String replyToolCallId;
+
+    /** 仅 question_reply：外层=多问题，内层=单题多选/单选/自由文本 */
+    private List<List<String>> replyAnswers;
+
+    /** 仅 permission_reply：关联回 permission.ask 的 permissionId */
+    private String replyPermissionId;
+
+    /** 仅 permission_reply：once / always / reject */
+    private String replyResponse;
 }
