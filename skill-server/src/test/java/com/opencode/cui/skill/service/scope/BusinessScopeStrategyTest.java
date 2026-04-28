@@ -17,8 +17,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -322,6 +324,37 @@ class BusinessScopeStrategyTest {
         JsonNode bep = (JsonNode) captor.getValue().getExtParameters().get("businessExtParam");
         assertTrue(bep.isObject());
         assertEquals(0, bep.size());
+    }
+
+    // ========== parseAnswers helper（4 用例） ==========
+
+    @Test
+    @DisplayName("parseAnswers stringified 嵌套数组 → 原样保留")
+    void parseAnswers_stringifiedNestedArray_preservedAsIs() {
+        List<List<String>> result = strategy.parseAnswers("[[\"A\"],[\"B\",\"C\"]]");
+        assertThat(result).containsExactly(List.of("A"), List.of("B", "C"));
+    }
+
+    @Test
+    @DisplayName("parseAnswers stringified 一维数组 → 包裹为外层")
+    void parseAnswers_stringified1DArray_wrappedToOuter() {
+        List<List<String>> result = strategy.parseAnswers("[\"A\",\"B\"]");
+        assertThat(result).containsExactly(List.of("A", "B"));
+    }
+
+    @Test
+    @DisplayName("parseAnswers 普通文本 → 包裹为二维")
+    void parseAnswers_plainText_wrappedToDoubleArray() {
+        List<List<String>> result = strategy.parseAnswers("普通文本");
+        assertThat(result).containsExactly(List.of("普通文本"));
+    }
+
+    @Test
+    @DisplayName("parseAnswers blank/null → 返回单个空")
+    void parseAnswers_blankOrNull_returnsSingleEmpty() {
+        assertThat(strategy.parseAnswers(null)).containsExactly(List.of(""));
+        assertThat(strategy.parseAnswers("")).containsExactly(List.of(""));
+        assertThat(strategy.parseAnswers("   ")).containsExactly(List.of(""));
     }
 
     @Test

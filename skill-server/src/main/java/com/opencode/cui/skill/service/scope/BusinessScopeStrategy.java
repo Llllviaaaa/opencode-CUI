@@ -1,6 +1,7 @@
 package com.opencode.cui.skill.service.scope;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -15,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -133,6 +135,45 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
     @Override
     public StreamMessage translateEvent(JsonNode event, String sessionId) {
         return cloudEventTranslator.translate(event, sessionId);
+    }
+
+    // ------------------------------------------------------------------ package-private (testable)
+
+    /**
+     * 将 question_reply 的 raw answer 字符串规整为云端协议要求的 List&lt;List&lt;String&gt;&gt;。
+     * <ul>
+     *   <li>null / blank → [[""]]（兜底单空字符串）</li>
+     *   <li>stringified 嵌套数组（如 {@code [["A"],["B","C"]]}）→ 原样 List</li>
+     *   <li>stringified 一维数组（如 {@code ["A","B"]}）→ 包裹外层为 [["A","B"]]</li>
+     *   <li>普通文本 / 解析失败 → [[raw]]</li>
+     * </ul>
+     */
+    List<List<String>> parseAnswers(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of(List.of(""));
+        }
+        try {
+            JsonNode node = objectMapper.readTree(raw);
+            if (node.isArray() && !node.isEmpty()) {
+                boolean allArray = true;
+                for (JsonNode el : node) {
+                    if (!el.isArray()) {
+                        allArray = false;
+                        break;
+                    }
+                }
+                if (allArray) {
+                    return objectMapper.convertValue(node,
+                            new TypeReference<List<List<String>>>() {});
+                }
+                // 一维数组兜底
+                return List.of(objectMapper.convertValue(node,
+                        new TypeReference<List<String>>() {}));
+            }
+        } catch (Exception ignored) {
+            /* fall through to plain-text fallback */
+        }
+        return List.of(List.of(raw));
     }
 
     // ------------------------------------------------------------------ private
