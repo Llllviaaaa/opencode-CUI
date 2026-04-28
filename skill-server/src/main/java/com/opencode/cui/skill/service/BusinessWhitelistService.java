@@ -82,7 +82,11 @@ public class BusinessWhitelistService {
         try {
             String v = sysConfigService.getValue(CONFIG_TYPE_SWITCH, CONFIG_KEY_SWITCH);
             if ("1".equals(v)) return true;
-            if ("0".equals(v) || v == null) return false;
+            if (v == null) {
+                log.debug("[Whitelist] switch value is null (key not configured), treating as disabled");
+                return false;
+            }
+            if ("0".equals(v)) return false;
             log.warn("[Whitelist] unknown switch value '{}', treating as disabled", v);
             return false;
         } catch (RuntimeException e) {
@@ -109,9 +113,10 @@ public class BusinessWhitelistService {
                 .filter(c -> c.getStatus() != null && c.getStatus() == 1)
                 .map(SysConfig::getConfigKey)
                 .collect(Collectors.toSet());
-        // 3. 写缓存（失败静默）
+        // 3. 写缓存（失败静默；写前排序保证不同实例间 JSON 字节一致，便于 diff/log 比较）
         try {
-            String json = objectMapper.writeValueAsString(tags);
+            List<String> sortedTags = tags.stream().sorted().toList();
+            String json = objectMapper.writeValueAsString(sortedTags);
             redisTemplate.opsForValue().set(CACHE_KEY_SET, json,
                     Duration.ofMinutes(properties.getCacheTtlMinutes()));
         } catch (Exception e) {
