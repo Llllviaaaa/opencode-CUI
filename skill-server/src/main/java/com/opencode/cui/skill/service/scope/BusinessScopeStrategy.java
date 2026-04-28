@@ -9,6 +9,7 @@ import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.CloudEventTranslator;
+import com.opencode.cui.skill.service.GatewayActions;
 import com.opencode.cui.skill.service.cloud.CloudRequestBuilder;
 import com.opencode.cui.skill.service.cloud.CloudRequestContext;
 import com.opencode.cui.skill.logging.MdcHelper;
@@ -54,6 +55,7 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
     @Override
     public String buildInvoke(InvokeCommand command, AssistantInfo info) {
         String businessTag = info.getBusinessTag();
+        String action = command.action();
 
         // 从 command payload 提取 content
         String content = extractContent(command.payload());
@@ -63,6 +65,20 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
 
         // 取业务方扩展参数（缺省 / 非 object → null，由下方兜底为 {}）
         JsonNode businessExtParam = extractObjectField(command.payload(), "businessExtParam");
+
+        // 按 action 路由 reply 字段（chat → 全部 null）
+        String replyToolCallId = null;
+        List<List<String>> replyAnswers = null;
+        String replyPermissionId = null;
+        String replyResponse = null;
+        if (GatewayActions.QUESTION_REPLY.equals(action)) {
+            replyToolCallId = extractField(command.payload(), "toolCallId");
+            String answerRaw = extractField(command.payload(), "answer");
+            replyAnswers = parseAnswers(answerRaw);
+        } else if (GatewayActions.PERMISSION_REPLY.equals(action)) {
+            replyPermissionId = extractField(command.payload(), "permissionId");
+            replyResponse = extractField(command.payload(), "response");
+        }
 
         // 用 LinkedHashMap 保证 businessExtParam 序列化在 platformExtParam 之前（与协议文档示例一致）
         Map<String, Object> extParameters = new LinkedHashMap<>();
@@ -80,6 +96,10 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
                 .messageId(extractField(command.payload(), "messageId"))
                 .clientLang("zh")
                 .extParameters(extParameters)
+                .replyToolCallId(replyToolCallId)
+                .replyAnswers(replyAnswers)
+                .replyPermissionId(replyPermissionId)
+                .replyResponse(replyResponse)
                 .build();
 
         ObjectNode cloudRequest = cloudRequestBuilder.buildCloudRequest(businessTag, context);

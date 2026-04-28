@@ -7,6 +7,7 @@ import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.CloudEventTranslator;
+import com.opencode.cui.skill.service.GatewayActions;
 import com.opencode.cui.skill.service.cloud.CloudRequestBuilder;
 import com.opencode.cui.skill.service.cloud.CloudRequestContext;
 import org.junit.jupiter.api.BeforeEach;
@@ -355,6 +356,69 @@ class BusinessScopeStrategyTest {
         assertThat(strategy.parseAnswers(null)).containsExactly(List.of(""));
         assertThat(strategy.parseAnswers("")).containsExactly(List.of(""));
         assertThat(strategy.parseAnswers("   ")).containsExactly(List.of(""));
+    }
+
+    // ========== T5: action 路由 reply 字段（3 用例） ==========
+
+    @Test
+    @DisplayName("buildInvoke(question_reply) 写入 toolCallId/answers，结果 JSON 含 action=question_reply")
+    void buildInvoke_questionReply_writesToolCallIdAndAnswers() throws Exception {
+        String payload = "{\"toolSessionId\":\"ts-1\",\"toolCallId\":\"call-q\",\"answer\":\"[[\\\"A\\\"]]\"}";
+        InvokeCommand command = new InvokeCommand("ak1", "u1", "s1",
+                GatewayActions.QUESTION_REPLY, payload);
+        AssistantInfo info = new AssistantInfo();
+        info.setAssistantScope("business");
+        info.setBusinessTag("app-001");
+
+        when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
+                .thenReturn(objectMapper.createObjectNode());
+
+        String result = strategy.buildInvoke(command, info);
+
+        assertNotNull(result);
+        JsonNode root = objectMapper.readTree(result);
+        assertThat(root.path("action").asText()).isEqualTo("question_reply");
+    }
+
+    @Test
+    @DisplayName("buildInvoke(permission_reply) 写入 permissionId/response，结果 JSON 含 action=permission_reply")
+    void buildInvoke_permissionReply_writesPermissionIdAndResponse() throws Exception {
+        String payload = "{\"toolSessionId\":\"ts-1\",\"permissionId\":\"perm-1\",\"response\":\"once\"}";
+        InvokeCommand command = new InvokeCommand("ak1", "u1", "s1",
+                GatewayActions.PERMISSION_REPLY, payload);
+        AssistantInfo info = new AssistantInfo();
+        info.setAssistantScope("business");
+        info.setBusinessTag("app-001");
+
+        when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
+                .thenReturn(objectMapper.createObjectNode());
+
+        String result = strategy.buildInvoke(command, info);
+
+        assertNotNull(result);
+        JsonNode root = objectMapper.readTree(result);
+        assertThat(root.path("action").asText()).isEqualTo("permission_reply");
+    }
+
+    @Test
+    @DisplayName("buildInvoke(chat) 不写 reply 字段，cloudRequest 不含 replyContext")
+    void buildInvoke_chat_doesNotWriteReplyFields() throws Exception {
+        String payload = "{\"toolSessionId\":\"ts-1\",\"text\":\"hello\"}";
+        InvokeCommand command = new InvokeCommand("ak1", "u1", "s1",
+                GatewayActions.CHAT, payload);
+        AssistantInfo info = new AssistantInfo();
+        info.setAssistantScope("business");
+        info.setBusinessTag("app-001");
+
+        when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
+                .thenReturn(objectMapper.createObjectNode());
+
+        String result = strategy.buildInvoke(command, info);
+
+        assertNotNull(result);
+        JsonNode root = objectMapper.readTree(result);
+        JsonNode cr = root.path("payload").path("cloudRequest");
+        assertThat(cr.has("replyContext")).isFalse();
     }
 
     @Test
