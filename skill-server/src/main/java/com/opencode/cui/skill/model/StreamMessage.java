@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -121,6 +122,20 @@ public class StreamMessage {
     @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class QuestionInfo {
+        private String header;
+        private String question;
+        private List<String> options;
+        private List<QuestionItem> questions;
+        private JsonNode extParam;
+    }
+
+    /** 多问题列表中的单个问题项（QuestionInfo.questions 元素） */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class QuestionItem {
         private String header;
         private String question;
         private List<String> options;
