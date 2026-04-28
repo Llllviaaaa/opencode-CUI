@@ -4,6 +4,7 @@ import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import com.opencode.cui.skill.service.scope.BusinessScopeStrategy;
 import com.opencode.cui.skill.service.scope.PersonalScopeStrategy;
+import org.mockito.Mockito;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -71,7 +72,8 @@ class OnlineCheckScopeTest {
                 cloudRequestBuilder, cloudEventTranslator, new com.fasterxml.jackson.databind.ObjectMapper());
 
         AssistantScopeDispatcher dispatcher = new AssistantScopeDispatcher(
-                List.of(personalStrategy, businessStrategy));
+                List.of(personalStrategy, businessStrategy),
+                Mockito.mock(BusinessWhitelistService.class));
 
         AssistantScopeStrategy resolved = dispatcher.getStrategy("business");
 

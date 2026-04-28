@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
+import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import lombok.extern.slf4j.Slf4j;
@@ -137,8 +138,8 @@ public class ImSessionManager {
                     created.getId(), ownerWelinkId, ak, sessionId);
 
             // 根据助手类型决定 toolSession 创建方式
-            String scope = assistantInfoService.getCachedScope(ak);
-            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(scope);
+            AssistantInfo info = assistantInfoService.getAssistantInfo(ak);
+            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(info);
             String generatedToolSessionId = strategy.generateToolSessionId();
             if (generatedToolSessionId != null) {
                 // 业务助手：本地预生成 toolSessionId，跳过 Gateway create_session

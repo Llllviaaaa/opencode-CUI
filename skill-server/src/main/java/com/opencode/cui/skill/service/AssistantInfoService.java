@@ -171,7 +171,7 @@ public class AssistantInfoService {
      *   "code": "200",
      *   "data": {
      *     "identityType": "3",   // "2"=personal, "3"=business
-     *     "hisAppId": "app_36209",
+     *     "businessTag": "tag-foo",   // 业务标签（注：原代码误读为 hisAppId/appId 是 bug）
      *     "endpoint": "https://cloud.example.com/chat",
      *     "protocol": "2",     // 1=rest, 2=sse, 3=websocket
      *     "authType": "1"      // 1=soa
@@ -196,7 +196,7 @@ public class AssistantInfoService {
 
             AssistantInfo info = new AssistantInfo();
             info.setAssistantScope(scope);
-            info.setAppId(dataNode.path("hisAppId").asText(null));
+            info.setBusinessTag(dataNode.path("businessTag").asText(null));
             info.setCloudEndpoint(dataNode.path("endpoint").asText(null));
             info.setCloudProtocol(mapProtocol(dataNode.path("protocol").asText(null)));
             info.setAuthType(mapAuthType(dataNode.path("authType").asText(null)));

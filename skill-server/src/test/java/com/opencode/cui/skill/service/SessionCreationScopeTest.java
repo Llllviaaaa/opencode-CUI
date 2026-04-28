@@ -1,6 +1,7 @@
 package com.opencode.cui.skill.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
@@ -78,8 +79,10 @@ class SessionCreationScopeTest {
         created.setId(100L);
         created.setAk("ak-biz");
         when(sessionService.createSession(any(), any(), any(), any(), any(), any(), any())).thenReturn(created);
-        when(assistantInfoService.getCachedScope("ak-biz")).thenReturn("business");
-        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
+        AssistantInfo bizInfo = new AssistantInfo();
+        bizInfo.setAssistantScope("business");
+        when(assistantInfoService.getAssistantInfo("ak-biz")).thenReturn(bizInfo);
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-abc123def456");
 
         // act
@@ -106,8 +109,10 @@ class SessionCreationScopeTest {
         created.setId(200L);
         created.setAk("ak-personal");
         when(sessionService.createSession(any(), any(), any(), any(), any(), any(), any())).thenReturn(created);
-        when(assistantInfoService.getCachedScope("ak-personal")).thenReturn("personal");
-        when(scopeDispatcher.getStrategy("personal")).thenReturn(personalStrategy);
+        AssistantInfo personalInfo = new AssistantInfo();
+        personalInfo.setAssistantScope("personal");
+        when(assistantInfoService.getAssistantInfo("ak-personal")).thenReturn(personalInfo);
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(personalStrategy);
         when(personalStrategy.generateToolSessionId()).thenReturn(null);
 
         // act

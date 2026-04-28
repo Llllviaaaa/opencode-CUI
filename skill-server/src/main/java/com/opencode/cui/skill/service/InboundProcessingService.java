@@ -11,6 +11,7 @@ import com.opencode.cui.skill.model.ResolveOutcome;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.delivery.StreamMessageEmitter;
+import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import lombok.extern.slf4j.Slf4j;
@@ -169,8 +170,8 @@ public class InboundProcessingService {
 
         // 情况 B：session 存在但 toolSessionId 尚未就绪
         if (session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
-            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(
-                    assistantInfoService.getCachedScope(ak));
+            AssistantInfo info = assistantInfoService.getAssistantInfo(ak);
+            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(info);
             String generated = strategy.generateToolSessionId();
             if (generated != null) {
                 // business 自愈：加锁 + 二次检查，失败则降级到 rebuild 路径避免丢消息
@@ -216,8 +217,8 @@ public class InboundProcessingService {
 
         // 情况 C：session 就绪，转发消息到 AI Gateway
         // append pending 仅对 personal 有意义（rebuild 链路消费者），business 不写避免并发重放放大
-        AssistantScopeStrategy caseCStrategy = scopeDispatcher.getStrategy(
-                assistantInfoService.getCachedScope(ak));
+        AssistantInfo caseCInfo = assistantInfoService.getAssistantInfo(ak);
+        AssistantScopeStrategy caseCStrategy = scopeDispatcher.getStrategy(caseCInfo);
         boolean appendToPending = caseCStrategy.generateToolSessionId() == null;
         return dispatchChatToGateway(session, prompt, ak, ownerWelinkId, assistantAccount,
                 senderUserAccount, sessionType, sessionId, inboundSource, content, appendToPending,
@@ -509,8 +510,8 @@ public class InboundProcessingService {
 
         SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
         if (session != null) {
-            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(
-                    assistantInfoService.getCachedScope(ak));
+            AssistantInfo info = assistantInfoService.getAssistantInfo(ak);
+            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(info);
             String generated = strategy.generateToolSessionId();
             if (generated != null) {
                 // business rebuild：加锁防止并发覆盖 Redis mapping；锁未拿到视为"合并重复请求"直接返回 ok
@@ -564,8 +565,8 @@ public class InboundProcessingService {
                                            String sessionId, String ak,
                                            String assistantAccount) {
         if (!assistantIdProperties.isEnabled()) return null;
-        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
-                assistantInfoService.getCachedScope(ak));
+        AssistantInfo checkInfo = assistantInfoService.getAssistantInfo(ak);
+        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(checkInfo);
         if (!scopeStrategy.requiresOnlineCheck()) return null;
         if (gatewayApiClient.getAgentByAk(ak) != null) return null;
 

@@ -1,6 +1,7 @@
 package com.opencode.cui.skill.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
@@ -52,8 +53,10 @@ class SkillSessionControllerTest {
                 org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
         org.mockito.Mockito.lenient().when(personalStrategy.generateToolSessionId()).thenReturn(null);
         org.mockito.Mockito.lenient().when(personalStrategy.requiresOnlineCheck()).thenReturn(true);
-        org.mockito.Mockito.lenient().when(scopeDispatcher.getStrategy(any())).thenReturn(personalStrategy);
-        org.mockito.Mockito.lenient().when(assistantInfoService.getCachedScope(any())).thenReturn("personal");
+        org.mockito.Mockito.lenient().when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(personalStrategy);
+        AssistantInfo defaultPersonalInfo = new AssistantInfo();
+        defaultPersonalInfo.setAssistantScope("personal");
+        org.mockito.Mockito.lenient().when(assistantInfoService.getAssistantInfo(any())).thenReturn(defaultPersonalInfo);
         // 默认 resolver 行为：开关 ON（null 放行），非 null 返 EXISTS
         org.mockito.Mockito.lenient().when(assistantAccountResolverService.isSkipOnNullAssistantAccount()).thenReturn(true);
         org.mockito.Mockito.lenient().when(assistantAccountResolverService.getDeletionMessage()).thenReturn("该助理已被删除");

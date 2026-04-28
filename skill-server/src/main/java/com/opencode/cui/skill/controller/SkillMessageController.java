@@ -28,6 +28,7 @@ import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillMessageService;
 import com.opencode.cui.skill.service.GatewayMessageRouter;
 import com.opencode.cui.skill.service.SkillSessionService;
+import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import lombok.Data;
@@ -174,8 +175,8 @@ public class SkillMessageController {
         }
 
         // Agent 在线检查：开关开启时，业务助手跳过检查
-        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
-                assistantInfoService.getCachedScope(session.getAk()));
+        AssistantInfo scopeInfo = assistantInfoService.getAssistantInfo(session.getAk());
+        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(scopeInfo);
         if (assistantIdProperties.isEnabled() && scopeStrategy.requiresOnlineCheck()) {
             AgentSummary agent = gatewayApiClient.getAgentByAk(session.getAk());
             if (agent == null) {
@@ -405,8 +406,8 @@ public class SkillMessageController {
         }
 
         // Agent 在线检查：云端助手永远在线（跳过），个人助手需要检查
-        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
-                assistantInfoService.getCachedScope(session.getAk()));
+        AssistantInfo replyInfo = assistantInfoService.getAssistantInfo(session.getAk());
+        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(replyInfo);
         if (assistantIdProperties.isEnabled() && scopeStrategy.requiresOnlineCheck()) {
             AgentSummary agent = gatewayApiClient.getAgentByAk(session.getAk());
             if (agent == null) {

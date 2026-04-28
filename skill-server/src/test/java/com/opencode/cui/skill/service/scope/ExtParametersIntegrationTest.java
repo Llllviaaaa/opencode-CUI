@@ -56,7 +56,7 @@ class ExtParametersIntegrationTest {
 
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-001");
+        info.setBusinessTag("app-001");
 
         String payload = "{\"text\":\"hi\",\"toolSessionId\":\"cloud-1\","
                 + "\"assistantAccount\":\"asst-1\",\"sendUserAccount\":\"u-1\",\"messageId\":\"m-1\","
@@ -93,7 +93,7 @@ class ExtParametersIntegrationTest {
 
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-001");
+        info.setBusinessTag("app-001");
 
         String payload = "{\"text\":\"hi\",\"toolSessionId\":\"cloud-1\"}";
         InvokeCommand cmd = new InvokeCommand("ak-1", "u-1", "1", "chat", payload);

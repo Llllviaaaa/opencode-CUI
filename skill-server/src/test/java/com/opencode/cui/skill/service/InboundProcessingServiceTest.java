@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.config.AssistantIdProperties;
 import com.opencode.cui.skill.config.DeliveryProperties;
 import com.opencode.cui.skill.model.AgentSummary;
+import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.ResolveOutcome;
@@ -104,8 +105,12 @@ class InboundProcessingServiceTest {
         // 默认 scope 策略：personal（requiresOnlineCheck=true）
         AssistantScopeStrategy personalStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(personalStrategy.requiresOnlineCheck()).thenReturn(true);
-        lenient().when(scopeDispatcher.getStrategy(any())).thenReturn(personalStrategy);
-        lenient().when(assistantInfoService.getCachedScope(any())).thenReturn("personal");
+        // nullable 覆盖 getAssistantInfo 返回 null 的情况（降级场景）
+        lenient().when(scopeDispatcher.getStrategy(nullable(AssistantInfo.class))).thenReturn(personalStrategy);
+        // 默认 getAssistantInfo 返回 personal info（personal 策略不含 business tag）
+        AssistantInfo defaultPersonalInfo = new AssistantInfo();
+        defaultPersonalInfo.setAssistantScope("personal");
+        lenient().when(assistantInfoService.getAssistantInfo(any())).thenReturn(defaultPersonalInfo);
         // 默认 Agent 在线
         lenient().when(gatewayApiClient.getAgentByAk(any()))
                 .thenReturn(AgentSummary.builder().ak("ak-001").toolType("assistant").build());
@@ -289,8 +294,10 @@ class InboundProcessingServiceTest {
     void processChatBusinessScopeSkipsOnlineCheck() {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
-        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
-        when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        AssistantInfo bizInfo = new AssistantInfo();
+        bizInfo.setAssistantScope("business");
+        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
 
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
@@ -546,8 +553,10 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-healed");
-        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
-        when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        AssistantInfo bizInfo = new AssistantInfo();
+        bizInfo.setAssistantScope("business");
+        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
 
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
@@ -578,8 +587,10 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-will-not-be-used");
-        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
-        when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        AssistantInfo bizInfo = new AssistantInfo();
+        bizInfo.setAssistantScope("business");
+        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
 
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
@@ -628,9 +639,9 @@ class InboundProcessingServiceTest {
     @Test
     @DisplayName("processChat: scope 识别降级为 personal → 不触发自愈，保持 requestToolSession 路径")
     void processChatScopeDegradedToPersonal_keepsRequestToolSession() {
-        // 降级语义：上游故障，getCachedScope 返回 "personal"（即使真实是 business）
-        // dispatcher.getStrategy("personal") 永远返回 personal strategy（generateToolSessionId=null）
-        when(assistantInfoService.getCachedScope("ak-001")).thenReturn("personal");
+        // 降级语义：上游故障，getAssistantInfo 返回 null（personal 降级）
+        // dispatcher.getStrategy(null) 永远返回 personal strategy（generateToolSessionId=null）
+        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(null);
         // setUp 中的默认 personalStrategy 已经 generateToolSessionId() == null (未 stub)
 
         when(resolverService.resolveWithStatus("assist-001"))
@@ -657,8 +668,10 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-new-one");
-        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
-        when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        AssistantInfo bizInfo = new AssistantInfo();
+        bizInfo.setAssistantScope("business");
+        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
 
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
@@ -680,8 +693,10 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-from-null");
-        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
-        when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        AssistantInfo bizInfo = new AssistantInfo();
+        bizInfo.setAssistantScope("business");
+        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
 
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
@@ -722,8 +737,10 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-would-have-generated");
-        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
-        when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        AssistantInfo bizInfo = new AssistantInfo();
+        bizInfo.setAssistantScope("business");
+        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
 
         // 锁被别人持有
         when(valueOperations.setIfAbsent(startsWith("skill:im-session:heal:"), anyString(), any(Duration.class)))
@@ -759,8 +776,10 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-new");
-        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
-        when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        AssistantInfo bizInfo = new AssistantInfo();
+        bizInfo.setAssistantScope("business");
+        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
 
         // session 已就绪 → 进 case C
         SkillSession session = buildReadySession();
@@ -785,8 +804,10 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-healed");
-        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
-        when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        AssistantInfo bizInfo = new AssistantInfo();
+        bizInfo.setAssistantScope("business");
+        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
 
         SkillSession session = buildSessionWithoutToolSession();
         when(resolverService.resolveWithStatus("assist-001"))
@@ -811,8 +832,10 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-fresh");
-        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
-        when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        AssistantInfo bizInfo = new AssistantInfo();
+        bizInfo.setAssistantScope("business");
+        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
 
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
@@ -851,8 +874,10 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-would-have-been");
-        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
-        when(assistantInfoService.getCachedScope("ak-001")).thenReturn("business");
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        AssistantInfo bizInfo = new AssistantInfo();
+        bizInfo.setAssistantScope("business");
+        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
 
         when(valueOperations.setIfAbsent(startsWith("skill:im-session:heal:"), anyString(), any(Duration.class)))
                 .thenReturn(false);

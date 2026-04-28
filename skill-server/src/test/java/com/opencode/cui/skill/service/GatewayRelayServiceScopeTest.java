@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -46,6 +47,8 @@ class GatewayRelayServiceScopeTest {
     @Mock
     private AssistantScopeStrategy businessStrategy;
     @Mock
+    private AssistantScopeStrategy personalStrategy;
+    @Mock
     private GatewayRelayService.GatewayRelayTarget gatewayRelayTarget;
     @Mock
     com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter;
@@ -67,6 +70,12 @@ class GatewayRelayServiceScopeTest {
 
         lenient().when(gatewayRelayTarget.hasActiveConnection()).thenReturn(true);
         lenient().when(gatewayRelayTarget.sendToGateway(any())).thenReturn(true);
+        // business strategy scope label
+        lenient().when(businessStrategy.getScope()).thenReturn("business");
+        // personal strategy scope label (used as fallback when info is null)
+        lenient().when(personalStrategy.getScope()).thenReturn("personal");
+        // default: getStrategy(null/personal info) → personalStrategy
+        lenient().when(scopeDispatcher.getStrategy(nullable(AssistantInfo.class))).thenReturn(personalStrategy);
     }
 
     @Test
@@ -75,9 +84,9 @@ class GatewayRelayServiceScopeTest {
         // arrange: business assistant info
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-001");
+        info.setBusinessTag("app-001");
         when(assistantInfoService.getAssistantInfo("ak-biz")).thenReturn(info);
-        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
 
         // strategy.buildInvoke returns a JSON with assistantScope=business and cloudRequest payload
         String strategyResult = "{\"type\":\"invoke\",\"ak\":\"ak-biz\",\"source\":\"skill-server\""
@@ -133,9 +142,9 @@ class GatewayRelayServiceScopeTest {
         // arrange
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
-        info.setAppId("app-001");
+        info.setBusinessTag("app-001");
         when(assistantInfoService.getAssistantInfo("ak-biz")).thenReturn(info);
-        when(scopeDispatcher.getStrategy("business")).thenReturn(businessStrategy);
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
 
         String strategyResult = "{\"type\":\"invoke\",\"ak\":\"ak-biz\",\"source\":\"skill-server\""
                 + ",\"action\":\"chat\",\"assistantScope\":\"business\""

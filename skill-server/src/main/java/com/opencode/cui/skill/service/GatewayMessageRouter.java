@@ -12,6 +12,7 @@ import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.logging.MdcHelper;
 import com.opencode.cui.skill.service.delivery.OutboundDeliveryDispatcher;
+import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import jakarta.annotation.PostConstruct;
@@ -517,11 +518,12 @@ public class GatewayMessageRouter {
 
         // 根据助手类型（scope）选择事件翻译策略
         String resolvedAk = ak != null ? ak : node.path("ak").asText(node.path("agentId").asText(null));
-        String scope = assistantInfoService.getCachedScope(resolvedAk);
-        AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(scope);
+        AssistantInfo routerInfo = assistantInfoService.getAssistantInfo(resolvedAk);
+        AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(routerInfo);
         StreamMessage msg = strategy.translateEvent(node.get("event"), sessionId);
         if (msg == null) {
-            log.debug("Event ignored by strategy translator for session {}, scope={}", sessionId, scope);
+            log.debug("Event ignored by strategy translator for session {}, scope={}", sessionId,
+                    routerInfo != null ? routerInfo.getAssistantScope() : null);
             return;
         }
 

@@ -51,7 +51,7 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
 
     @Override
     public String buildInvoke(InvokeCommand command, AssistantInfo info) {
-        String appId = info.getAppId();
+        String businessTag = info.getBusinessTag();
 
         // 从 command payload 提取 content
         String content = extractContent(command.payload());
@@ -80,7 +80,7 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
                 .extParameters(extParameters)
                 .build();
 
-        ObjectNode cloudRequest = cloudRequestBuilder.buildCloudRequest(appId, context);
+        ObjectNode cloudRequest = cloudRequestBuilder.buildCloudRequest(businessTag, context);
 
         // 构建 payload：GW 的 CloudAgentService 期望 payload.cloudRequest 和 payload.toolSessionId
         ObjectNode payload = objectMapper.createObjectNode();
@@ -109,8 +109,8 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
         try {
             return objectMapper.writeValueAsString(message);
         } catch (JsonProcessingException e) {
-            log.error("Failed to serialize business invoke message: ak={}, appId={}",
-                    command.ak(), appId, e);
+            log.error("Failed to serialize business invoke message: ak={}, businessTag={}",
+                    command.ak(), businessTag, e);
             return null;
         }
     }

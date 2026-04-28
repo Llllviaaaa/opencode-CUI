@@ -20,8 +20,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -87,7 +89,8 @@ class GatewayRelayServiceTest {
                 org.mockito.Mockito.lenient().when(sessionRouteService.getOwnerInstance(any())).thenReturn(LOCAL_INSTANCE);
                 org.mockito.Mockito.lenient().when(skillInstanceRegistry.getInstanceId()).thenReturn(LOCAL_INSTANCE);
                 // scopeDispatcher always returns a lenient strategy to avoid NPE in tool_event handling
-                org.mockito.Mockito.lenient().when(scopeDispatcher.getStrategy(any())).thenReturn(scopeStrategy);
+                // nullable 覆盖 getAssistantInfo 返回 null 的情况
+                org.mockito.Mockito.lenient().when(scopeDispatcher.getStrategy(nullable(AssistantInfo.class))).thenReturn(scopeStrategy);
                 // scopeStrategy.translateEvent 默认委派给 translator.translate（模拟 PersonalScopeStrategy 行为）
                 org.mockito.Mockito.lenient().when(scopeStrategy.translateEvent(any(), any()))
                         .thenAnswer(invocation -> translator.translate(invocation.getArgument(0)));
