@@ -24,8 +24,11 @@ public class CloudTimeoutProperties {
     /** 最后一次收到数据/心跳后的空闲超时（秒） */
     private int idleTimeoutSeconds = 90;
 
-    /** 单轮对话最大总时长（秒） */
-    private int maxDurationSeconds = 600;
+    /** 单轮对话最大总时长（秒）：30min，覆盖用户思考 q_r/p_r 期间的保活窗口 */
+    private int maxDurationSeconds = 1800;
+
+    /** WebHook POST 总超时（秒） */
+    private int webhookTimeoutSeconds = 10;
 
     /** SSE 协议覆盖配置 */
     private ProtocolOverride sse = new ProtocolOverride();
