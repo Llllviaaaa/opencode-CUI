@@ -69,9 +69,12 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                     .header("Accept", "text/event-stream")
                     .header("X-Trace-Id", context.getTraceId() != null ? context.getTraceId() : "")
                     .header("X-Request-Id", UUID.randomUUID().toString())
-                    .header("X-App-Id", context.getAppId() != null ? context.getAppId() : "")
                     // 不设请求级超时，由云端关闭 SSE 流来结束连接
                     ;
+            // X-App-Id 仅在 appId 非空时写入（v2 模式 appId=null 时跳过）
+            if (context.getAppId() != null) {
+                requestBuilder.header("X-App-Id", context.getAppId());
+            }
 
             // 3. 注入认证头
             cloudAuthService.applyAuth(requestBuilder, context.getAppId(), context.getAuthType());
@@ -152,6 +155,9 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
         }
         try {
             GatewayMessage message = objectMapper.readValue(jsonData, GatewayMessage.class);
+            // T13: 根据事件类型派发 pause/resume idle timer（必须在 onEventReceived 之前，
+            // 让 onEventReceived → resetIdleTimeout 能感知到新设置的 awaitingReply）
+            dispatchIdleTimerByEventType(lifecycle, message);
             notifyLifecycle(lifecycle, CloudConnectionLifecycle::onEventReceived);
             onEvent.accept(message);
             if (message.isType(GatewayMessage.Type.TOOL_DONE)
@@ -170,6 +176,28 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                                         Consumer<CloudConnectionLifecycle> action) {
         if (lifecycle != null) {
             action.accept(lifecycle);
+        }
+    }
+
+    /**
+     * T13: 根据 event.type 派发 idle timer 操作。
+     *
+     * <ul>
+     *   <li>{@code "question"} / {@code "permission.ask"} → pause（等待用户回复，关闭 idle 计时）</li>
+     *   <li>其他事件类型 → resume（assistant 仍在产出，恢复 idle 计时）</li>
+     *   <li>{@code "permission.reply"} 是 assistant role 应答事件，不触发 pause（落入 resume 分支）</li>
+     * </ul>
+     */
+    private static void dispatchIdleTimerByEventType(CloudConnectionLifecycle lifecycle,
+                                                     GatewayMessage message) {
+        if (lifecycle == null || message == null || message.getEvent() == null) {
+            return;
+        }
+        String eventType = message.getEvent().path("type").asText("");
+        if ("question".equals(eventType) || "permission.ask".equals(eventType)) {
+            lifecycle.pauseIdleTimer();
+        } else {
+            lifecycle.resumeIdleTimer();
         }
     }
 }

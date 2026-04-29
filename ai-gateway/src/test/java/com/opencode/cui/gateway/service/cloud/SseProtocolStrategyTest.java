@@ -304,4 +304,100 @@ class SseProtocolStrategyTest {
         verify(lifecycle).onTerminalEvent();
         verify(lifecycle, times(2)).onEventReceived();
     }
+
+    // ==================== T13: question/permission 事件保活 ====================
+
+    @Test
+    @DisplayName("T13: event.type=question 触发 lifecycle.pauseIdleTimer()")
+    void sse_questionEvent_triggersPauseIdleTimer() throws Exception {
+        String sseStream = "data: {\"type\":\"tool_event\",\"toolSessionId\":\"ts-1\","
+                + "\"event\":{\"type\":\"question\",\"properties\":{\"toolCallId\":\"call-1\"}}}\n\n";
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
+
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
+
+        verify(lifecycle).pauseIdleTimer();
+        verify(lifecycle, never()).resumeIdleTimer();
+    }
+
+    @Test
+    @DisplayName("T13: event.type=permission.ask 触发 lifecycle.pauseIdleTimer()")
+    void sse_permissionAskEvent_triggersPause() throws Exception {
+        String sseStream = "data: {\"type\":\"tool_event\",\"toolSessionId\":\"ts-2\","
+                + "\"event\":{\"type\":\"permission.ask\",\"properties\":{\"permissionId\":\"p-1\"}}}\n\n";
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
+
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
+
+        verify(lifecycle).pauseIdleTimer();
+        verify(lifecycle, never()).resumeIdleTimer();
+    }
+
+    @Test
+    @DisplayName("T13: event.type=permission.reply 不调 pause；调 resume")
+    void sse_permissionReplyEvent_doesNotTriggerPause() throws Exception {
+        String sseStream = "data: {\"type\":\"tool_event\",\"toolSessionId\":\"ts-3\","
+                + "\"event\":{\"type\":\"permission.reply\",\"properties\":{\"permissionId\":\"p-1\"}}}\n\n";
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
+
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
+
+        verify(lifecycle, never()).pauseIdleTimer();
+        verify(lifecycle).resumeIdleTimer();
+    }
+
+    @Test
+    @DisplayName("T13: event.type=text.delta 触发 lifecycle.resumeIdleTimer()")
+    void sse_textDeltaEvent_triggersResume() throws Exception {
+        String sseStream = "data: {\"type\":\"tool_event\",\"toolSessionId\":\"ts-4\","
+                + "\"event\":{\"type\":\"text.delta\",\"properties\":{\"text\":\"hello\"}}}\n\n";
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
+
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
+
+        verify(lifecycle, never()).pauseIdleTimer();
+        verify(lifecycle).resumeIdleTimer();
+    }
+
+    @Test
+    @DisplayName("T13: appId=null 时 HTTP 请求不写 X-App-Id header")
+    void sse_appIdNull_skipsXAppIdHeader() throws Exception {
+        String sseStream = "data: [DONE]\n";
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        ArgumentCaptor<HttpRequest> requestCaptor = ArgumentCaptor.forClass(HttpRequest.class);
+        doReturn(response).when(strategy).sendRequest(requestCaptor.capture());
+
+        CloudConnectionContext context = CloudConnectionContext.builder()
+                .channelAddress("https://cloud.example.com/sse")
+                .cloudRequest(objectMapper.valueToTree(java.util.Map.of("prompt", "hello")))
+                .appId(null)
+                .authType("none")
+                .traceId("trace_null_app")
+                .build();
+
+        strategy.connect(context, lifecycle, onEvent, onError);
+
+        HttpRequest captured = requestCaptor.getValue();
+        assertFalse(captured.headers().firstValue("X-App-Id").isPresent(),
+                "X-App-Id header MUST be absent when appId is null");
+    }
+
+    @Test
+    @DisplayName("T13: appId 非空时 HTTP 请求包含 X-App-Id header")
+    void sse_appIdPresent_writesXAppIdHeader() throws Exception {
+        String sseStream = "data: [DONE]\n";
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        ArgumentCaptor<HttpRequest> requestCaptor = ArgumentCaptor.forClass(HttpRequest.class);
+        doReturn(response).when(strategy).sendRequest(requestCaptor.capture());
+
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
+
+        HttpRequest captured = requestCaptor.getValue();
+        assertEquals("app_test",
+                captured.headers().firstValue("X-App-Id").orElse(null));
+    }
 }
