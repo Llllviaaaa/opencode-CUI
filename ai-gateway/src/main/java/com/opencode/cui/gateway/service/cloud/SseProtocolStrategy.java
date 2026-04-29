@@ -71,12 +71,9 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                     .header("X-Request-Id", UUID.randomUUID().toString())
                     // 不设请求级超时，由云端关闭 SSE 流来结束连接
                     ;
-            // X-App-Id 仅在 appId 非空时写入（v2 模式 appId=null 时跳过）
-            if (context.getAppId() != null) {
-                requestBuilder.header("X-App-Id", context.getAppId());
-            }
 
-            // 3. 注入认证头
+            // 3. 注入认证头：X-App-Id 由 cloudAuthService 内部 strategy（Soa/Apig）按需写入；
+            //    NoAuthStrategy 不写。这里不再重复写入避免出现两个同名 header。
             cloudAuthService.applyAuth(requestBuilder, context.getAppId(), context.getAuthType());
 
             // 4. 发送请求
