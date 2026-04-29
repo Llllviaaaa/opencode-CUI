@@ -110,17 +110,6 @@ public class GatewayMessage {
     /** Invoke 动作类型：chat、create_session、close_session 等 */
     private String action;
 
-    /**
-     * 云端路由接口版本（仅 invoke 消息 + business scope 设置）。
-     *
-     * <p>由 SS BusinessScopeStrategy 按 SysConfig 开关写入：</p>
-     * <ul>
-     *   <li>{@code "v2"} → GW 走新 callback config 接口（{@code GatewayCallbackResolver}）</li>
-     *   <li>缺/null/"v1" → GW 走旧路由接口（{@code LegacyRouteResolver}），默认</li>
-     * </ul>
-     */
-    private String apiVersion;
-
     /** Invoke 或 Register 消息的载荷数据 */
     private JsonNode payload;
 

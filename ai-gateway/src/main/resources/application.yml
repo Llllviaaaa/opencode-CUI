@@ -115,16 +115,20 @@ gateway:
       ping-interval-seconds: ${CLOUD_WS_PING_INTERVAL:30}
 
   # 云端路由信息查询
+  # v1/v2 切换由 SS SysConfig 控制（cloud_route.v2_enabled），GW 通过 skill-server 接口查询
   cloud-route:
-    # 路由接口版本：v1=旧接口（默认）/ v2=新接口（callback config）
-    api-version: ${CLOUD_ROUTE_API_VERSION:v1}
-    # v1 旧接口
+    # v1 旧接口（按 ak 单维度）
     api-url: ${CLOUD_ROUTE_API_URL:http://localhost:9999/appstore/wecodeapi/open/ak/info}
     bearer-token: ${CLOUD_ROUTE_BEARER_TOKEN:}
     cache-ttl-seconds: ${CLOUD_ROUTE_CACHE_TTL_SECONDS:300}
-    # v2 新接口（默认空，切到 v2 时配置）
-    v2-api-url: ${GW_CLOUD_CALLBACK_CONFIG_URL:}
+    # v2 新接口（POST /gateway/callbacks/config，按 (ak, scope) 双维度）
+    v2-api-url: ${GW_CLOUD_CALLBACK_CONFIG_URL:http://localhost:9999/gateway/callbacks/config}
     v2-bearer-token: ${GW_CLOUD_CALLBACK_BEARER:}
+
+  # skill-server SysConfig 客户端（用于跨服务读取 cloud_route.v2_enabled 等开关）
+  skill-server:
+    api-base: ${SKILL_SERVER_API_BASE:http://localhost:8082}
+    api-token: ${SKILL_SERVER_API_TOKEN:e2e-test-token}
 
 skill:
   gateway:

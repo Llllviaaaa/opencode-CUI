@@ -46,7 +46,7 @@ class ExtParametersIntegrationTest {
         objectMapper = new ObjectMapper();
         DefaultCloudRequestStrategy defaultStrategy = new DefaultCloudRequestStrategy(objectMapper);
         CloudRequestBuilder builder = new CloudRequestBuilder(List.of(defaultStrategy), sysConfigService);
-        strategy = new BusinessScopeStrategy(builder, cloudEventTranslator, objectMapper, org.mockito.Mockito.mock(com.opencode.cui.skill.service.SysConfigService.class));
+        strategy = new BusinessScopeStrategy(builder, cloudEventTranslator, objectMapper);
     }
 
     @Test

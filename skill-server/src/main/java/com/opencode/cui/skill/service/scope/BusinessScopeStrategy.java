@@ -35,23 +35,16 @@ import java.util.UUID;
 @Component
 public class BusinessScopeStrategy implements AssistantScopeStrategy {
 
-    /** SysConfig: 控制 GW 调云端路由用 v1（旧）还是 v2（新 callback config） */
-    private static final String CONFIG_TYPE_CLOUD_ROUTE = "cloud_route";
-    private static final String CONFIG_KEY_V2_ENABLED = "v2_enabled";
-
     private final CloudRequestBuilder cloudRequestBuilder;
     private final CloudEventTranslator cloudEventTranslator;
     private final ObjectMapper objectMapper;
-    private final com.opencode.cui.skill.service.SysConfigService sysConfigService;
 
     public BusinessScopeStrategy(CloudRequestBuilder cloudRequestBuilder,
                                  CloudEventTranslator cloudEventTranslator,
-                                 ObjectMapper objectMapper,
-                                 com.opencode.cui.skill.service.SysConfigService sysConfigService) {
+                                 ObjectMapper objectMapper) {
         this.cloudRequestBuilder = cloudRequestBuilder;
         this.cloudEventTranslator = cloudEventTranslator;
         this.objectMapper = objectMapper;
-        this.sysConfigService = sysConfigService;
     }
 
     @Override
@@ -127,10 +120,6 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
         message.put("assistantScope", "business");
         if (command.userId() != null && !command.userId().isBlank()) {
             message.put("userId", command.userId());
-        }
-        // SysConfig 开关：configValue="1" 时 GW 走 v2 callback config 接口；其它情况走 v1
-        if ("1".equals(sysConfigService.getValue(CONFIG_TYPE_CLOUD_ROUTE, CONFIG_KEY_V2_ENABLED))) {
-            message.put("apiVersion", "v2");
         }
 
         // 注入 traceId：从 MDC 获取或自动生成，确保跨服务链路可追踪
