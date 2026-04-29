@@ -577,6 +577,8 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"step.done",
 
 云端 Agent 需要用户回答问题时发送。用户回答后，SS 通过新的 invoke（action=chat）将答案传回。
 
+**形态 1（单问题，扁平字段）**：
+
 ```
 data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"question","properties":{"toolCallId":"call-002","messageId":"msg-001","partId":"prt-q-01","header":"请确认操作","question":"您想查询哪个部门的信息？","options":["IT部","研发部","市场部"]}}}
 ```
@@ -589,6 +591,30 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"question","
 | header | String | | 问题标题 |
 | question | String | ✅ | 问题内容 |
 | options | List\<String\> | | 可选项列表（无则为开放式问答） |
+| extParam | Object | | 云端定义的扩展属性，平台原样透传（见下方说明） |
+
+**形态 2（多问题数组，OpenCode 风格，平台兼容）**：
+
+```json
+{"type":"tool_event","toolSessionId":"ts-789","event":{"type":"question",
+  "properties":{"toolCallId":"call-002","messageId":"msg-001","partId":"prt-q-01",
+    "questions":[
+      {"header":"...", "question":"...", "options":[...]},
+      {"header":"...", "question":"...", "options":[...]}
+    ],
+    "extParam":{ /* 任意 JSON，云端定义，平台原样透传到 SS / miniapp / external WS */ }
+  }}}
+```
+
+| properties 字段 | 类型 | 必填 | 说明 |
+|----------------|------|------|------|
+| toolCallId | String | ✅ | 工具调用 ID（用户回答时需回传） |
+| messageId | String | | 消息 ID |
+| partId | String | | 片段 ID |
+| questions | List\<Object\> | ✅ | 问题数组，每项含 `header` / `question` / `options` |
+| extParam | Object | | 云端定义的扩展属性，平台原样透传（见下方说明） |
+
+**`extParam` 字段**（对两种形态均可选）：云端定义的扩展属性对象，平台不解析、不修改，原样透传到 SS（QuestionInfo.extParam）→ miniapp / external WS。
 
 #### 5.5.2 `permission.ask` —— 请求用户授权
 
@@ -1323,11 +1349,17 @@ SS 收到 `im_push` 后：
   "assistantScope": "business",
   "payload": {
     "toolSessionId": "cloud-1001214",
-    "answer": "Yes",
+    "answer": "[[\"选项A\"],[\"选项B\",\"选项C\"]]",
     "toolCallId": "call-q001"
   }
 }
 ```
+
+**payload 字段补充**：
+
+| payload 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| answer | String | 条件 | question_reply 时必填。值为 stringified JSON `[[...]]`（数组的数组），平台兜底单文本→`[[<text>]]`。详见 §10.3 cloudRequest 协议 |
 
 **permission_reply**：
 
@@ -1367,10 +1399,18 @@ X-App-Id: {appId}
 
 ```json
 {
-  "type": "question_reply",
   "topicId": "cloud-1001214",
-  "toolCallId": "call-q001",
-  "answer": "Yes"
+  "assistantAccount": "...",
+  "sendUserAccount": "...",
+  "imGroupId": "...",
+  "messageId": "...",
+  "clientLang": "zh",
+  "replyContext": {
+    "type": "question_reply",
+    "toolCallId": "call-q001",
+    "answers": [["选项A"], ["选项B","选项C"]]
+  },
+  "extParameters": { "businessExtParam": {}, "platformExtParam": {} }
 }
 ```
 
@@ -1378,21 +1418,30 @@ X-App-Id: {appId}
 
 ```json
 {
-  "type": "permission_reply",
   "topicId": "cloud-1001214",
-  "permissionId": "perm-001",
-  "response": "once"
+  "assistantAccount": "...",
+  "sendUserAccount": "...",
+  "imGroupId": "...",
+  "messageId": "...",
+  "clientLang": "zh",
+  "replyContext": {
+    "type": "permission_reply",
+    "permissionId": "perm-001",
+    "response": "once"
+  },
+  "extParameters": { "businessExtParam": {}, "platformExtParam": {} }
 }
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| type | String | ✅ | `"question_reply"` / `"permission_reply"` |
 | topicId | String | ✅ | 会话主题 ID（= toolSessionId，关联到正在等待的 SSE 连接） |
-| toolCallId | String | 条件 | question_reply 时必填，对应 question 事件的 toolCallId |
-| answer | String | 条件 | question_reply 时必填，用户的回答 |
-| permissionId | String | 条件 | permission_reply 时必填，对应 permission.ask 的 permissionId |
-| response | String | 条件 | permission_reply 时必填，`"once"` / `"always"` / `"reject"` |
+| replyContext | Object | ✅ | 回复上下文，承载 reply 业务字段 |
+| replyContext.type | String | ✅ | `"question_reply"` / `"permission_reply"` |
+| replyContext.toolCallId | String | 条件 | question_reply 时必填，对应 question 事件的 toolCallId |
+| replyContext.answers | List\<List\<String\>\> | 条件 | question_reply 时必填，数组的数组（外层对应 questions，内层对应每个问题的所选 options） |
+| replyContext.permissionId | String | 条件 | permission_reply 时必填，对应 permission.ask 的 permissionId |
+| replyContext.response | String | 条件 | permission_reply 时必填，`"once"` / `"always"` / `"reject"` |
 
 **响应**：
 
@@ -1407,6 +1456,22 @@ X-App-Id: {appId}
 1. **多 GW 实例映射**：SSE 连接在 GW-A 上，reply invoke 可能路由到 GW-B，本地内存映射无法跨实例。需 Redis 共享或定向路由
 2. **旁路 REST 端点**：不应简单拼接 `{endpoint}/reply`，需由上游接口单独提供 reply endpoint
 3. **线程占用**：SSE 连接等待回复期间阻塞读取线程，需异步方案（WebClient）
+
+### 10.5 回调 scope 与连接形态
+
+| Scope | channelType | 连接形态 | 何时使用 |
+|---|---|---|---|
+| `callback:weagent:chat` | sse / websocket | 长连接事件流 | chat invoke |
+| `callback:weagent:question_reply` | webhook | 同步 POST | question_reply invoke |
+| `callback:weagent:permission_reply` | webhook | 同步 POST | permission_reply invoke |
+
+### 10.6 chat 长连接保活
+
+云端推送 `question` / `permission.ask` 后，平台保活 chat SSE/WS 连接（idle timer 暂停）直到下一个非 q/p.ask 事件到达再恢复。`maxDuration`（默认 30min）兜底。WebHook reply 失败不会主动 close 原 chat 连接。
+
+### 10.7 WebHook fire-and-forget
+
+平台收到云端 WebHook 2xx 响应后**不向 SS 回流任何 GatewayMessage**；失败（网络/超时/非 2xx）回 `tool_error`。SS 由 `sendInvokeToGateway` 同步路径感知送达。
 
 ---
 
