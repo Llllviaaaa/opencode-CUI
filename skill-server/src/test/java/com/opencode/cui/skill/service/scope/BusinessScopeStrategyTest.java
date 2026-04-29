@@ -38,13 +38,16 @@ class BusinessScopeStrategyTest {
     @Mock
     private CloudEventTranslator cloudEventTranslator;
 
+    @Mock
+    private com.opencode.cui.skill.service.SysConfigService sysConfigService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private BusinessScopeStrategy strategy;
 
     @BeforeEach
     void setUp() {
-        strategy = new BusinessScopeStrategy(cloudRequestBuilder, cloudEventTranslator, objectMapper);
+        strategy = new BusinessScopeStrategy(cloudRequestBuilder, cloudEventTranslator, objectMapper, sysConfigService);
     }
 
     @Test

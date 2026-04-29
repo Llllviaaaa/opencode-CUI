@@ -42,7 +42,7 @@ class OnlineCheckScopeTest {
     @DisplayName("S59: business scope requiresOnlineCheck returns false")
     void businessScope_requiresOnlineCheck_returnsFalse() {
         BusinessScopeStrategy strategy = new BusinessScopeStrategy(
-                cloudRequestBuilder, cloudEventTranslator, new com.fasterxml.jackson.databind.ObjectMapper());
+                cloudRequestBuilder, cloudEventTranslator, new com.fasterxml.jackson.databind.ObjectMapper(), org.mockito.Mockito.mock(com.opencode.cui.skill.service.SysConfigService.class));
 
         assertFalse(strategy.requiresOnlineCheck(),
                 "business scope should NOT require online check");
@@ -69,7 +69,7 @@ class OnlineCheckScopeTest {
         // 构造 mock 策略
         AssistantScopeStrategy personalStrategy = new PersonalScopeStrategy(openCodeEventTranslator, cloudEventTranslator);
         BusinessScopeStrategy businessStrategy = new BusinessScopeStrategy(
-                cloudRequestBuilder, cloudEventTranslator, new com.fasterxml.jackson.databind.ObjectMapper());
+                cloudRequestBuilder, cloudEventTranslator, new com.fasterxml.jackson.databind.ObjectMapper(), org.mockito.Mockito.mock(com.opencode.cui.skill.service.SysConfigService.class));
 
         AssistantScopeDispatcher dispatcher = new AssistantScopeDispatcher(
                 List.of(personalStrategy, businessStrategy),

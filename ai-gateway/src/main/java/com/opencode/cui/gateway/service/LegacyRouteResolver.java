@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.net.URI;
@@ -24,10 +23,6 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-@ConditionalOnProperty(
-        name = "gateway.cloud-route.api-version",
-        havingValue = "v1",
-        matchIfMissing = true)
 public class LegacyRouteResolver implements CallbackConfigResolver {
 
     private static final String CHAT_SCOPE = "callback:weagent:chat";

@@ -45,7 +45,7 @@ class EventTranslationScopeTest {
 
     @BeforeEach
     void setUp() {
-        businessStrategy = new BusinessScopeStrategy(cloudRequestBuilder, cloudEventTranslator, objectMapper);
+        businessStrategy = new BusinessScopeStrategy(cloudRequestBuilder, cloudEventTranslator, objectMapper, org.mockito.Mockito.mock(com.opencode.cui.skill.service.SysConfigService.class));
         personalStrategy = new PersonalScopeStrategy(openCodeEventTranslator, cloudEventTranslator);
     }
 

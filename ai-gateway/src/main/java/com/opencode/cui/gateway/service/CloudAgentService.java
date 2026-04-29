@@ -84,8 +84,8 @@ public class CloudAgentService {
             return;
         }
 
-        // 2. 拉取 (ak, scope) 对应的回调配置
-        CallbackConfig cfg = callbackConfigService.getConfig(ak, scope);
+        // 2. 拉取 (ak, scope) 对应的回调配置（按 invoke 消息的 apiVersion 选 v1/v2 resolver）
+        CallbackConfig cfg = callbackConfigService.getConfig(ak, scope, invokeMessage.getApiVersion());
         if (cfg == null) {
             String reason = "chat".equals(action)
                     ? "Cloud route info not found for ak: " + ak
