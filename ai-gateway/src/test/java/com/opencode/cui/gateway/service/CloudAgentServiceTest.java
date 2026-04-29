@@ -3,11 +3,11 @@ package com.opencode.cui.gateway.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.gateway.config.CloudTimeoutProperties;
-import com.opencode.cui.gateway.model.CloudRouteInfo;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionContext;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionLifecycle;
 import com.opencode.cui.gateway.service.cloud.CloudProtocolClient;
+import com.opencode.cui.gateway.service.cloud.WebHookExecutor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -28,18 +28,29 @@ import static org.mockito.Mockito.lenient;
 /**
  * CloudAgentService 单元测试（TDD）。
  *
+ * <p>覆盖 callback 配置驱动的分叉逻辑：
  * <ul>
- *   <li>正常流程：获取路由信息、构建上下文、连接云端、注入路由上下文后通过 onRelay 转发</li>
- *   <li>路由信息获取失败：返回 tool_error</li>
+ *   <li>action → scope 映射（chat / question_reply / permission_reply / unknown）</li>
+ *   <li>channelType vs action 双向校验</li>
+ *   <li>SSE/WebSocket 走 CloudProtocolClient；webhook 走 WebHookExecutor</li>
+ *   <li>v1 模式 q_r/p_r 因 LegacyRouteResolver 仅 chat scope 接通而返回 null</li>
+ *   <li>原 chat 路径的 fallback messageId / fallback partId / errorSent 单次回流逻辑保留</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
 class CloudAgentServiceTest {
 
+    private static final String TEST_AK = "ak-test-001";
+    private static final String CHAT_SCOPE = "callback:weagent:chat";
+    private static final String QR_SCOPE = "callback:weagent:question_reply";
+    private static final String PR_SCOPE = "callback:weagent:permission_reply";
+
     @Mock
-    private CloudRouteService cloudRouteService;
+    private CallbackConfigService callbackConfigService;
     @Mock
     private CloudProtocolClient cloudProtocolClient;
+    @Mock
+    private WebHookExecutor webHookExecutor;
     @Mock
     private CloudTimeoutProperties cloudTimeoutProperties;
     @Mock
@@ -63,17 +74,23 @@ class CloudAgentServiceTest {
         lenient().when(cloudTimeoutProperties.getEffectiveIdleTimeoutSeconds(anyString())).thenReturn(90);
         lenient().when(cloudTimeoutProperties.getMaxDurationSeconds()).thenReturn(600);
 
-        cloudAgentService = new CloudAgentService(cloudRouteService, cloudProtocolClient, cloudTimeoutProperties);
+        cloudAgentService = new CloudAgentService(
+                callbackConfigService, cloudProtocolClient, webHookExecutor, cloudTimeoutProperties);
     }
 
-    private GatewayMessage buildInvokeMessage() {
+    // ---------------------------------------------------------------------
+    // helpers
+    // ---------------------------------------------------------------------
+
+    private GatewayMessage buildInvoke(String action, String ak) {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.set("cloudRequest", objectMapper.createObjectNode().put("prompt", "hello"));
         payload.put("toolSessionId", "tool-session-001");
 
         return GatewayMessage.builder()
                 .type(GatewayMessage.Type.INVOKE)
-                .ak("ak-test-001")
+                .ak(ak)
+                .action(action)
                 .userId("user-001")
                 .welinkSessionId("welink-session-001")
                 .traceId("trace-001")
@@ -81,27 +98,222 @@ class CloudAgentServiceTest {
                 .build();
     }
 
-    private CloudRouteInfo buildRouteInfo() {
-        CloudRouteInfo info = new CloudRouteInfo();
-        info.setAppId("app_36209");
-        info.setEndpoint("https://cloud.example.com/chat");
-        info.setProtocol("sse");
-        info.setAuthType("soa");
-        return info;
+    private CallbackConfig buildCfg(String channelType, String channelAddress, String authType, String appId) {
+        CallbackConfig c = new CallbackConfig();
+        c.setAk(TEST_AK);
+        c.setScope("callback:weagent:chat");
+        c.setChannelType(channelType);
+        c.setChannelAddress(channelAddress);
+        c.setAuthType(authType);
+        c.setAppId(appId);
+        return c;
     }
 
+    // ---------------------------------------------------------------------
+    // action → scope 路由
+    // ---------------------------------------------------------------------
+
     @Nested
-    @DisplayName("正常流程")
-    class HappyPathTests {
+    @DisplayName("Action 路由分叉")
+    class ActionRoutingTests {
 
         @Test
-        @DisplayName("获取路由信息并构建正确的 CloudConnectionContext")
-        void shouldBuildCorrectConnectionContext() {
-            GatewayMessage invokeMsg = buildInvokeMessage();
-            CloudRouteInfo routeInfo = buildRouteInfo();
-            when(cloudRouteService.getRouteInfo("ak-test-001")).thenReturn(routeInfo);
+        @DisplayName("chat action → 走 CloudProtocolClient (SSE)")
+        void handleInvoke_chatAction_routesToSseProtocol() {
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
 
-            cloudAgentService.handleInvoke(invokeMsg, onRelay);
+            cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
+
+            verify(cloudProtocolClient).connect(eq("sse"), any(), any(), any(), any());
+            verifyNoInteractions(webHookExecutor);
+        }
+
+        @Test
+        @DisplayName("chat action → 走 CloudProtocolClient (WebSocket)")
+        void handleInvoke_chatAction_routesToWebSocketProtocol() {
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+                    .thenReturn(buildCfg("websocket", "wss://cloud.example.com/chat", "soa", "app-1"));
+
+            cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
+
+            verify(cloudProtocolClient).connect(eq("websocket"), any(), any(), any(), any());
+            verifyNoInteractions(webHookExecutor);
+        }
+
+        @Test
+        @DisplayName("question_reply action → 走 WebHookExecutor")
+        void handleInvoke_questionReplyAction_routesToWebHook() {
+            when(callbackConfigService.getConfig(TEST_AK, QR_SCOPE))
+                    .thenReturn(buildCfg("webhook", "https://cloud.example.com/qr", "soa", null));
+
+            GatewayMessage invoke = buildInvoke("question_reply", TEST_AK);
+            cloudAgentService.handleInvoke(invoke, onRelay);
+
+            verify(webHookExecutor).execute(any(CloudConnectionContext.class),
+                    eq(onRelay), eq(invoke), eq("tool-session-001"));
+            verifyNoInteractions(cloudProtocolClient);
+        }
+
+        @Test
+        @DisplayName("permission_reply action → 走 WebHookExecutor")
+        void handleInvoke_permissionReplyAction_routesToWebHook() {
+            when(callbackConfigService.getConfig(TEST_AK, PR_SCOPE))
+                    .thenReturn(buildCfg("webhook", "https://cloud.example.com/pr", "soa", null));
+
+            GatewayMessage invoke = buildInvoke("permission_reply", TEST_AK);
+            cloudAgentService.handleInvoke(invoke, onRelay);
+
+            verify(webHookExecutor).execute(any(CloudConnectionContext.class),
+                    eq(onRelay), eq(invoke), eq("tool-session-001"));
+            verifyNoInteractions(cloudProtocolClient);
+        }
+
+        @Test
+        @DisplayName("未知 action → 回流 tool_error")
+        void handleInvoke_unknownAction_emitsToolError() {
+            cloudAgentService.handleInvoke(buildInvoke("unknown_action", TEST_AK), onRelay);
+
+            verify(onRelay).accept(messageCaptor.capture());
+            GatewayMessage err = messageCaptor.getValue();
+            assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
+            assertTrue(err.getError().contains("Unknown action"),
+                    "Expected 'Unknown action' in error: " + err.getError());
+            verifyNoInteractions(cloudProtocolClient, webHookExecutor);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // channelType vs action 校验
+    // ---------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("ChannelType 校验")
+    class ChannelTypeValidationTests {
+
+        @Test
+        @DisplayName("chat 收到 webhook channel → tool_error")
+        void handleInvoke_chatWithWebhookChannel_emitsToolError() {
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+                    .thenReturn(buildCfg("webhook", "https://x", "soa", null));
+
+            cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
+
+            verify(onRelay).accept(messageCaptor.capture());
+            GatewayMessage err = messageCaptor.getValue();
+            assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
+            assertTrue(err.getError().contains("Invalid channel type for chat"),
+                    "Expected 'Invalid channel type for chat' in error: " + err.getError());
+            verifyNoInteractions(cloudProtocolClient, webHookExecutor);
+        }
+
+        @Test
+        @DisplayName("question_reply 收到 sse channel → tool_error")
+        void handleInvoke_questionReplyWithSseChannel_emitsToolError() {
+            when(callbackConfigService.getConfig(TEST_AK, QR_SCOPE))
+                    .thenReturn(buildCfg("sse", "https://x", "soa", "app-1"));
+
+            cloudAgentService.handleInvoke(buildInvoke("question_reply", TEST_AK), onRelay);
+
+            verify(onRelay).accept(messageCaptor.capture());
+            GatewayMessage err = messageCaptor.getValue();
+            assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
+            assertTrue(err.getError().contains("Invalid channel type for reply"),
+                    "Expected 'Invalid channel type for reply' in error: " + err.getError());
+            verifyNoInteractions(cloudProtocolClient, webHookExecutor);
+        }
+
+        @Test
+        @DisplayName("permission_reply 收到 websocket channel → tool_error")
+        void handleInvoke_permissionReplyWithWebSocketChannel_emitsToolError() {
+            when(callbackConfigService.getConfig(TEST_AK, PR_SCOPE))
+                    .thenReturn(buildCfg("websocket", "wss://x", "soa", "app-1"));
+
+            cloudAgentService.handleInvoke(buildInvoke("permission_reply", TEST_AK), onRelay);
+
+            verify(onRelay).accept(messageCaptor.capture());
+            GatewayMessage err = messageCaptor.getValue();
+            assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
+            assertTrue(err.getError().contains("Invalid channel type for reply"));
+            verifyNoInteractions(cloudProtocolClient, webHookExecutor);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // 配置缺失（含 v1 模式 q_r/p_r 不接通）
+    // ---------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("配置缺失")
+    class MissingConfigTests {
+
+        @Test
+        @DisplayName("chat 配置缺失 → tool_error，错误消息保留 'Cloud route info not found'")
+        void handleInvoke_chatConfigMissing_emitsLegacyErrorMessage() {
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE)).thenReturn(null);
+
+            cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
+
+            verify(cloudProtocolClient, never()).connect(any(), any(), any(), any(), any());
+            verify(onRelay).accept(messageCaptor.capture());
+            GatewayMessage err = messageCaptor.getValue();
+            assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
+            assertEquals(TEST_AK, err.getAk());
+            assertEquals("user-001", err.getUserId());
+            assertEquals("welink-session-001", err.getWelinkSessionId());
+            assertEquals("tool-session-001", err.getToolSessionId());
+            assertNotNull(err.getError());
+            assertTrue(err.getError().contains("Cloud route info not found for ak: " + TEST_AK),
+                    "Expected v1-compatible error message, got: " + err.getError());
+        }
+
+        @Test
+        @DisplayName("v1 模式 question_reply 配置缺失 → tool_error 含 'not enabled'")
+        void handleInvoke_v1ModeQuestionReplyReturnsNullConfig_emitsToolError() {
+            when(callbackConfigService.getConfig(TEST_AK, QR_SCOPE)).thenReturn(null);
+
+            cloudAgentService.handleInvoke(buildInvoke("question_reply", TEST_AK), onRelay);
+
+            verify(onRelay).accept(messageCaptor.capture());
+            GatewayMessage err = messageCaptor.getValue();
+            assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
+            assertTrue(err.getError().contains("question_reply"));
+            assertTrue(err.getError().contains("not enabled"),
+                    "Expected 'not enabled' in error: " + err.getError());
+            verifyNoInteractions(cloudProtocolClient, webHookExecutor);
+        }
+
+        @Test
+        @DisplayName("v1 模式 permission_reply 配置缺失 → tool_error 含 'not enabled'")
+        void handleInvoke_v1ModePermissionReplyReturnsNullConfig_emitsToolError() {
+            when(callbackConfigService.getConfig(TEST_AK, PR_SCOPE)).thenReturn(null);
+
+            cloudAgentService.handleInvoke(buildInvoke("permission_reply", TEST_AK), onRelay);
+
+            verify(onRelay).accept(messageCaptor.capture());
+            GatewayMessage err = messageCaptor.getValue();
+            assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
+            assertTrue(err.getError().contains("permission_reply"));
+            assertTrue(err.getError().contains("not enabled"));
+            verifyNoInteractions(cloudProtocolClient, webHookExecutor);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // chat 路径正常流程（保留原有 fallback 与 errorSent 行为）
+    // ---------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("chat 路径正常流程")
+    class ChatHappyPathTests {
+
+        @Test
+        @DisplayName("构建正确的 CloudConnectionContext (含 channelType / scope)")
+        void shouldBuildCorrectConnectionContext() {
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app_36209"));
+
+            cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
 
             verify(cloudProtocolClient).connect(
                     eq("sse"),
@@ -113,6 +325,8 @@ class CloudAgentServiceTest {
 
             CloudConnectionContext ctx = contextCaptor.getValue();
             assertEquals("https://cloud.example.com/chat", ctx.getChannelAddress());
+            assertEquals("sse", ctx.getChannelType());
+            assertEquals(CHAT_SCOPE, ctx.getScope());
             assertEquals("app_36209", ctx.getAppId());
             assertEquals("soa", ctx.getAuthType());
             assertEquals("trace-001", ctx.getTraceId());
@@ -122,11 +336,10 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("云端事件注入路由上下文后通过 onRelay 转发")
         void shouldInjectRoutingContextAndRelayEvents() {
-            GatewayMessage invokeMsg = buildInvokeMessage();
-            CloudRouteInfo routeInfo = buildRouteInfo();
-            when(cloudRouteService.getRouteInfo("ak-test-001")).thenReturn(routeInfo);
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
 
-            cloudAgentService.handleInvoke(invokeMsg, onRelay);
+            cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
 
             verify(cloudProtocolClient).connect(
                     eq("sse"),
@@ -136,7 +349,6 @@ class CloudAgentServiceTest {
                     any()
             );
 
-            // Simulate cloud event
             GatewayMessage cloudEvent = GatewayMessage.builder()
                     .type(GatewayMessage.Type.TOOL_EVENT)
                     .event(objectMapper.createObjectNode().put("text", "response"))
@@ -147,7 +359,7 @@ class CloudAgentServiceTest {
             verify(onRelay).accept(messageCaptor.capture());
             GatewayMessage relayed = messageCaptor.getValue();
 
-            assertEquals("ak-test-001", relayed.getAk());
+            assertEquals(TEST_AK, relayed.getAk());
             assertEquals("user-001", relayed.getUserId());
             assertEquals("welink-session-001", relayed.getWelinkSessionId());
             assertEquals("trace-001", relayed.getTraceId());
@@ -157,11 +369,10 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("云端事件已有 toolSessionId 时不覆盖")
         void shouldNotOverrideExistingToolSessionId() {
-            GatewayMessage invokeMsg = buildInvokeMessage();
-            CloudRouteInfo routeInfo = buildRouteInfo();
-            when(cloudRouteService.getRouteInfo("ak-test-001")).thenReturn(routeInfo);
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
 
-            cloudAgentService.handleInvoke(invokeMsg, onRelay);
+            cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
 
             verify(cloudProtocolClient).connect(
                     eq("sse"),
@@ -171,7 +382,6 @@ class CloudAgentServiceTest {
                     any()
             );
 
-            // Simulate cloud event with existing toolSessionId
             GatewayMessage cloudEvent = GatewayMessage.builder()
                     .type(GatewayMessage.Type.TOOL_EVENT)
                     .toolSessionId("cloud-tool-session-999")
@@ -181,43 +391,25 @@ class CloudAgentServiceTest {
             onEventCaptor.getValue().accept(cloudEvent);
 
             verify(onRelay).accept(messageCaptor.capture());
-            GatewayMessage relayed = messageCaptor.getValue();
-            assertEquals("cloud-tool-session-999", relayed.getToolSessionId());
+            assertEquals("cloud-tool-session-999", messageCaptor.getValue().getToolSessionId());
         }
     }
 
+    // ---------------------------------------------------------------------
+    // chat 路径异常流程（保留原有 onError / 超时行为）
+    // ---------------------------------------------------------------------
+
     @Nested
-    @DisplayName("错误场景")
-    class ErrorTests {
-
-        @Test
-        @DisplayName("路由信息获取失败时通过 onRelay 返回 tool_error")
-        void shouldReturnToolErrorWhenRouteInfoFails() {
-            GatewayMessage invokeMsg = buildInvokeMessage();
-            when(cloudRouteService.getRouteInfo("ak-test-001")).thenReturn(null);
-
-            cloudAgentService.handleInvoke(invokeMsg, onRelay);
-
-            verify(cloudProtocolClient, never()).connect(any(), any(), any(), any(), any());
-            verify(onRelay).accept(messageCaptor.capture());
-
-            GatewayMessage errorMsg = messageCaptor.getValue();
-            assertEquals(GatewayMessage.Type.TOOL_ERROR, errorMsg.getType());
-            assertEquals("ak-test-001", errorMsg.getAk());
-            assertEquals("user-001", errorMsg.getUserId());
-            assertEquals("welink-session-001", errorMsg.getWelinkSessionId());
-            assertEquals("tool-session-001", errorMsg.getToolSessionId());
-            assertNotNull(errorMsg.getError());
-        }
+    @DisplayName("chat 路径异常流程")
+    class ChatErrorTests {
 
         @Test
         @DisplayName("云端连接异常时 onError 通过 onRelay 构建 tool_error 转发")
         void shouldRelayToolErrorOnCloudConnectionFailure() {
-            GatewayMessage invokeMsg = buildInvokeMessage();
-            CloudRouteInfo routeInfo = buildRouteInfo();
-            when(cloudRouteService.getRouteInfo("ak-test-001")).thenReturn(routeInfo);
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
 
-            cloudAgentService.handleInvoke(invokeMsg, onRelay);
+            cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
 
             verify(cloudProtocolClient).connect(
                     eq("sse"),
@@ -227,24 +419,22 @@ class CloudAgentServiceTest {
                     onErrorCaptor.capture()
             );
 
-            // Simulate error
             onErrorCaptor.getValue().accept(new RuntimeException("Connection timeout"));
 
             verify(onRelay).accept(messageCaptor.capture());
-            GatewayMessage errorMsg = messageCaptor.getValue();
-            assertEquals(GatewayMessage.Type.TOOL_ERROR, errorMsg.getType());
-            assertEquals("ak-test-001", errorMsg.getAk());
-            assertTrue(errorMsg.getError().contains("Connection timeout"));
+            GatewayMessage err = messageCaptor.getValue();
+            assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
+            assertEquals(TEST_AK, err.getAk());
+            assertTrue(err.getError().contains("Connection timeout"));
         }
 
         @Test
         @DisplayName("云端超时时通过 onRelay 返回包含超时信息的 tool_error")
         void shouldRelayToolErrorWithTimeoutInfoOnTimeout() {
-            GatewayMessage invokeMsg = buildInvokeMessage();
-            CloudRouteInfo routeInfo = buildRouteInfo();
-            when(cloudRouteService.getRouteInfo("ak-test-001")).thenReturn(routeInfo);
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
 
-            cloudAgentService.handleInvoke(invokeMsg, onRelay);
+            cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
 
             verify(cloudProtocolClient).connect(
                     eq("sse"),
@@ -254,14 +444,13 @@ class CloudAgentServiceTest {
                     onErrorCaptor.capture()
             );
 
-            // Simulate timeout error (this is what lifecycle's onTimeout callback produces)
             onErrorCaptor.getValue().accept(
                     new RuntimeException("Cloud agent error: idle_timeout (elapsed: 90s)"));
 
             verify(onRelay).accept(messageCaptor.capture());
-            GatewayMessage errorMsg = messageCaptor.getValue();
-            assertEquals(GatewayMessage.Type.TOOL_ERROR, errorMsg.getType());
-            assertTrue(errorMsg.getError().contains("idle_timeout"));
+            GatewayMessage err = messageCaptor.getValue();
+            assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
+            assertTrue(err.getError().contains("idle_timeout"));
         }
     }
 }

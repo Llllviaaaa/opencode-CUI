@@ -18,7 +18,7 @@ import java.util.Map;
  * v1 实现：把现有 Cloud Route 旧接口包装为 {@link CallbackConfigResolver}。
  *
  * <p>仅支持 {@code callback:weagent:chat} scope，其他 scope 在 v1 阶段直接返回 null。
- * 旧接口形态为 GET-with-body（沿用 {@code CloudRouteService.fetchFromUpstream} 的非常规写法）。</p>
+ * 旧接口形态为 GET-with-body（沿用历史 cloud route 接入端的非常规写法）。</p>
  *
  * <p>当 {@code gateway.cloud-route.api-version} 未配置或值为 {@code v1} 时装配此 Bean（默认）。</p>
  */
@@ -106,7 +106,7 @@ public class LegacyRouteResolver implements CallbackConfigResolver {
      * 旧上游 protocol 数字码 → CallbackConfig.channelType。
      *
      * <p>对齐 v2 channelType 字典（1=webhook / 2=sse / 3=websocket），
-     * 与历史 {@code CloudRouteService.mapProtocol}（1=rest）不同；
+     * 与历史 cloud route 接入端的协议映射（1=rest）不同；
      * 由于 {@code CloudProtocolClient} 从未注册 rest/webhook 策略，
      * 该差异在 chat 场景（仅消费 sse/websocket）下无运行时影响。</p>
      */
