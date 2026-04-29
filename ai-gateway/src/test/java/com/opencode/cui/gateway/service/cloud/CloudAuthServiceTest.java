@@ -24,12 +24,14 @@ class CloudAuthServiceTest {
     private CloudAuthService cloudAuthService;
     private SoaAuthStrategy soaStrategy;
     private ApigAuthStrategy apigStrategy;
+    private NoAuthStrategy noAuthStrategy;
 
     @BeforeEach
     void setUp() {
         soaStrategy = new SoaAuthStrategy();
         apigStrategy = new ApigAuthStrategy();
-        cloudAuthService = new CloudAuthService(List.of(soaStrategy, apigStrategy));
+        noAuthStrategy = new NoAuthStrategy();
+        cloudAuthService = new CloudAuthService(List.of(soaStrategy, apigStrategy, noAuthStrategy));
     }
 
     @Nested
@@ -62,6 +64,18 @@ class CloudAuthServiceTest {
             assertEquals("apig", request.headers().firstValue("X-Auth-Type").get());
             assertTrue(request.headers().firstValue("X-App-Id").isPresent());
             assertEquals("app_456", request.headers().firstValue("X-App-Id").get());
+        }
+
+        @Test
+        @DisplayName("authType=none 时调度到 NoAuthStrategy 且不写入任何鉴权 header")
+        void applyAuth_noneAuthType_noHeaderWritten() {
+            HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://x.example"));
+
+            cloudAuthService.applyAuth(builder, null, "none");
+
+            HttpRequest request = builder.GET().build();
+            assertTrue(request.headers().firstValue("X-Auth-Type").isEmpty());
+            assertTrue(request.headers().firstValue("X-App-Id").isEmpty());
         }
     }
 
