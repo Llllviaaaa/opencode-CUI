@@ -63,23 +63,23 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
 
             // 2. 构建 HTTP POST 请求
             HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(context.getEndpoint()))
+                    .uri(URI.create(context.getChannelAddress()))
                     .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
                     .header("Content-Type", "application/json")
                     .header("Accept", "text/event-stream")
                     .header("X-Trace-Id", context.getTraceId() != null ? context.getTraceId() : "")
                     .header("X-Request-Id", UUID.randomUUID().toString())
-                    .header("X-App-Id", context.getAppId() != null ? context.getAppId() : "")
                     // 不设请求级超时，由云端关闭 SSE 流来结束连接
                     ;
 
-            // 3. 注入认证头
+            // 3. 注入认证头：X-App-Id 由 cloudAuthService 内部 strategy（Soa/Apig）按需写入；
+            //    NoAuthStrategy 不写。这里不再重复写入避免出现两个同名 header。
             cloudAuthService.applyAuth(requestBuilder, context.getAppId(), context.getAuthType());
 
             // 4. 发送请求
             HttpRequest request = requestBuilder.build();
             log.info("[SSE] Connecting: endpoint={}, appId={}, traceId={}",
-                    context.getEndpoint(), context.getAppId(), context.getTraceId());
+                    context.getChannelAddress(), context.getAppId(), context.getTraceId());
 
             HttpResponse<InputStream> response = sendRequest(request);
 
@@ -99,7 +99,7 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
 
         } catch (Exception e) {
             log.error("[SSE] Connection error: endpoint={}, traceId={}, error={}",
-                    context.getEndpoint(), context.getTraceId(), e.getMessage());
+                    context.getChannelAddress(), context.getTraceId(), e.getMessage());
             onError.accept(e);
         }
     }
@@ -152,6 +152,9 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
         }
         try {
             GatewayMessage message = objectMapper.readValue(jsonData, GatewayMessage.class);
+            // T13: 根据事件类型派发 pause/resume idle timer（必须在 onEventReceived 之前，
+            // 让 onEventReceived → resetIdleTimeout 能感知到新设置的 awaitingReply）
+            dispatchIdleTimerByEventType(lifecycle, message);
             notifyLifecycle(lifecycle, CloudConnectionLifecycle::onEventReceived);
             onEvent.accept(message);
             if (message.isType(GatewayMessage.Type.TOOL_DONE)
@@ -170,6 +173,28 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                                         Consumer<CloudConnectionLifecycle> action) {
         if (lifecycle != null) {
             action.accept(lifecycle);
+        }
+    }
+
+    /**
+     * T13: 根据 event.type 派发 idle timer 操作。
+     *
+     * <ul>
+     *   <li>{@code "question"} / {@code "permission.ask"} → pause（等待用户回复，关闭 idle 计时）</li>
+     *   <li>其他事件类型 → resume（assistant 仍在产出，恢复 idle 计时）</li>
+     *   <li>{@code "permission.reply"} 是 assistant role 应答事件，不触发 pause（落入 resume 分支）</li>
+     * </ul>
+     */
+    private static void dispatchIdleTimerByEventType(CloudConnectionLifecycle lifecycle,
+                                                     GatewayMessage message) {
+        if (lifecycle == null || message == null || message.getEvent() == null) {
+            return;
+        }
+        String eventType = message.getEvent().path("type").asText("");
+        if ("question".equals(eventType) || "permission.ask".equals(eventType)) {
+            lifecycle.pauseIdleTimer();
+        } else {
+            lifecycle.resumeIdleTimer();
         }
     }
 }

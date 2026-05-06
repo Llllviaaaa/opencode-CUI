@@ -27,6 +27,8 @@ public class CloudConnectionLifecycle {
 
     private final ScheduledExecutorService scheduler;
     private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final AtomicBoolean awaitingReply = new AtomicBoolean(false);
+    private final Object idleLock = new Object();
 
     private volatile ScheduledFuture<?> firstEventFuture;
     private volatile ScheduledFuture<?> idleFuture;
@@ -85,6 +87,24 @@ public class CloudConnectionLifecycle {
         resetIdleTimeout();
     }
 
+    public void pauseIdleTimer() {
+        if (closed.get()) return;
+        synchronized (idleLock) {
+            awaitingReply.set(true);
+            cancelFuture(idleFuture);
+            idleFuture = null;
+        }
+        log.debug("[CLOUD_LIFECYCLE] idle timer paused (awaiting reply)");
+    }
+
+    public void resumeIdleTimer() {
+        if (closed.get()) return;
+        if (awaitingReply.compareAndSet(true, false)) {
+            resetIdleTimeout();
+            log.debug("[CLOUD_LIFECYCLE] idle timer resumed");
+        }
+    }
+
     public void onTerminalEvent() {
         if (!closed.compareAndSet(false, true)) return;
         cancelAllTimers();
@@ -110,13 +130,16 @@ public class CloudConnectionLifecycle {
     }
 
     private void resetIdleTimeout() {
-        cancelFuture(idleFuture);
-        try {
-            idleFuture = scheduler.schedule(
-                    () -> fireTimeout("idle_timeout"),
-                    idleTimeoutSeconds, TimeUnit.SECONDS);
-        } catch (java.util.concurrent.RejectedExecutionException e) {
-            // Scheduler already shut down by a concurrent timeout/terminal event
+        synchronized (idleLock) {
+            if (closed.get() || awaitingReply.get()) return;
+            cancelFuture(idleFuture);
+            try {
+                idleFuture = scheduler.schedule(
+                        () -> fireTimeout("idle_timeout"),
+                        idleTimeoutSeconds, TimeUnit.SECONDS);
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                // Scheduler already shut down by a concurrent timeout/terminal event
+            }
         }
     }
 

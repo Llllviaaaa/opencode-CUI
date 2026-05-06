@@ -295,6 +295,31 @@ public class CloudEventTranslator {
     // ==================== Question Handler ====================
 
     private StreamMessage handleQuestion(JsonNode event) {
+        JsonNode questionsNode = event.get("questions");
+        List<QuestionItem> questions;
+        if (questionsNode != null && questionsNode.isArray() && !questionsNode.isEmpty()) {
+            questions = new ArrayList<>();
+            for (JsonNode q : questionsNode) {
+                questions.add(QuestionItem.builder()
+                        .header(q.path("header").asText(null))
+                        .question(q.path("question").asText(null))
+                        .options(com.opencode.cui.skill.service.ProtocolUtils.extractQuestionOptions(q.get("options")))
+                        .multiSelect(extractMultiSelect(q))
+                        .build());
+            }
+        } else {
+            questions = List.of(QuestionItem.builder()
+                    .header(event.path("header").asText(null))
+                    .question(event.path("question").asText(null))
+                    .options(com.opencode.cui.skill.service.ProtocolUtils.extractQuestionOptions(event.get("options")))
+                    .multiSelect(extractMultiSelect(event))
+                    .build());
+        }
+        QuestionItem first = questions.get(0);
+
+        JsonNode extParamNode = event.get("extParam");
+        JsonNode extParam = (extParamNode != null && !extParamNode.isNull()) ? extParamNode : null;
+
         return StreamMessage.builder()
                 .type(Types.QUESTION)
                 .messageId(event.path("messageId").asText(null))
@@ -304,11 +329,21 @@ public class CloudEventTranslator {
                         .build())
                 .status(event.path("status").asText(null))
                 .questionInfo(QuestionInfo.builder()
-                        .question(event.path("question").asText(null))
-                        .header(event.path("header").asText(null))
-                        .options(toStringList(event.get("options")))
+                        .header(first.getHeader())
+                        .question(first.getQuestion())
+                        .options(first.getOptions())
+                        .multiSelect(first.getMultiSelect())
+                        .questions(questions)
+                        .extParam(extParam)
                         .build())
                 .build();
+    }
+
+    /** 解析 multiSelect 字段（缺/非 boolean → null，前端按单选默认行为处理）。 */
+    private static Boolean extractMultiSelect(JsonNode node) {
+        if (node == null) return null;
+        JsonNode ms = node.get("multiSelect");
+        return (ms != null && ms.isBoolean()) ? ms.asBoolean() : null;
     }
 
     // ==================== Permission Handlers ====================

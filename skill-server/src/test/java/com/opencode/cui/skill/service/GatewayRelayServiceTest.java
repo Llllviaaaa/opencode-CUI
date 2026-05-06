@@ -216,7 +216,9 @@ class GatewayRelayServiceTest {
                                 .questionInfo(StreamMessage.QuestionInfo.builder()
                                                 .header("Confirm")
                                                 .question("Continue?")
-                                                .options(java.util.List.of("yes", "no"))
+                                                .options(java.util.List.of(
+                                                        StreamMessage.QuestionOption.builder().label("yes").build(),
+                                                        StreamMessage.QuestionOption.builder().label("no").build()))
                                                 .build())
                                 .build());
 

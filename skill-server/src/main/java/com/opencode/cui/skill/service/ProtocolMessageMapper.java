@@ -97,7 +97,7 @@ public final class ProtocolMessageMapper {
                     if (question != null && question.isTextual()) {
                         builder.question(question.asText());
                     }
-                    builder.options(ProtocolUtils.extractQuestionOptions(questionNode.get("options")));
+                    builder.options(toLabelList(ProtocolUtils.extractQuestionOptions(questionNode.get("options"))));
                 }
             }
             case "permission" -> builder.permissionId(
@@ -170,7 +170,7 @@ public final class ProtocolMessageMapper {
                 if (q != null) {
                     builder.header(q.getHeader())
                             .question(q.getQuestion())
-                            .options(q.getOptions());
+                            .options(toLabelList(q.getOptions()));
                 }
             }
             case "permission" -> {
@@ -247,6 +247,22 @@ public final class ProtocolMessageMapper {
             log.debug("Failed to parse JSON: {}", json, e);
             return null;
         }
+    }
+
+    /**
+     * 把 QuestionOption 列表抽取成纯 label 字符串列表（用于 ProtocolMessagePart 历史视图）。
+     * description 字段在历史回放视图中不输出（保持 ProtocolMessagePart.options 旧契约）。
+     */
+    private static java.util.List<String> toLabelList(
+            java.util.List<com.opencode.cui.skill.model.StreamMessage.QuestionOption> options) {
+        if (options == null || options.isEmpty()) return null;
+        java.util.List<String> labels = new java.util.ArrayList<>(options.size());
+        for (com.opencode.cui.skill.model.StreamMessage.QuestionOption opt : options) {
+            if (opt != null && opt.getLabel() != null && !opt.getLabel().isBlank()) {
+                labels.add(opt.getLabel());
+            }
+        }
+        return labels.isEmpty() ? null : labels;
     }
 
     /**

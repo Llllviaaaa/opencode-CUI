@@ -57,7 +57,7 @@ class CloudProtocolClientTest {
         @DisplayName("protocol=sse 时调度到 SSE 策略")
         void shouldDispatchToSseStrategy() {
             CloudConnectionContext context = CloudConnectionContext.builder()
-                    .endpoint("https://example.com/chat")
+                    .channelAddress("https://example.com/chat")
                     .cloudRequest(objectMapper.createObjectNode())
                     .appId("app_123")
                     .authType("soa")
@@ -76,7 +76,7 @@ class CloudProtocolClientTest {
         @DisplayName("protocol=websocket 时调度到 WebSocket 策略")
         void shouldDispatchToWebSocketStrategy() {
             CloudConnectionContext context = CloudConnectionContext.builder()
-                    .endpoint("https://ws.example.com/stream")
+                    .channelAddress("https://ws.example.com/stream")
                     .cloudRequest(objectMapper.createObjectNode())
                     .appId("app_456")
                     .authType("apig")
@@ -100,7 +100,7 @@ class CloudProtocolClientTest {
         @DisplayName("未知 protocol 调用 onError 回调")
         void shouldCallOnErrorForUnknownProtocol() {
             CloudConnectionContext context = CloudConnectionContext.builder()
-                    .endpoint("https://example.com")
+                    .channelAddress("https://example.com")
                     .cloudRequest(objectMapper.createObjectNode())
                     .appId("app_789")
                     .authType("soa")
@@ -121,7 +121,7 @@ class CloudProtocolClientTest {
         @DisplayName("null protocol 调用 onError 回调")
         void shouldCallOnErrorForNullProtocol() {
             CloudConnectionContext context = CloudConnectionContext.builder()
-                    .endpoint("https://example.com")
+                    .channelAddress("https://example.com")
                     .cloudRequest(objectMapper.createObjectNode())
                     .appId("app_789")
                     .authType("soa")

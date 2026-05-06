@@ -56,6 +56,23 @@ public class DefaultCloudRequestStrategy implements CloudRequestStrategy {
             node.set("extParameters", objectMapper.valueToTree(ext));
         }
 
+        // 仅在 question_reply / permission_reply 时写入 replyContext 嵌套对象；chat 不写
+        boolean isQR = context.getReplyToolCallId() != null;
+        boolean isPR = context.getReplyPermissionId() != null;
+        if (isQR || isPR) {
+            ObjectNode replyContext = objectMapper.createObjectNode();
+            if (isQR) {
+                replyContext.put("type", "question_reply");
+                replyContext.put("toolCallId", context.getReplyToolCallId());
+                replyContext.set("answers", objectMapper.valueToTree(context.getReplyAnswers()));
+            } else {
+                replyContext.put("type", "permission_reply");
+                replyContext.put("permissionId", context.getReplyPermissionId());
+                replyContext.put("response", context.getReplyResponse());
+            }
+            node.set("replyContext", replyContext);
+        }
+
         return node;
     }
 }

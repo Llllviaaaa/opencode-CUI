@@ -22,8 +22,11 @@ public class SoaAuthStrategy implements CloudAuthStrategy {
     @Override
     public void applyAuth(HttpRequest.Builder requestBuilder, String appId) {
         // 占位实现：设置认证类型和应用 ID Header
+        // X-App-Id 仅在 appId 非空时写入，避免空值 header；外部调用方不应再重复写入。
         requestBuilder.header("X-Auth-Type", "soa");
-        requestBuilder.header("X-App-Id", appId);
+        if (appId != null) {
+            requestBuilder.header("X-App-Id", appId);
+        }
         log.debug("[CLOUD_AUTH] Applied SOA auth: appId={}", appId);
     }
 }

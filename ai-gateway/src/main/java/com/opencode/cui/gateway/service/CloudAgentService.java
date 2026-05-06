@@ -1,15 +1,17 @@
 package com.opencode.cui.gateway.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.gateway.config.CloudTimeoutProperties;
-import com.opencode.cui.gateway.model.CloudRouteInfo;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionContext;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionLifecycle;
 import com.opencode.cui.gateway.service.cloud.CloudProtocolClient;
+import com.opencode.cui.gateway.service.cloud.WebHookExecutor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -21,10 +23,11 @@ import java.util.function.Consumer;
  *
  * <p>负责编排云端 AI 调用的完整流程：
  * <ol>
- *   <li>从 CloudRouteService 获取路由信息</li>
- *   <li>构建 CloudConnectionContext</li>
- *   <li>通过 CloudProtocolClient 连接云端服务</li>
- *   <li>为云端返回的事件注入路由上下文后通过 onRelay 回调转发</li>
+ *   <li>按 {@code action} 映射到 callback {@code scope}</li>
+ *   <li>从 {@link CallbackConfigService} 获取回调订阅配置</li>
+ *   <li>校验 {@code channelType} 与 {@code action} 匹配关系</li>
+ *   <li>构建 {@link CloudConnectionContext}</li>
+ *   <li>分叉到 {@link WebHookExecutor}（webhook）或 {@link CloudProtocolClient}（sse/websocket）</li>
  * </ol>
  * </p>
  *
@@ -35,15 +38,25 @@ import java.util.function.Consumer;
 @Service
 public class CloudAgentService {
 
-    private final CloudRouteService cloudRouteService;
+    /** action → callback scope 硬编码映射。 */
+    private static final Map<String, String> ACTION_TO_SCOPE = Map.of(
+            "chat",             "callback:weagent:chat",
+            "question_reply",   "callback:weagent:question_reply",
+            "permission_reply", "callback:weagent:permission_reply"
+    );
+
+    private final CallbackConfigService callbackConfigService;
     private final CloudProtocolClient cloudProtocolClient;
+    private final WebHookExecutor webHookExecutor;
     private final CloudTimeoutProperties timeoutProperties;
 
-    public CloudAgentService(CloudRouteService cloudRouteService,
+    public CloudAgentService(CallbackConfigService callbackConfigService,
                              CloudProtocolClient cloudProtocolClient,
+                             WebHookExecutor webHookExecutor,
                              CloudTimeoutProperties timeoutProperties) {
-        this.cloudRouteService = cloudRouteService;
+        this.callbackConfigService = callbackConfigService;
         this.cloudProtocolClient = cloudProtocolClient;
+        this.webHookExecutor = webHookExecutor;
         this.timeoutProperties = timeoutProperties;
     }
 
@@ -55,38 +68,88 @@ public class CloudAgentService {
      */
     public void handleInvoke(GatewayMessage invokeMessage, Consumer<GatewayMessage> onRelay) {
         String ak = invokeMessage.getAk();
+        String action = invokeMessage.getAction();
         JsonNode cloudRequest = invokeMessage.getPayload().path("cloudRequest");
         String toolSessionId = invokeMessage.getPayload().path("toolSessionId").asText(null);
 
-        log.info("[CLOUD_AGENT] handleInvoke: ak={}, toolSessionId={}, traceId={}",
-                ak, toolSessionId, invokeMessage.getTraceId());
+        log.info("[CLOUD_AGENT] handleInvoke: ak={}, action={}, toolSessionId={}, traceId={}",
+                ak, action, toolSessionId, invokeMessage.getTraceId());
 
-        // 1. 获取路由信息
-        CloudRouteInfo routeInfo = cloudRouteService.getRouteInfo(ak);
-        if (routeInfo == null) {
-            log.warn("[CLOUD_AGENT] Route info not found: ak={}", ak);
-            GatewayMessage errorMsg = buildCloudError(invokeMessage, toolSessionId,
-                    new RuntimeException("Cloud route info not found for ak: " + ak));
-            onRelay.accept(errorMsg);
+        // 1. action → scope 映射
+        String scope = ACTION_TO_SCOPE.get(action);
+        if (scope == null) {
+            log.warn("[CLOUD_AGENT] unknown action: ak={}, action={}", ak, action);
+            onRelay.accept(buildCloudError(invokeMessage, toolSessionId,
+                    new RuntimeException("Unknown action: " + action)));
             return;
         }
 
-        // 2. 构建连接上下文
+        // 2. 拉取 (ak, scope) 对应的回调配置（v1/v2 由 service 内部按 SS SysConfig 决定）
+        CallbackConfig cfg = callbackConfigService.getConfig(ak, scope);
+        if (cfg == null) {
+            String reason = "chat".equals(action)
+                    ? "Cloud route info not found for ak: " + ak
+                    : action + " not enabled (v1 mode or AK not subscribed)";
+            log.warn("[CLOUD_AGENT] callback config missing: ak={}, scope={}, action={}", ak, scope, action);
+            onRelay.accept(buildCloudError(invokeMessage, toolSessionId, new RuntimeException(reason)));
+            return;
+        }
+
+        // 3. channelType vs action 校验：
+        //    - chat 必须 sse/websocket
+        //    - question_reply / permission_reply 必须 webhook
+        boolean expectsWebhook = !"chat".equals(action);
+        boolean isWebhook = "webhook".equals(cfg.getChannelType());
+        if (expectsWebhook != isWebhook) {
+            String msg = "chat".equals(action)
+                    ? "Invalid channel type for chat: " + cfg.getChannelType()
+                    : "Invalid channel type for reply: " + cfg.getChannelType();
+            log.warn("[CLOUD_AGENT] channel type mismatch: ak={}, action={}, channelType={}",
+                    ak, action, cfg.getChannelType());
+            onRelay.accept(buildCloudError(invokeMessage, toolSessionId, new RuntimeException(msg)));
+            return;
+        }
+
+        // 4. 构建连接上下文
         CloudConnectionContext context = CloudConnectionContext.builder()
-                .endpoint(routeInfo.getEndpoint())
+                .channelAddress(cfg.getChannelAddress())
+                .channelType(cfg.getChannelType())
+                .scope(scope)
+                .appId(cfg.getAppId())
+                .authType(cfg.getAuthType())
                 .cloudRequest(cloudRequest)
-                .appId(routeInfo.getAppId())
-                .authType(routeInfo.getAuthType())
                 .traceId(invokeMessage.getTraceId())
                 .build();
 
-        // 3. 兜底 messageId/partId（优先使用云端首个事件携带的 messageId，不存在时再生成）
+        // 5. 分叉
+        if (isWebhook) {
+            webHookExecutor.execute(context, onRelay, invokeMessage, toolSessionId);
+            return;
+        }
+
+        // 6. chat：SSE / WebSocket 走原 CloudProtocolClient 逻辑（保留 lifecycle / fallback messageId / fallback partId）
+        invokeStreaming(invokeMessage, onRelay, context, cfg.getChannelType(), ak, toolSessionId);
+    }
+
+    /**
+     * 调用流式协议（SSE / WebSocket）。保留原实现的全部行为：
+     * <ul>
+     *   <li>{@link CloudConnectionLifecycle} 三段超时（首事件 / 空闲 / 最大时长）</li>
+     *   <li>fallback messageId：优先沿用云端首个事件携带的 messageId，缺失则生成</li>
+     *   <li>fallback partId：按归一化后的事件类型分组，每类共享同一个 partId</li>
+     *   <li>errorSent CAS：超时或 onError 任一方触发后只回流一次 tool_error</li>
+     * </ul>
+     */
+    private void invokeStreaming(GatewayMessage invokeMessage,
+                                 Consumer<GatewayMessage> onRelay,
+                                 CloudConnectionContext context,
+                                 String protocol,
+                                 String ak,
+                                 String toolSessionId) {
         AtomicReference<String> fallbackMessageIdRef = new AtomicReference<>(null);
         ConcurrentHashMap<String, String> fallbackPartIds = new ConcurrentHashMap<>();
-
-        // 4. 创建连接生命周期管理器
         AtomicBoolean errorSent = new AtomicBoolean(false);
-        String protocol = routeInfo.getProtocol();
+
         CloudConnectionLifecycle lifecycle = new CloudConnectionLifecycle(
                 timeoutProperties.getFirstEventTimeoutSeconds(),
                 timeoutProperties.getEffectiveIdleTimeoutSeconds(protocol),
@@ -102,69 +165,66 @@ public class CloudAgentService {
                         ak, invokeMessage.getTraceId())
         );
 
-        // 5. 连接云端服务
         try {
-        cloudProtocolClient.connect(protocol, context, lifecycle,
-                event -> {
-                    // 注入路由上下文
-                    event.setAk(ak);
-                    event.setUserId(invokeMessage.getUserId());
-                    event.setWelinkSessionId(invokeMessage.getWelinkSessionId());
-                    event.setTraceId(invokeMessage.getTraceId());
-                    if (event.getToolSessionId() == null) {
-                        event.setToolSessionId(toolSessionId);
-                    }
-
-                    // 兜底：云端未传 messageId/partId 时 GW 自动补充
-                    // GatewayMessage.event 结构: {"type":"text.delta","properties":{"content":"..."}}
-                    // SS 的 CloudEventTranslator handler 从 event.properties 中读取字段
-                    // 所以注入到 properties 和 event 顶层都需要（properties 给 handler 读，顶层给 translate 方法读）
-                    JsonNode eventNode = event.getEvent();
-                    if (eventNode != null && !eventNode.isMissingNode() && eventNode.isObject()) {
-                        String eventType = eventNode.path("type").asText("");
-                        com.fasterxml.jackson.databind.node.ObjectNode eventObj =
-                                (com.fasterxml.jackson.databind.node.ObjectNode) eventNode;
-                        JsonNode props = eventObj.path("properties");
-                        com.fasterxml.jackson.databind.node.ObjectNode propsObj =
-                                (props != null && props.isObject())
-                                        ? (com.fasterxml.jackson.databind.node.ObjectNode) props : null;
-
-                        // messageId 兜底：优先从云端事件学习，不存在时生成
-                        String eventMsgId = (propsObj != null && propsObj.has("messageId"))
-                                ? propsObj.path("messageId").asText("") : "";
-                        if (!eventMsgId.isBlank()) {
-                            // 学习云端首个携带 messageId 的事件，作为后续的 fallback
-                            fallbackMessageIdRef.compareAndSet(null, eventMsgId);
-                        } else if (propsObj != null) {
-                            // 云端没传 messageId，使用已学习的或生成兜底
-                            String fallback = fallbackMessageIdRef.updateAndGet(current ->
-                                    current != null ? current
-                                            : "cloud-msg-" + UUID.randomUUID().toString().replace("-", ""));
-                            propsObj.put("messageId", fallback);
+            cloudProtocolClient.connect(protocol, context, lifecycle,
+                    event -> {
+                        // 注入路由上下文
+                        event.setAk(ak);
+                        event.setUserId(invokeMessage.getUserId());
+                        event.setWelinkSessionId(invokeMessage.getWelinkSessionId());
+                        event.setTraceId(invokeMessage.getTraceId());
+                        if (event.getToolSessionId() == null) {
+                            event.setToolSessionId(toolSessionId);
                         }
 
-                        // partId 兜底：注入到 properties 中
-                        boolean needPartId = propsObj == null
-                                || !propsObj.has("partId")
-                                || propsObj.path("partId").asText("").isBlank();
-                        if (needPartId && propsObj != null) {
-                            String normalizedType = normalizeEventType(eventType);
-                            String fbPartId = fallbackPartIds.computeIfAbsent(normalizedType,
-                                    t -> "cloud-part-" + t + "-" + UUID.randomUUID().toString().substring(0, 8));
-                            propsObj.put("partId", fbPartId);
-                        }
-                    }
+                        // 兜底：云端未传 messageId/partId 时 GW 自动补充
+                        // GatewayMessage.event 结构: {"type":"text.delta","properties":{"content":"..."}}
+                        // SS 的 CloudEventTranslator handler 从 event.properties 中读取字段
+                        // 所以注入到 properties 和 event 顶层都需要（properties 给 handler 读，顶层给 translate 方法读）
+                        JsonNode eventNode = event.getEvent();
+                        if (eventNode != null && !eventNode.isMissingNode() && eventNode.isObject()) {
+                            String eventType = eventNode.path("type").asText("");
+                            ObjectNode eventObj = (ObjectNode) eventNode;
+                            JsonNode props = eventObj.path("properties");
+                            ObjectNode propsObj = (props != null && props.isObject())
+                                    ? (ObjectNode) props : null;
 
-                    if (errorSent.get()) return;
-                    onRelay.accept(event);
-                },
-                error -> {
-                    log.error("[CLOUD_AGENT] Cloud connection error: ak={}, traceId={}, error={}",
-                            ak, invokeMessage.getTraceId(), error.getMessage());
-                    GatewayMessage errorMsg = buildCloudError(invokeMessage, toolSessionId, error);
-                    if (errorSent.compareAndSet(false, true)) { onRelay.accept(errorMsg); }
-                }
-        );
+                            // messageId 兜底：优先从云端事件学习，不存在时生成
+                            String eventMsgId = (propsObj != null && propsObj.has("messageId"))
+                                    ? propsObj.path("messageId").asText("") : "";
+                            if (!eventMsgId.isBlank()) {
+                                // 学习云端首个携带 messageId 的事件，作为后续的 fallback
+                                fallbackMessageIdRef.compareAndSet(null, eventMsgId);
+                            } else if (propsObj != null) {
+                                // 云端没传 messageId，使用已学习的或生成兜底
+                                String fallback = fallbackMessageIdRef.updateAndGet(current ->
+                                        current != null ? current
+                                                : "cloud-msg-" + UUID.randomUUID().toString().replace("-", ""));
+                                propsObj.put("messageId", fallback);
+                            }
+
+                            // partId 兜底：注入到 properties 中
+                            boolean needPartId = propsObj == null
+                                    || !propsObj.has("partId")
+                                    || propsObj.path("partId").asText("").isBlank();
+                            if (needPartId && propsObj != null) {
+                                String normalizedType = normalizeEventType(eventType);
+                                String fbPartId = fallbackPartIds.computeIfAbsent(normalizedType,
+                                        t -> "cloud-part-" + t + "-" + UUID.randomUUID().toString().substring(0, 8));
+                                propsObj.put("partId", fbPartId);
+                            }
+                        }
+
+                        if (errorSent.get()) return;
+                        onRelay.accept(event);
+                    },
+                    error -> {
+                        log.error("[CLOUD_AGENT] Cloud connection error: ak={}, traceId={}, error={}",
+                                ak, invokeMessage.getTraceId(), error.getMessage());
+                        GatewayMessage errorMsg = buildCloudError(invokeMessage, toolSessionId, error);
+                        if (errorSent.compareAndSet(false, true)) { onRelay.accept(errorMsg); }
+                    }
+            );
         } finally {
             lifecycle.close();
         }

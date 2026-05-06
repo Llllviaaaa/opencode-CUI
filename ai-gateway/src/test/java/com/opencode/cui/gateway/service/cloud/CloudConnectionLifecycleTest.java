@@ -8,6 +8,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 
 class CloudConnectionLifecycleTest {
@@ -141,5 +142,69 @@ class CloudConnectionLifecycleTest {
         lifecycle.close();
         lifecycle.close();
         lifecycle.close();
+    }
+
+    static class TimeoutCapture implements CloudConnectionLifecycle.TimeoutCallback {
+        final CountDownLatch latch = new CountDownLatch(1);
+        volatile String timeoutType;
+        volatile long elapsedSeconds;
+        @Override public void onTimeout(String type, long elapsed) {
+            this.timeoutType = type;
+            this.elapsedSeconds = elapsed;
+            latch.countDown();
+        }
+    }
+
+    @Test
+    @DisplayName("pauseIdleTimer: 暂停后 onEventReceived/onHeartbeat 不应重启 idle timer")
+    void pauseIdleTimer_preventsResetByOnEventReceived() throws Exception {
+        TimeoutCapture capture = new TimeoutCapture();
+        lifecycle = new CloudConnectionLifecycle(30, 1, 60, capture, () -> {});
+        lifecycle.onConnected();
+        lifecycle.onEventReceived();        // 启动 idle timer
+        lifecycle.pauseIdleTimer();
+        lifecycle.onEventReceived();        // 应被 no-op
+        lifecycle.onHeartbeat();            // 同上
+        // 等 2 秒（>idleTimeout=1），latch 应未触发
+        assertThat(capture.latch.await(2, TimeUnit.SECONDS)).isFalse();
+        assertThat(capture.timeoutType).isNull();   // pause 状态下 idle 永远不应触发
+    }
+
+    @Test
+    @DisplayName("resumeIdleTimer: 恢复后 idle timer 正常运行")
+    void resumeIdleTimer_restartsTimerNormally() throws Exception {
+        TimeoutCapture capture = new TimeoutCapture();
+        lifecycle = new CloudConnectionLifecycle(30, 1, 60, capture, () -> {});
+        lifecycle.onConnected();
+        lifecycle.pauseIdleTimer();
+        lifecycle.resumeIdleTimer();
+        assertThat(capture.latch.await(3, TimeUnit.SECONDS)).isTrue();
+        assertThat(capture.timeoutType).isEqualTo("idle_timeout");
+    }
+
+    @Test
+    @DisplayName("maxDuration: 即使在 paused 状态下也应触发")
+    void maxDuration_firesEvenInPausedState() throws Exception {
+        TimeoutCapture capture = new TimeoutCapture();
+        lifecycle = new CloudConnectionLifecycle(30, 100, 1, capture, () -> {});
+        lifecycle.onConnected();
+        lifecycle.pauseIdleTimer();
+        assertThat(capture.latch.await(3, TimeUnit.SECONDS)).isTrue();
+        assertThat(capture.timeoutType).isEqualTo("max_duration");
+    }
+
+    @Test
+    @DisplayName("pauseIdleTimer/resumeIdleTimer: 重复调用应幂等且安全")
+    void pauseIdleTimer_idempotent() throws Exception {
+        TimeoutCapture capture = new TimeoutCapture();
+        lifecycle = new CloudConnectionLifecycle(30, 1, 60, capture, () -> {});
+        lifecycle.onConnected();
+        lifecycle.pauseIdleTimer();
+        lifecycle.pauseIdleTimer();         // 不应抛错
+        lifecycle.resumeIdleTimer();
+        lifecycle.resumeIdleTimer();        // 第二次 resume 是 no-op
+        // resume 后第一次 idle timer 启动，应在 3s 内触发
+        assertThat(capture.latch.await(3, TimeUnit.SECONDS)).isTrue();
+        assertThat(capture.timeoutType).isEqualTo("idle_timeout");
     }
 }

@@ -1,6 +1,7 @@
 package com.opencode.cui.skill.service.scope;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -8,6 +9,7 @@ import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.CloudEventTranslator;
+import com.opencode.cui.skill.service.GatewayActions;
 import com.opencode.cui.skill.service.cloud.CloudRequestBuilder;
 import com.opencode.cui.skill.service.cloud.CloudRequestContext;
 import com.opencode.cui.skill.logging.MdcHelper;
@@ -15,6 +17,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -52,6 +55,7 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
     @Override
     public String buildInvoke(InvokeCommand command, AssistantInfo info) {
         String businessTag = info.getBusinessTag();
+        String action = command.action();
 
         // 从 command payload 提取 content
         String content = extractContent(command.payload());
@@ -61,6 +65,20 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
 
         // 取业务方扩展参数（缺省 / 非 object → null，由下方兜底为 {}）
         JsonNode businessExtParam = extractObjectField(command.payload(), "businessExtParam");
+
+        // 按 action 路由 reply 字段（chat → 全部 null）
+        String replyToolCallId = null;
+        List<List<String>> replyAnswers = null;
+        String replyPermissionId = null;
+        String replyResponse = null;
+        if (GatewayActions.QUESTION_REPLY.equals(action)) {
+            replyToolCallId = extractField(command.payload(), "toolCallId");
+            String answerRaw = extractField(command.payload(), "answer");
+            replyAnswers = parseAnswers(answerRaw);
+        } else if (GatewayActions.PERMISSION_REPLY.equals(action)) {
+            replyPermissionId = extractField(command.payload(), "permissionId");
+            replyResponse = extractField(command.payload(), "response");
+        }
 
         // 用 LinkedHashMap 保证 businessExtParam 序列化在 platformExtParam 之前（与协议文档示例一致）
         Map<String, Object> extParameters = new LinkedHashMap<>();
@@ -78,6 +96,10 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
                 .messageId(extractField(command.payload(), "messageId"))
                 .clientLang("zh")
                 .extParameters(extParameters)
+                .replyToolCallId(replyToolCallId)
+                .replyAnswers(replyAnswers)
+                .replyPermissionId(replyPermissionId)
+                .replyResponse(replyResponse)
                 .build();
 
         ObjectNode cloudRequest = cloudRequestBuilder.buildCloudRequest(businessTag, context);
@@ -133,6 +155,45 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
     @Override
     public StreamMessage translateEvent(JsonNode event, String sessionId) {
         return cloudEventTranslator.translate(event, sessionId);
+    }
+
+    // ------------------------------------------------------------------ package-private (testable)
+
+    /**
+     * 将 question_reply 的 raw answer 字符串规整为云端协议要求的 List&lt;List&lt;String&gt;&gt;。
+     * <ul>
+     *   <li>null / blank → [[""]]（兜底单空字符串）</li>
+     *   <li>stringified 嵌套数组（如 {@code [["A"],["B","C"]]}）→ 原样 List</li>
+     *   <li>stringified 一维数组（如 {@code ["A","B"]}）→ 包裹外层为 [["A","B"]]</li>
+     *   <li>普通文本 / 解析失败 → [[raw]]</li>
+     * </ul>
+     */
+    List<List<String>> parseAnswers(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of(List.of(""));
+        }
+        try {
+            JsonNode node = objectMapper.readTree(raw);
+            if (node.isArray() && !node.isEmpty()) {
+                boolean allArray = true;
+                for (JsonNode el : node) {
+                    if (!el.isArray()) {
+                        allArray = false;
+                        break;
+                    }
+                }
+                if (allArray) {
+                    return objectMapper.convertValue(node,
+                            new TypeReference<List<List<String>>>() {});
+                }
+                // 一维数组兜底
+                return List.of(objectMapper.convertValue(node,
+                        new TypeReference<List<String>>() {}));
+            }
+        } catch (Exception ignored) {
+            /* fall through to plain-text fallback */
+        }
+        return List.of(List.of(raw));
     }
 
     // ------------------------------------------------------------------ private

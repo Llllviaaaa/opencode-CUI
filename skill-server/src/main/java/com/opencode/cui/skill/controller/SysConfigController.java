@@ -45,6 +45,22 @@ public class SysConfigController {
     }
 
     /**
+     * GET /api/admin/configs/value?type={type}&key={key}
+     * 查询单条配置的 value（供 GW 等其它服务跨服务读取 SysConfig）。
+     *
+     * <p>响应 data: {@code {"configValue": "<value>"}}；配置不存在时 configValue 为 null。</p>
+     */
+    @GetMapping("/value")
+    public ResponseEntity<ApiResponse<java.util.Map<String, String>>> getValue(
+            @RequestParam("type") String configType,
+            @RequestParam("key") String configKey) {
+        String v = sysConfigService.getValue(configType, configKey);
+        java.util.Map<String, String> data = new java.util.HashMap<>();
+        data.put("configValue", v);
+        return ResponseEntity.ok(ApiResponse.ok(data));
+    }
+
+    /**
      * POST /api/admin/configs
      * 新增系统配置。
      */

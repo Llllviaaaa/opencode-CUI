@@ -126,7 +126,74 @@ class CloudEventTranslatorTest {
         assertNotNull(msg.getQuestionInfo());
         assertEquals("Continue?", msg.getQuestionInfo().getQuestion());
         assertEquals("Confirmation", msg.getQuestionInfo().getHeader());
-        assertEquals(List.of("Yes", "No"), msg.getQuestionInfo().getOptions());
+        assertEquals(List.of("Yes", "No"), msg.getQuestionInfo().getOptions().stream().map(com.opencode.cui.skill.model.StreamMessage.QuestionOption::getLabel).toList());
+    }
+
+    @Test
+    @DisplayName("question legacy single structure -> wraps to single-element questions list, extParam null")
+    void handleQuestion_legacySingleStructure_wrapsToSingleElementQuestions() throws Exception {
+        String json = """
+            {"type":"question","toolCallId":"call-1",
+             "header":"h","question":"q","options":["A","B"]}
+            """;
+        StreamMessage msg = translator.translate(om.readTree(json));
+
+        assertNotNull(msg);
+        assertNotNull(msg.getQuestionInfo());
+        assertNotNull(msg.getQuestionInfo().getQuestions());
+        assertEquals(1, msg.getQuestionInfo().getQuestions().size());
+        assertEquals("q", msg.getQuestionInfo().getQuestions().get(0).getQuestion());
+        assertEquals("h", msg.getQuestionInfo().getQuestions().get(0).getHeader());
+        assertEquals(List.of("A", "B"), msg.getQuestionInfo().getQuestions().get(0).getOptions().stream().map(com.opencode.cui.skill.model.StreamMessage.QuestionOption::getLabel).toList());
+        // 顶层兼容字段
+        assertEquals("h", msg.getQuestionInfo().getHeader());
+        assertEquals("q", msg.getQuestionInfo().getQuestion());
+        assertEquals(List.of("A", "B"), msg.getQuestionInfo().getOptions().stream().map(com.opencode.cui.skill.model.StreamMessage.QuestionOption::getLabel).toList());
+        assertNull(msg.getQuestionInfo().getExtParam());
+    }
+
+    @Test
+    @DisplayName("question with questions[] -> iterates all items, top-level fields take first")
+    void handleQuestion_questionsArray_iteratesAll() throws Exception {
+        String json = """
+            {"type":"question","toolCallId":"call-1",
+             "questions":[
+               {"header":"h1","question":"q1","options":["A"]},
+               {"question":"q2","options":["B","C"]}]}
+            """;
+        StreamMessage msg = translator.translate(om.readTree(json));
+
+        assertNotNull(msg);
+        assertNotNull(msg.getQuestionInfo());
+        assertNotNull(msg.getQuestionInfo().getQuestions());
+        assertEquals(2, msg.getQuestionInfo().getQuestions().size());
+        assertEquals("q1", msg.getQuestionInfo().getQuestions().get(0).getQuestion());
+        assertEquals("h1", msg.getQuestionInfo().getQuestions().get(0).getHeader());
+        assertEquals(List.of("A"), msg.getQuestionInfo().getQuestions().get(0).getOptions().stream().map(com.opencode.cui.skill.model.StreamMessage.QuestionOption::getLabel).toList());
+        assertEquals("q2", msg.getQuestionInfo().getQuestions().get(1).getQuestion());
+        assertNull(msg.getQuestionInfo().getQuestions().get(1).getHeader());
+        assertEquals(List.of("B", "C"), msg.getQuestionInfo().getQuestions().get(1).getOptions().stream().map(com.opencode.cui.skill.model.StreamMessage.QuestionOption::getLabel).toList());
+        // 顶层取第一个
+        assertEquals("q1", msg.getQuestionInfo().getQuestion());
+        assertEquals("h1", msg.getQuestionInfo().getHeader());
+        assertEquals(List.of("A"), msg.getQuestionInfo().getOptions().stream().map(com.opencode.cui.skill.model.StreamMessage.QuestionOption::getLabel).toList());
+    }
+
+    @Test
+    @DisplayName("question with extParam -> extParam passthrough as JsonNode")
+    void handleQuestion_extParamPassthrough() throws Exception {
+        String json = """
+            {"type":"question","toolCallId":"call-1",
+             "header":"h","question":"q","options":["A"],
+             "extParam":{"foo":"bar","nested":{"k":1}}}
+            """;
+        StreamMessage msg = translator.translate(om.readTree(json));
+
+        assertNotNull(msg);
+        assertNotNull(msg.getQuestionInfo());
+        assertNotNull(msg.getQuestionInfo().getExtParam());
+        assertEquals("bar", msg.getQuestionInfo().getExtParam().get("foo").asText());
+        assertEquals(1, msg.getQuestionInfo().getExtParam().get("nested").get("k").asInt());
     }
 
     // ==================== permission.ask ====================

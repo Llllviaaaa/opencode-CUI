@@ -74,7 +74,7 @@ class SseProtocolStrategyTest {
 
     private CloudConnectionContext buildContext() {
         return CloudConnectionContext.builder()
-                .endpoint("https://cloud.example.com/sse")
+                .channelAddress("https://cloud.example.com/sse")
                 .cloudRequest(objectMapper.valueToTree(java.util.Map.of("prompt", "hello")))
                 .appId("app_test")
                 .authType("soa")
@@ -303,5 +303,107 @@ class SseProtocolStrategyTest {
 
         verify(lifecycle).onTerminalEvent();
         verify(lifecycle, times(2)).onEventReceived();
+    }
+
+    // ==================== T13: question/permission 事件保活 ====================
+
+    @Test
+    @DisplayName("T13: event.type=question 触发 lifecycle.pauseIdleTimer()")
+    void sse_questionEvent_triggersPauseIdleTimer() throws Exception {
+        String sseStream = "data: {\"type\":\"tool_event\",\"toolSessionId\":\"ts-1\","
+                + "\"event\":{\"type\":\"question\",\"properties\":{\"toolCallId\":\"call-1\"}}}\n\n";
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
+
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
+
+        verify(lifecycle).pauseIdleTimer();
+        verify(lifecycle, never()).resumeIdleTimer();
+    }
+
+    @Test
+    @DisplayName("T13: event.type=permission.ask 触发 lifecycle.pauseIdleTimer()")
+    void sse_permissionAskEvent_triggersPause() throws Exception {
+        String sseStream = "data: {\"type\":\"tool_event\",\"toolSessionId\":\"ts-2\","
+                + "\"event\":{\"type\":\"permission.ask\",\"properties\":{\"permissionId\":\"p-1\"}}}\n\n";
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
+
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
+
+        verify(lifecycle).pauseIdleTimer();
+        verify(lifecycle, never()).resumeIdleTimer();
+    }
+
+    @Test
+    @DisplayName("T13: event.type=permission.reply 不调 pause；调 resume")
+    void sse_permissionReplyEvent_doesNotTriggerPause() throws Exception {
+        String sseStream = "data: {\"type\":\"tool_event\",\"toolSessionId\":\"ts-3\","
+                + "\"event\":{\"type\":\"permission.reply\",\"properties\":{\"permissionId\":\"p-1\"}}}\n\n";
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
+
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
+
+        verify(lifecycle, never()).pauseIdleTimer();
+        verify(lifecycle).resumeIdleTimer();
+    }
+
+    @Test
+    @DisplayName("T13: event.type=text.delta 触发 lifecycle.resumeIdleTimer()")
+    void sse_textDeltaEvent_triggersResume() throws Exception {
+        String sseStream = "data: {\"type\":\"tool_event\",\"toolSessionId\":\"ts-4\","
+                + "\"event\":{\"type\":\"text.delta\",\"properties\":{\"text\":\"hello\"}}}\n\n";
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
+
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
+
+        verify(lifecycle, never()).pauseIdleTimer();
+        verify(lifecycle).resumeIdleTimer();
+    }
+
+    @Test
+    @DisplayName("T13: appId=null 时 HTTP 请求不写 X-App-Id header")
+    void sse_appIdNull_skipsXAppIdHeader() throws Exception {
+        String sseStream = "data: [DONE]\n";
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        ArgumentCaptor<HttpRequest> requestCaptor = ArgumentCaptor.forClass(HttpRequest.class);
+        doReturn(response).when(strategy).sendRequest(requestCaptor.capture());
+
+        CloudConnectionContext context = CloudConnectionContext.builder()
+                .channelAddress("https://cloud.example.com/sse")
+                .cloudRequest(objectMapper.valueToTree(java.util.Map.of("prompt", "hello")))
+                .appId(null)
+                .authType("none")
+                .traceId("trace_null_app")
+                .build();
+
+        strategy.connect(context, lifecycle, onEvent, onError);
+
+        HttpRequest captured = requestCaptor.getValue();
+        // SseProtocolStrategy 自身不再写 X-App-Id；mock 的 cloudAuthService 也不会触发真正策略，
+        // 因此 X-App-Id 必须为空（同时验证不会出现重复写入）。
+        assertTrue(captured.headers().allValues("X-App-Id").isEmpty(),
+                "X-App-Id header MUST be absent when appId is null");
+    }
+
+    @Test
+    @DisplayName("T13: SseProtocolStrategy 自身不写 X-App-Id（由 cloudAuthService 内部 strategy 负责）")
+    void sse_appIdPresent_writesXAppIdHeader() throws Exception {
+        String sseStream = "data: [DONE]\n";
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        ArgumentCaptor<HttpRequest> requestCaptor = ArgumentCaptor.forClass(HttpRequest.class);
+        doReturn(response).when(strategy).sendRequest(requestCaptor.capture());
+
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
+
+        HttpRequest captured = requestCaptor.getValue();
+        // mock 的 cloudAuthService.applyAuth 不会真正调 SoaAuthStrategy 写入 X-App-Id；
+        // 此处断言 SseProtocolStrategy 自身不再写入 X-App-Id（防止两份重复写入回归）。
+        assertTrue(captured.headers().allValues("X-App-Id").isEmpty(),
+                "SseProtocolStrategy 不应直接写 X-App-Id（由 cloudAuthService 内部 strategy 写入）");
+        // 但 cloudAuthService.applyAuth 必须被调用一次。
+        verify(cloudAuthService).applyAuth(any(HttpRequest.Builder.class), eq("app_test"), eq("soa"));
     }
 }

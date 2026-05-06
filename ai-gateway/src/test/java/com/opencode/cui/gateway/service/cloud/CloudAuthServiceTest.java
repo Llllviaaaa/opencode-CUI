@@ -24,12 +24,14 @@ class CloudAuthServiceTest {
     private CloudAuthService cloudAuthService;
     private SoaAuthStrategy soaStrategy;
     private ApigAuthStrategy apigStrategy;
+    private NoAuthStrategy noAuthStrategy;
 
     @BeforeEach
     void setUp() {
         soaStrategy = new SoaAuthStrategy();
         apigStrategy = new ApigAuthStrategy();
-        cloudAuthService = new CloudAuthService(List.of(soaStrategy, apigStrategy));
+        noAuthStrategy = new NoAuthStrategy();
+        cloudAuthService = new CloudAuthService(List.of(soaStrategy, apigStrategy, noAuthStrategy));
     }
 
     @Nested
@@ -62,6 +64,53 @@ class CloudAuthServiceTest {
             assertEquals("apig", request.headers().firstValue("X-Auth-Type").get());
             assertTrue(request.headers().firstValue("X-App-Id").isPresent());
             assertEquals("app_456", request.headers().firstValue("X-App-Id").get());
+        }
+
+        @Test
+        @DisplayName("authType=none 时调度到 NoAuthStrategy 且不写入任何鉴权 header")
+        void applyAuth_noneAuthType_noHeaderWritten() {
+            HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://x.example"));
+
+            cloudAuthService.applyAuth(builder, null, "none");
+
+            HttpRequest request = builder.GET().build();
+            assertTrue(request.headers().firstValue("X-Auth-Type").isEmpty());
+            assertTrue(request.headers().firstValue("X-App-Id").isEmpty());
+        }
+
+        @Test
+        @DisplayName("SoaAuthStrategy: appId=null 时不写 X-App-Id（仅写 X-Auth-Type）")
+        void soaStrategy_appIdNull_skipsXAppIdHeader() {
+            HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://x.example"));
+
+            cloudAuthService.applyAuth(builder, null, "soa");
+
+            HttpRequest request = builder.GET().build();
+            assertEquals("soa", request.headers().firstValue("X-Auth-Type").orElse(null));
+            assertTrue(request.headers().allValues("X-App-Id").isEmpty());
+        }
+
+        @Test
+        @DisplayName("SoaAuthStrategy: appId 非空时仅写一次 X-App-Id（防重复回归）")
+        void soaStrategy_appIdPresent_writesXAppIdExactlyOnce() {
+            HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://x.example"));
+
+            cloudAuthService.applyAuth(builder, "app_only_once", "soa");
+
+            HttpRequest request = builder.GET().build();
+            assertEquals(List.of("app_only_once"), request.headers().allValues("X-App-Id"));
+        }
+
+        @Test
+        @DisplayName("ApigAuthStrategy: appId=null 时不写 X-App-Id（仅写 X-Auth-Type）")
+        void apigStrategy_appIdNull_skipsXAppIdHeader() {
+            HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://x.example"));
+
+            cloudAuthService.applyAuth(builder, null, "apig");
+
+            HttpRequest request = builder.GET().build();
+            assertEquals("apig", request.headers().firstValue("X-Auth-Type").orElse(null));
+            assertTrue(request.headers().allValues("X-App-Id").isEmpty());
         }
     }
 
