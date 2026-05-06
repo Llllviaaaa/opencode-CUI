@@ -590,7 +590,8 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"question","
 | partId | String | | 片段 ID |
 | header | String | | 问题标题 |
 | question | String | ✅ | 问题内容 |
-| options | List\<String\> | | 可选项列表（无则为开放式问答） |
+| options | List\<Option\> | | 可选项列表，元素可以是字符串或 `{label, description?}` 对象（见下方"Option 形态"） |
+| multiSelect | Boolean | | 是否多选（`true`=多选 / 缺省 / `false`=单选）；前端据此渲染单选 / 多选 UI |
 | extParam | Object | | 云端定义的扩展属性，平台原样透传（见下方说明） |
 
 **形态 2（多问题数组，OpenCode 风格，平台兼容）**：
@@ -599,8 +600,10 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"question","
 {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"question",
   "properties":{"toolCallId":"call-002","messageId":"msg-001","partId":"prt-q-01",
     "questions":[
-      {"header":"...", "question":"...", "options":[...]},
-      {"header":"...", "question":"...", "options":[...]}
+      {"header":"请选择部门", "question":"...", "options":["IT","研发"], "multiSelect":false},
+      {"header":"时间范围", "question":"...",
+       "options":[{"label":"本月","description":"30 天"},{"label":"本年"}],
+       "multiSelect":true}
     ],
     "extParam":{ /* 任意 JSON，云端定义，平台原样透传到 SS / miniapp / external WS */ }
   }}}
@@ -608,11 +611,20 @@ data: {"type":"tool_event","toolSessionId":"ts-789","event":{"type":"question","
 
 | properties 字段 | 类型 | 必填 | 说明 |
 |----------------|------|------|------|
-| toolCallId | String | ✅ | 工具调用 ID（用户回答时需回传） |
+| toolCallId | String | ✅ | 工具调用 ID（用户回答时需回传，关联整个 questions 列表） |
 | messageId | String | | 消息 ID |
 | partId | String | | 片段 ID |
-| questions | List\<Object\> | ✅ | 问题数组，每项含 `header` / `question` / `options` |
+| questions | List\<Object\> | ✅ | 问题数组，每项含 `header` / `question` / `options` / `multiSelect` |
 | extParam | Object | | 云端定义的扩展属性，平台原样透传（见下方说明） |
+
+**Option 形态**（`options` 数组每个元素）：
+
+| 形态 | 示例 | 说明 |
+|---|---|---|
+| 字符串 | `"IT部"` | 简单选项，等价 `{label:"IT部"}` |
+| 对象 | `{"label":"研发部","description":"技术与产品"}` | 含选项解释，前端可在选项下方展示 description |
+
+平台解析后在 SS 端统一规范化为 `QuestionOption{label, description?}` 投递；缺 `label` 或 `label` 为空白的元素被丢弃。q_r 应答时 `answers[i][j]` **只回传 `label` 字符串**（不需要回 description）。
 
 **`extParam` 字段**（对两种形态均可选）：云端定义的扩展属性对象，平台不解析、不修改，原样透传到 SS（QuestionInfo.extParam）→ miniapp / external WS。
 

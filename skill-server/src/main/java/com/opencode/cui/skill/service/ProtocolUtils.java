@@ -86,21 +86,25 @@ public final class ProtocolUtils {
     }
 
     /**
-     * 从 question 节点中提取选项列表。
-     * 支持纯文本数组和 {label: "..."} 对象数组两种格式。
-     * 统一替代 OpenCodeEventTranslator.extractQuestionOptions 和
-     * ProtocolMessageMapper.normalizeQuestionOptions 中的重复实现。
+     * 从 question 节点中提取选项列表（含 label + 可选 description）。
+     *
+     * <p>对齐 OpenCode question 工具 {@code options} 入参的两种形态：</p>
+     * <ul>
+     *   <li>纯字符串 {@code ["A", "B"]} → 每项 {@code QuestionOption(label, null)}</li>
+     *   <li>对象数组 {@code [{label, description?}, ...]} → 完整保留</li>
+     * </ul>
      *
      * @return 选项列表，无选项时返回 null
      */
-    public static List<String> extractQuestionOptions(JsonNode optionsNode) {
+    public static List<com.opencode.cui.skill.model.StreamMessage.QuestionOption> extractQuestionOptions(JsonNode optionsNode) {
         if (optionsNode == null || !optionsNode.isArray()) {
             return null;
         }
 
-        List<String> options = new ArrayList<>();
+        List<com.opencode.cui.skill.model.StreamMessage.QuestionOption> options = new ArrayList<>();
         for (JsonNode optionNode : optionsNode) {
             String label = null;
+            String description = null;
             if (optionNode.isTextual()) {
                 label = optionNode.asText();
             } else if (optionNode.isObject()) {
@@ -108,9 +112,17 @@ public final class ProtocolUtils {
                 if (labelNode != null && labelNode.isTextual()) {
                     label = labelNode.asText();
                 }
+                JsonNode descNode = optionNode.get("description");
+                if (descNode != null && descNode.isTextual()) {
+                    String d = descNode.asText();
+                    description = (d == null || d.isBlank()) ? null : d;
+                }
             }
             if (label != null && !label.isBlank()) {
-                options.add(label);
+                options.add(com.opencode.cui.skill.model.StreamMessage.QuestionOption.builder()
+                        .label(label)
+                        .description(description)
+                        .build());
             }
         }
         return options.isEmpty() ? null : options;

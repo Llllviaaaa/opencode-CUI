@@ -66,7 +66,8 @@ public class ImRestDeliveryStrategy implements OutboundDeliveryStrategy {
         if (msg.getQuestionInfo().getOptions() != null && !msg.getQuestionInfo().getOptions().isEmpty()) {
             text.append('\n');
             for (int i = 0; i < msg.getQuestionInfo().getOptions().size(); i++) {
-                text.append(i + 1).append(". ").append(msg.getQuestionInfo().getOptions().get(i)).append('\n');
+                text.append(i + 1).append(". ")
+                        .append(msg.getQuestionInfo().getOptions().get(i).getLabel()).append('\n');
             }
         }
         return text.isEmpty() ? null : text.toString().trim();

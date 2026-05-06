@@ -126,7 +126,7 @@ class CloudEventTranslatorTest {
         assertNotNull(msg.getQuestionInfo());
         assertEquals("Continue?", msg.getQuestionInfo().getQuestion());
         assertEquals("Confirmation", msg.getQuestionInfo().getHeader());
-        assertEquals(List.of("Yes", "No"), msg.getQuestionInfo().getOptions());
+        assertEquals(List.of("Yes", "No"), msg.getQuestionInfo().getOptions().stream().map(com.opencode.cui.skill.model.StreamMessage.QuestionOption::getLabel).toList());
     }
 
     @Test
@@ -144,11 +144,11 @@ class CloudEventTranslatorTest {
         assertEquals(1, msg.getQuestionInfo().getQuestions().size());
         assertEquals("q", msg.getQuestionInfo().getQuestions().get(0).getQuestion());
         assertEquals("h", msg.getQuestionInfo().getQuestions().get(0).getHeader());
-        assertEquals(List.of("A", "B"), msg.getQuestionInfo().getQuestions().get(0).getOptions());
+        assertEquals(List.of("A", "B"), msg.getQuestionInfo().getQuestions().get(0).getOptions().stream().map(com.opencode.cui.skill.model.StreamMessage.QuestionOption::getLabel).toList());
         // 顶层兼容字段
         assertEquals("h", msg.getQuestionInfo().getHeader());
         assertEquals("q", msg.getQuestionInfo().getQuestion());
-        assertEquals(List.of("A", "B"), msg.getQuestionInfo().getOptions());
+        assertEquals(List.of("A", "B"), msg.getQuestionInfo().getOptions().stream().map(com.opencode.cui.skill.model.StreamMessage.QuestionOption::getLabel).toList());
         assertNull(msg.getQuestionInfo().getExtParam());
     }
 
@@ -169,14 +169,14 @@ class CloudEventTranslatorTest {
         assertEquals(2, msg.getQuestionInfo().getQuestions().size());
         assertEquals("q1", msg.getQuestionInfo().getQuestions().get(0).getQuestion());
         assertEquals("h1", msg.getQuestionInfo().getQuestions().get(0).getHeader());
-        assertEquals(List.of("A"), msg.getQuestionInfo().getQuestions().get(0).getOptions());
+        assertEquals(List.of("A"), msg.getQuestionInfo().getQuestions().get(0).getOptions().stream().map(com.opencode.cui.skill.model.StreamMessage.QuestionOption::getLabel).toList());
         assertEquals("q2", msg.getQuestionInfo().getQuestions().get(1).getQuestion());
         assertNull(msg.getQuestionInfo().getQuestions().get(1).getHeader());
-        assertEquals(List.of("B", "C"), msg.getQuestionInfo().getQuestions().get(1).getOptions());
+        assertEquals(List.of("B", "C"), msg.getQuestionInfo().getQuestions().get(1).getOptions().stream().map(com.opencode.cui.skill.model.StreamMessage.QuestionOption::getLabel).toList());
         // 顶层取第一个
         assertEquals("q1", msg.getQuestionInfo().getQuestion());
         assertEquals("h1", msg.getQuestionInfo().getHeader());
-        assertEquals(List.of("A"), msg.getQuestionInfo().getOptions());
+        assertEquals(List.of("A"), msg.getQuestionInfo().getOptions().stream().map(com.opencode.cui.skill.model.StreamMessage.QuestionOption::getLabel).toList());
     }
 
     @Test
