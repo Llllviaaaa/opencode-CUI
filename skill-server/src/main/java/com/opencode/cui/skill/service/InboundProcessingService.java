@@ -66,6 +66,8 @@ public class InboundProcessingService {
     private final AssistantOfflineMessageProvider offlineMessageProvider;
     private final SkillSessionService sessionService;
     private final StringRedisTemplate redisTemplate;
+    private final ChannelLookupService channelLookupService;
+    private final ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService;
 
     public InboundProcessingService(
             AssistantAccountResolverService resolverService,
@@ -84,7 +86,9 @@ public class InboundProcessingService {
             RedisMessageBroker redisMessageBroker,
             AssistantOfflineMessageProvider offlineMessageProvider,
             SkillSessionService sessionService,
-            StringRedisTemplate redisTemplate) {
+            StringRedisTemplate redisTemplate,
+            ChannelLookupService channelLookupService,
+            ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService) {
         this.resolverService = resolverService;
         this.assistantIdProperties = assistantIdProperties;
         this.gatewayApiClient = gatewayApiClient;
@@ -102,6 +106,8 @@ public class InboundProcessingService {
         this.offlineMessageProvider = offlineMessageProvider;
         this.sessionService = sessionService;
         this.redisTemplate = redisTemplate;
+        this.channelLookupService = channelLookupService;
+        this.channelSuppressReplyWhitelistService = channelSuppressReplyWhitelistService;
     }
 
     /**
@@ -338,10 +344,26 @@ public class InboundProcessingService {
         payloadFields.put("imGroupId", "group".equals(sessionType) ? sessionId : null);
         payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
         payloadFields.put("businessExtParam", businessExtParam);
+
+        // 群聊场景下：解析该 ak 当前 channel（plugin toolType），命中"禁群聊"白名单则置 suppressReply=true。
+        // 单聊或未命中：suppressReply 维持 null，buildInvokeMessage 不会写入 INVOKE 报文。
+        Boolean suppressReply = null;
+        if ("group".equals(sessionType)) {
+            boolean suppress = channelLookupService.getToolType(ak)
+                    .map(channelSuppressReplyWhitelistService::shouldSuppress)
+                    .orElse(false);
+            if (suppress) {
+                suppressReply = Boolean.TRUE;
+                log.info("[SKIP] dispatchChatToGateway.suppressReply: reason=channel_in_group_blocklist, ak={}, sessionId={}, welinkSessionId={}",
+                        ak, sessionId, session.getId());
+            }
+        }
+
         gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
                 ak, ownerWelinkId, String.valueOf(session.getId()),
                 GatewayActions.CHAT,
-                PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields)));
+                PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields),
+                suppressReply));
 
         writeInvokeSource(session, inboundSource);
         return InboundResult.ok(sessionId, String.valueOf(session.getId()));

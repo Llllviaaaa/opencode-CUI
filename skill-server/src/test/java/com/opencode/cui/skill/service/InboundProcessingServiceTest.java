@@ -67,6 +67,10 @@ class InboundProcessingServiceTest {
     private StringRedisTemplate redisTemplate;
     @Mock
     private ValueOperations<String, String> valueOperations;
+    @Mock
+    private ChannelLookupService channelLookupService;
+    @Mock
+    private ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService;
 
     private AssistantIdProperties assistantIdProperties;
     private DeliveryProperties deliveryProperties;
@@ -100,7 +104,9 @@ class InboundProcessingServiceTest {
                 redisMessageBroker,
                 offlineMessageProvider,
                 sessionService,
-                redisTemplate);
+                redisTemplate,
+                channelLookupService,
+                channelSuppressReplyWhitelistService);
 
         // 默认 scope 策略：personal（requiresOnlineCheck=true）
         AssistantScopeStrategy personalStrategy = mock(AssistantScopeStrategy.class);
@@ -125,6 +131,10 @@ class InboundProcessingServiceTest {
 
         // 助理删除文案（用于 NOT_EXISTS 410 分支）
         lenient().when(resolverService.getDeletionMessage()).thenReturn("该助理已被删除");
+
+        // 默认 channel 查询行为：不命中白名单（即默认不抑制）
+        lenient().when(channelLookupService.getToolType(any())).thenReturn(java.util.Optional.empty());
+        lenient().when(channelSuppressReplyWhitelistService.shouldSuppress(any())).thenReturn(false);
     }
 
     // ==================== processChat ====================
@@ -336,6 +346,110 @@ class InboundProcessingServiceTest {
         JsonNode payload = objectMapper.readTree(captor.getValue().payload());
         assertEquals("owner-001", payload.get("sendUserAccount").asText(),
                 "group chat with null sender should fall back to ownerWelinkId");
+    }
+
+    // ==================== suppressReply 4-branch matrix（PRD AC） ====================
+    // 矩阵：sessionType ∈ {group, direct} × channel ∈ {whitelist hit, miss}
+    // 期望：仅 group + hit → suppressReply == TRUE；其余三档 == null。
+
+    @Test
+    @DisplayName("dispatchChatToGateway: groupChat + channelInWhitelist → suppressReply=TRUE")
+    void dispatchChatToGateway_groupChat_channelInWhitelist_setsSuppressReply() {
+        SkillSession session = buildReadySession();
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
+        when(sessionManager.findSession("im", "group", "grp-001", "ak-001"))
+                .thenReturn(session);
+        when(contextInjectionService.resolvePrompt(eq("group"), eq("hello"), any()))
+                .thenReturn("hello");
+        when(channelLookupService.getToolType("ak-001"))
+                .thenReturn(java.util.Optional.of("opencode"));
+        when(channelSuppressReplyWhitelistService.shouldSuppress("opencode")).thenReturn(true);
+
+        InboundResult result = service.processChat(
+                "im", "group", "grp-001", "assist-001",
+                "user-x", "hello", "text", null, null, "IM", null);
+
+        assertTrue(result.success());
+        ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
+        assertEquals(Boolean.TRUE, captor.getValue().suppressReply(),
+                "group + whitelist hit should mark suppressReply=true");
+    }
+
+    @Test
+    @DisplayName("dispatchChatToGateway: groupChat + channelNotInWhitelist → suppressReply=null")
+    void dispatchChatToGateway_groupChat_channelNotInWhitelist_noSuppress() {
+        SkillSession session = buildReadySession();
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
+        when(sessionManager.findSession("im", "group", "grp-001", "ak-001"))
+                .thenReturn(session);
+        when(contextInjectionService.resolvePrompt(eq("group"), eq("hello"), any()))
+                .thenReturn("hello");
+        when(channelLookupService.getToolType("ak-001"))
+                .thenReturn(java.util.Optional.of("assistant"));
+        when(channelSuppressReplyWhitelistService.shouldSuppress("assistant")).thenReturn(false);
+
+        InboundResult result = service.processChat(
+                "im", "group", "grp-001", "assist-001",
+                "user-x", "hello", "text", null, null, "IM", null);
+
+        assertTrue(result.success());
+        ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
+        assertNull(captor.getValue().suppressReply(),
+                "group + whitelist miss should leave suppressReply=null");
+    }
+
+    @Test
+    @DisplayName("dispatchChatToGateway: directChat + channelInWhitelist → suppressReply=null（白名单仅群聊生效）")
+    void dispatchChatToGateway_directChat_channelInWhitelist_noSuppress() {
+        SkillSession session = buildReadySession();
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
+        when(sessionManager.findSession("im", "direct", "dm-001", "ak-001"))
+                .thenReturn(session);
+        when(contextInjectionService.resolvePrompt("direct", "hello", null))
+                .thenReturn("hello");
+        // 即便 channel 在白名单，单聊也不应触发 suppressReply
+        lenient().when(channelLookupService.getToolType("ak-001"))
+                .thenReturn(java.util.Optional.of("opencode"));
+        lenient().when(channelSuppressReplyWhitelistService.shouldSuppress("opencode")).thenReturn(true);
+
+        InboundResult result = service.processChat(
+                "im", "direct", "dm-001", "assist-001",
+                null, "hello", "text", null, null, "IM", null);
+
+        assertTrue(result.success());
+        ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
+        assertNull(captor.getValue().suppressReply(),
+                "direct chat must never set suppressReply, regardless of whitelist");
+        // 关键：单聊路径不应查询白名单（避免无谓 RPC / DB 调用）
+        verify(channelSuppressReplyWhitelistService, never()).shouldSuppress(anyString());
+    }
+
+    @Test
+    @DisplayName("dispatchChatToGateway: directChat + channelNotInWhitelist → suppressReply=null")
+    void dispatchChatToGateway_directChat_channelNotInWhitelist_noSuppress() {
+        SkillSession session = buildReadySession();
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
+        when(sessionManager.findSession("im", "direct", "dm-001", "ak-001"))
+                .thenReturn(session);
+        when(contextInjectionService.resolvePrompt("direct", "hello", null))
+                .thenReturn("hello");
+
+        InboundResult result = service.processChat(
+                "im", "direct", "dm-001", "assist-001",
+                null, "hello", "text", null, null, "IM", null);
+
+        assertTrue(result.success());
+        ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
+        assertNull(captor.getValue().suppressReply());
+        verify(channelSuppressReplyWhitelistService, never()).shouldSuppress(anyString());
     }
 
     // ==================== processQuestionReply ====================

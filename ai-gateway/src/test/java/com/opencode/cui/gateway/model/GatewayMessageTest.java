@@ -235,4 +235,28 @@ class GatewayMessageTest {
 
         assertFalse(json.contains("gatewayInstanceId"));
     }
+
+    // ==================== suppressReply 字段 ====================
+
+    @Test
+    void testSuppressReplySerializationRoundTrip() throws Exception {
+        JsonNode payload = objectMapper.readTree("{\"text\":\"hello\"}");
+        GatewayMessage msg = GatewayMessage.invoke("ak-001", "42", "chat", payload)
+                .toBuilder().suppressReply(Boolean.TRUE).build();
+
+        String json = objectMapper.writeValueAsString(msg);
+        assertTrue(json.contains("\"suppressReply\":true"));
+
+        GatewayMessage deserialized = objectMapper.readValue(json, GatewayMessage.class);
+        assertEquals(Boolean.TRUE, deserialized.getSuppressReply());
+    }
+
+    @Test
+    void testSuppressReplyNullNotSerialized() throws Exception {
+        JsonNode payload = objectMapper.readTree("{\"text\":\"hello\"}");
+        GatewayMessage msg = GatewayMessage.invoke("ak-001", "42", "chat", payload);
+
+        String json = objectMapper.writeValueAsString(msg);
+        assertFalse(json.contains("suppressReply"));
+    }
 }
