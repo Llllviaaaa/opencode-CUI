@@ -213,15 +213,22 @@ public class MessagePersistenceService {
             return null;
         }
 
-        // 先查 Redis 缓冲中的 pending permission part
+        // 必须按 toolCallId 精确关联到触发它的 pending permission；否则在多 permission 并发
+        // 场景下会把无关 permission 错误地标记为 resolved（前端表现为「点 1 → 4 也变已选择」）。
+        String toolCallId = msg.getTool() != null ? msg.getTool().getToolCallId() : null;
+        if (toolCallId == null || toolCallId.isBlank()) {
+            return null;
+        }
+
+        // 先查 Redis 缓冲中按 toolCallId 精确匹配的 pending permission part
         ActiveMessageTracker.ActiveMessageRef active = tracker.getActiveMessage(sessionId);
         SkillMessagePart pendingPart = null;
         if (active != null) {
-            pendingPart = partBufferService.findLatestPendingPermission(active.dbId());
+            pendingPart = partBufferService.findPendingPermissionByToolCallId(active.dbId(), toolCallId);
         }
         // 降级查 DB（兼容 takeover 后已刷盘的场景）
         if (pendingPart == null) {
-            pendingPart = partRepository.findLatestPendingPermissionPart(sessionId);
+            pendingPart = partRepository.findPendingPermissionPartByToolCallId(sessionId, toolCallId);
         }
         if (pendingPart == null) {
             return null;

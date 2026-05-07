@@ -399,6 +399,88 @@ class MessagePersistenceServiceTest {
     }
 
     @Test
+    @DisplayName("synthesize uses tool.toolCallId to find the pending permission, not the latest one")
+    void synthesizePermissionReplyMatchesByToolCallId() {
+        SkillMessagePart pending = SkillMessagePart.builder()
+                .id(2L).messageId(11L).sessionId(1L)
+                .partId("part-A").seq(1).partType("permission")
+                .toolCallId("perm-A").toolName("write")
+                .content("approve write?")
+                .build();
+        when(partRepository.findPendingPermissionPartByToolCallId(1L, "perm-A")).thenReturn(pending);
+        when(messageService.findById(11L)).thenReturn(SkillMessage.builder()
+                .id(11L).messageId("msg_1_1").build());
+
+        StreamMessage toolUpdate = StreamMessage.builder()
+                .type(StreamMessage.Types.TOOL_UPDATE)
+                .status("completed")
+                .tool(StreamMessage.ToolInfo.builder()
+                        .toolName("write")
+                        .toolCallId("perm-A")
+                        .output("ok")
+                        .build())
+                .build();
+
+        StreamMessage reply = service.synthesizePermissionReplyFromToolOutcome(1L, toolUpdate);
+
+        assertThat(reply).isNotNull();
+        assertThat(reply.getType()).isEqualTo(StreamMessage.Types.PERMISSION_REPLY);
+        assertThat(reply.getPartId()).isEqualTo("part-A");
+        assertThat(reply.getPermission().getPermissionId()).isEqualTo("perm-A");
+        assertThat(reply.getPermission().getResponse()).isEqualTo("once");
+        // 关键：未来无论 buffer/DB 里还有多少更晚的 pending permission，都不会被命中。
+        verify(partRepository).findPendingPermissionPartByToolCallId(1L, "perm-A");
+    }
+
+    @Test
+    @DisplayName("synthesize returns null when tool.update lacks toolCallId")
+    void synthesizeReturnsNullWhenNoToolCallId() {
+        StreamMessage toolUpdate = StreamMessage.builder()
+                .type(StreamMessage.Types.TOOL_UPDATE)
+                .status("completed")
+                .tool(StreamMessage.ToolInfo.builder().toolName("write").output("ok").build())
+                .build();
+
+        StreamMessage reply = service.synthesizePermissionReplyFromToolOutcome(1L, toolUpdate);
+
+        assertThat(reply).isNull();
+        verify(partRepository, never()).findPendingPermissionPartByToolCallId(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("synthesize returns null when no permission part matches the toolCallId")
+    void synthesizeReturnsNullWhenNoPendingMatchesToolCallId() {
+        when(partRepository.findPendingPermissionPartByToolCallId(1L, "perm-A")).thenReturn(null);
+
+        StreamMessage toolUpdate = StreamMessage.builder()
+                .type(StreamMessage.Types.TOOL_UPDATE)
+                .status("error")
+                .error("Error: The user rejected permission to use this specific tool call.")
+                .tool(StreamMessage.ToolInfo.builder().toolName("bash").toolCallId("perm-A").build())
+                .build();
+
+        StreamMessage reply = service.synthesizePermissionReplyFromToolOutcome(1L, toolUpdate);
+
+        assertThat(reply).isNull();
+    }
+
+    @Test
+    @DisplayName("synthesize returns null when tool error is not a permission rejection")
+    void synthesizePlainToolErrorIgnored() {
+        StreamMessage toolUpdate = StreamMessage.builder()
+                .type(StreamMessage.Types.TOOL_UPDATE)
+                .status("error")
+                .error("Error: command failed")
+                .tool(StreamMessage.ToolInfo.builder().toolName("bash").toolCallId("perm-A").build())
+                .build();
+
+        StreamMessage reply = service.synthesizePermissionReplyFromToolOutcome(1L, toolUpdate);
+
+        assertThat(reply).isNull();
+        verify(partRepository, never()).findPendingPermissionPartByToolCallId(anyLong(), any());
+    }
+
+    @Test
     @DisplayName("permission_reply with active context persists immediately to overwrite status/response")
     void permissionReplyPersistsImmediatelyWhenActiveExists() {
         setupActiveMessage();
