@@ -26,8 +26,12 @@ public interface SkillMessagePartRepository {
     SkillMessagePart findByPartId(@Param("sessionId") Long sessionId,
             @Param("partId") String partId);
 
-    /** 查询指定会话中最新的待处理权限分片 */
-    SkillMessagePart findLatestPendingPermissionPart(@Param("sessionId") Long sessionId);
+    /**
+     * 按 toolCallId 精确查找仍待处理的权限分片。
+     * permission part 的 tool_call_id 字段存的就是 opencode 的 callID（即协议层 permissionId）。
+     */
+    SkillMessagePart findPendingPermissionPartByToolCallId(@Param("sessionId") Long sessionId,
+            @Param("toolCallId") String toolCallId);
 
     /** 按所属消息 ID 查询所有分片 */
     List<SkillMessagePart> findByMessageId(@Param("messageId") Long messageId);

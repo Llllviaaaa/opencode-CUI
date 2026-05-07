@@ -325,23 +325,28 @@ public class PartBufferService {
     }
 
     /**
-     * 从 Redis 缓冲中反向查找最新的 pending permission part。
-     * pending 定义：partType=permission 且 toolOutput 为 null 或空。
+     * 从 Redis 缓冲中按 toolCallId 精确查找仍 pending 的 permission part。
      *
-     * @return 找到的 pending permission part，未找到返回 null
+     * <p>permission part 的 {@code tool_call_id} 字段存的就是 opencode 的 callID
+     * （也是协议层的 permissionId）。此方法用于把 {@code tool.update} 的 toolCallId
+     * 关联回触发它的那条 permission，避免在多个 permission 同时 pending 时取错。
+     *
+     * @return 命中的 pending permission part，找不到返回 null
      */
-    public SkillMessagePart findLatestPendingPermission(Long messageDbId) {
+    public SkillMessagePart findPendingPermissionByToolCallId(Long messageDbId, String toolCallId) {
+        if (toolCallId == null || toolCallId.isEmpty()) {
+            return null;
+        }
         String bufKey = BUF_PREFIX + messageDbId;
         List<String> jsonList = redis.opsForList().range(bufKey, 0, -1);
         if (jsonList == null || jsonList.isEmpty()) {
             return null;
         }
-
-        // 反向遍历，找最新的 pending permission
         for (int i = jsonList.size() - 1; i >= 0; i--) {
             try {
                 SkillMessagePart part = objectMapper.readValue(jsonList.get(i), SkillMessagePart.class);
                 if ("permission".equals(part.getPartType())
+                        && toolCallId.equals(part.getToolCallId())
                         && (part.getToolOutput() == null || part.getToolOutput().isEmpty())) {
                     return part;
                 }

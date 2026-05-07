@@ -105,41 +105,75 @@ class PartBufferServiceTest {
     }
 
     @Test
-    @DisplayName("findLatestPendingPermission finds permission part with no response from buffer")
-    void findLatestPendingPermission() throws Exception {
-        SkillMessagePart textPart = SkillMessagePart.builder()
+    @DisplayName("findPendingPermissionByToolCallId hits exact pending permission, not the latest one")
+    void findPendingPermissionByToolCallIdMatchesByToolCallId() throws Exception {
+        // 多个 pending permission 同时存在；查 perm-A 时不能错返最新入队的 perm-D
+        SkillMessagePart permA = SkillMessagePart.builder()
                 .id(1L).messageId(100L).sessionId(10L)
-                .partId("p1").seq(1).partType("text").content("hi")
+                .partId("part-A").seq(1).partType("permission")
+                .toolCallId("perm-A").toolName("write")
                 .build();
-        SkillMessagePart permPart = SkillMessagePart.builder()
+        SkillMessagePart permB = SkillMessagePart.builder()
                 .id(2L).messageId(100L).sessionId(10L)
-                .partId("perm-1").seq(2).partType("permission")
-                .toolCallId("perm-1").toolName("Bash")
+                .partId("part-B").seq(2).partType("permission")
+                .toolCallId("perm-B").toolName("bash")
+                .build();
+        SkillMessagePart permD = SkillMessagePart.builder()
+                .id(3L).messageId(100L).sessionId(10L)
+                .partId("part-D").seq(3).partType("permission")
+                .toolCallId("perm-D").toolName("bash")
                 .build();
 
-        String json1 = objectMapper.writeValueAsString(textPart);
-        String json2 = objectMapper.writeValueAsString(permPart);
-        when(listOps.range("ss:part-buf:100", 0, -1)).thenReturn(List.of(json1, json2));
+        when(listOps.range("ss:part-buf:100", 0, -1)).thenReturn(List.of(
+                objectMapper.writeValueAsString(permA),
+                objectMapper.writeValueAsString(permB),
+                objectMapper.writeValueAsString(permD)));
 
-        SkillMessagePart result = service.findLatestPendingPermission(100L);
+        SkillMessagePart result = service.findPendingPermissionByToolCallId(100L, "perm-A");
 
         assertThat(result).isNotNull();
-        assertThat(result.getPartId()).isEqualTo("perm-1");
+        assertThat(result.getPartId()).isEqualTo("part-A");
+        assertThat(result.getToolCallId()).isEqualTo("perm-A");
     }
 
     @Test
-    @DisplayName("findLatestPendingPermission returns null if permission already has response")
-    void findLatestPendingPermissionCompleted() throws Exception {
-        SkillMessagePart permPart = SkillMessagePart.builder()
-                .id(2L).messageId(100L).sessionId(10L)
-                .partId("perm-1").seq(2).partType("permission")
-                .toolCallId("perm-1").toolOutput("once")
+    @DisplayName("findPendingPermissionByToolCallId returns null if matching permission is already resolved")
+    void findPendingPermissionByToolCallIdSkipsResolved() throws Exception {
+        SkillMessagePart resolved = SkillMessagePart.builder()
+                .id(1L).messageId(100L).sessionId(10L)
+                .partId("part-A").seq(1).partType("permission")
+                .toolCallId("perm-A").toolOutput("once")
                 .build();
 
-        String json = objectMapper.writeValueAsString(permPart);
-        when(listOps.range("ss:part-buf:100", 0, -1)).thenReturn(List.of(json));
+        when(listOps.range("ss:part-buf:100", 0, -1)).thenReturn(List.of(
+                objectMapper.writeValueAsString(resolved)));
 
-        SkillMessagePart result = service.findLatestPendingPermission(100L);
+        SkillMessagePart result = service.findPendingPermissionByToolCallId(100L, "perm-A");
+
+        assertThat(result).isNull();
+    }
+
+    @Test
+    @DisplayName("findPendingPermissionByToolCallId returns null when toolCallId is null/blank")
+    void findPendingPermissionByToolCallIdNullArg() {
+        assertThat(service.findPendingPermissionByToolCallId(100L, null)).isNull();
+        assertThat(service.findPendingPermissionByToolCallId(100L, "")).isNull();
+        verify(listOps, never()).range(anyString(), anyLong(), anyLong());
+    }
+
+    @Test
+    @DisplayName("findPendingPermissionByToolCallId returns null if no permission matches the toolCallId")
+    void findPendingPermissionByToolCallIdNoMatch() throws Exception {
+        SkillMessagePart permOther = SkillMessagePart.builder()
+                .id(1L).messageId(100L).sessionId(10L)
+                .partId("part-X").seq(1).partType("permission")
+                .toolCallId("perm-X").toolName("bash")
+                .build();
+
+        when(listOps.range("ss:part-buf:100", 0, -1)).thenReturn(List.of(
+                objectMapper.writeValueAsString(permOther)));
+
+        SkillMessagePart result = service.findPendingPermissionByToolCallId(100L, "perm-A");
 
         assertThat(result).isNull();
     }
