@@ -197,7 +197,7 @@ public class SkillMessageController {
             // Agent 在线但 toolType 不匹配目标值：跳过 assistantId 相关逻辑，正常发送
         }
 
-        if (session.getToolSessionId() == null) {
+        if (session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
             log.info(
                     "[SKIP] SkillMessageController.routeToGateway: reason=no_toolSessionId, sessionId={}, triggering rebuild",
                     sessionId);
