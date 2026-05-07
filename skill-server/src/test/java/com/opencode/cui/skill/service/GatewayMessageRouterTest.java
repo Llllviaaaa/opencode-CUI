@@ -310,6 +310,67 @@ class GatewayMessageRouterTest {
         verify(routeResponseSender, times(1)).sendRouteConfirm(eq(TOOL_SESSION_ID), eq(WELINK_SESSION_ID));
     }
 
+    // ============= tool_error 路由（reason 优先 + isSessionInvalidError 回退） =============
+
+    /** 构造一条 tool_error：携带 welinkSessionId 直连，避免 toolSessionId 反查路径。 */
+    private ObjectNode buildToolError(String welinkSessionId, String error, String reason) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("type", "tool_error");
+        node.put("welinkSessionId", welinkSessionId);
+        node.put("error", error);
+        if (reason != null) {
+            node.put("reason", reason);
+        }
+        return node;
+    }
+
+    @Test
+    @DisplayName("tool_error reason=callback_config_missing 不触发 rebuild，走错误投递")
+    void toolError_callbackConfigMissing_doesNotRebuild() {
+        router = buildRouter(true);
+        ObjectNode node = buildToolError(WELINK_SESSION_ID,
+                "Cloud agent error: Cloud route info not found for ak: ak-xx",
+                "callback_config_missing");
+
+        router.route("tool_error", null, null, node);
+
+        verify(rebuildService, never()).handleSessionNotFound(anyString(), any(), any());
+        verify(messageService, times(1))
+                .saveSystemMessage(eq(42L), org.mockito.ArgumentMatchers.contains("Cloud route info not found"));
+        org.mockito.ArgumentCaptor<StreamMessage> msgCap = org.mockito.ArgumentCaptor.forClass(StreamMessage.class);
+        verify(emitter).emitToSession(any(), eq(WELINK_SESSION_ID), any(), msgCap.capture());
+        assertEquals(StreamMessage.Types.ERROR, msgCap.getValue().getType());
+    }
+
+    @Test
+    @DisplayName("tool_error reason 缺失 + error 含 'session not found' → 触发 rebuild（保留旧行为）")
+    void toolError_legacySessionNotFoundFallback_triggersRebuild() {
+        router = buildRouter(true);
+        ObjectNode node = buildToolError(WELINK_SESSION_ID,
+                "Cloud agent error: Session not found for toolSessionId xyz",
+                null);
+
+        router.route("tool_error", null, null, node);
+
+        verify(rebuildService, times(1))
+                .handleSessionNotFound(eq(WELINK_SESSION_ID), any(), any());
+    }
+
+    @Test
+    @DisplayName("tool_error reason 缺失 + error 含 'Cloud route info not found'（收紧后不命中）→ 不触发 rebuild")
+    void toolError_cloudRouteNotFoundLegacy_doesNotTriggerRebuild() {
+        router = buildRouter(true);
+        // 老 GW 不发 reason；error 文案包含 "not found" 但不是 session 失效语义。
+        // 收紧 isSessionInvalidError 后不再命中，避免误重建。
+        ObjectNode node = buildToolError(WELINK_SESSION_ID,
+                "Cloud agent error: Cloud route info not found for ak: ak-xx",
+                null);
+
+        router.route("tool_error", null, null, node);
+
+        verify(rebuildService, never()).handleSessionNotFound(anyString(), any(), any());
+    }
+
     // ============= Helpers: MutableClock + FakeTicker =============
 
     /** 测试专用可推进 Clock。 */

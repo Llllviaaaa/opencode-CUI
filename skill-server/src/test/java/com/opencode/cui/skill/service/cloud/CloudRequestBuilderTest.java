@@ -139,6 +139,8 @@ class CloudRequestBuilderTest {
             CloudRequestContext context = CloudRequestContext.builder()
                     .content("test")
                     .contentType(null)
+                    .assistantAccount("asst-x")
+                    .sendUserAccount("user-x")
                     .build();
 
             ObjectNode result = defaultStrategy.build(context);
@@ -152,6 +154,8 @@ class CloudRequestBuilderTest {
             CloudRequestContext context = CloudRequestContext.builder()
                     .content("test")
                     .clientLang(null)
+                    .assistantAccount("asst-x")
+                    .sendUserAccount("user-x")
                     .build();
 
             ObjectNode result = defaultStrategy.build(context);
@@ -165,6 +169,8 @@ class CloudRequestBuilderTest {
             CloudRequestContext context = CloudRequestContext.builder()
                     .content("test")
                     .extParameters(null)
+                    .assistantAccount("asst-x")
+                    .sendUserAccount("user-x")
                     .build();
 
             ObjectNode result = defaultStrategy.build(context);
@@ -180,6 +186,8 @@ class CloudRequestBuilderTest {
             CloudRequestContext context = CloudRequestContext.builder()
                     .content("test")
                     .extParameters(Map.of())
+                    .assistantAccount("asst-x")
+                    .sendUserAccount("user-x")
                     .build();
 
             ObjectNode result = defaultStrategy.build(context);
@@ -195,6 +203,8 @@ class CloudRequestBuilderTest {
             CloudRequestContext context = CloudRequestContext.builder()
                     .content("base64data")
                     .contentType("IMAGE-V1")
+                    .assistantAccount("asst-x")
+                    .sendUserAccount("user-x")
                     .build();
 
             ObjectNode result = defaultStrategy.build(context);
@@ -207,6 +217,7 @@ class CloudRequestBuilderTest {
         void buildCloudRequest_questionReply_writesReplyContext() {
             CloudRequestContext ctx = CloudRequestContext.builder()
                     .content("").contentType("text").topicId("ts-1")
+                    .assistantAccount("asst-x").sendUserAccount("user-x")
                     .replyToolCallId("call-q")
                     .replyAnswers(List.of(List.of("A"), List.of("B", "C")))
                     .build();
@@ -226,6 +237,7 @@ class CloudRequestBuilderTest {
         void buildCloudRequest_permissionReply_writesReplyContext() {
             CloudRequestContext ctx = CloudRequestContext.builder()
                     .topicId("ts-1")
+                    .assistantAccount("asst-x").sendUserAccount("user-x")
                     .replyPermissionId("perm-1")
                     .replyResponse("once")
                     .build();
@@ -242,7 +254,8 @@ class CloudRequestBuilderTest {
         @DisplayName("chat：cloudRequest 不含 replyContext 字段")
         void buildCloudRequest_chat_noReplyContext() {
             CloudRequestContext ctx = CloudRequestContext.builder()
-                    .content("hi").contentType("text").topicId("ts-1").build();
+                    .content("hi").contentType("text").topicId("ts-1")
+                    .assistantAccount("asst-x").sendUserAccount("user-x").build();
 
             ObjectNode result = defaultStrategy.build(ctx);
 
@@ -265,6 +278,8 @@ class CloudRequestBuilderTest {
                     .content("hi")
                     .contentType("text")
                     .extParameters(ext)
+                    .assistantAccount("asst-x")
+                    .sendUserAccount("user-x")
                     .build();
 
             ObjectNode result = defaultStrategy.build(context);
@@ -286,6 +301,33 @@ class CloudRequestBuilderTest {
         return CloudRequestContext.builder()
                 .content("test content")
                 .contentType("text")
+                .assistantAccount("asst-default")
+                .sendUserAccount("user-default")
                 .build();
+    }
+
+    // ------------------------------------------------------------------ fast-fail 校验
+
+    @Nested
+    @DisplayName("DefaultCloudRequestStrategy fast-fail 入口校验")
+    class FastFailValidation {
+
+        @Test
+        @DisplayName("assistantAccount 为 null 时抛 IllegalArgumentException")
+        void rejectsBlankAssistantAccount() {
+            CloudRequestContext ctx = CloudRequestContext.builder()
+                    .content("hi").sendUserAccount("user-x").build();
+
+            assertThrows(IllegalArgumentException.class, () -> defaultStrategy.build(ctx));
+        }
+
+        @Test
+        @DisplayName("sendUserAccount 为空白时抛 IllegalArgumentException")
+        void rejectsBlankSendUserAccount() {
+            CloudRequestContext ctx = CloudRequestContext.builder()
+                    .content("hi").assistantAccount("asst-x").sendUserAccount("  ").build();
+
+            assertThrows(IllegalArgumentException.class, () -> defaultStrategy.build(ctx));
+        }
     }
 }

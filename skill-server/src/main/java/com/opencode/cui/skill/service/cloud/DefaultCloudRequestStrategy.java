@@ -37,6 +37,10 @@ public class DefaultCloudRequestStrategy implements CloudRequestStrategy {
      */
     @Override
     public ObjectNode build(CloudRequestContext context) {
+        // Fast-fail：vendor SDK 内部对关键账号字段不防御 null（List.of(null) 会 NPE），
+        // 在仓内入口先校验，提供明确日志便于定位 rebuild 路径上的数据缺失。
+        validateAccountFields(context);
+
         ObjectNode node = objectMapper.createObjectNode();
 
         node.put("type", context.getContentType() != null ? context.getContentType() : "text");
@@ -74,5 +78,29 @@ public class DefaultCloudRequestStrategy implements CloudRequestStrategy {
         }
 
         return node;
+    }
+
+    /**
+     * 关键账号字段 fast-fail 校验。
+     *
+     * <p>vendor SDK 在 {@code convertToW3Account} 中调用 {@code List.of(<null>)} 不防御 null，
+     * 此前因 rebuild 路径的 context 缺失 assistantAccount/sendUserAccount 导致进入 vendor 后 NPE，
+     * 用户收到黑屏错误。这里在仓内入口主动校验，让缺失字段在 SS 层显式失败。</p>
+     */
+    private void validateAccountFields(CloudRequestContext context) {
+        if (isBlank(context.getAssistantAccount())) {
+            log.error("[ERROR] DefaultCloudRequestStrategy.build: blank assistantAccount, topicId={}, messageId={}",
+                    context.getTopicId(), context.getMessageId());
+            throw new IllegalArgumentException("assistantAccount must not be blank");
+        }
+        if (isBlank(context.getSendUserAccount())) {
+            log.error("[ERROR] DefaultCloudRequestStrategy.build: blank sendUserAccount, topicId={}, messageId={}, assistantAccount={}",
+                    context.getTopicId(), context.getMessageId(), context.getAssistantAccount());
+            throw new IllegalArgumentException("sendUserAccount must not be blank");
+        }
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
     }
 }

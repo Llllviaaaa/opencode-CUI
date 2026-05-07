@@ -3,12 +3,14 @@ package com.opencode.cui.skill.service;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -169,6 +171,123 @@ public class RedisMessageBroker {
     public boolean isUserSubscribed(String userId) {
         String channel = "user-stream:" + userId;
         return activeListeners.containsKey(channel);
+    }
+
+    // ==================== Pub/sub silent-failure self-healing ====================
+
+    /**
+     * 查询某 channel 在 Redis 端真实订阅者数量（PUBSUB NUMSUB）。
+     *
+     * <p>这是 Redis server 端真值，能捕获 Spring 侧 {@code activeListeners} 内存
+     * map 检测不到的"长连接断、listener 仍在 map"的 silent-failure 场景。</p>
+     *
+     * @param channel 完整 channel 名
+     * @return 真实订阅者数；channel 不存在或异常时返回 0
+     */
+    public long physicalSubscriberCount(String channel) {
+        if (channel == null || channel.isBlank()) {
+            return 0L;
+        }
+        try {
+            // Spring Data Redis 3.4 没有高级 pubSubNumSub API，用 raw execute
+            // PUBSUB NUMSUB <channel> 返回 [channelName(bytes), count(bytes)]
+            Object result = redisTemplate.execute((RedisCallback<Object>) conn ->
+                    conn.execute("PUBSUB",
+                            "NUMSUB".getBytes(StandardCharsets.UTF_8),
+                            channel.getBytes(StandardCharsets.UTF_8)));
+            return parsePubSubNumSubResult(result);
+        } catch (Exception e) {
+            log.error("physicalSubscriberCount failed: channel={}, error={}", channel, e.getMessage(), e);
+            return 0L;
+        }
+    }
+
+    /**
+     * 解析 PUBSUB NUMSUB 返回值。Lettuce 返回 {@code List<Object>}，元素依次为
+     * channel name (byte[]) 与 subscriber count (Long 或 byte[])。
+     */
+    @SuppressWarnings("unchecked")
+    private long parsePubSubNumSubResult(Object raw) {
+        if (raw == null) {
+            return 0L;
+        }
+        if (raw instanceof List<?> list && list.size() >= 2) {
+            Object countObj = list.get(1);
+            if (countObj instanceof Number n) {
+                return n.longValue();
+            }
+            if (countObj instanceof byte[] bytes) {
+                String s = new String(bytes, StandardCharsets.UTF_8);
+                return s.isBlank() ? 0L : Long.parseLong(s.trim());
+            }
+            if (countObj != null) {
+                String s = countObj.toString();
+                return s.isBlank() ? 0L : Long.parseLong(s.trim());
+            }
+        }
+        return 0L;
+    }
+
+    /**
+     * 强制重启 {@link RedisMessageListenerContainer}，让 Spring 重建底层 subscription
+     * 长连接，并重新注册 {@code activeListeners} 中所有 listener。
+     *
+     * <p>用于 pub/sub 长连接 silent failure 自愈：当 {@link #physicalSubscriberCount}
+     * 检测到本实例 channel 的 Redis 端订阅数为 0（长连接已断、listener 对象仍在内存
+     * map 中）时调用。{@code addMessageListener} 把 listener 挂在 container 当前的
+     * subscription connection 上，简单 unsubscribe + subscribe 仍会挂到死连接上，
+     * 必须 stop + start 重建底层连接。</p>
+     *
+     * <p>副作用：影响该 container 下所有订阅（agent:*、user-stream:*、ss:relay:*）
+     * 短暂中断（毫秒级）。仅在自检失败路径触发，可接受。</p>
+     *
+     * @param verifyChannel 重连后用于校验订阅恢复的 channel；通常是调用方自己的
+     *                      {@code ss:relay:{instanceId}}
+     * @param timeoutMs     等待物理订阅恢复的最大时间（毫秒），超时返回 false
+     * @return true 表示重连后 {@code verifyChannel} 在 Redis 端订阅数 >0；
+     *         false 表示重启异常或超时未恢复
+     */
+    public boolean forceReconnectListenerContainer(String verifyChannel, long timeoutMs) {
+        int affectedSubscriptions = activeListeners.size();
+        log.warn("Force reconnecting RedisMessageListenerContainer: affectedSubscriptions={}, verifyChannel={}",
+                affectedSubscriptions, verifyChannel);
+        try {
+            listenerContainer.stop();
+            listenerContainer.start(); // Spring 异步重新注册 cachedListeners
+            return waitForSubscriptionRestored(verifyChannel, timeoutMs);
+        } catch (Exception e) {
+            log.error("forceReconnectListenerContainer failed: verifyChannel={}, error={}",
+                    verifyChannel, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * 短轮询等待 {@code channel} 在 Redis 端订阅数恢复 (>0)。
+     *
+     * <p>{@link RedisMessageListenerContainer#start()} 是异步注册 cachedListeners，
+     * 必须等待物理订阅真正落到 Redis 后再返回，否则调用方可能在 listener 还未生效时
+     * 就开始处理消息。轮询间隔 100ms。</p>
+     */
+    private boolean waitForSubscriptionRestored(String channel, long timeoutMs) {
+        if (channel == null || channel.isBlank()) {
+            return false;
+        }
+        long deadline = System.currentTimeMillis() + Math.max(0L, timeoutMs);
+        while (true) {
+            if (physicalSubscriberCount(channel) > 0L) {
+                return true;
+            }
+            if (System.currentTimeMillis() >= deadline) {
+                return false;
+            }
+            try {
+                Thread.sleep(100L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
     }
 
     // ==================== SS relay pub/sub (Task 2.6) ====================

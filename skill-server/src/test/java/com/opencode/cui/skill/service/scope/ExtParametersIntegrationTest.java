@@ -95,7 +95,8 @@ class ExtParametersIntegrationTest {
         info.setAssistantScope("business");
         info.setBusinessTag("app-001");
 
-        String payload = "{\"text\":\"hi\",\"toolSessionId\":\"cloud-1\"}";
+        String payload = "{\"text\":\"hi\",\"toolSessionId\":\"cloud-1\","
+                + "\"assistantAccount\":\"asst-1\",\"sendUserAccount\":\"u-1\"}";
         InvokeCommand cmd = new InvokeCommand("ak-1", "u-1", "1", "chat", payload);
 
         String invokeMessage = strategy.buildInvoke(cmd, info);

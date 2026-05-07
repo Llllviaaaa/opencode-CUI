@@ -15,16 +15,19 @@ import java.time.Duration;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-/** SkillInstanceRegistry 单元测试：验证 SS 实例心跳写入、探活查询和销毁逻辑。 */
+/** SkillInstanceRegistry 单元测试：验证 SS 实例心跳写入、探活查询、自检自重连和销毁逻辑。 */
 class SkillInstanceRegistryTest {
 
     private static final String INSTANCE_ID = "ss-az1-test";
     private static final String REDIS_KEY = "ss:internal:instance:" + INSTANCE_ID;
+    private static final String RELAY_CHANNEL = "ss:relay:" + INSTANCE_ID;
 
     @Mock
     private StringRedisTemplate redisTemplate;
@@ -32,13 +35,16 @@ class SkillInstanceRegistryTest {
     @Mock
     private ValueOperations<String, String> valueOperations;
 
+    @Mock
+    private RedisMessageBroker redisMessageBroker;
+
     private SkillInstanceRegistry registry;
 
     @BeforeEach
     void setUp() {
         // lenient：仅 register/refresh 等写入场景需要 opsForValue；其他测试无需此 stub
         org.mockito.Mockito.lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        registry = new SkillInstanceRegistry(redisTemplate, INSTANCE_ID);
+        registry = new SkillInstanceRegistry(redisTemplate, redisMessageBroker, INSTANCE_ID);
     }
 
     @Test
@@ -76,13 +82,47 @@ class SkillInstanceRegistryTest {
     }
 
     @Test
-    @DisplayName("refreshHeartbeat 定时刷新向 Redis 写入心跳 key，TTL 30s")
-    void refreshHeartbeat_shouldRenewTtl() {
+    @DisplayName("refreshHeartbeat: NUMSUB>0 跳过重连，正常写入心跳")
+    void refreshHeartbeat_subscriptionAlive_shouldRenewTtlAndSkipReconnect() {
+        when(redisMessageBroker.physicalSubscriberCount(RELAY_CHANNEL)).thenReturn(1L);
+
         registry.refreshHeartbeat();
 
         ArgumentCaptor<Duration> ttlCaptor = ArgumentCaptor.forClass(Duration.class);
         verify(valueOperations).set(eq(REDIS_KEY), eq("alive"), ttlCaptor.capture());
         assertEquals(Duration.ofSeconds(30), ttlCaptor.getValue());
+        verify(redisMessageBroker, never()).forceReconnectListenerContainer(
+                org.mockito.ArgumentMatchers.anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("refreshHeartbeat: NUMSUB=0 触发重连；重连成功后写心跳")
+    void refreshHeartbeat_subscriptionDead_reconnectSucceeds_shouldWriteHeartbeat() {
+        when(redisMessageBroker.physicalSubscriberCount(RELAY_CHANNEL)).thenReturn(0L);
+        when(redisMessageBroker.forceReconnectListenerContainer(eq(RELAY_CHANNEL), anyLong()))
+                .thenReturn(true);
+
+        registry.refreshHeartbeat();
+
+        verify(redisMessageBroker).forceReconnectListenerContainer(eq(RELAY_CHANNEL), anyLong());
+        verify(valueOperations).set(eq(REDIS_KEY), eq("alive"),
+                org.mockito.ArgumentMatchers.any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("refreshHeartbeat: NUMSUB=0 重连失败 → 跳过心跳写入，让 TTL 过期触发 takeover")
+    void refreshHeartbeat_subscriptionDead_reconnectFails_shouldSkipHeartbeat() {
+        when(redisMessageBroker.physicalSubscriberCount(RELAY_CHANNEL)).thenReturn(0L);
+        when(redisMessageBroker.forceReconnectListenerContainer(eq(RELAY_CHANNEL), anyLong()))
+                .thenReturn(false);
+
+        registry.refreshHeartbeat();
+
+        verify(redisMessageBroker).forceReconnectListenerContainer(eq(RELAY_CHANNEL), anyLong());
+        verify(valueOperations, never()).set(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(Duration.class));
     }
 
     @Test
