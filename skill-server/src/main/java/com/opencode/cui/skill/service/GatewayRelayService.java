@@ -160,6 +160,12 @@ public class GatewayRelayService {
         }
         message.put("action", command.action());
 
+        // 顶层 suppressReply 标志：仅在 chat 群聊 + channel 命中白名单时由调用方显式置 true，
+        // 其它路径 command.suppressReply() 为 null，不写入 INVOKE 报文。
+        if (Boolean.TRUE.equals(command.suppressReply())) {
+            message.put("suppressReply", true);
+        }
+
         // 注入 traceId：从 MDC 获取或自动生成，确保跨服务链路可追踪
         String traceId = MdcHelper.ensureTraceId();
         message.put("traceId", traceId);

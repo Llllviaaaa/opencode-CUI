@@ -26,7 +26,7 @@ import java.util.UUID;
  * REGISTER_OK         | (无额外字段)
  * REGISTER_REJECTED   | reason
  * HEARTBEAT           | (无额外字段)
- * INVOKE              | ak, welinkSessionId, action, payload, userId, source
+ * INVOKE              | ak, welinkSessionId, action, payload, userId, source, suppressReply?
  * TOOL_EVENT          | toolSessionId, event
  * TOOL_DONE           | toolSessionId, usage
  * TOOL_ERROR          | toolSessionId, error, reason
@@ -131,6 +131,15 @@ public class GatewayMessage {
 
     /** 子 agent 名称（Plugin 映射重写后附加） */
     private String subagentName;
+
+    /**
+     * 抑制 plugin 端 opencode 回复的标志。
+     *
+     * <p>仅在 INVOKE/chat 下行场景由 skill-server 在群聊 + channel 命中"禁群聊"白名单时置 true，
+     * plugin 接收到 INVOKE 后据此跳过 opencode SDK 调用，但仍保持上下文记录路径。
+     * 其他 action（permission_reply / question_reply / abort_session 等）不会携带该字段。</p>
+     */
+    private Boolean suppressReply;
 
     // ==================== 多实例协调字段 ====================
 
