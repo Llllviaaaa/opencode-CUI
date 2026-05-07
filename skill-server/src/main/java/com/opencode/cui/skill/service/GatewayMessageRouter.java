@@ -374,6 +374,7 @@ public class GatewayMessageRouter {
         }
 
         // Case 2: Remote owner exists → try relay
+        boolean publishReturnedZero = false;
         if (ownerInstance != null) {
             String rawMessage = serializeRelayMessage(type, sessionId, ak, userId, node);
             long subscribers = redisMessageBroker.publishToSsRelay(ownerInstance, rawMessage);
@@ -383,13 +384,14 @@ public class GatewayMessageRouter {
                         type, sessionId, ownerInstance);
                 return; // relay succeeded
             }
-            // subscribers == 0: owner is likely dead → fall through to takeover
-            log.info("Relay returned 0 subscribers, owner may be dead: sessionId={}, owner={}",
+            // subscribers == 0: owner is likely dead (half-dead pod) → fall through to takeover
+            publishReturnedZero = true;
+            log.warn("Relay returned 0 subscribers, owner may be dead: sessionId={}, owner={}",
                     sessionId, ownerInstance);
         }
 
         // Case 3 & 4: No owner, or owner is dead → attempt takeover / auto-claim
-        if (shouldTakeover(ownerInstance, sessionId)) {
+        if (shouldTakeover(ownerInstance, sessionId, publishReturnedZero)) {
             if (ownerInstance == null) {
                 // No route record → auto-claim via ensureRouteOwnership
                 boolean claimed = sessionRouteService.ensureRouteOwnership(sessionId, ak, userId);
@@ -457,19 +459,29 @@ public class GatewayMessageRouter {
     }
 
     /**
-     * Two-tier liveness check to determine if the owner instance should be taken over.
+     * Liveness check to determine if the owner instance should be taken over.
      *
      * <ol>
      *   <li>No owner → always takeover (auto-claim)</li>
+     *   <li>{@code publishReturnedZero=true} → 硬信号：publish 时 Redis 端无订阅者，
+     *       owner 半死（heartbeat 还在但 pub/sub 长连接已断）→ takeover</li>
      *   <li>Redis heartbeat missing → takeover</li>
      * </ol>
      *
-     * Note: Redis PUBLISH subscriber count (checked before this method) serves as
-     * an auxiliary signal — 0 subscribers hints the owner may be dead.
+     * @param publishReturnedZero true 表示前置 {@code publishToSsRelay} 返回 0 subscribers，
+     *                            是 owner 半死的硬信号，优先于 heartbeat 判活
      */
-    private boolean shouldTakeover(String ownerInstance, String sessionId) {
+    private boolean shouldTakeover(String ownerInstance, String sessionId, boolean publishReturnedZero) {
         if (ownerInstance == null) {
             return true; // no owner, auto-claim
+        }
+
+        // 硬信号优先：publish 0 订阅者表明 pub/sub 长连接已断（owner 半死）
+        if (publishReturnedZero) {
+            ownerProbeDeadCount.incrementAndGet();
+            log.warn("shouldTakeover: 0 subscribers, treating owner as half-dead: owner={}, sessionId={}",
+                    ownerInstance, sessionId);
+            return true;
         }
 
         // Tier 1: check Redis heartbeat
