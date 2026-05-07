@@ -73,6 +73,8 @@ public class GatewayMessageRouter {
     private final com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter;
     private final AssistantInfoService assistantInfoService;
     private final AssistantScopeDispatcher scopeDispatcher;
+    private final ChannelLookupService channelLookupService;
+    private final ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService;
     /** 已完成会话的短期缓存，用于抑制 tool_done 后的残余事件 */
     private final Cache<String, Instant> completedSessions = Caffeine.newBuilder()
             .expireAfterWrite(Duration.ofSeconds(5))
@@ -186,6 +188,8 @@ public class GatewayMessageRouter {
             SessionRouteService sessionRouteService,
             SkillInstanceRegistry skillInstanceRegistry,
             AssistantInfoService assistantInfoService,
+            ChannelLookupService channelLookupService,
+            ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService,
             AssistantScopeDispatcher scopeDispatcher,
             OutboundDeliveryDispatcher outboundDeliveryDispatcher,
             com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter,
@@ -209,6 +213,8 @@ public class GatewayMessageRouter {
         this.sessionRouteService = sessionRouteService;
         this.skillInstanceRegistry = skillInstanceRegistry;
         this.assistantInfoService = assistantInfoService;
+        this.channelLookupService = channelLookupService;
+        this.channelSuppressReplyWhitelistService = channelSuppressReplyWhitelistService;
         this.scopeDispatcher = scopeDispatcher;
         this.instanceId = skillInstanceRegistry.getInstanceId();
         this.ownerDeadThresholdSeconds = ownerDeadThresholdSeconds;
@@ -238,6 +244,8 @@ public class GatewayMessageRouter {
             SessionRouteService sessionRouteService,
             SkillInstanceRegistry skillInstanceRegistry,
             AssistantInfoService assistantInfoService,
+            ChannelLookupService channelLookupService,
+            ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService,
             AssistantScopeDispatcher scopeDispatcher,
             OutboundDeliveryDispatcher outboundDeliveryDispatcher,
             com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter,
@@ -245,7 +253,8 @@ public class GatewayMessageRouter {
         this(objectMapper, messageService, sessionService, redisMessageBroker, translator,
                 persistenceService, bufferService, rebuildService, interactionStateService,
                 imOutboundService, sessionRouteService, skillInstanceRegistry,
-                assistantInfoService, scopeDispatcher, outboundDeliveryDispatcher, emitter,
+                assistantInfoService, channelLookupService, channelSuppressReplyWhitelistService,
+                scopeDispatcher, outboundDeliveryDispatcher, emitter,
                 ownerDeadThresholdSeconds, true, 25, Clock.systemUTC(), Ticker.systemTicker());
         // 主动初始化 cache，避免测试场景下 @PostConstruct 未触发导致 NPE
         initConfirmDedupCache();
@@ -845,6 +854,13 @@ public class GatewayMessageRouter {
             return;
         }
 
+        // 群聊 + channel 命中白名单时一次性算出 suppressReply，避免在循环里每条 invoke 重复查询。
+        Boolean suppressReply = computeSuppressReplyForRetry(sessionId, ak);
+        if (Boolean.TRUE.equals(suppressReply)) {
+            log.info("[ENTRY] retryPendingMessages.suppressReply: reason=channel_in_group_blocklist, sessionId={}, ak={}",
+                    sessionId, ak);
+        }
+
         int sent = 0;
         for (String pendingText : pendingMessages) {
             if (pendingText == null || pendingText.isBlank()) {
@@ -859,12 +875,31 @@ public class GatewayMessageRouter {
             } catch (JsonProcessingException e) {
                 payloadStr = "{}";
             }
-            sender.sendInvokeToGateway(new InvokeCommand(ak, userId, sessionId, GatewayActions.CHAT, payloadStr));
+            sender.sendInvokeToGateway(new InvokeCommand(
+                    ak, userId, sessionId, GatewayActions.CHAT, payloadStr, suppressReply));
             sent++;
         }
 
-        log.info("[EXIT] retryPendingMessages: sessionId={}, ak={}, sent={}/{}", sessionId, ak, sent, pendingMessages.size());
+        log.info("[EXIT] retryPendingMessages: sessionId={}, ak={}, sent={}/{}, suppressReply={}",
+                sessionId, ak, sent, pendingMessages.size(), suppressReply);
         emitter.emitToClient(sessionId, userId, StreamMessage.sessionStatus("busy"));
+    }
+
+    /**
+     * 重建后回放 chat 时计算 suppressReply：
+     * 仅当会话是 IM 群聊、且当前 ak 对应的 plugin channel 命中"禁群聊"白名单时返回 {@link Boolean#TRUE}；
+     * 其它任何情况（单聊、Miniapp、查询失败、未命中白名单）一律返回 {@code null}，
+     * 与 {@link InvokeCommand} 中"null = 不写入 INVOKE 报文"语义一致。
+     */
+    private Boolean computeSuppressReplyForRetry(String sessionId, String ak) {
+        SkillSession session = resolveSession(sessionId);
+        if (session == null || !session.isImGroupSession()) {
+            return null;
+        }
+        return channelLookupService.getToolType(ak)
+                .map(channelSuppressReplyWhitelistService::shouldSuppress)
+                .filter(Boolean::booleanValue)
+                .orElse(null);
     }
 
     /** 处理 permission_request：统一投递权限请求消息。 */

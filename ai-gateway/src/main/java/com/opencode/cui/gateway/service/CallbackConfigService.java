@@ -22,11 +22,22 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p>切换 v1/v2 仅需修改 SS SysConfig，不需要重启任何服务（最长延迟 = TTL）。</p>
  *
+ * <h3>v2 fallback 链路</h3>
+ * <p>v2 分支额外支持「总开关 + SysConfig 兜底」：
+ * <ul>
+ *   <li>总开关 {@code cloud_route.v2_fallback_enabled}：{@code "1"} = ON，否则 OFF。</li>
+ *   <li>总开关 ON：v2 resolver 返回 null（HTTP 非 200 / data 缺失 / 业务 code 非 200）时
+ *       走 {@link SysConfigFallbackProvider} 拉取 SysConfig 兜底。</li>
+ *   <li>总开关 OFF：直接跳过 v2 调用，全部走兜底。</li>
+ * </ul>
+ * fallback 命中后写入与 v2 同一个 Redis key，下游统一从 Redis 读。</p>
+ *
  * <h3>缓存策略</h3>
  * <ul>
  *   <li>路由结果缓存 key：{@code gw:cloud:route:{version}:{ak}:{scope}}</li>
  *   <li>路由结果 TTL 由 {@code gateway.cloud-route.cache-ttl-seconds} 配置（默认 300s）</li>
  *   <li>v1/v2 版本判定 in-memory 缓存 30s</li>
+ *   <li>fallback 总开关 in-memory 缓存 30s（与版本判定同 TTL）</li>
  * </ul>
  */
 @Slf4j
@@ -37,21 +48,26 @@ public class CallbackConfigService {
     private static final String DEFAULT_VERSION = "v1";
     private static final String SS_CONFIG_TYPE = "cloud_route";
     private static final String SS_CONFIG_KEY = "v2_enabled";
-    private static final long VERSION_CACHE_TTL_MS = 30_000L;
+    private static final String SS_FALLBACK_SWITCH_KEY = "v2_fallback_enabled";
+    static final long VERSION_CACHE_TTL_MS = 30_000L;
 
     private final Map<String, CallbackConfigResolver> resolversByVersion;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final long cacheTtlSeconds;
     private final SkillServerConfigClient ssConfigClient;
+    private final SysConfigFallbackProvider fallbackProvider;
 
     /** in-memory 版本判定缓存（避免每次 invoke 都打 SS） */
     private final AtomicReference<CachedVersion> versionCache = new AtomicReference<>();
+    /** in-memory 总开关缓存（与 versionCache 同 TTL） */
+    private final AtomicReference<CachedSwitch> fallbackSwitchCache = new AtomicReference<>();
 
     public CallbackConfigService(List<CallbackConfigResolver> resolvers,
                                  StringRedisTemplate redisTemplate,
                                  ObjectMapper objectMapper,
                                  SkillServerConfigClient ssConfigClient,
+                                 SysConfigFallbackProvider fallbackProvider,
                                  @Value("${gateway.cloud-route.cache-ttl-seconds:300}") long cacheTtlSeconds) {
         this.resolversByVersion = new HashMap<>();
         for (CallbackConfigResolver r : resolvers) {
@@ -60,6 +76,7 @@ public class CallbackConfigService {
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
         this.ssConfigClient = ssConfigClient;
+        this.fallbackProvider = fallbackProvider;
         this.cacheTtlSeconds = cacheTtlSeconds;
         log.info("[CALLBACK_CONFIG] registered resolvers: {}, route cache TTL={}s, version cache TTL={}ms",
                 resolversByVersion.keySet(), cacheTtlSeconds, VERSION_CACHE_TTL_MS);
@@ -84,6 +101,13 @@ public class CallbackConfigService {
             log.debug("[CALLBACK_CONFIG] cache hit: ak={}, scope={}, version={}", ak, scope, version);
             return cached;
         }
+
+        // v2 路径：支持总开关 + SysConfig 兜底（D5：仅作用于 v2，v1 完全不动）
+        if ("v2".equals(version)) {
+            return resolveV2WithFallback(ak, scope, resolver, cacheKey);
+        }
+
+        // v1 路径：完全维持原状
         CallbackConfig fresh = resolver.resolve(ak, scope);
         if (fresh != null) {
             writeCache(cacheKey, fresh);
@@ -91,6 +115,44 @@ public class CallbackConfigService {
                     ak, scope, version, fresh.getChannelType(), fresh.getAuthType());
         }
         return fresh;
+    }
+
+    /**
+     * v2 分支：按总开关决定是否调用 v2 resolver；resolver 返回 null 时回退到 SysConfig 兜底。
+     * <p>命中 fallback 时仍写入 v2 的 Redis key（{@code gw:cloud:route:v2:{ak}:{scope}}），
+     * 下游消费方对来源无感。</p>
+     */
+    private CallbackConfig resolveV2WithFallback(String ak, String scope,
+                                                 CallbackConfigResolver resolver,
+                                                 String cacheKey) {
+        boolean fallbackEnabled = currentFallbackEnabled();
+        if (!fallbackEnabled) {
+            // 总开关 OFF：跳过 v2，直接走 SysConfig 兜底（D2/D5：OFF=全部走兜底）
+            CallbackConfig fb = fallbackProvider.load(ak, scope);
+            if (fb != null) {
+                writeCache(cacheKey, fb);
+                log.info("[CALLBACK_CONFIG] fallback switch OFF, served from SysConfig: ak={}, scope={}, channelType={}, authType={}",
+                        ak, scope, fb.getChannelType(), fb.getAuthType());
+            }
+            return fb;
+        }
+
+        // 总开关 ON：先 v2，失败则 fallback
+        CallbackConfig fresh = resolver.resolve(ak, scope);
+        if (fresh != null) {
+            writeCache(cacheKey, fresh);
+            log.info("[CALLBACK_CONFIG] fetched and cached: ak={}, scope={}, version=v2, channelType={}, authType={}",
+                    ak, scope, fresh.getChannelType(), fresh.getAuthType());
+            return fresh;
+        }
+
+        // v2 返回 null：触发 fallback（D8/D13：不区分原因，只打一行 log）
+        log.info("[CALLBACK_CONFIG] v2 returned null, fallback to SysConfig: ak={}, scope={}", ak, scope);
+        CallbackConfig fb = fallbackProvider.load(ak, scope);
+        if (fb != null) {
+            writeCache(cacheKey, fb);
+        }
+        return fb;
     }
 
     /**
@@ -108,6 +170,23 @@ public class CallbackConfigService {
         versionCache.set(new CachedVersion(version, now));
         log.debug("[CALLBACK_CONFIG] refreshed activeVersion={} (configValue={})", version, configValue);
         return version;
+    }
+
+    /**
+     * 当前 v2 fallback 总开关状态。带 30s in-memory 缓存。
+     * <p>SS 不可达 / 配置未设置 / 配置非 "1" → 返回 false（OFF），即默认走 SysConfig 兜底。</p>
+     */
+    boolean currentFallbackEnabled() {
+        long now = System.currentTimeMillis();
+        CachedSwitch cached = fallbackSwitchCache.get();
+        if (cached != null && now - cached.fetchedAtMs < VERSION_CACHE_TTL_MS) {
+            return cached.enabled;
+        }
+        String configValue = ssConfigClient.getConfigValue(SS_CONFIG_TYPE, SS_FALLBACK_SWITCH_KEY);
+        boolean enabled = "1".equals(configValue);
+        fallbackSwitchCache.set(new CachedSwitch(enabled, now));
+        log.debug("[CALLBACK_CONFIG] refreshed fallbackEnabled={} (configValue={})", enabled, configValue);
+        return enabled;
     }
 
     private CallbackConfig readCache(String key) {
@@ -132,4 +211,7 @@ public class CallbackConfigService {
 
     /** in-memory 版本缓存 entry */
     private record CachedVersion(String version, long fetchedAtMs) {}
+
+    /** in-memory 总开关缓存 entry */
+    private record CachedSwitch(boolean enabled, long fetchedAtMs) {}
 }
