@@ -179,6 +179,8 @@ class CloudAgentServiceTest {
             assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
             assertTrue(err.getError().contains("Unknown action"),
                     "Expected 'Unknown action' in error: " + err.getError());
+            assertNull(err.getReason(),
+                    "Unknown action should not carry a structured reason; got: " + err.getReason());
             verifyNoInteractions(cloudProtocolClient, webHookExecutor);
         }
     }
@@ -204,6 +206,7 @@ class CloudAgentServiceTest {
             assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
             assertTrue(err.getError().contains("Invalid channel type for chat"),
                     "Expected 'Invalid channel type for chat' in error: " + err.getError());
+            assertNull(err.getReason());
             verifyNoInteractions(cloudProtocolClient, webHookExecutor);
         }
 
@@ -220,6 +223,7 @@ class CloudAgentServiceTest {
             assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
             assertTrue(err.getError().contains("Invalid channel type for reply"),
                     "Expected 'Invalid channel type for reply' in error: " + err.getError());
+            assertNull(err.getReason());
             verifyNoInteractions(cloudProtocolClient, webHookExecutor);
         }
 
@@ -235,6 +239,7 @@ class CloudAgentServiceTest {
             GatewayMessage err = messageCaptor.getValue();
             assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
             assertTrue(err.getError().contains("Invalid channel type for reply"));
+            assertNull(err.getReason());
             verifyNoInteractions(cloudProtocolClient, webHookExecutor);
         }
     }
@@ -265,6 +270,8 @@ class CloudAgentServiceTest {
             assertNotNull(err.getError());
             assertTrue(err.getError().contains("Cloud route info not found for ak: " + TEST_AK),
                     "Expected v1-compatible error message, got: " + err.getError());
+            assertEquals("callback_config_missing", err.getReason(),
+                    "callback config missing should carry structured reason for SS routing");
         }
 
         @Test
@@ -280,6 +287,7 @@ class CloudAgentServiceTest {
             assertTrue(err.getError().contains("question_reply"));
             assertTrue(err.getError().contains("not enabled"),
                     "Expected 'not enabled' in error: " + err.getError());
+            assertEquals("callback_config_missing", err.getReason());
             verifyNoInteractions(cloudProtocolClient, webHookExecutor);
         }
 
@@ -295,6 +303,7 @@ class CloudAgentServiceTest {
             assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
             assertTrue(err.getError().contains("permission_reply"));
             assertTrue(err.getError().contains("not enabled"));
+            assertEquals("callback_config_missing", err.getReason());
             verifyNoInteractions(cloudProtocolClient, webHookExecutor);
         }
     }
@@ -426,6 +435,7 @@ class CloudAgentServiceTest {
             assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
             assertEquals(TEST_AK, err.getAk());
             assertTrue(err.getError().contains("Connection timeout"));
+            assertNull(err.getReason());
         }
 
         @Test
@@ -451,6 +461,7 @@ class CloudAgentServiceTest {
             GatewayMessage err = messageCaptor.getValue();
             assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
             assertTrue(err.getError().contains("idle_timeout"));
+            assertNull(err.getReason());
         }
     }
 }

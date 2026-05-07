@@ -711,7 +711,12 @@ public class GatewayMessageRouter {
             return;
         }
 
-        if ("session_not_found".equals(reason) || isSessionInvalidError(error)) {
+        // callback_config_missing 是配置缺失（GW 侧 ak 未订阅 callback scope），
+        // 不应触发会话重建；直接走错误投递路径。reason 字面量与 GW
+        // CloudAgentService.REASON_CALLBACK_CONFIG_MISSING 对齐。
+        boolean isCallbackConfigMissing = "callback_config_missing".equals(reason);
+        if (!isCallbackConfigMissing
+                && ("session_not_found".equals(reason) || isSessionInvalidError(error))) {
             clearPendingImInteractionState(sessionId);
             rebuildService.handleSessionNotFound(sessionId, userId, rebuildCallback());
             return;
@@ -1115,8 +1120,11 @@ public class GatewayMessageRouter {
             return false;
         }
         String lower = error.toLowerCase();
-        return lower.contains("not found")
+        // 收紧匹配：原 "not found" 太宽，会把 "Cloud route info not found"、
+        // "config not found" 等配置缺失类错误误判为 session 失效，触发不必要的重建。
+        return lower.contains("session not found")
                 || lower.contains("session_not_found")
+                || lower.contains("toolsession not found")
                 || lower.contains("json parse error")
                 || lower.contains("unexpected eof");
     }

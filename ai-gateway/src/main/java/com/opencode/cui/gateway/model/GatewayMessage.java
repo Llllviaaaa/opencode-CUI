@@ -29,7 +29,7 @@ import java.util.UUID;
  * INVOKE              | ak, welinkSessionId, action, payload, userId, source
  * TOOL_EVENT          | toolSessionId, event
  * TOOL_DONE           | toolSessionId, usage
- * TOOL_ERROR          | toolSessionId, error
+ * TOOL_ERROR          | toolSessionId, error, reason
  * SESSION_CREATED     | welinkSessionId, toolSessionId
  * AGENT_ONLINE        | ak, toolType, toolVersion
  * AGENT_OFFLINE       | ak
@@ -148,7 +148,12 @@ public class GatewayMessage {
     private String toolType;
     private String toolVersion;
 
-    /** 注册拒绝原因 */
+    /**
+     * 注册拒绝原因。
+     *
+     * <p>也用于 tool_error，区分失败原因（如 {@code callback_config_missing}），
+     * SS 据此决定是否重建会话；缺省时 SS 回退到 error 文案启发式匹配。</p>
+     */
     private String reason;
 
     // ==================== Session/Status 字段 ====================
