@@ -19,6 +19,12 @@ import java.time.Duration;
  * 目标实例是否仍然存活，决策是否接管其路由会话。
  *
  * <p>心跳 key TTL：30 秒；刷新间隔默认 10 秒（可通过配置项覆盖）。
+ *
+ * <p>半死自愈：刷新心跳前，先用 {@link RedisMessageBroker#physicalSubscriberCount}
+ * 检查本实例 {@code ss:relay:{instanceId}} 在 Redis 端的订阅数；若为 0（长连接
+ * silent failed），调用 {@link RedisMessageBroker#forceReconnectListenerContainer}
+ * 重建 subscription 连接。重连失败时跳过心跳写入，让 30s TTL 过期触发其他实例的
+ * takeover 兜底。
  */
 @Slf4j
 @Component
@@ -27,12 +33,21 @@ public class SkillInstanceRegistry {
     /** 心跳 key TTL（秒）：比刷新间隔（10s）留足 3× 余量，避免误判失联。 */
     private static final int HEARTBEAT_TTL_SECONDS = 30;
 
+    /** SS relay channel 前缀，用于 pub/sub 自检。 */
+    private static final String SS_RELAY_CHANNEL_PREFIX = "ss:relay:";
+
+    /** 重连后等待物理订阅恢复的超时（毫秒）。 */
+    private static final long RECONNECT_VERIFY_TIMEOUT_MS = 2000L;
+
     private final StringRedisTemplate redisTemplate;
+    private final RedisMessageBroker redisMessageBroker;
     private final String instanceId;
 
     public SkillInstanceRegistry(StringRedisTemplate redisTemplate,
+            RedisMessageBroker redisMessageBroker,
             @Value("${HOSTNAME:skill-server-local}") String instanceId) {
         this.redisTemplate = redisTemplate;
+        this.redisMessageBroker = redisMessageBroker;
         this.instanceId = instanceId;
     }
 
@@ -49,9 +64,24 @@ public class SkillInstanceRegistry {
     /**
      * 定时刷新心跳，防止 key 过期导致误判失联。
      * 默认每 10 秒执行一次，可通过 {@code skill.instance-registry.refresh-interval-ms} 配置。
+     *
+     * <p>续心跳前先做 pub/sub 自检；若本实例 relay channel 在 Redis 端订阅数为 0，
+     * 调用 broker 强制重连。重连失败则跳过本轮心跳，让 30s TTL 过期，由其他实例
+     * 通过 {@link #isInstanceAlive} 判活并触发 takeover 兜底。</p>
      */
     @Scheduled(fixedDelayString = "${skill.instance-registry.refresh-interval-ms:10000}")
     public void refreshHeartbeat() {
+        if (!verifyOwnSubscriptionAlive()) {
+            log.error("Self-check failed: own relay channel has 0 subscribers, attempting reconnect: instanceId={}",
+                    instanceId);
+            boolean recovered = redisMessageBroker.forceReconnectListenerContainer(
+                    SS_RELAY_CHANNEL_PREFIX + instanceId, RECONNECT_VERIFY_TIMEOUT_MS);
+            if (!recovered) {
+                log.error("Reconnect failed, skipping heartbeat to trigger takeover: instanceId={}", instanceId);
+                return; // 不写心跳 → 30s TTL 过期 → 其他实例 isInstanceAlive=false → takeover 兜底
+            }
+            log.info("Self-healed via reconnect: instanceId={}", instanceId);
+        }
         writeHeartbeat();
         log.info("[ENTRY] SkillInstanceRegistry.refreshHeartbeat: instanceId={}", instanceId);
     }
@@ -88,6 +118,16 @@ public class SkillInstanceRegistry {
     }
 
     // ==================== 私有方法 ====================
+
+    /**
+     * 通过 PUBSUB NUMSUB 校验本实例 relay channel 在 Redis 端的真实订阅数 >0。
+     * 这是 Redis server 端真值，能捕获 Spring 侧 {@code activeListeners} map 检测
+     * 不到的长连接 silent failure。
+     */
+    private boolean verifyOwnSubscriptionAlive() {
+        String channel = SS_RELAY_CHANNEL_PREFIX + instanceId;
+        return redisMessageBroker.physicalSubscriberCount(channel) > 0L;
+    }
 
     private void writeHeartbeat() {
         redisTemplate.opsForValue().set(redisKey(), "alive", Duration.ofSeconds(HEARTBEAT_TTL_SECONDS));
