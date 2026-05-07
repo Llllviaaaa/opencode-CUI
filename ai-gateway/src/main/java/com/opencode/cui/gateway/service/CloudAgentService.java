@@ -45,6 +45,9 @@ public class CloudAgentService {
             "permission_reply", "callback:weagent:permission_reply"
     );
 
+    /** tool_error reason 枚举：让 SS 能精确区分失败类型，不再依赖 error 文案启发式。 */
+    static final String REASON_CALLBACK_CONFIG_MISSING = "callback_config_missing";
+
     private final CallbackConfigService callbackConfigService;
     private final CloudProtocolClient cloudProtocolClient;
     private final WebHookExecutor webHookExecutor;
@@ -80,7 +83,7 @@ public class CloudAgentService {
         if (scope == null) {
             log.warn("[CLOUD_AGENT] unknown action: ak={}, action={}", ak, action);
             onRelay.accept(buildCloudError(invokeMessage, toolSessionId,
-                    new RuntimeException("Unknown action: " + action)));
+                    new RuntimeException("Unknown action: " + action), null));
             return;
         }
 
@@ -91,7 +94,8 @@ public class CloudAgentService {
                     ? "Cloud route info not found for ak: " + ak
                     : action + " not enabled (v1 mode or AK not subscribed)";
             log.warn("[CLOUD_AGENT] callback config missing: ak={}, scope={}, action={}", ak, scope, action);
-            onRelay.accept(buildCloudError(invokeMessage, toolSessionId, new RuntimeException(reason)));
+            onRelay.accept(buildCloudError(invokeMessage, toolSessionId,
+                    new RuntimeException(reason), REASON_CALLBACK_CONFIG_MISSING));
             return;
         }
 
@@ -106,7 +110,7 @@ public class CloudAgentService {
                     : "Invalid channel type for reply: " + cfg.getChannelType();
             log.warn("[CLOUD_AGENT] channel type mismatch: ak={}, action={}, channelType={}",
                     ak, action, cfg.getChannelType());
-            onRelay.accept(buildCloudError(invokeMessage, toolSessionId, new RuntimeException(msg)));
+            onRelay.accept(buildCloudError(invokeMessage, toolSessionId, new RuntimeException(msg), null));
             return;
         }
 
@@ -158,7 +162,7 @@ public class CloudAgentService {
                     log.warn("[CLOUD_AGENT] Connection timeout: ak={}, traceId={}, type={}, elapsed={}s",
                             ak, invokeMessage.getTraceId(), timeoutType, elapsedSeconds);
                     GatewayMessage errorMsg = buildCloudError(invokeMessage, toolSessionId,
-                            new RuntimeException(timeoutType + " (elapsed: " + elapsedSeconds + "s)"));
+                            new RuntimeException(timeoutType + " (elapsed: " + elapsedSeconds + "s)"), null);
                     if (errorSent.compareAndSet(false, true)) { onRelay.accept(errorMsg); }
                 },
                 () -> log.info("[CLOUD_AGENT] Connection closed by lifecycle: ak={}, traceId={}",
@@ -221,7 +225,7 @@ public class CloudAgentService {
                     error -> {
                         log.error("[CLOUD_AGENT] Cloud connection error: ak={}, traceId={}, error={}",
                                 ak, invokeMessage.getTraceId(), error.getMessage());
-                        GatewayMessage errorMsg = buildCloudError(invokeMessage, toolSessionId, error);
+                        GatewayMessage errorMsg = buildCloudError(invokeMessage, toolSessionId, error, null);
                         if (errorSent.compareAndSet(false, true)) { onRelay.accept(errorMsg); }
                     }
             );
@@ -242,8 +246,12 @@ public class CloudAgentService {
 
     /**
      * 构建云端错误消息（tool_error 类型）。
+     *
+     * @param reason 失败原因枚举（如 {@link #REASON_CALLBACK_CONFIG_MISSING}）；
+     *               可为 null，老 SS 仍可通过 error 文案启发式 fallback。
      */
-    private GatewayMessage buildCloudError(GatewayMessage invokeMessage, String toolSessionId, Throwable error) {
+    private GatewayMessage buildCloudError(GatewayMessage invokeMessage, String toolSessionId,
+                                           Throwable error, String reason) {
         return GatewayMessage.builder()
                 .type(GatewayMessage.Type.TOOL_ERROR)
                 .ak(invokeMessage.getAk())
@@ -252,6 +260,7 @@ public class CloudAgentService {
                 .traceId(invokeMessage.getTraceId())
                 .toolSessionId(toolSessionId)
                 .error("Cloud agent error: " + error.getMessage())
+                .reason(reason)
                 .build();
     }
 }
