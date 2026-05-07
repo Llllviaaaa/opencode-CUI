@@ -66,6 +66,10 @@ class GatewayRelayServiceTest {
         @Mock
         private AssistantInfoService assistantInfoService;
         @Mock
+        private ChannelLookupService channelLookupService;
+        @Mock
+        private ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService;
+        @Mock
         private AssistantScopeDispatcher scopeDispatcher;
         @Mock
         private AssistantScopeStrategy scopeStrategy;
@@ -111,6 +115,8 @@ class GatewayRelayServiceTest {
                                 sessionRouteService,
                                 skillInstanceRegistry,
                                 assistantInfoService,
+                                channelLookupService,
+                                channelSuppressReplyWhitelistService,
                                 scopeDispatcher,
                                 outboundDeliveryDispatcher,
                                 emitter,

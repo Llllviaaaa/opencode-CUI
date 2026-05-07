@@ -83,6 +83,10 @@ class GatewayMessageRouterTest {
     @Mock
     private AssistantInfoService assistantInfoService;
     @Mock
+    private ChannelLookupService channelLookupService;
+    @Mock
+    private ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService;
+    @Mock
     private AssistantScopeDispatcher scopeDispatcher;
     @Mock
     private AssistantScopeStrategy scopeStrategy;
@@ -131,6 +135,8 @@ class GatewayMessageRouterTest {
                 sessionRouteService,
                 skillInstanceRegistry,
                 assistantInfoService,
+                channelLookupService,
+                channelSuppressReplyWhitelistService,
                 scopeDispatcher,
                 outboundDeliveryDispatcher,
                 emitter,
@@ -399,6 +405,90 @@ class GatewayMessageRouterTest {
         public Instant instant() {
             return now;
         }
+    }
+
+    // ==================== retryPendingMessages.suppressReply ====================
+
+    @Test
+    @DisplayName("retryPendingMessages: group session + channel hit whitelist -> all replays carry suppressReply=TRUE")
+    void retryPendingMessages_groupSessionAndChannelInWhitelist_setsSuppressReplyOnAllReplays() {
+        // Arrange
+        GatewayMessageRouter r = buildRouter(true);
+        GatewayMessageRouter.DownstreamSender sender =
+                org.mockito.Mockito.mock(GatewayMessageRouter.DownstreamSender.class);
+        r.setDownstreamSender(sender);
+
+        String welinkSessionId = "1001";
+        String toolSessionId = "tool-1";
+        String ak = "ak-1";
+        String userId = "user-1";
+
+        SkillSession groupSession = new SkillSession();
+        groupSession.setId(1001L);
+        groupSession.setBusinessSessionDomain("im");
+        groupSession.setBusinessSessionType("group");
+        when(sessionService.findByIdSafe(1001L)).thenReturn(groupSession);
+
+        when(rebuildService.consumePendingMessages(welinkSessionId))
+                .thenReturn(java.util.List.of("hello", "world"));
+        when(channelLookupService.getToolType(ak)).thenReturn(java.util.Optional.of("plugin-x"));
+        when(channelSuppressReplyWhitelistService.shouldSuppress("plugin-x")).thenReturn(true);
+
+        // Trigger via session_created flow
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("toolSessionId", toolSessionId);
+        node.put("welinkSessionId", welinkSessionId);
+
+        // Act
+        r.route("session_created", ak, userId, node);
+
+        // Assert: both pending messages replayed with suppressReply=TRUE
+        org.mockito.ArgumentCaptor<com.opencode.cui.skill.model.InvokeCommand> captor =
+                org.mockito.ArgumentCaptor.forClass(com.opencode.cui.skill.model.InvokeCommand.class);
+        verify(sender, times(2)).sendInvokeToGateway(captor.capture());
+        for (com.opencode.cui.skill.model.InvokeCommand cmd : captor.getAllValues()) {
+            assertEquals(Boolean.TRUE, cmd.suppressReply());
+            assertEquals(GatewayActions.CHAT, cmd.action());
+        }
+    }
+
+    @Test
+    @DisplayName("retryPendingMessages: direct session -> never sets suppressReply (whitelist not consulted)")
+    void retryPendingMessages_directSession_neverSetsSuppressReply() {
+        // Arrange
+        GatewayMessageRouter r = buildRouter(true);
+        GatewayMessageRouter.DownstreamSender sender =
+                org.mockito.Mockito.mock(GatewayMessageRouter.DownstreamSender.class);
+        r.setDownstreamSender(sender);
+
+        String welinkSessionId = "1002";
+        String toolSessionId = "tool-2";
+        String ak = "ak-2";
+        String userId = "user-2";
+
+        SkillSession directSession = new SkillSession();
+        directSession.setId(1002L);
+        directSession.setBusinessSessionDomain("im");
+        directSession.setBusinessSessionType("direct");
+        when(sessionService.findByIdSafe(1002L)).thenReturn(directSession);
+
+        when(rebuildService.consumePendingMessages(welinkSessionId))
+                .thenReturn(java.util.List.of("ping"));
+
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("toolSessionId", toolSessionId);
+        node.put("welinkSessionId", welinkSessionId);
+
+        // Act
+        r.route("session_created", ak, userId, node);
+
+        // Assert: replay carries null suppressReply, channel lookup never invoked
+        org.mockito.ArgumentCaptor<com.opencode.cui.skill.model.InvokeCommand> captor =
+                org.mockito.ArgumentCaptor.forClass(com.opencode.cui.skill.model.InvokeCommand.class);
+        verify(sender, times(1)).sendInvokeToGateway(captor.capture());
+        assertEquals(null, captor.getValue().suppressReply());
+        verify(channelLookupService, never()).getToolType(anyString());
+        verify(channelSuppressReplyWhitelistService, never()).shouldSuppress(anyString());
     }
 
     /** 测试专用 Caffeine Ticker，可推进虚拟纳秒时间。 */

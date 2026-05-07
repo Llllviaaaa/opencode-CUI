@@ -65,6 +65,8 @@ class PersonalScopeCloudProtocolIntegrationTest {
     @Mock private SessionRouteService sessionRouteService;
     @Mock private SkillInstanceRegistry skillInstanceRegistry;
     @Mock private AssistantInfoService assistantInfoService;
+    @Mock private com.opencode.cui.skill.service.ChannelLookupService channelLookupService;
+    @Mock private com.opencode.cui.skill.service.ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService;
     @Mock private OutboundDeliveryDispatcher outboundDeliveryDispatcher;
     @Mock private StreamMessageEmitter emitter;
     @Mock private BusinessWhitelistService whitelistService;
@@ -99,7 +101,9 @@ class PersonalScopeCloudProtocolIntegrationTest {
                 objectMapper, messageService, sessionService, redisMessageBroker,
                 legacyTranslatorArg, persistenceService, bufferService, rebuildService,
                 interactionStateService, imOutboundService, sessionRouteService,
-                skillInstanceRegistry, assistantInfoService, scopeDispatcher,
+                skillInstanceRegistry, assistantInfoService,
+                channelLookupService, channelSuppressReplyWhitelistService,
+                scopeDispatcher,
                 outboundDeliveryDispatcher, emitter, 120);
     }
 

@@ -69,6 +69,10 @@ class GatewayMessageRouterImPushTest {
     @Mock
     private AssistantInfoService assistantInfoService;
     @Mock
+    private ChannelLookupService channelLookupService;
+    @Mock
+    private ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService;
+    @Mock
     private AssistantScopeDispatcher scopeDispatcher;
     @Mock
     private com.opencode.cui.skill.service.delivery.OutboundDeliveryDispatcher outboundDeliveryDispatcher;
@@ -97,6 +101,8 @@ class GatewayMessageRouterImPushTest {
                 sessionRouteService,
                 skillInstanceRegistry,
                 assistantInfoService,
+                channelLookupService,
+                channelSuppressReplyWhitelistService,
                 scopeDispatcher,
                 outboundDeliveryDispatcher,
                 emitter,

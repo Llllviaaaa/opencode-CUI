@@ -57,6 +57,8 @@ class ImOutboundFilterTest {
     @Mock private SessionRouteService sessionRouteService;
     @Mock private SkillInstanceRegistry skillInstanceRegistry;
     @Mock private AssistantInfoService assistantInfoService;
+    @Mock private ChannelLookupService channelLookupService;
+    @Mock private ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService;
     @Mock private AssistantScopeDispatcher scopeDispatcher;
     @Mock private AssistantScopeStrategy businessScopeStrategy;
     @Mock private AssistantScopeStrategy personalScopeStrategy;
@@ -84,6 +86,8 @@ class ImOutboundFilterTest {
                 sessionRouteService,
                 skillInstanceRegistry,
                 assistantInfoService,
+                channelLookupService,
+                channelSuppressReplyWhitelistService,
                 scopeDispatcher,
                 outboundDeliveryDispatcher,
                 emitter,
