@@ -478,6 +478,13 @@ class InboundProcessingServiceTest {
         JsonNode payload = objectMapper.readTree(captor.getValue().payload());
         assertEquals("user-001", payload.get("sendUserAccount").asText(),
                 "gateway payload should bind sendUserAccount=user-001");
+        // business（云端）助理通过 BusinessScopeStrategy.extractField 从 payload 反向取这些字段，
+        // 缺一个就会在 DefaultCloudRequestStrategy 校验时抛 'assistantAccount must not be blank'。
+        assertEquals("assist-001", payload.get("assistantAccount").asText(),
+                "gateway payload should carry assistantAccount for business cloud route");
+        assertTrue(payload.has("messageId"), "gateway payload should carry messageId");
+        assertFalse(payload.has("imGroupId"),
+                "direct session: imGroupId should be absent (null skipped by PayloadBuilder)");
     }
 
     @Test
@@ -549,6 +556,12 @@ class InboundProcessingServiceTest {
         JsonNode permissionPayload = objectMapper.readTree(invokeCaptor.getValue().payload());
         assertEquals("user-001", permissionPayload.get("sendUserAccount").asText(),
                 "gateway payload should bind sendUserAccount=user-001");
+        // business（云端）助理协议依赖：缺一个就会在 DefaultCloudRequestStrategy 校验时 fast-fail。
+        assertEquals("assist-001", permissionPayload.get("assistantAccount").asText(),
+                "gateway payload should carry assistantAccount for business cloud route");
+        assertTrue(permissionPayload.has("messageId"), "gateway payload should carry messageId");
+        assertFalse(permissionPayload.has("imGroupId"),
+                "direct session: imGroupId should be absent (null skipped by PayloadBuilder)");
 
         // 验证广播
         ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
