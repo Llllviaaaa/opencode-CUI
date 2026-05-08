@@ -526,8 +526,7 @@ public class OpenCodeEventTranslator {
             return baseBuilder(StreamMessage.Types.QUESTION, sessionId).build();
         }
 
-        List<StreamMessage.QuestionOption> options =
-                ProtocolUtils.extractQuestionOptions(firstQuestion.path("options"));
+        List<String> options = ProtocolUtils.extractQuestionOptions(firstQuestion.path("options"));
 
         // callID and messageID live inside "properties.tool" in the question.asked
         // event,
