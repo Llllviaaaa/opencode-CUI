@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>同时装配 v1（{@link LegacyRouteResolver}）与 v2（{@link GatewayCallbackResolver}）
  * 两个 resolver。运行时由 GW 自己向 SS 查询 SysConfig 开关
  * （{@code cloud_route.v2_enabled = "1"} 启用 v2），结果在 GW 端 in-memory
- * 缓存 {@link #VERSION_CACHE_TTL_MS} 毫秒。</p>
+ * 缓存 {@code sysconfigCacheTtlMs} 毫秒（由 {@code gateway.cloud-route.sysconfig-cache-ttl-ms} 配置）。</p>
  *
  * <p>切换 v1/v2 仅需修改 SS SysConfig，不需要重启任何服务（最长延迟 = TTL）。</p>
  *
@@ -36,8 +36,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * <ul>
  *   <li>路由结果缓存 key：{@code gw:cloud:route:{version}:{ak}:{scope}}</li>
  *   <li>路由结果 TTL 由 {@code gateway.cloud-route.cache-ttl-seconds} 配置（默认 300s）</li>
- *   <li>v1/v2 版本判定 in-memory 缓存 30s</li>
- *   <li>fallback 总开关 in-memory 缓存 30s（与版本判定同 TTL）</li>
+ *   <li>v1/v2 版本判定 in-memory TTL 由 {@code gateway.cloud-route.sysconfig-cache-ttl-ms} 配置（默认 300000ms）</li>
+ *   <li>fallback 总开关 in-memory 缓存复用同一 TTL（与版本判定对齐，由 {@link SysConfigFallbackProvider} 一并消费）</li>
  * </ul>
  */
 @Slf4j
@@ -49,12 +49,12 @@ public class CallbackConfigService {
     private static final String SS_CONFIG_TYPE = "cloud_route";
     private static final String SS_CONFIG_KEY = "v2_enabled";
     private static final String SS_FALLBACK_SWITCH_KEY = "v2_fallback_enabled";
-    static final long VERSION_CACHE_TTL_MS = 30_000L;
 
     private final Map<String, CallbackConfigResolver> resolversByVersion;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final long cacheTtlSeconds;
+    private final long sysconfigCacheTtlMs;
     private final SkillServerConfigClient ssConfigClient;
     private final SysConfigFallbackProvider fallbackProvider;
 
@@ -68,7 +68,8 @@ public class CallbackConfigService {
                                  ObjectMapper objectMapper,
                                  SkillServerConfigClient ssConfigClient,
                                  SysConfigFallbackProvider fallbackProvider,
-                                 @Value("${gateway.cloud-route.cache-ttl-seconds:300}") long cacheTtlSeconds) {
+                                 @Value("${gateway.cloud-route.cache-ttl-seconds:300}") long cacheTtlSeconds,
+                                 @Value("${gateway.cloud-route.sysconfig-cache-ttl-ms:300000}") long sysconfigCacheTtlMs) {
         this.resolversByVersion = new HashMap<>();
         for (CallbackConfigResolver r : resolvers) {
             this.resolversByVersion.put(r.version(), r);
@@ -78,8 +79,9 @@ public class CallbackConfigService {
         this.ssConfigClient = ssConfigClient;
         this.fallbackProvider = fallbackProvider;
         this.cacheTtlSeconds = cacheTtlSeconds;
+        this.sysconfigCacheTtlMs = sysconfigCacheTtlMs;
         log.info("[CALLBACK_CONFIG] registered resolvers: {}, route cache TTL={}s, version cache TTL={}ms",
-                resolversByVersion.keySet(), cacheTtlSeconds, VERSION_CACHE_TTL_MS);
+                resolversByVersion.keySet(), cacheTtlSeconds, sysconfigCacheTtlMs);
     }
 
     public CallbackConfig getConfig(String ak, String scope) {
@@ -162,7 +164,7 @@ public class CallbackConfigService {
     String currentVersion() {
         long now = System.currentTimeMillis();
         CachedVersion cached = versionCache.get();
-        if (cached != null && now - cached.fetchedAtMs < VERSION_CACHE_TTL_MS) {
+        if (cached != null && now - cached.fetchedAtMs < sysconfigCacheTtlMs) {
             return cached.version;
         }
         String configValue = ssConfigClient.getConfigValue(SS_CONFIG_TYPE, SS_CONFIG_KEY);
@@ -179,7 +181,7 @@ public class CallbackConfigService {
     boolean currentFallbackEnabled() {
         long now = System.currentTimeMillis();
         CachedSwitch cached = fallbackSwitchCache.get();
-        if (cached != null && now - cached.fetchedAtMs < VERSION_CACHE_TTL_MS) {
+        if (cached != null && now - cached.fetchedAtMs < sysconfigCacheTtlMs) {
             return cached.enabled;
         }
         String configValue = ssConfigClient.getConfigValue(SS_CONFIG_TYPE, SS_FALLBACK_SWITCH_KEY);
