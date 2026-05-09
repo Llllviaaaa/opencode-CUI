@@ -13,6 +13,7 @@ import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.scheduling.TaskScheduler;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.ScheduledFuture;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -81,21 +82,32 @@ class SkillInstanceRegistryTest {
     }
 
     @Test
-    @DisplayName("ApplicationReadyEvent 触发后才注册 scheduleWithFixedDelay；事件未发布时 scheduler 不被调用")
+    @DisplayName("ApplicationReadyEvent 触发后才注册 scheduleWithFixedDelay；首次执行延迟 = interval（不立即 fire）")
     @SuppressWarnings({"unchecked", "rawtypes"})
     void startScheduling_onlyRegistersAfterApplicationReadyEvent() {
         // 事件触发前：scheduler 没收到任何调用
         verifyNoInteractions(taskScheduler);
 
-        when(taskScheduler.scheduleWithFixedDelay(any(Runnable.class), any(Duration.class)))
+        when(taskScheduler.scheduleWithFixedDelay(
+                any(Runnable.class), any(Instant.class), any(Duration.class)))
                 .thenReturn(scheduledFuture);
 
+        Instant before = Instant.now();
         ApplicationReadyEvent event = org.mockito.Mockito.mock(ApplicationReadyEvent.class);
         registry.startScheduling(event);
+        Instant after = Instant.now();
 
+        ArgumentCaptor<Instant> startCaptor = ArgumentCaptor.forClass(Instant.class);
         ArgumentCaptor<Duration> intervalCaptor = ArgumentCaptor.forClass(Duration.class);
         verify(taskScheduler, times(1)).scheduleWithFixedDelay(
-                any(Runnable.class), intervalCaptor.capture());
+                any(Runnable.class), startCaptor.capture(), intervalCaptor.capture());
+
+        // 首次执行时间应在 [before + interval, after + interval] 之间，给订阅 settle 留窗口
+        Instant firstRun = startCaptor.getValue();
+        assertTrue(!firstRun.isBefore(before.plusMillis(REFRESH_INTERVAL_MS)),
+                "firstRun should be >= before + interval");
+        assertTrue(!firstRun.isAfter(after.plusMillis(REFRESH_INTERVAL_MS)),
+                "firstRun should be <= after + interval");
         assertEquals(Duration.ofMillis(REFRESH_INTERVAL_MS), intervalCaptor.getValue());
     }
 
@@ -120,7 +132,8 @@ class SkillInstanceRegistryTest {
     @SuppressWarnings({"unchecked", "rawtypes"})
     void destroy_shouldDeleteKeyAndCancelScheduledFuture() {
         // 先模拟启动期：调度任务已注册
-        when(taskScheduler.scheduleWithFixedDelay(any(Runnable.class), any(Duration.class)))
+        when(taskScheduler.scheduleWithFixedDelay(
+                any(Runnable.class), any(Instant.class), any(Duration.class)))
                 .thenReturn(scheduledFuture);
         ApplicationReadyEvent event = org.mockito.Mockito.mock(ApplicationReadyEvent.class);
         registry.startScheduling(event);
