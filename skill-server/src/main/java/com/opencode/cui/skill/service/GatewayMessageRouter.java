@@ -18,6 +18,8 @@ import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -267,9 +269,18 @@ public class GatewayMessageRouter {
      *
      * <p>与 {@link SkillInstanceRegistry#register()} 配合：心跳注册让其他实例知道本实例存活，
      * relay 订阅让其他实例的消息能真正送达。两者缺一不可。</p>
+     *
+     * <p>必须使用 {@link ApplicationReadyEvent} 而非 {@code @PostConstruct}：
+     * Spring 的 {@code RedisMessageListenerContainer} 是 {@code SmartLifecycle}（默认
+     * {@code autoStartup=true}），会在所有 {@code @PostConstruct} 方法执行完毕之后才
+     * {@code start()}。在 {@code @PostConstruct} 阶段调 {@code addMessageListener} 时
+     * container 尚未 running，listener 仅被加进 {@code channelMapping} 但**不会真实**
+     * 把 SUBSCRIBE 命令发到 Redis（spring-data-redis 3.4.6 + Lettuce 6.4.2 实测）。
+     * 监听 {@code ApplicationReadyEvent} 时 container 已 start，
+     * {@code addMessageListener} 会同步触发 SUBSCRIBE。详见 PRD D1。</p>
      */
-    @PostConstruct
-    void initSsRelaySubscription() {
+    @EventListener(ApplicationReadyEvent.class)
+    void initSsRelaySubscription(ApplicationReadyEvent event) {
         redisMessageBroker.subscribeToSsRelay(instanceId, this::handleSsRelayMessage);
         log.info("[ENTRY] GatewayMessageRouter.initSsRelaySubscription: instanceId={}, channel=ss:relay:{}",
                 instanceId, instanceId);

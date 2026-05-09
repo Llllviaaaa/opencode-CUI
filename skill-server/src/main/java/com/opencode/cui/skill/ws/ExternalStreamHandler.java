@@ -5,9 +5,10 @@ import com.opencode.cui.skill.config.DeliveryProperties;
 import com.opencode.cui.skill.service.ExternalWsRegistry;
 import com.opencode.cui.skill.service.RedisMessageBroker;
 import com.opencode.cui.skill.service.SkillInstanceRegistry;
-import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -180,8 +181,20 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
         return false;
     }
 
-    @PostConstruct
-    public void subscribeRelayChannel() {
+    /**
+     * 启动后订阅本实例的 external relay channel，接收其他实例中转过来的 external WS 消息。
+     *
+     * <p>必须使用 {@link ApplicationReadyEvent} 而非 {@code @PostConstruct}：
+     * Spring 的 {@code RedisMessageListenerContainer} 是 {@code SmartLifecycle}（默认
+     * {@code autoStartup=true}），会在所有 {@code @PostConstruct} 方法执行完毕之后才
+     * {@code start()}。在 {@code @PostConstruct} 阶段调 {@code addMessageListener} 时
+     * container 尚未 running，listener 仅被加进 {@code channelMapping} 但**不会真实**
+     * 把 SUBSCRIBE 命令发到 Redis（spring-data-redis 3.4.6 + Lettuce 6.4.2 实测）。
+     * 监听 {@code ApplicationReadyEvent} 时 container 已 start，
+     * {@code addMessageListener} 会同步触发 SUBSCRIBE。详见 PRD D1。</p>
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void subscribeRelayChannel(ApplicationReadyEvent event) {
         String instanceId = instanceRegistry.getInstanceId();
         redisMessageBroker.subscribeToChannel("ss:external-relay:" + instanceId,
                 this::handleExternalRelayMessage);
