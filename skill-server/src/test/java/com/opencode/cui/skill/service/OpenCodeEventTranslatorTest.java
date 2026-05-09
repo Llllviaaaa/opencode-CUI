@@ -188,9 +188,7 @@ class OpenCodeEventTranslatorTest {
     assertEquals("assistant", translated.getRole());
     assertEquals("Choose one", translated.getQuestionInfo().getHeader());
     assertEquals("Which option?", translated.getQuestionInfo().getQuestion());
-    assertEquals(java.util.List.of("A", "B"),
-            translated.getQuestionInfo().getOptions().stream()
-                    .map(com.opencode.cui.skill.model.StreamMessage.QuestionOption::getLabel).toList());
+    assertEquals(java.util.List.of("A", "B"), translated.getQuestionInfo().getOptions());
   }
 
   @Test

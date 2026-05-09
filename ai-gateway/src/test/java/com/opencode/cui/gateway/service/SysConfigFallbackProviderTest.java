@@ -21,7 +21,7 @@ import static org.mockito.Mockito.when;
  *   <li>JSON 解析失败 → 返回 null（warn）</li>
  *   <li>SysConfig 返回 null → 返回 null</li>
  *   <li>scope 不在白名单 → 返回 null（不打 SS）</li>
- *   <li>30s 内重复 load 仅打 SS 一次（in-mem 缓存）</li>
+ *   <li>TTL 窗口内重复 load 仅打 SS 一次（in-mem 缓存）</li>
  * </ul>
  */
 class SysConfigFallbackProviderTest {
@@ -33,7 +33,7 @@ class SysConfigFallbackProviderTest {
         SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
         when(ss.getConfigValue("cloud_route_fallback", "chat"))
                 .thenReturn("{\"channelAddress\":\"http://x/chat\",\"channelType\":\"sse\",\"authType\":\"none\"}");
-        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper);
+        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper, 300_000L);
 
         CallbackConfig cfg = p.load("AK1", "callback:weagent:chat");
 
@@ -51,7 +51,7 @@ class SysConfigFallbackProviderTest {
         SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
         when(ss.getConfigValue("cloud_route_fallback", "question"))
                 .thenReturn("{\"channelAddress\":\"http://x/q\",\"channelType\":\"webhook\",\"authType\":\"soa\"}");
-        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper);
+        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper, 300_000L);
 
         CallbackConfig cfg = p.load("AK1", "callback:weagent:question_reply");
 
@@ -66,7 +66,7 @@ class SysConfigFallbackProviderTest {
         SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
         when(ss.getConfigValue("cloud_route_fallback", "permission"))
                 .thenReturn("{\"channelAddress\":\"http://x/p\",\"channelType\":\"webhook\",\"authType\":\"apig\"}");
-        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper);
+        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper, 300_000L);
 
         CallbackConfig cfg = p.load("AK1", "callback:weagent:permission_reply");
 
@@ -82,7 +82,7 @@ class SysConfigFallbackProviderTest {
         // 缺 authType
         when(ss.getConfigValue("cloud_route_fallback", "chat"))
                 .thenReturn("{\"channelAddress\":\"http://x\",\"channelType\":\"sse\"}");
-        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper);
+        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper, 300_000L);
 
         CallbackConfig cfg = p.load("AK1", "callback:weagent:chat");
 
@@ -94,7 +94,7 @@ class SysConfigFallbackProviderTest {
         SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
         when(ss.getConfigValue("cloud_route_fallback", "chat"))
                 .thenReturn("not-a-json{{");
-        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper);
+        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper, 300_000L);
 
         CallbackConfig cfg = p.load("AK1", "callback:weagent:chat");
 
@@ -105,7 +105,7 @@ class SysConfigFallbackProviderTest {
     void load_sysConfigReturnsNull_returnsNull() {
         SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
         when(ss.getConfigValue(any(), any())).thenReturn(null);
-        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper);
+        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper, 300_000L);
 
         CallbackConfig cfg = p.load("AK1", "callback:weagent:chat");
 
@@ -115,7 +115,7 @@ class SysConfigFallbackProviderTest {
     @Test
     void load_scopeNotInWhitelist_returnsNullWithoutCallingSs() {
         SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
-        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper);
+        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper, 300_000L);
 
         CallbackConfig cfg = p.load("AK1", "callback:unknown:scope");
 
@@ -128,7 +128,7 @@ class SysConfigFallbackProviderTest {
         SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
         when(ss.getConfigValue("cloud_route_fallback", "chat"))
                 .thenReturn("{\"channelAddress\":\"http://x\",\"channelType\":\"sse\",\"authType\":\"none\"}");
-        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper);
+        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper, 300_000L);
 
         CallbackConfig c1 = p.load("AK1", "callback:weagent:chat");
         CallbackConfig c2 = p.load("AK2", "callback:weagent:chat");
@@ -152,7 +152,7 @@ class SysConfigFallbackProviderTest {
                 .thenReturn("{\"channelAddress\":\"http://chat\",\"channelType\":\"sse\",\"authType\":\"none\"}");
         when(ss.getConfigValue("cloud_route_fallback", "question"))
                 .thenReturn("{\"channelAddress\":\"http://q\",\"channelType\":\"webhook\",\"authType\":\"soa\"}");
-        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper);
+        SysConfigFallbackProvider p = new SysConfigFallbackProvider(ss, mapper, 300_000L);
 
         CallbackConfig c1 = p.load("AK1", "callback:weagent:chat");
         CallbackConfig c2 = p.load("AK1", "callback:weagent:question_reply");

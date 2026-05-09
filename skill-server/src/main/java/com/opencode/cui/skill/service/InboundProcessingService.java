@@ -413,11 +413,16 @@ public class InboundProcessingService {
         if (offline != null) return offline;
 
         String targetToolSessionId = subagentSessionId != null ? subagentSessionId : session.getToolSessionId();
+        // business（云端）助理通过 BusinessScopeStrategy 从 payload 反向提取 assistantAccount/imGroupId/messageId
+        // 构建云端协议请求体；缺字段会在 DefaultCloudRequestStrategy 校验时 fast-fail。
         Map<String, Object> payloadFields = new LinkedHashMap<>();
         payloadFields.put("answer", content);
         payloadFields.put("toolCallId", toolCallId);
         payloadFields.put("toolSessionId", targetToolSessionId);
+        payloadFields.put("assistantAccount", assistantAccount);
         payloadFields.put("sendUserAccount", senderUserAccount);
+        payloadFields.put("imGroupId", "group".equals(sessionType) ? sessionId : null);
+        payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
         payloadFields.put("businessExtParam", businessExtParam);
         gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
                 ak, ownerWelinkId, String.valueOf(session.getId()),
@@ -472,11 +477,16 @@ public class InboundProcessingService {
         if (offline != null) return offline;
 
         String targetToolSessionId = subagentSessionId != null ? subagentSessionId : session.getToolSessionId();
+        // business（云端）助理通过 BusinessScopeStrategy 从 payload 反向提取 assistantAccount/imGroupId/messageId
+        // 构建云端协议请求体；缺字段会在 DefaultCloudRequestStrategy 校验时 fast-fail。
         Map<String, Object> payloadFields = new LinkedHashMap<>();
         payloadFields.put("permissionId", permissionId);
         payloadFields.put("response", response);
         payloadFields.put("toolSessionId", targetToolSessionId);
+        payloadFields.put("assistantAccount", assistantAccount);
         payloadFields.put("sendUserAccount", senderUserAccount);
+        payloadFields.put("imGroupId", "group".equals(sessionType) ? sessionId : null);
+        payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
         payloadFields.put("businessExtParam", businessExtParam);
         gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
                 ak, ownerWelinkId, String.valueOf(session.getId()),

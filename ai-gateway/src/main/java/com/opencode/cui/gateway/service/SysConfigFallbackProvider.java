@@ -3,6 +3,7 @@ package com.opencode.cui.gateway.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -22,8 +23,8 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <h3>缓存策略</h3>
  * <p>本地 in-memory 缓存按 scope 短名（chat/question/permission）独立维护，
- * TTL = {@link #FALLBACK_CACHE_TTL_MS}（30s），与
- * {@link CallbackConfigService} 的 {@code versionCache} 对齐，避免每次失败都打 skill-server。</p>
+ * TTL 由 {@code gateway.cloud-route.sysconfig-cache-ttl-ms} 配置（默认 300000ms），
+ * 与 {@link CallbackConfigService} 的版本缓存共用同一配置项，避免每次失败都打 skill-server。</p>
  */
 @Slf4j
 @Component
@@ -38,20 +39,20 @@ public class SysConfigFallbackProvider {
             "callback:weagent:permission_reply", "permission"
     );
 
-    /** 与 {@code CallbackConfigService.VERSION_CACHE_TTL_MS} 对齐（30s）。 */
-    private static final long FALLBACK_CACHE_TTL_MS = 30_000L;
-
     private final SkillServerConfigClient skillServerConfigClient;
     private final ObjectMapper objectMapper;
+    private final long fallbackCacheTtlMs;
 
     /** 按 scope 短名缓存兜底配置；value 为 (CallbackConfig, fetchedAtMs)。 */
     private final ConcurrentHashMap<String, AtomicReference<CachedFallback>> cacheByShortName =
             new ConcurrentHashMap<>();
 
     public SysConfigFallbackProvider(SkillServerConfigClient skillServerConfigClient,
-                                     ObjectMapper objectMapper) {
+                                     ObjectMapper objectMapper,
+                                     @Value("${gateway.cloud-route.sysconfig-cache-ttl-ms:300000}") long fallbackCacheTtlMs) {
         this.skillServerConfigClient = skillServerConfigClient;
         this.objectMapper = objectMapper;
+        this.fallbackCacheTtlMs = fallbackCacheTtlMs;
     }
 
     /**
@@ -71,7 +72,7 @@ public class SysConfigFallbackProvider {
                 shortName, k -> new AtomicReference<>());
         CachedFallback cached = ref.get();
         CallbackConfig template;
-        if (cached != null && now - cached.fetchedAtMs < FALLBACK_CACHE_TTL_MS) {
+        if (cached != null && now - cached.fetchedAtMs < fallbackCacheTtlMs) {
             template = cached.config;
         } else {
             template = fetchFromSysConfig(shortName);

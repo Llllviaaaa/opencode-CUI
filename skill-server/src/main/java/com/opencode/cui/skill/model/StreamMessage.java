@@ -124,8 +124,8 @@ public class StreamMessage {
     public static class QuestionInfo {
         private String header;
         private String question;
-        /** 选项列表（每项含 label，可选 description）；与 OpenCode question 工具 input.options 对齐 */
-        private List<QuestionOption> options;
+        /** 选项 label 列表；与 OpenCode question 工具 input.options 对齐 */
+        private List<String> options;
         /** 是否多选（false=单选；true=多选）。云端缺省时按 false */
         private Boolean multiSelect;
         private List<QuestionItem> questions;
@@ -141,26 +141,9 @@ public class StreamMessage {
     public static class QuestionItem {
         private String header;
         private String question;
-        private List<QuestionOption> options;
+        private List<String> options;
         /** 是否多选（false=单选；true=多选）。云端缺省时按 false */
         private Boolean multiSelect;
-    }
-
-    /**
-     * Question 选项项。
-     *
-     * <p>对齐 OpenCode question 工具 {@code options} 入参格式（支持 string 或
-     * {@code {label, description?}} 两种形态）。SS 端规范化后统一以本结构投递；
-     * 前端可读 {@link #label}（兼容旧 {@code List<String>}）+ 可选 {@link #description}（长选项解释）。</p>
-     */
-    @Data
-    @Builder
-    @NoArgsConstructor
-    @AllArgsConstructor
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public static class QuestionOption {
-        private String label;
-        private String description;
     }
 
     /** 用量统计相关字段 (step.done 消息) */

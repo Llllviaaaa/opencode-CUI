@@ -121,6 +121,9 @@ gateway:
     api-url: ${CLOUD_ROUTE_API_URL:http://localhost:9999/appstore/wecodeapi/open/ak/info}
     bearer-token: ${CLOUD_ROUTE_BEARER_TOKEN:}
     cache-ttl-seconds: ${CLOUD_ROUTE_CACHE_TTL_SECONDS:300}
+    # GW 端 in-memory 缓存 SS SysConfig（v1/v2 开关、fallback 总开关、SysConfig 兜底模板）的 TTL
+    # CallbackConfigService 与 SysConfigFallbackProvider 共用此值，保持 in-memory 失效语义对齐
+    sysconfig-cache-ttl-ms: ${GW_SYSCONFIG_CACHE_TTL_MS:300000}
     # v2 新接口（POST /gateway/callbacks/config，按 (ak, scope) 双维度）
     v2-api-url: ${GW_CLOUD_CALLBACK_CONFIG_URL:http://localhost:9999/gateway/callbacks/config}
     v2-bearer-token: ${GW_CLOUD_CALLBACK_BEARER:}
