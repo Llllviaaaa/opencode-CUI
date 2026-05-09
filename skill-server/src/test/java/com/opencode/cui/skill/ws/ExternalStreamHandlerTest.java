@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
@@ -27,6 +28,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -49,7 +51,29 @@ class ExternalStreamHandlerTest {
         when(instanceRegistry.getInstanceId()).thenReturn("test-instance-1");
         handler = new ExternalStreamHandler(objectMapper, redisMessageBroker, "test-token",
                 wsRegistry, instanceRegistry, deliveryProperties);
-        handler.subscribeRelayChannel();
+        // 模拟 Spring ApplicationReadyEvent 触发后的订阅注册（生产路径）
+        handler.subscribeRelayChannel(mock(ApplicationReadyEvent.class));
+    }
+
+    @Test
+    @DisplayName("subscribeRelayChannel 仅在 ApplicationReadyEvent 触发后才调 broker.subscribeToChannel")
+    void subscribeRelayChannel_onlyRegistersAfterApplicationReadyEvent() {
+        // setUp 复用 broker mock；此用例独立构造一份新 handler，避免 setUp 已触发的订阅干扰断言
+        RedisMessageBroker freshBroker = mock(RedisMessageBroker.class);
+        SkillInstanceRegistry freshRegistry = mock(SkillInstanceRegistry.class);
+        when(freshRegistry.getInstanceId()).thenReturn("fresh-instance");
+        ExternalStreamHandler freshHandler = new ExternalStreamHandler(
+                objectMapper, freshBroker, "test-token",
+                wsRegistry, freshRegistry, deliveryProperties);
+
+        // 事件触发前：broker 没收到任何 subscribe 调用
+        verifyNoInteractions(freshBroker);
+
+        // 事件触发后：恰好对正确的 channel 调一次 subscribeToChannel
+        freshHandler.subscribeRelayChannel(mock(ApplicationReadyEvent.class));
+        verify(freshBroker, times(1)).subscribeToChannel(
+                eq("ss:external-relay:fresh-instance"),
+                any());
     }
 
     private String buildAuthProtocol(String token, String source, String instanceId) {

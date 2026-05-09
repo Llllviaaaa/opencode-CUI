@@ -26,10 +26,16 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>心跳 key TTL：30 秒；刷新间隔默认 10 秒（可通过配置项覆盖）。
  *
  * <p>调度时机：定时刷新由 {@link ApplicationReadyEvent} 触发后才注册到
- * {@link TaskScheduler}，确保所有 {@code @PostConstruct}（包括
+ * {@link TaskScheduler}，确保所有 {@code @PostConstruct} 与同样监听
+ * {@code ApplicationReadyEvent} 的 listener（包括
  * {@code GatewayMessageRouter.initSsRelaySubscription}）都已完成订阅，避免启动期
  * 内 {@code refreshHeartbeat} 在 relay channel 实际订阅就绪前发起伪自检触发
  * {@code forceReconnectListenerContainer} 的级联副作用。
+ * 注意 {@code initSsRelaySubscription} 已迁移为 {@code @EventListener(ApplicationReadyEvent.class)}：
+ * {@code RedisMessageListenerContainer} 是 {@code SmartLifecycle}，{@code @PostConstruct} 阶段
+ * container 尚未 start，{@code addMessageListener} 不会真实把 SUBSCRIBE 发到 Redis。
+ * 监听 {@code ApplicationReadyEvent} 之间默认无序，但本类首次执行延迟到
+ * {@code now + interval}（10s）已经给 SUBSCRIBE settle 留出窗口，无需 {@code @Order}。
  *
  * <p>半死自愈：刷新心跳前，先用 {@link RedisMessageBroker#physicalSubscriberCount}
  * 检查本实例 {@code ss:relay:{instanceId}} 在 Redis 端的订阅数；若为 0（长连接

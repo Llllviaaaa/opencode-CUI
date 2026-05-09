@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -27,9 +28,11 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -314,6 +317,22 @@ class GatewayMessageRouterTest {
         router.route("tool_event", null, null, buildToolEventByToolSession(TOOL_SESSION_ID));
 
         verify(routeResponseSender, times(1)).sendRouteConfirm(eq(TOOL_SESSION_ID), eq(WELINK_SESSION_ID));
+    }
+
+    // ============= initSsRelaySubscription 必须延后到 ApplicationReadyEvent =============
+
+    @Test
+    @DisplayName("initSsRelaySubscription 仅在 ApplicationReadyEvent 触发后才调 broker.subscribeToSsRelay")
+    void initSsRelaySubscription_onlyRegistersAfterApplicationReadyEvent() {
+        // 构造期 + initConfirmDedupCache 不应触发任何 redisMessageBroker 调用
+        // （注意 setUp 已 stub `getToolSessionMapping` 等，但仅在 router.route 时才调用）
+        GatewayMessageRouter r = buildRouter(true);
+        verifyNoInteractions(redisMessageBroker);
+
+        // 模拟 Spring 在所有 bean 就绪后发的 ApplicationReadyEvent
+        r.initSsRelaySubscription(mock(ApplicationReadyEvent.class));
+
+        verify(redisMessageBroker, times(1)).subscribeToSsRelay(eq(LOCAL_INSTANCE), any());
     }
 
     // ============= tool_error 路由（reason 优先 + isSessionInvalidError 回退） =============
