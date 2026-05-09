@@ -1,8 +1,10 @@
 package com.opencode.cui.skill.service;
 
+import io.lettuce.core.api.async.BaseRedisAsyncCommands;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
+import org.springframework.data.redis.connection.lettuce.LettuceConnection;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.listener.ChannelTopic;
@@ -10,10 +12,11 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 
 /**
@@ -189,43 +192,42 @@ public class RedisMessageBroker {
             return 0L;
         }
         try {
-            // Spring Data Redis 3.4 没有高级 pubSubNumSub API，用 raw execute
-            // PUBSUB NUMSUB <channel> 返回 [channelName(bytes), count(bytes)]
-            Object result = redisTemplate.execute((RedisCallback<Object>) conn ->
-                    conn.execute("PUBSUB",
-                            "NUMSUB".getBytes(StandardCharsets.UTF_8),
-                            channel.getBytes(StandardCharsets.UTF_8)));
-            return parsePubSubNumSubResult(result);
+            // Lettuce native async API：避免 raw execute("PUBSUB", "NUMSUB", ...) 经
+            // ByteArrayOutput 解码 RESP integer 时抛 UnsupportedOperationException
+            // (Lettuce 6.4.x：ByteArrayOutput 不实现 set(long))。
+            Long count = redisTemplate.execute((RedisCallback<Long>) conn -> {
+                if (!(conn instanceof LettuceConnection lettuce)) {
+                    return 0L;
+                }
+                Object nativeConn = lettuce.getNativeConnection();
+                if (!(nativeConn instanceof BaseRedisAsyncCommands<?, ?> base)) {
+                    return 0L;
+                }
+                @SuppressWarnings("unchecked")
+                BaseRedisAsyncCommands<byte[], byte[]> async =
+                        (BaseRedisAsyncCommands<byte[], byte[]>) base;
+                byte[] channelBytes = channel.getBytes(StandardCharsets.UTF_8);
+                try {
+                    Map<byte[], Long> result = async.pubsubNumsub(channelBytes)
+                            .get(2, TimeUnit.SECONDS);
+                    // PUBSUB NUMSUB 协议保证 [name, count] 成对返回；0 订阅时
+                    // entry 仍存在 (channel, 0L)，不会 missing。
+                    return result.values().stream().findFirst().orElse(0L);
+                } catch (TimeoutException | ExecutionException e) {
+                    log.error("physicalSubscriberCount failed: channel={}, error={}",
+                            channel, e.getMessage(), e);
+                    return 0L;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.error("physicalSubscriberCount interrupted: channel={}", channel);
+                    return 0L;
+                }
+            });
+            return count != null ? count : 0L;
         } catch (Exception e) {
             log.error("physicalSubscriberCount failed: channel={}, error={}", channel, e.getMessage(), e);
             return 0L;
         }
-    }
-
-    /**
-     * 解析 PUBSUB NUMSUB 返回值。Lettuce 返回 {@code List<Object>}，元素依次为
-     * channel name (byte[]) 与 subscriber count (Long 或 byte[])。
-     */
-    @SuppressWarnings("unchecked")
-    private long parsePubSubNumSubResult(Object raw) {
-        if (raw == null) {
-            return 0L;
-        }
-        if (raw instanceof List<?> list && list.size() >= 2) {
-            Object countObj = list.get(1);
-            if (countObj instanceof Number n) {
-                return n.longValue();
-            }
-            if (countObj instanceof byte[] bytes) {
-                String s = new String(bytes, StandardCharsets.UTF_8);
-                return s.isBlank() ? 0L : Long.parseLong(s.trim());
-            }
-            if (countObj != null) {
-                String s = countObj.toString();
-                return s.isBlank() ? 0L : Long.parseLong(s.trim());
-            }
-        }
-        return 0L;
     }
 
     /**
