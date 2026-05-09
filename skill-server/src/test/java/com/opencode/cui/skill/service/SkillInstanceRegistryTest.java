@@ -7,27 +7,34 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.scheduling.TaskScheduler;
 
 import java.time.Duration;
+import java.util.concurrent.ScheduledFuture;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-/** SkillInstanceRegistry 单元测试：验证 SS 实例心跳写入、探活查询、自检自重连和销毁逻辑。 */
+/** SkillInstanceRegistry 单元测试：验证 SS 实例心跳写入、探活查询、自检自重连、调度时机和销毁逻辑。 */
 class SkillInstanceRegistryTest {
 
     private static final String INSTANCE_ID = "ss-az1-test";
     private static final String REDIS_KEY = "ss:internal:instance:" + INSTANCE_ID;
     private static final String RELAY_CHANNEL = "ss:relay:" + INSTANCE_ID;
+    private static final long REFRESH_INTERVAL_MS = 10_000L;
 
     @Mock
     private StringRedisTemplate redisTemplate;
@@ -38,13 +45,21 @@ class SkillInstanceRegistryTest {
     @Mock
     private RedisMessageBroker redisMessageBroker;
 
+    @Mock
+    private TaskScheduler taskScheduler;
+
+    @Mock
+    @SuppressWarnings("rawtypes")
+    private ScheduledFuture scheduledFuture;
+
     private SkillInstanceRegistry registry;
 
     @BeforeEach
     void setUp() {
         // lenient：仅 register/refresh 等写入场景需要 opsForValue；其他测试无需此 stub
         org.mockito.Mockito.lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        registry = new SkillInstanceRegistry(redisTemplate, redisMessageBroker, INSTANCE_ID);
+        registry = new SkillInstanceRegistry(redisTemplate, redisMessageBroker, taskScheduler,
+                INSTANCE_ID, REFRESH_INTERVAL_MS);
     }
 
     @Test
@@ -55,6 +70,33 @@ class SkillInstanceRegistryTest {
         ArgumentCaptor<Duration> ttlCaptor = ArgumentCaptor.forClass(Duration.class);
         verify(valueOperations).set(eq(REDIS_KEY), eq("alive"), ttlCaptor.capture());
         assertEquals(Duration.ofSeconds(30), ttlCaptor.getValue());
+    }
+
+    @Test
+    @DisplayName("register 不会注册定时任务到 TaskScheduler（只在 ApplicationReadyEvent 后才调度）")
+    void register_shouldNotRegisterScheduledTask() {
+        registry.register();
+
+        verifyNoInteractions(taskScheduler);
+    }
+
+    @Test
+    @DisplayName("ApplicationReadyEvent 触发后才注册 scheduleWithFixedDelay；事件未发布时 scheduler 不被调用")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void startScheduling_onlyRegistersAfterApplicationReadyEvent() {
+        // 事件触发前：scheduler 没收到任何调用
+        verifyNoInteractions(taskScheduler);
+
+        when(taskScheduler.scheduleWithFixedDelay(any(Runnable.class), any(Duration.class)))
+                .thenReturn(scheduledFuture);
+
+        ApplicationReadyEvent event = org.mockito.Mockito.mock(ApplicationReadyEvent.class);
+        registry.startScheduling(event);
+
+        ArgumentCaptor<Duration> intervalCaptor = ArgumentCaptor.forClass(Duration.class);
+        verify(taskScheduler, times(1)).scheduleWithFixedDelay(
+                any(Runnable.class), intervalCaptor.capture());
+        assertEquals(Duration.ofMillis(REFRESH_INTERVAL_MS), intervalCaptor.getValue());
     }
 
     @Test
@@ -74,11 +116,28 @@ class SkillInstanceRegistryTest {
     }
 
     @Test
-    @DisplayName("destroy 关闭时删除 Redis 心跳 key")
-    void destroy_shouldDeleteKey() {
+    @DisplayName("destroy 关闭时删除 Redis 心跳 key，并取消已注册的调度任务")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void destroy_shouldDeleteKeyAndCancelScheduledFuture() {
+        // 先模拟启动期：调度任务已注册
+        when(taskScheduler.scheduleWithFixedDelay(any(Runnable.class), any(Duration.class)))
+                .thenReturn(scheduledFuture);
+        ApplicationReadyEvent event = org.mockito.Mockito.mock(ApplicationReadyEvent.class);
+        registry.startScheduling(event);
+
+        registry.destroy();
+
+        verify(scheduledFuture).cancel(false);
+        verify(redisTemplate).delete(REDIS_KEY);
+    }
+
+    @Test
+    @DisplayName("destroy 在未注册调度任务时也能安全删除心跳 key")
+    void destroy_withoutScheduledFuture_shouldStillDeleteKey() {
         registry.destroy();
 
         verify(redisTemplate).delete(REDIS_KEY);
+        verifyNoInteractions(taskScheduler);
     }
 
     @Test
