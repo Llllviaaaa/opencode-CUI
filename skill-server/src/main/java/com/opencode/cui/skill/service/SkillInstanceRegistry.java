@@ -11,6 +11,7 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -87,20 +88,29 @@ public class SkillInstanceRegistry {
     /**
      * 在 {@link ApplicationReadyEvent} 触发后注册定时心跳刷新任务。
      *
-     * <p>此时所有 {@code @PostConstruct} 已完成，{@code ss:relay:*} 订阅已就绪，
-     * 后续 {@link #refreshHeartbeat} 的自检不会因启动顺序产生伪 0 订阅。</p>
+     * <p>此时所有 {@code @PostConstruct} 已完成，{@code ss:relay:*} 订阅已加入
+     * Spring 端 listener mapping，但 Lettuce 实际向 Redis 发送 SUBSCRIBE 命令是异步
+     * 的，存在毫秒级 settle 窗口。因此首次执行时间设为 {@code now + interval}，
+     * 给 Lettuce 长连接 SUBSCRIBE 留出时间窗口，避免首轮自检看到伪 0 订阅。</p>
+     *
+     * <p>注意：Spring {@link TaskScheduler#scheduleWithFixedDelay(Runnable, Duration)}
+     * 的默认实现等价于 {@code scheduleWithFixedDelay(task, Instant.now(), delay)}，
+     * 即首次执行 {@code initialDelay = 0}，**会立即触发**。这里显式用三参数版本
+     * 把首次时间推迟到 {@code now + interval}。</p>
      */
     @EventListener(ApplicationReadyEvent.class)
     public void startScheduling(ApplicationReadyEvent event) {
         Duration interval = Duration.ofMillis(refreshIntervalMs);
-        ScheduledFuture<?> future = taskScheduler.scheduleWithFixedDelay(this::refreshHeartbeat, interval);
+        Instant firstRun = Instant.now().plus(interval);
+        ScheduledFuture<?> future = taskScheduler.scheduleWithFixedDelay(
+                this::refreshHeartbeat, firstRun, interval);
         ScheduledFuture<?> previous = scheduledFutureRef.getAndSet(future);
         if (previous != null) {
             // ApplicationReadyEvent 理论只发一次；防御性兜底，避免重复调度泄漏。
             previous.cancel(false);
         }
-        log.info("[ENTRY] SkillInstanceRegistry.startScheduling: instanceId={}, intervalMs={}",
-                instanceId, refreshIntervalMs);
+        log.info("[ENTRY] SkillInstanceRegistry.startScheduling: instanceId={}, intervalMs={}, firstRunAt={}",
+                instanceId, refreshIntervalMs, firstRun);
     }
 
     /**
