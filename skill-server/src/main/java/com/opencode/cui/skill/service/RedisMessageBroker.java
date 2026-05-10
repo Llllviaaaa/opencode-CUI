@@ -4,8 +4,10 @@ import io.lettuce.core.api.async.BaseRedisAsyncCommands;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.lettuce.LettuceConnection;
-import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.RedisConnectionUtils;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
@@ -191,42 +193,50 @@ public class RedisMessageBroker {
         if (channel == null || channel.isBlank()) {
             return 0L;
         }
+        // 直接从 ConnectionFactory 拿 raw RedisConnection，绕开 RedisTemplate.execute
+        // 默认走的 CloseSuppressingInvocationHandler。后者会把 RedisConnection 包成
+        // JDK 动态代理（jdk.proxy2.$ProxyN），代理实现 RedisConnection interface
+        // 但**不是** LettuceConnection 类的实例，导致下面 instanceof cast 永远 false
+        // → 早 return 0L → self-check 永远失败 → forceReconnectListenerContainer 风暴。
+        // 见 spec/skill-server/backend/conventions.md "RedisTemplate.execute 包 connection 成 proxy"。
+        RedisConnectionFactory factory = redisTemplate.getRequiredConnectionFactory();
+        RedisConnection conn = RedisConnectionUtils.getConnection(factory);
         try {
             // Lettuce native async API：避免 raw execute("PUBSUB", "NUMSUB", ...) 经
             // ByteArrayOutput 解码 RESP integer 时抛 UnsupportedOperationException
             // (Lettuce 6.4.x：ByteArrayOutput 不实现 set(long))。
-            Long count = redisTemplate.execute((RedisCallback<Long>) conn -> {
-                if (!(conn instanceof LettuceConnection lettuce)) {
-                    return 0L;
-                }
-                Object nativeConn = lettuce.getNativeConnection();
-                if (!(nativeConn instanceof BaseRedisAsyncCommands<?, ?> base)) {
-                    return 0L;
-                }
-                @SuppressWarnings("unchecked")
-                BaseRedisAsyncCommands<byte[], byte[]> async =
-                        (BaseRedisAsyncCommands<byte[], byte[]>) base;
-                byte[] channelBytes = channel.getBytes(StandardCharsets.UTF_8);
-                try {
-                    Map<byte[], Long> result = async.pubsubNumsub(channelBytes)
-                            .get(2, TimeUnit.SECONDS);
-                    // PUBSUB NUMSUB 协议保证 [name, count] 成对返回；0 订阅时
-                    // entry 仍存在 (channel, 0L)，不会 missing。
-                    return result.values().stream().findFirst().orElse(0L);
-                } catch (TimeoutException | ExecutionException e) {
-                    log.error("physicalSubscriberCount failed: channel={}, error={}",
-                            channel, e.getMessage(), e);
-                    return 0L;
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    log.error("physicalSubscriberCount interrupted: channel={}", channel);
-                    return 0L;
-                }
-            });
-            return count != null ? count : 0L;
+            if (!(conn instanceof LettuceConnection lettuce)) {
+                // 切到 Jedis 或其他实现时 graceful 降级；本路径在 Lettuce 部署下走不到。
+                return 0L;
+            }
+            Object nativeConn = lettuce.getNativeConnection();
+            if (!(nativeConn instanceof BaseRedisAsyncCommands<?, ?> base)) {
+                return 0L;
+            }
+            @SuppressWarnings("unchecked")
+            BaseRedisAsyncCommands<byte[], byte[]> async =
+                    (BaseRedisAsyncCommands<byte[], byte[]>) base;
+            byte[] channelBytes = channel.getBytes(StandardCharsets.UTF_8);
+            try {
+                Map<byte[], Long> result = async.pubsubNumsub(channelBytes)
+                        .get(2, TimeUnit.SECONDS);
+                // PUBSUB NUMSUB 协议保证 [name, count] 成对返回；0 订阅时
+                // entry 仍存在 (channel, 0L)，不会 missing。
+                return result.values().stream().findFirst().orElse(0L);
+            } catch (TimeoutException | ExecutionException e) {
+                log.warn("physicalSubscriberCount failed: channel={}, error={}",
+                        channel, e.getMessage(), e);
+                return 0L;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("physicalSubscriberCount interrupted: channel={}", channel);
+                return 0L;
+            }
         } catch (Exception e) {
-            log.error("physicalSubscriberCount failed: channel={}, error={}", channel, e.getMessage(), e);
+            log.warn("physicalSubscriberCount failed: channel={}, error={}", channel, e.getMessage(), e);
             return 0L;
+        } finally {
+            RedisConnectionUtils.releaseConnection(conn, factory);
         }
     }
 
