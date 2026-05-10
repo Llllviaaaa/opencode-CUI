@@ -9,8 +9,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.lettuce.LettuceConnection;
-import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 
@@ -19,6 +20,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -31,10 +33,14 @@ import static org.mockito.Mockito.when;
 /**
  * RedisMessageBroker 单元测试：toolSessionId 反查缓存失效 + pub/sub silent-failure 自愈。
  *
- * <p>{@code physicalSubscriberCount_*} 测试 mock 深到 Lettuce {@code pubsubNumsub} 这一层，
- * 而非 Spring callback 的包装层，以确保 Lettuce 接口本身的方法签名 / 返回类型变化能被
- * 测试发现（旧版本 mock {@code redisTemplate.execute(callback)} 让 callback 完全没执行，
- * 是导致 {@code UnsupportedOperationException} 在生产爆炸但测试全绿的根因）。
+ * <p>{@code physicalSubscriberCount_*} 测试 mock 深到 Lettuce {@code pubsubNumsub} 这一层。
+ * 之所以 mock {@code connectionFactory.getConnection()} 而不是 {@code redisTemplate.execute(callback)}：
+ * 后者默认通过 {@code CloseSuppressingInvocationHandler} 把 RedisConnection 包成 JDK 动态代理
+ * （实现 RedisConnection interface，但**不是** {@link LettuceConnection} 类的实例），
+ * 导致生产代码里的 {@code instanceof LettuceConnection} cast guard 永远 false → 早 return 0L。
+ * 现在 {@code physicalSubscriberCount} 直接走
+ * {@code redisTemplate.getRequiredConnectionFactory().getConnection()} 拿 raw {@link LettuceConnection}，
+ * 测试 mock 路径必须与之对齐，cast 才能真实通过、覆盖到 {@code pubsubNumsub} 真实路径。
  */
 @ExtendWith(MockitoExtension.class)
 class RedisMessageBrokerTest {
@@ -46,6 +52,8 @@ class RedisMessageBrokerTest {
     private StringRedisTemplate redisTemplate;
     @Mock
     private RedisMessageListenerContainer listenerContainer;
+    @Mock
+    private RedisConnectionFactory connectionFactory;
     @Mock
     private LettuceConnection lettuceConnection;
     /**
@@ -93,7 +101,7 @@ class RedisMessageBrokerTest {
         Map<byte[], Long> numsubResult = new LinkedHashMap<>();
         numsubResult.put(VERIFY_CHANNEL.getBytes(), 1L);
         stubPubsubNumsub(numsubResult);
-        stubExecuteToInvokeCallback();
+        stubConnectionFactoryToReturnLettuceConnection();
 
         boolean ok = broker.forceReconnectListenerContainer(VERIFY_CHANNEL, 1000L);
 
@@ -120,11 +128,11 @@ class RedisMessageBrokerTest {
         Map<byte[], Long> numsubResult = new LinkedHashMap<>();
         numsubResult.put(VERIFY_CHANNEL.getBytes(), 3L);
         stubPubsubNumsub(numsubResult);
-        stubExecuteToInvokeCallback();
+        stubConnectionFactoryToReturnLettuceConnection();
 
         long count = broker.physicalSubscriberCount(VERIFY_CHANNEL);
 
-        org.junit.jupiter.api.Assertions.assertEquals(3L, count);
+        assertEquals(3L, count);
     }
 
     @Test
@@ -133,9 +141,9 @@ class RedisMessageBrokerTest {
         Map<byte[], Long> numsubResult = new LinkedHashMap<>();
         numsubResult.put(VERIFY_CHANNEL.getBytes(), 0L);
         stubPubsubNumsub(numsubResult);
-        stubExecuteToInvokeCallback();
+        stubConnectionFactoryToReturnLettuceConnection();
 
-        org.junit.jupiter.api.Assertions.assertEquals(0L, broker.physicalSubscriberCount(VERIFY_CHANNEL));
+        assertEquals(0L, broker.physicalSubscriberCount(VERIFY_CHANNEL));
     }
 
     @Test
@@ -144,33 +152,83 @@ class RedisMessageBrokerTest {
         when(lettuceConnection.getNativeConnection()).thenReturn(asyncCommands);
         when(asyncCommands.pubsubNumsub(any(byte[].class))).thenReturn(pubsubNumsubFuture);
         when(pubsubNumsubFuture.get(2L, TimeUnit.SECONDS)).thenThrow(new TimeoutException("test timeout"));
-        stubExecuteToInvokeCallback();
+        stubConnectionFactoryToReturnLettuceConnection();
 
-        org.junit.jupiter.api.Assertions.assertEquals(0L, broker.physicalSubscriberCount(VERIFY_CHANNEL));
+        assertEquals(0L, broker.physicalSubscriberCount(VERIFY_CHANNEL));
     }
 
     @Test
     @DisplayName("physicalSubscriberCount: null/blank channel → 0，不触达 Redis")
     void physicalSubscriberCount_nullOrBlank_returnsZero() {
-        org.junit.jupiter.api.Assertions.assertEquals(0L, broker.physicalSubscriberCount(null));
-        org.junit.jupiter.api.Assertions.assertEquals(0L, broker.physicalSubscriberCount(""));
-        org.junit.jupiter.api.Assertions.assertEquals(0L, broker.physicalSubscriberCount("  "));
-        verify(redisTemplate, never()).execute(any(RedisCallback.class));
+        assertEquals(0L, broker.physicalSubscriberCount(null));
+        assertEquals(0L, broker.physicalSubscriberCount(""));
+        assertEquals(0L, broker.physicalSubscriberCount("  "));
+        // 早返回，不应该走到 ConnectionFactory 路径
+        verify(redisTemplate, never()).getRequiredConnectionFactory();
+        verifyNoInteractions(connectionFactory, lettuceConnection);
+    }
+
+    /**
+     * 防回归 (AC5)：原 bug 是 {@code redisTemplate.execute(callback)} 默认通过
+     * {@code CloseSuppressingInvocationHandler} 把 {@link org.springframework.data.redis.connection.RedisConnection RedisConnection}
+     * 包成 JDK 动态代理（如 {@code jdk.proxy2.$Proxy134}），代理实现 {@code RedisConnection} interface 但不是
+     * {@link LettuceConnection} 类的实例 → 生产代码里的 {@code instanceof LettuceConnection} cast 永远 false →
+     * 早 return 0L。
+     *
+     * <p>本用例验证：通过 {@code redisTemplate.getRequiredConnectionFactory().getConnection()} 拿到的
+     * 是 raw {@link LettuceConnection}（不被 proxy 包装），cast 真能通过、能走到 {@code pubsubNumsub} 真实路径
+     * 并返回 server 端真值（这里 mock 为 7）。如果未来谁把 {@code physicalSubscriberCount} 改回
+     * {@code redisTemplate.execute(callback)}，这个用例会因为 cast 失败而拿到 0 而非 7，立刻报错。
+     */
+    @Test
+    @DisplayName("physicalSubscriberCount: 走 connectionFactory 路径，cast 不再被 proxy 阻断（防回归）")
+    void physicalSubscriberCount_proxiedConnection_now_works() throws Exception {
+        Map<byte[], Long> numsubResult = new LinkedHashMap<>();
+        numsubResult.put(VERIFY_CHANNEL.getBytes(), 7L);
+        stubPubsubNumsub(numsubResult);
+        stubConnectionFactoryToReturnLettuceConnection();
+
+        long count = broker.physicalSubscriberCount(VERIFY_CHANNEL);
+
+        // 真值 7 来自 pubsubNumsub mock：cast guard 真实通过 → 走到 native API → 拿到真值
+        assertEquals(7L, count);
+        // 进一步证明 cast 通过：lettuceConnection.getNativeConnection() 一定被调到
+        verify(lettuceConnection).getNativeConnection();
+    }
+
+    /**
+     * 防回归 (AC5)：保留 cast guard 的 Jedis 兜底语义。
+     *
+     * <p>当 {@code factory.getConnection()} 返回的是 plain {@link RedisConnection}（非 LettuceConnection），
+     * cast guard {@code if (!(conn instanceof LettuceConnection)) return 0L;} 必须降级返回 0L，
+     * 而不是 NPE / ClassCastException。
+     */
+    @Test
+    @DisplayName("physicalSubscriberCount: 非 LettuceConnection（如 Jedis）→ cast guard 降级返回 0L")
+    void physicalSubscriberCount_nonLettuceConnection_returnsZero() {
+        RedisConnection plainConn = org.mockito.Mockito.mock(RedisConnection.class);
+        when(redisTemplate.getRequiredConnectionFactory()).thenReturn(connectionFactory);
+        when(connectionFactory.getConnection()).thenReturn(plainConn);
+
+        assertEquals(0L, broker.physicalSubscriberCount(VERIFY_CHANNEL));
+        // cast guard 早 return；不应触达 LettuceConnection 路径
+        verifyNoInteractions(lettuceConnection);
     }
 
     // ==================== 测试辅助方法 ====================
 
     /**
-     * 让 {@code redisTemplate.execute(callback)} 真实执行 callback（传入 mock 的
-     * {@link LettuceConnection}），从而覆盖到我们新的 cast → getNativeConnection →
-     * pubsubNumsub 路径。
+     * 让 {@code redisTemplate.getRequiredConnectionFactory().getConnection()} 返回 mock 的
+     * {@link LettuceConnection}。这与生产实现现在的真实路径对齐：
+     * {@code physicalSubscriberCount} 直接 {@code RedisConnectionUtils.getConnection(factory)} →
+     * 内部调 {@code factory.getConnection()}，拿到 raw connection 后做 cast。
+     *
+     * <p>关键：不再 mock {@code redisTemplate.execute(callback)}，那条路径默认会经
+     * {@code CloseSuppressingInvocationHandler} 包 JDK 代理，破坏 {@code instanceof LettuceConnection}。
      */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private void stubExecuteToInvokeCallback() {
-        when(redisTemplate.execute(any(RedisCallback.class))).thenAnswer(inv -> {
-            RedisCallback callback = inv.getArgument(0);
-            return callback.doInRedis(lettuceConnection);
-        });
+    private void stubConnectionFactoryToReturnLettuceConnection() {
+        when(redisTemplate.getRequiredConnectionFactory()).thenReturn(connectionFactory);
+        when(connectionFactory.getConnection()).thenReturn(lettuceConnection);
     }
 
     /**

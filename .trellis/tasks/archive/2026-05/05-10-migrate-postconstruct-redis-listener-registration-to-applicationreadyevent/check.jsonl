@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server 后端规范主索引 — 校准全局组织约定"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "构造注入、定时任务调度、PostConstruct 反模式（本次新增）— 检查改动是否符合现有约定 + 新加固是否落地"}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "Redis pub/sub 约定一致性 — 检查迁移到 ApplicationReadyEvent 后是否符合"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "[ENTRY]/[EXIT]/[SKIP] 一致性"}
+{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "异常处理 — listener 注册路径若有异常处理变化需符合规范"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "避免重复模式 — 跟 PR #21 SkillInstanceRegistry.startScheduling 风格保持一致"}
