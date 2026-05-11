@@ -1,1298 +1,377 @@
-# SS + GW 架构设计文档
+# SS + GW 架构设计
 
-> 范围：`skill-server`（SS，业务后端）+ `ai-gateway`（GW，Agent 网关）
-> 基线：commit `82bd982` + 当前工作区未提交修改
-> 说明：所有结论来自源码实读，不引用历史文档。
+| 项 | 内容 |
+|---|---|
+| 范围 | skill-server（SS，业务后端）+ ai-gateway（GW，Agent 网关） |
+| 读者 | 架构评审、技术决策者、跨团队对接方 |
+| 维护 | 待补充 |
+| 版本 | v1.0（2026-05） |
+
+> 图片说明：本文所有图采用 draw.io 源文件保存在 `./diagrams/` 目录下，可用 draw.io desktop、VS Code 的 *Draw.io Integration* 扩展或 [app.diagrams.net](https://app.diagrams.net) 打开后导出 PNG/SVG 嵌入。文末附使用说明。
 
 ---
 
-# 技术设计
+## 一页纸概览
 
-## 【功能实现设计】
+**做什么。** SS+GW 是数字助理对话能力的中台。它把"用户向助理提问/对话"这件事，从用户接入侧（小程序、IM、外部系统）一直接到模型侧（用户本机的 OpenCode Agent，或业务方部署在云端的服务），并把流式回答原路推回。
 
-### 一、这两个服务在做什么
+**为什么需要它。** 助理来源有两类——员工本机 PC 上跑的"个人助理"和业务方云端托管的"业务助理"。它们的接入方式、鉴权、协议、运维要求完全不同。SS+GW 把这两类差异在网关层抽象掉，对外只暴露一致的会话与消息能力，让业务接入方写一份代码就能用所有助理。
 
-一句话：**用户发一句话给"助理"，最终要落到模型上把答案流回来**。SS 管业务和数据，GW 管 Agent / 云端模型的接入。
+**关键能力。**
+1. 三种业务接入通道：小程序长连接、IM 平台 REST 回调、外部系统 WebSocket。
+2. 两种助理执行通道：PC Agent 长连接、业务方云端（SSE / WebSocket / Webhook 三选一）。
+3. 会话、消息、权限请求的统一持久化与重连快照。
+4. 多实例水平扩展，跨节点路由 + 故障自愈。
 
-不同助理走不同路径：
+**关键约束。** 助理类型差异不在业务接入层暴露——SS 侧识别助理来源后自动选路。新增业务接入域（如会议、文档）不改库表，新增云端协议不改路由层。
 
-| 助理类型（`AssistantInfo.assistantScope`） | 走哪条路 | 谁在出力 |
+---
+
+## 术语表
+
+| 术语 | 含义 |
+|---|---|
+| **个人助理** | 用户本机跑的 OpenCode Agent，通过 AK/SK 长连接到 GW |
+| **业务助理** | 业务方部署在云端的助理服务，由 GW 通过 SSE/WS/Webhook 调用 |
+| **会话** | 一次对话上下文，含归属用户、助理身份、业务来源三元组 |
+| **PC Agent** | 个人助理在用户机器上的运行实体 |
+| **业务接入域** | 业务侧入口类别（小程序 / IM / 外部系统） |
+| **业务接入三元组** | `(域, 类型, 业务方会话 id)`，用于跨平台唯一标识会话来源 |
+| **回流** | 助理端的流式事件经 GW 返回到 SS，再推送给业务方的过程 |
+
+---
+
+# 一、用例视图
+
+## 1.1 上下文模型
+
+> 图：[`./diagrams/01-usecase.drawio`](./diagrams/01-usecase.drawio) · 标签页 *上下文模型*
+
+系统对外的边界与所有外部交互方：
+
+- **接入侧**：员工小程序、IM 平台（群聊 @ 助理）、外部系统（会议助手、文档助手）、业务方云端服务（反向推送）
+- **执行侧**：员工 PC 上的 OpenCode Agent、业务方部署的云端助理（SSE/WS/Webhook 三种通道）
+- **支撑侧**：数字分身平台（助理账号解析）、身份服务（AK/SK 远端验签）、业务方云端路由配置服务
+
+SS+GW 系统对外只暴露三类入口（接收业务方消息、接收业务方反向推送、向业务方推送回答），其他一切都被网关边界封装。
+
+## 1.2 用例模型
+
+> 图：[`./diagrams/01-usecase.drawio`](./diagrams/01-usecase.drawio) · 标签页 *用例模型*
+
+| 主用例 | 触发方 | 目标 | 关键参与方 |
+|---|---|---|---|
+| 与个人助理对话 | 员工（小程序 / IM / 外部） | 把消息送到员工 PC 上的 Agent，并把流式回答推回 | SS、GW、PC Agent |
+| 与业务助理对话 | 员工（小程序 / IM / 外部） | 把消息送到业务方云端助理，并把流式回答推回 | SS、GW、业务方云端 |
+| IM 群聊里 @ 助理 | IM 平台 | 含群聊上下文的对话；群聊回答不持久化、单聊持久化 | SS、IM 平台 |
+| 业务助理反向推送 | 业务方云端 | 业务方主动向某个会话或 IM 群推一条消息 | 业务方、GW、SS、IM |
+| 助理权限请求与回应 | 助理 | 助理请求"读取本机文件"等敏感动作时由用户确认 | 助理、SS、用户 |
+| 中断当前回答 | 用户 | 立即停止某条问答的流式输出 | SS、GW、助理 |
+| 重连后续传 | 用户 | 刷新网页 / 断网恢复后，恢复未完成的流式 | SS |
+| 会话生命周期管理 | 用户 / 系统 | 列表、详情、关闭、按业务侧 id 找会话 | SS |
+| Agent 接入与下线 | PC Agent | AK/SK 认证、设备绑定、心跳维持、断连清理 | GW |
+| 配置下发 | 运维 / 系统 | 切 v1↔v2 路由、调白名单、改超时 | SS（持有配置）、GW（按需读取） |
+
+---
+
+# 二、逻辑视图
+
+## 2.1 业务模型
+
+> 图：[`./diagrams/02-logical.drawio`](./diagrams/02-logical.drawio) · 标签页 *业务模型*
+
+四个核心业务对象及其关系：
+
+- **用户** 通过 **业务接入通道** 与 **会话** 交互
+- **会话** 绑定一个 **助理**（个人 / 业务），承载一连串 **消息** 与 **消息片段**
+- **助理** 通过 **执行通道** 实际产出回答；执行通道根据助理类型由系统自动选择
+- **业务方** 既是接入方（发起消息）也可以是反向推送方（主动推消息进会话）
+
+业务流（理想路径）：
+1. 用户在业务方接入通道里发一句话 →
+2. SS 找到/创建对应会话、识别助理类型 →
+3. 网关把请求送到正确的执行通道 →
+4. 助理流式产出回答 →
+5. 回答经网关回流，SS 落库并推回用户。
+
+## 2.2 逻辑模型与元素清单
+
+> 图：[`./diagrams/02-logical.drawio`](./diagrams/02-logical.drawio) · 标签页 *逻辑模型*
+
+| 元素 | 所属 | 职责 |
 |---|---|---|
-| **personal**（个人助理） | SS → GW → **PCAgent** (`/ws/agent`) | 用户 PC 上跑的 OpenCode Agent |
-| **business**（业务助理） | SS → GW → **云端 SSE/WS/Webhook** | 业务方部署在云上的服务 |
+| **业务接入入口** | SS | 接收三种通道（小程序 WS / IM REST / 外部 WS）的入站消息，统一交给业务编排 |
+| **业务编排** | SS | 找/建会话、解析助理账号、群聊上下文注入、权限校验 |
+| **助理选路** | SS | 按助理身份选择个人 / 业务路径；含业务助理白名单 gate |
+| **会话与消息存储** | SS | 会话三元组、消息、消息片段、子任务等的持久化与历史查询 |
+| **流式协议翻译** | SS | 把助理端事件翻译成对外的统一流式协议（含搜索/引用/子任务扩展） |
+| **出站策略** | SS | 按业务接入域选择推送方式：小程序 WS / IM REST / 外部 WS |
+| **会话自愈** | SS | 助理端 session 失效时自动重建并回放队列 |
+| **GW 通信代理** | SS | 与 GW 之间的连接池与回包路由 |
+| **业务方反向通道** | GW | 接收业务方"主动推一条消息"的反向回调，鉴权后并入回流 |
+| **Agent 接入网关** | GW | PC Agent 的 AK/SK 验签、设备绑定、注册、心跳、断连清理 |
+| **跨节点路由** | GW | 多实例部署下，把回包送到持有上游连接的那个网关节点 |
+| **云端执行编排** | GW | 业务助理的 v1/v2 路由解析、通道选择（SSE/WS/Webhook）、鉴权头注入、三阶段超时控制 |
+| **回流中继** | GW | 把执行侧事件回送到对应的 SS 实例 |
+| **配置共享** | SS/GW | SS 持有运维配置，GW 通过受控接口按需读取 |
 
-**判定逻辑**（`AssistantScopeDispatcher.java:57-69`）：
-1. `AssistantInfo` 拿不到 → 默认 personal。
-2. `assistantScope != "business"` → 按字段值选策略。
-3. `assistantScope == "business"` → 再问 `BusinessWhitelistService.allowsCloud(businessTag)`，白名单不允许 → 降级 personal。
+## 2.3 数据模型
 
-业务助理**完全绕过 PCAgent**：GW 收到 `assistantScope="business"` 的 INVOKE 后，由 `BusinessInvokeRouteStrategy` 直接交给 `CloudAgentService`，不走 Agent WS，也不进 `AgentRegistryService` 的 session map（`SkillRelayService.java:688-735`）。
+> 图：[`./diagrams/02-logical.drawio`](./diagrams/02-logical.drawio) · 标签页 *数据模型*
 
-接入域有 3 个，对应代码里的 `business_session_domain` 取值：
-
-| domain | 入口 | 出口 |
+| 实体 | 关键属性 | 说明 |
 |---|---|---|
-| `miniapp` | `/ws/skill/stream`（Cookie 鉴权） | `MiniappDeliveryStrategy` 推回同一条 WS |
-| `im` | `POST /api/inbound/messages`（Bearer） | `ImRestDeliveryStrategy` 调 IM 平台 REST |
-| 其它（如 meeting/doc） | `/ws/external/stream`（子协议 token） | `ExternalWsDeliveryStrategy` 推到注册过的外部 WS 实例 |
+| **会话** | 唯一 id、归属用户、助理 ak、助理端 session id、状态、业务接入三元组、助理账号、时间戳 | 三元组是 (业务域, 业务类型 group/direct, 业务方会话 id)；唯一索引保证同一接入方不重复建会话 |
+| **消息** | 会话 id、序号、角色、内容、是否完成、tokens、cost | 序号在同一会话内唯一 |
+| **消息片段** | 消息 id、片段类型（文本/思考/工具/文件/子任务/搜索…）、内容、工具调用信息、子任务上下文 | 流式回答会被拆成多个片段 |
+| **助理定义** | 助理编码、名称、类型 | 当前主要承载 OpenCode |
+| **系统配置** | 类型、键、值 | 运维侧动态开关（v1/v2 切换、白名单、兜底配置、离线文案模板） |
+| **Agent 连接** | 用户、助理 ak、设备名、MAC、操作系统、工具类型版本、状态、最近心跳 | GW 侧管理 |
+| **AK/SK 凭据** | ak、sk、归属用户、状态 | GW 本地验签模式下使用 |
 
-域和 scope 是两个正交维度：小程序里也能聊业务助理，IM 里也能聊个人助理。
+数据规模评估：会话 + 消息为主要增长面；消息片段是消息条数的若干倍。
 
-### 二、整体长什么样（4+1 — 场景视图）
+## 2.4 技术模型
 
-```mermaid
-flowchart LR
-  subgraph 业务方
-    MA[小程序]
-    IMP[IM 平台]
-    EXT[外部系统<br/>meeting/doc]
-    BIZ[业务方云端服务<br/>反向回调]
-  end
+| 类别 | 选型 | 说明 |
+|---|---|---|
+| 运行时 | Java 21 + Spring Boot 3 | 两服务统一栈 |
+| 持久化 | MySQL 5.7（主从） | 通过 Flyway 仅追加迁移管理 |
+| 缓存 / 协调 | Redis 5.0（哨兵或集群） | 三类用途：分布式锁、跨实例广播、离线消息缓冲 |
+| 实时通信 | WebSocket（多通道）+ REST | 业务接入与内部网关全部走 WS 长连接；REST 用于配置与反向推送 |
+| 业务助理流式 | SSE / WebSocket / Webhook | 三选一，由云端路由配置决定 |
+| 鉴权 | AK/SK + HMAC-SHA256（含 nonce、时间窗）、Bearer Token、Cookie | 按通道分别采用 |
+| 数据库迁移 | Flyway 仅追加 | 支持滚动发布；ENUM 已统一为 VARCHAR 以利兼容 |
+| 监控 | 应用 JSON 日志 + MDC 链路字段 | 度量埋点待补 |
 
-  subgraph SS [skill-server :8082]
-    SSREST[REST]
-    SSWS[WS]
-    SSCORE[业务 + 翻译 + 出站]
-    SSGWPOOL[GatewayWSClient<br/>WS ×8]
-  end
+## 2.5 安全 / 韧性逻辑模型
 
-  subgraph GW [ai-gateway :8081]
-    GWSKILLWS[/ws/skill/]
-    GWAGENTWS[/ws/agent/]
-    GWREST[REST<br/>/api/gateway/*]
-    GWRELAY[SkillRelayService]
-    GWCLOUD[CloudAgentService<br/>云端编排]
-  end
+> 图：[`./diagrams/02-logical.drawio`](./diagrams/02-logical.drawio) · 标签页 *安全韧性模型*
 
-  AGENT[PCAgent]
-  CLOUD[业务方云端<br/>SSE / WS / Webhook]
+**安全控制点**（按外圈到内圈层层校验）：
 
-  MA  -- WS Cookie --> SSWS
-  IMP -- REST Bearer --> SSREST
-  EXT -- WS 子协议 --> SSWS
-  BIZ -- POST /im-push --> GWREST
+| 层 | 控制 | 兜底 |
+|---|---|---|
+| 业务方 → SS | Cookie（小程序）/ Bearer Token（IM、外部、配置接口） | 拦截器统一校验 |
+| 业务方 → GW（反向推送） | 必填字段校验 + 单聊场景下校验"接收人 == 助理归属人"防越权 | 不通过返回 403 |
+| Agent → GW | AK/SK HMAC 签名 + 时间戳容忍 ±5 分钟 + nonce 防重放 | 远端校验模式下加三级缓存抵抗外部抖动 |
+| SS ↔ GW | WebSocket 子协议同时校验内部 Token、来源标识、实例 id | Token 失配立刻停止重连 |
+| 助理 → 用户敏感动作 | 权限请求机制（用户在前端 once / always / reject） | 默认 reject |
+| 业务助理白名单 | 总开关 + 白名单条目；开关关闭时全放行 | 异常时 fail-open 不阻断业务 |
+| 数据脱敏 | 日志中的 sk、token、手机号等敏感字段自动屏蔽 | — |
 
-  SSREST --> SSCORE
-  SSWS --> SSCORE
-  SSCORE --> SSGWPOOL
-  SSGWPOOL -- WS 子协议 token+source+instanceId --> GWSKILLWS
-  GWSKILLWS --> GWRELAY
-  GWRELAY -- personal --> GWAGENTWS
-  GWRELAY -- business --> GWCLOUD
-  GWAGENTWS -- WS AK/SK --> AGENT
-  GWCLOUD -- HTTP/SSE/WS --> CLOUD
+**韧性策略**：
 
-  CLOUD -. 反向事件流 .-> GWCLOUD
-  GWREST -. im-push 反向 .-> GWRELAY
-```
+| 故障 | 策略 | 影响半径 |
+|---|---|---|
+| 单个 SS 实例宕机 | 无状态，连接由 LB 自动重分配；多实例间通过 Redis 广播确保推送可达 | 用户层无感（重连后续传） |
+| 单个 GW 实例宕机 | 网关侧三层路由（本地缓存→Redis 路由表→跨节点广播）容忍单节点失效 | 助理消息在秒级内恢复路径 |
+| Redis 订阅静默断开 | 自检机制定期探活并自动重建监听 | 无感 |
+| PC Agent 离线 | 待发消息暂存 30 分钟，重连后原子取出 | 用户看到"等待中"提示 |
+| 业务助理 v2 路由查询失败 | 自动降级到运维侧静态兜底配置（按 chat / question / permission 三个 scope 分别配置） | 单次请求慢 ~30ms |
+| 业务助理远端 session 失效 | 系统自动重建并回放未完成消息，最多 3 次 | 用户感知一次重试延迟 |
+| 网关实例崩溃重启 | 启动时清理自身遗留的路由占位；SS 关闭时主动把自身路由置为已关闭 | 不出现"幽灵路由" |
 
-### 三、4+1 — 逻辑视图（组件图，按 SS / GW 分块）
+---
 
-```mermaid
-flowchart TB
-  subgraph SS_INBOUND [SS · 入站]
-    A1[SkillSessionController]
-    A2[SkillMessageController]
-    A3[ImInboundController]
-    A4[ExternalInboundController]
-    A5[SysConfigController<br/>给 GW 反向读]
-    A6[SkillStreamHandler<br/>/ws/skill/stream]
-    A7[ExternalStreamHandler<br/>/ws/external/stream]
-  end
+# 三、开发视图
 
-  subgraph SS_BIZ [SS · 业务编排]
-    B1[InboundProcessingService]
-    B2[ImSessionManager<br/>三元组 findOrCreate]
-    B3[SkillSessionService /<br/>SkillMessageService]
-    B4[ContextInjectionService<br/>群聊 prompt]
-    B5[AssistantInfoService<br/>AssistantAccountResolverService<br/>AssistantIdResolverService]
-    B6[SessionAccessControlService<br/>BusinessWhitelistService<br/>ChannelSuppressReplyWhitelistService]
-  end
+## 3.1 代码模型
 
-  subgraph SS_SCOPE [SS · scope 分流]
-    SC1[AssistantScopeDispatcher]
-    SC2[PersonalScopeStrategy<br/>原 PCAgent 路径]
-    SC3[BusinessScopeStrategy<br/>包装云端 invoke]
-    SC4[CloudRequestBuilder<br/>+ DefaultCloudRequestStrategy]
-  end
+> 图：[`./diagrams/03-development.drawio`](./diagrams/03-development.drawio) · 标签页 *代码模型*
 
-  subgraph SS_BRIDGE [SS · 与 GW 通信]
-    C1[GatewayMessageRouter<br/>按 type 分发 + 去重]
-    C2[GatewayRelayService]
-    C3[GatewayWSClient<br/>WS ×8]
-    C4[GatewayApiClient<br/>REST 兜底]
-  end
+仓库 `opencode-CUI` 采用 monorepo 组织，主体两个 Java 模块加若干前端/插件模块：
 
-  subgraph SS_TRANS [SS · 翻译 + 持久化]
-    D1[OpenCodeEventTranslator<br/>个人助理]
-    D2[CloudEventTranslator<br/>业务助理 / 云端]
-    D3[ProtocolMessageMapper]
-    D4[MessagePersistenceService<br/>SnapshotService<br/>MessageHistoryCacheService]
-    D5[StreamBufferService<br/>PartBufferService<br/>SequenceTracker]
-  end
+| 模块 | 角色 | 主要职责 |
+|---|---|---|
+| `skill-server` | 业务后端 | 见 §2.2 SS 行 |
+| `ai-gateway` | Agent / 云端网关 | 见 §2.2 GW 行 |
+| `skill-miniapp` | 员工小程序前端 | 流式消息渲染、用户交互 |
+| `plugins/*` | OpenCode Agent 插件 | 桥接 OpenCode SDK 与本系统的网关协议 |
 
-  subgraph SS_OUT [SS · 出站]
-    E0[OutboundDeliveryDispatcher]
-    E1[MiniappDeliveryStrategy<br/>order=1]
-    E2[ImRestDeliveryStrategy<br/>order=3]
-    E3[ExternalWsDeliveryStrategy]
-    E4[StreamMessageEmitter]
-  end
+两个 Java 模块的内部分层一致：入站层（HTTP / WebSocket Handler）→ 业务编排层 → 协议翻译/路由层 → 出站层 / 存储层 / Redis 层。这种对称结构降低团队上手成本。
 
-  subgraph SS_INFRA [SS · 基础设施]
-    F1[RedisMessageBroker<br/>含 ss-relay 自愈]
-    F2[SessionRebuildService]
-    F3[SessionRouteService]
-    F4[ExternalWsRegistry]
-  end
+## 3.2 构建模型
 
-  subgraph GW_IN [GW · 入站]
-    G1[/ws/skill SkillWebSocketHandler/]
-    G2[/ws/agent AgentWebSocketHandler/]
-    G3[AgentController<br/>/api/gateway/*]
-    G4[CloudPushController<br/>/im-push]
-  end
+> 图：[`./diagrams/03-development.drawio`](./diagrams/03-development.drawio) · 标签页 *构建模型*
 
-  subgraph GW_AUTH [GW · 认证 + 注册]
-    H1[AkSkAuthService<br/>gateway / remote 双模式]
-    H2[IdentityApiClient<br/>三级缓存]
-    H3[AgentRegistryService]
-    H4[DeviceBindingService]
-  end
+| 阶段 | 输入 | 产物 | 工具 |
+|---|---|---|---|
+| 源码 | 仓库主分支 | — | Git |
+| 编译 + 单测 | Java 源 + 资源 | 可运行 jar | Maven |
+| 容器化 | jar + Dockerfile | 容器镜像（两份：SS、GW） | Docker |
+| 镜像仓库 | 容器镜像 | 镜像 tag | 制品仓 |
+| 部署 | 镜像 + 配置 | 集群上 Pod | K8s / 公司 PaaS |
+| 数据库迁移 | Flyway SQL | 已迁移的 schema | 启动时自动执行 |
 
-  subgraph GW_RELAY [GW · 中继 + 路由]
-    I1[SkillRelayService<br/>三层路由]
-    I2[ConsistentHashRing]
-    I3[UpstreamRoutingTable]
-    I4[LegacySkillRelayStrategy]
-    I5[EventRelayService]
-  end
+构建关键点：
+- 两个服务的迁移脚本仅追加、不修改既有；保证滚动发布不需要停机。
+- 配置走外部注入（ConfigMap / Secret / SysConfig 表），制品本身环境无关。
 
-  subgraph GW_CLOUD [GW · 云端编排]
-    J1[CloudAgentService<br/>action→scope→分发]
-    J2[InvokeRouteStrategy<br/>Personal / Business]
-    J3[CallbackConfigService<br/>v1/v2 + 缓存 + fallback]
-    J4[LegacyRouteResolver v1<br/>GatewayCallbackResolver v2]
-    J5[SysConfigFallbackProvider<br/>SkillServerConfigClient]
-    J6[CloudAuthService<br/>Apig/Soa/None]
-    J7[CloudProtocolStrategy<br/>SSE / WebSocket]
-    J8[WebHookExecutor<br/>同步 POST]
-    J9[CloudConnectionLifecycle<br/>3 阶段超时]
-    J10[AssistantAccountResolver<br/>+ Redis 缓存]
-  end
+---
 
-  subgraph GW_INFRA [GW · 基础设施]
-    K1[RedisMessageBroker<br/>conn:ak / route / pending]
-  end
+# 四、部署视图
 
-  A6 & A1 & A2 --> B3
-  A3 & A4 --> B1
-  B1 --> B2 & B5 & B4 --> B3
-  B3 --> SC1
-  SC1 --> SC2 & SC3
-  SC3 --> SC4
-  SC2 & SC3 --> C2 --> C3 --> G1
-  C3 -. 回流 .-> C1
-  C1 --> D1 & D2 --> D3 --> D4 & E0
-  E0 --> E1 & E2 & E3 --> E4
+## 4.1 部署模型
 
-  G1 --> I1
-  I1 --> G2
-  G2 --> H1 --> H2
-  G2 --> H3 --> H4
-  I1 -- assistantScope=business --> J2
-  J2 --> J1
-  J1 --> J3 --> J4 & J5
-  J1 --> J6 --> J7
-  J1 --> J8
-  J7 --> J9
-  G4 --> J10
-  G4 --> I1
-  J5 --> A5
-```
+> 图：[`./diagrams/04-deployment.drawio`](./diagrams/04-deployment.drawio) · 标签页 *部署模型*
 
-### 四、4+1 — 进程视图（关键时序）
+典型生产部署：
 
-#### 4.1 个人助理：小程序发一条消息
-
-```mermaid
-sequenceDiagram
-  autonumber
-  participant U as 小程序
-  participant SS as SS Controller
-  participant SC as SS ScopeDispatcher
-  participant SP as SS GatewayWSClient
-  participant GS as GW SkillWS
-  participant GR as GW SkillRelayService
-  participant GA as GW AgentWS
-  participant A as PCAgent
-
-  U->>SS: POST /messages（content）
-  SS->>SS: 找会话 / 落库（user role）
-  SS->>SC: getStrategy(AssistantInfo)
-  SC-->>SS: PersonalScopeStrategy
-  SS->>SP: GatewayMessage{type=invoke,<br/>action=chat, payload, ak,<br/>assistantScope="personal"}
-  SP->>GS: WS（连接池轮询）
-  GS->>GR: handleInvokeFromSkill
-  GR->>GR: scope!=business → dispatchToAgent<br/>ConsistentHashRing(ak) 选 Agent
-  alt Agent 在线
-    GR->>GA: 转发
-    GA->>A: 推送
-  else Agent 离线
-    GR->>GR: LPUSH gw:pending:{ak}<br/>30 min TTL
-  end
-
-  loop 流式回包
-    A->>GA: tool_event / tool_done / session_created
-    GA->>GR: relayToSkill<br/>L1 hashRing → L2 redis → L3 broadcast
-    GR->>GS: 回到目标 SS 实例
-    GS->>SP: WS
-    SP->>SS: GatewayMessageRouter
-    SS->>SS: OpenCodeEventTranslator → 写库 → DeliveryDispatcher
-    SS->>U: StreamMessage
-  end
-```
-
-#### 4.2 业务助理：云端 SSE 调用全链路（**重点**）
-
-```mermaid
-sequenceDiagram
-  autonumber
-  participant U as 业务方<br/>（小程序/IM/外部）
-  participant SS as SS<br/>Controller
-  participant SC as SS<br/>ScopeDispatcher
-  participant CB as SS<br/>BusinessScopeStrategy<br/>+ CloudRequestBuilder
-  participant SP as SS<br/>GatewayWSClient
-  participant GS as GW SkillWS
-  participant GR as GW SkillRelayService
-  participant CA as GW CloudAgentService
-  participant CC as GW CallbackConfigService
-  participant V2 as 云端 v2 API<br/>/gateway/callbacks/config
-  participant FB as SysConfigFallback<br/>+ SkillServerConfigClient
-  participant CL as 业务方云端<br/>SSE 通道
-
-  U->>SS: 发消息（chat）
-  SS->>SC: getStrategy(AssistantInfo)
-  Note over SC: assistantScope=="business"<br/>且 BusinessWhitelist 允许
-  SC-->>SS: BusinessScopeStrategy
-  SS->>CB: buildInvoke(InvokeCommand)
-  CB->>CB: toolSessionId="cloud-"+UUID<br/>查 cloud_request_strategy SysConfig<br/>选 strategy（默认 DefaultCloudRequestStrategy）
-  CB->>CB: 构造 cloudRequest:<br/>{type, content, assistantAccount,<br/>sendUserAccount, imGroupId,<br/>clientLang, topicId, messageId,<br/>extParameters{businessExtParam,<br/>platformExtParam}}
-  CB-->>SS: GatewayMessage{type=invoke,<br/>assistantScope="business",<br/>payload={cloudRequest, toolSessionId},<br/>ak, action=chat}
-  SS->>SP: 发出
-  SP->>GS: WS
-  GS->>GR: handleInvokeFromSkill
-  GR->>GR: scope=="business" → routeBusinessInvoke
-  GR->>CA: handleInvoke(message, onRelay=relayToSkill)
-  CA->>CA: action=chat → scope="callback:weagent:chat"
-  CA->>CC: getConfig(ak, scope)
-
-  alt v2_enabled="1"
-    CC->>V2: POST {ak, scope}<br/>Bearer v2-token
-    alt v2 成功
-      V2-->>CC: {channelType, channelAddress, authType}
-    else v2 失败 且 v2_fallback_enabled="1"
-      CC->>FB: load(scope)
-      FB->>FB: 30s 内存缓存命中？
-      alt 缓存未命中
-        FB->>FB: GET /api/admin/configs/value<br/>type=cloud_route_fallback<br/>key=chat<br/>Bearer api-token
-      end
-      FB-->>CC: {channelAddress, channelType, authType} JSON
-    end
-  else v1（v2_enabled≠"1"）
-    CC->>CC: GET LegacyRouteResolver<br/>{ak} → {hisAppId, endpoint,<br/>protocol, authType}
-  end
-  CC-->>CA: CallbackConfig{channelType, channelAddress,<br/>authType, appId}
-  Note over CA: 校验 channelType 与 action 匹配<br/>chat→sse/websocket<br/>不匹配则 tool_error
-
-  CA->>CA: 构 CloudConnectionContext<br/>注入 ak/userId/welinkSessionId/traceId
-  CA->>CL: SseProtocolStrategy.connect<br/>POST channelAddress<br/>headers: Accept: text/event-stream<br/>X-Trace-Id, X-Auth-Type, X-App-Id<br/>body: cloudRequest
-
-  loop 云端流式
-    CL-->>CA: data: {GatewayMessage}<br/>（tool_event/tool_done/...）
-    CA->>CA: 注入 ak/userId/welinkSessionId/<br/>traceId/toolSessionId/messageId/partId
-    CA->>GR: onRelay(msg) = relayToSkill
-    GR->>GS: 回到目标 SS
-    GS->>SS: GatewayMessageRouter
-    SS->>SS: CloudEventTranslator → StreamMessage<br/>→ 写库 → DeliveryDispatcher
-    SS->>U: 推回
-  end
-
-  Note over CL,CA: 三阶段超时：<br/>connect 30s / first event 120s /<br/>idle 90s / max 1800s<br/>question/permission 触发 pauseIdleTimer
-```
-
-#### 4.3 业务助理：question_reply / permission_reply（webhook 路径）
-
-```mermaid
-sequenceDiagram
-  autonumber
-  participant U as 用户
-  participant SS as SS
-  participant CA as GW CloudAgentService
-  participant CC as CallbackConfigService
-  participant WH as WebHookExecutor
-  participant CL as 业务方云端 webhook
-
-  U->>SS: 回答 question / 同意权限
-  SS->>SS: 同 §4.2 构造，<br/>action=question_reply | permission_reply<br/>cloudRequest.replyContext={type,toolCallId|<br/>permissionId, answers|response}
-  SS->>CA: GatewayMessage{type=invoke}（经 GW WS）
-  CA->>CC: getConfig(ak, scope=question/permission)
-  CC-->>CA: CallbackConfig{channelType=webhook,<br/>channelAddress, authType, appId}
-  Note over CA: action=reply 时 channelType 必须 webhook
-  CA->>WH: execute(cloudRequest, channelAddress, auth)
-  WH->>CL: POST channelAddress<br/>headers: Auth + X-Trace-Id<br/>body: cloudRequest<br/>timeout: webhookTimeoutSeconds(10s)
-  alt 2xx
-    CL-->>WH: 200
-    WH->>WH: fire-and-forget<br/>不回流（事件由原 SSE/WS 流送回）
-  else 非 2xx / 超时
-    WH->>CA: 转 tool_error
-    CA->>SS: relayToSkill(tool_error)
-  end
-```
-
-#### 4.4 IM 群聊里 @ 助理
-
-```mermaid
-sequenceDiagram
-  autonumber
-  participant IM as IM 平台
-  participant C as ImInboundController
-  participant P as InboundProcessingService
-  participant R as AssistantAccountResolver
-  participant M as ImSessionManager
-  participant CTX as ContextInjectionService
-  participant SS as SkillMessageService
-  participant DOWN as 走 §4.1 / §4.2<br/>（看 scope）
-
-  IM->>C: POST /api/inbound/messages<br/>Bearer skill.im.inbound-token
-  C->>P: 转交
-  P->>R: 解析 assistantAccount → ak<br/>缓存 exist 300s / 不存在 60s
-  R-->>P: ak / "助理已删除"
-  P->>M: findOrCreateSession<br/>(domain=im, type=group/direct,<br/>id, ak, assistantAccount)
-  M-->>P: SkillSession
-  alt sessionType=group
-    P->>CTX: buildPrompt(history+current,<br/>template="group-chat-prompt.txt")
-    CTX-->>P: 拼好的 prompt
-  end
-  P->>SS: send → 见 §4.1 / §4.2
-
-  Note over DOWN: 回包阶段 ImRestDeliveryStrategy 处理：<br/>group: 不持久化下行；<br/>direct: 持久化；<br/>个人 channel 命中 ChannelSuppressReplyWhitelist<br/>→ INVOKE 携带 suppressReply
-```
-
-#### 4.5 PCAgent 注册（个人助理在线条件）
-
-```mermaid
-sequenceDiagram
-  autonumber
-  participant A as PCAgent
-  participant H as GW AgentWS Handler
-  participant AU as AkSkAuthService
-  participant ID as IdentityApiClient<br/>(remote 模式)
-  participant DB as MySQL agent_connection
-  participant RD as Redis
-  participant ER as EventRelayService
-
-  A->>H: WS 握手 子协议<br/>auth.{ak, ts, nonce, sign}
-  H->>AU: verify
-  alt mode=gateway
-    AU->>AU: 查 ak_sk_credential 表<br/>HMAC-SHA256 + nonce TTL 300s<br/>+ ts 容忍 ±300s
-  else mode=remote
-    AU->>AU: L1 caffeine（max 10000, 300s）<br/>L2 redis 3600s 全 miss<br/>L3 ↓
-    AU->>ID: POST /open/identity/check<br/>{ak, timestamp:long, nonce, sign}<br/>Bearer identity-token<br/>timeout 3s
-    ID-->>AU: {checkResult, userId}
-  end
-  AU-->>H: userId / null
-  H-->>A: 握手通过
-
-  A->>H: REGISTER {deviceName, mac, os,<br/>toolType, toolVersion}
-  H->>RD: SET NX gw:register:lock:{ak} EX 10s
-  alt 抢到锁
-    H->>H: DeviceBindingService.check<br/>(ak,mac,toolType)
-    Note over H: 不一致 → 关 4403
-    H->>H: 同 GW 重复连接 → 关旧的 4409
-    H->>DB: INSERT/UPDATE agent_connection
-    H->>RD: SET conn:ak:{ak}={gwId} EX 120s
-    H->>RD: SET gw:internal:agent:{ak}={gwId} EX 120s
-    H->>RD: Lua 释放锁（owner CAS）
-    H->>RD: Lua DRAIN gw:pending:{ak}（LRANGE+DEL）
-    H->>ER: 发 agent_online 给 SS
-  else 抢锁失败
-    H-->>A: 关 4408 register_timeout
-  end
-
-  loop 心跳 30s 巡检
-    A->>H: heartbeat
-    H->>RD: 刷新 conn:ak / gw:internal:agent TTL
-  end
-  Note over H: 90s 没收到 → 视为离线<br/>afterConnectionClosed:<br/>Lua CAS 删除 conn:ak（owner 校验）
-```
-
-#### 4.6 toolSession 失效自愈
-
-```mermaid
-sequenceDiagram
-  autonumber
-  participant GW as GW
-  participant R as SS GatewayMessageRouter
-  participant SR as SS SessionRebuildService
-  participant RD as Redis
-
-  GW->>R: tool_error reason=session_invalid
-  R->>SR: triggerRebuild(sessionId, 原 invoke)
-  SR->>RD: LPUSH ss:pending-rebuild:{sid}（5min）
-  SR->>RD: SET NX ss:rebuild-lock:{sid} EX 15s
-  alt 抢锁
-    SR->>GW: 发 create_session
-    GW-->>R: session_created（携带 suppressReply）
-    R->>R: 更新 skill_session.tool_session_id
-    R->>RD: 失效 ss:tool-session:* 反查
-    SR->>RD: LPOP → 重发 invoke
-  end
-  Note over SR: max-attempts=3，cooldown=30s<br/>超限放弃并清 list
-```
-
-#### 4.7 业务方反向回调（im_push）
-
-```mermaid
-sequenceDiagram
-  autonumber
-  participant BIZ as 业务方云端
-  participant CP as GW CloudPushController
-  participant AR as AssistantAccountResolver
-  participant GR as SkillRelayService
-  participant SS as SS
-
-  BIZ->>CP: POST /api/gateway/cloud/im-push<br/>{assistantAccount, userAccount,<br/>imGroupId, topicId, content}
-  CP->>CP: 校验 assistantAccount/content 非空
-  CP->>AR: resolve(assistantAccount)<br/>→ {appKey(ak), create_by}
-  AR-->>CP: ak, create_by
-  alt 单聊
-    CP->>CP: userAccount==create_by ?<br/>否 → 403
-  end
-  CP->>GR: GatewayMessage{type=im_push,<br/>toolSessionId=topicId,<br/>payload=ImPushRequest}
-  GR->>SS: relayToSkill（同正常回流）
-  SS->>SS: 走 ImRestDeliveryStrategy 推到 IM
-```
-
-### 五、4+1 — 开发视图（代码组织）
-
-```
-opencode-CUI/
-├── skill-server/
-│   └── src/main/java/com/opencode/cui/skill/
-│       ├── controller/         6 个 REST controller
-│       ├── ws/                 SkillStreamHandler / ExternalStreamHandler / GatewayWSClient
-│       ├── service/
-│       │   ├── delivery/       Miniapp / ImRest / ExternalWs 三策略 + Emitter
-│       │   ├── cloud/          业务助理云端请求构造（CloudRequestBuilder/Strategy/Context）
-│       │   ├── scope/          Personal / Business 助手分流（Dispatcher/Strategy ×2）
-│       │   └── *.java          会话/消息/翻译/持久化/Redis/重建
-│       ├── model/              StreamMessage / GatewayMessage 副本 / 各 DTO
-│       ├── repository/         5 个 MyBatis Mapper
-│       ├── config/             Spring Config + 拦截器
-│       └── logging/            MDC + 脱敏
-│   └── src/main/resources/
-│       ├── application.yml
-│       ├── templates/group-chat-prompt.txt
-│       └── db/migration/       Flyway V1–V11
-├── ai-gateway/
-│   └── src/main/java/com/opencode/cui/gateway/
-│       ├── controller/         AgentController + CloudPushController
-│       ├── ws/                 AgentWS + SkillWS + AsyncSessionSender
-│       ├── service/
-│       │   ├── cloud/          云端 5 件套（InvokeRoute × Auth × Protocol × Lifecycle × Webhook）
-│       │   └── *.java          认证/注册/中继/路由/sys_config 兜底/资源解析
-│       ├── model/              AgentConnection / GatewayMessage / RelayMessage / ImPushRequest
-│       ├── repository/         2 个 Mapper
-│       └── config/             含 CloudTimeoutProperties
-│   └── src/main/resources/
-│       ├── application.yml
-│       └── db/migration/       Flyway V1–V5
-```
-
-### 六、4+1 — 物理视图
-
-```mermaid
-flowchart LR
-  subgraph CLIENT [接入侧]
-    MA[小程序]
-    IMP[IM 平台]
-    EXT[外部系统]
-    AG[PCAgent ×N]
-    BIZ[业务方云端]
-  end
-
-  ALB1{ALB SS}
-  ALB2{ALB GW}
-
-  subgraph SSC [SS 集群 :8082, ≥2]
-    SS1[SS-1]
-    SS2[SS-2]
-  end
-  subgraph GWC [GW 集群 :8081, ≥2]
-    GW1[GW-1]
-    GW2[GW-2]
-  end
-
-  subgraph DATA
-    MYSQL[(MySQL 5.7 主从)]
-    REDIS[(Redis 5.0 哨兵/集群)]
-  end
-
-  CLOUD[业务方云端 SSE/WS]
-
-  MA & IMP & EXT --> ALB1
-  ALB1 --> SS1 & SS2
-  SS1 -- WS ×8 --> ALB2
-  SS2 -- WS ×8 --> ALB2
-  AG --> ALB2
-  BIZ -- /im-push --> ALB2
-  ALB2 --> GW1 & GW2
-
-  GW1 -- SSE/WS/Webhook --> CLOUD
-  GW2 -- SSE/WS/Webhook --> CLOUD
-  CLOUD -. 流式回包 .-> GW1 & GW2
-
-  SS1 & SS2 --> MYSQL & REDIS
-  GW1 & GW2 --> MYSQL & REDIS
-  GW1 & GW2 -. 读 sys_config .-> ALB1
-```
+- **接入层 LB**：分两组（SS 用、GW 用），均启用 WebSocket 长连接保持（IP-hash 或 sticky）。
+- **SS 集群**：≥ 2 副本，无状态，可水平扩。
+- **GW 集群**：≥ 2 副本，无状态，可水平扩。
+- **MySQL**：主从，分别承载两套 schema。
+- **Redis**：哨兵或集群，承担分布式锁、跨实例广播、离线消息缓冲。
+- **业务方云端**：外部，独立 SLA。
 
 特点：
-- SS、GW 全部无状态。
-- SS 不需要"知道"具体连到哪个 GW Pod；ALB 自然分散，GW 内部三层路由保证消息找得到目标 SS。
-- 多 SS 实例靠 Redis pub/sub `user-stream:{userId}` 把回包送到持有 WS 的那个实例。
+- SS 不需要知道连到的是哪一台 GW，由 LB 自然分散；GW 内部用路由层兜底保证消息找得到回路。
+- 多 SS 实例时，回包可能落到"不持有用户 WS"的实例上，由跨实例广播兜底转发。
 
-### 七、数据流图
+## 4.2 交付模型
 
-```mermaid
-flowchart LR
-  IN[业务方]
-  SSIN[SS 入站]
-  SSCORE[SS 业务编排<br/>+ scope 分流]
-  GW[GW SkillWS]
-  RELAY[GW 中继]
-  PERSONAL[PCAgent]
-  CLOUD[业务方云端]
-  SSOUT[SS 出站策略]
-  USER[业务方收到]
-  DB1[(MySQL skill)]
-  DB2[(MySQL gateway)]
-  RD[(Redis)]
-
-  IN --> SSIN --> SSCORE
-  SSCORE -- INVOKE --> GW --> RELAY
-  RELAY -- personal --> PERSONAL
-  RELAY -- business --> CLOUD
-  PERSONAL -- 流式 --> RELAY
-  CLOUD -- 流式 --> RELAY
-  RELAY --> GW --> SSCORE
-  SSCORE --> SSOUT --> USER
-  SSCORE -- 消息/会话 --> DB1
-  SSCORE -- pubsub/缓存/锁 --> RD
-  RELAY -- 连接/路由 --> DB2
-  RELAY -- 缓存/路由/锁 --> RD
-```
-
-### 八、异常处理（按场景）
-
-| 场景 | 处理 | 在哪 |
+| 环境 | 用途 | 部署节奏 |
 |---|---|---|
-| SS 连 GW 时内部 token 不对 | 不重连，直接放弃 | `GatewayWSClient.java:351-365` |
-| Agent 拿假 AK/SK 来连 | 1008 关闭 | `AkSkAuthService` + `AgentWebSocketHandler.java:131-203` |
-| 设备绑定不一致 | 4403 关 | `AgentWebSocketHandler.java:73-77` |
-| 同一 AK 重复连 | 关旧的 4409 | 同上 |
-| 注册超时（10s 内没拿到锁） | 4408 关 | 同上 |
-| 个人助理 invoke 时 Agent 离线 | LPUSH `gw:pending:{ak}` 30 min；上线后 Lua 原子取出 | `RedisMessageBroker.java:106-153` |
-| 业务助理 callback 配置查不到 | 回 `tool_error reason=callback_config_missing` | `CloudAgentService.java:72-136` |
-| 业务助理 channelType 与 action 不匹配 | tool_error（chat 必须 sse/websocket；reply 必须 webhook） | `:105-115` |
-| 业务助理 webhook 非 2xx | tool_error，不重试 | `WebHookExecutor` |
-| 业务助理 SSE/WS 首事件超时 | tool_error，关闭连接 | `CloudConnectionLifecycle` 三阶段定时器 |
-| toolSession 失效 | SessionRebuild：暂存→抢锁→create_session→重发 | `SessionRebuildService.java:31-` |
-| Redis pub/sub 半死 | PUBSUB NUMSUB 探活，0 就重启监听容器 | `RedisMessageBroker.java:177-291` |
-| 来源不允许 / 不匹配 | `ProtocolException` + 协议错误回包 | `SkillRelayService.java:1080-1088` |
-| 云端 v2 接口挂 | `v2_fallback_enabled=1` 时走 SysConfigFallbackProvider | `CallbackConfigService.java:125-156` |
-| 助理被删 / 离线 | `AssistantOfflineMessageProvider` 兜底文案 | `AssistantOfflineMessageProvider.java:12-25` |
-| 跨 GW 广播被打爆 | per-source 10 QPS 滑窗 | `SkillRelayService.java:117-123, 527-545` |
-| GW 崩溃重启 | 启动清自己的 source-conn 残留 | `RedisMessageBroker.java:637-659` |
+| 开发 | 本地或个人沙箱 | 每次推送 |
+| 集成测试 | 联调 + 自动化回归 | 每次合并主干 |
+| 预发 | 生产同构 + 真实业务方对接 | 按版本节奏 |
+| 生产 | 对外服务 | 按版本节奏，分批滚动 |
+
+发布策略：
+- **滚动发布**：单服务逐 Pod 替换；WS 连接断开后客户端自动重连到新实例。
+- **金丝雀**：必要时小流量切单实例验证；通过运维侧配置开关控制路径选择（如 v1↔v2 路由）而非镜像切换。
+- **配置发布**：运维侧改 SysConfig 即生效，无需重启服务。
+- **回滚**：上一版本镜像 + 重新启动；数据库迁移仅追加，自动向前兼容。
 
 ---
 
-## 【接口设计】
+# 五、运行视图
 
-> APIDesigner 工程链接：**< 待补充 >**
+## 5.1 运行模型
 
-### 1. 业务方 → SS（REST）
+> 图：[`./diagrams/05-runtime.drawio`](./diagrams/05-runtime.drawio) · 标签页 *运行模型*
 
-#### 1.1 `POST /api/skill/sessions` — 创建会话
-- 鉴权：Cookie `userId` 必填
-- 请求体（`CreateSessionRequest`）
-  | 字段 | 类型 | 必填 | 说明 |
-  |---|---|---|---|
-  | ak | String | 否 | 助理 ak |
-  | title | String | 否 | 会话标题 |
-  | businessSessionDomain | String | 否 | 默认 `miniapp` |
-  | businessSessionType | String | 否 | `group`/`direct` |
-  | businessSessionId | String | 否 | 业务侧会话 id |
-  | assistantAccount | String | 否 | 助理账号；business scope 时必填 |
-- 响应：`ApiResponse<SkillSession>`；错误：400 / 410（助理已删）
+运行期组件之间的数据流（不分时序，展示稳态拓扑）：
 
-#### 1.2 `POST /api/skill/sessions/{sid}/messages` — 发消息
-- 请求体（`SendMessageRequest`）
-  | 字段 | 类型 | 必填 | 说明 |
-  |---|---|---|---|
-  | content | String | 是 | 文本内容 |
-  | toolCallId | String | 否 | 有则视为 question_reply |
-  | subagentSessionId | String | 否 | 子任务会话 id |
-  | businessExtParam | JsonNode | 否 | 业务自定义参数，透传到 cloudRequest |
-- 响应：`ApiResponse<ProtocolMessageView>`
+1. **入站方向**：业务方 → SS 入站层 → 业务编排 → 助理选路 → GW 通信代理 → GW → 执行侧（PC Agent 或业务方云端）
+2. **出站方向**：执行侧 → GW 中继 → SS GW 代理 → 流式翻译 → 持久化 + 出站策略 → 业务方
+3. **横向**：SS 多实例之间通过 Redis 广播让回包找到持有用户 WS 的实例；GW 多实例之间通过 Redis 路由表 + 受控广播让回包找到持有上游连接的实例
+4. **支撑**：MySQL 持久化、Redis 协调与缓存、外部身份服务、业务方云端
 
-#### 1.3 `POST /api/skill/sessions/{sid}/abort` — 中止
-- 无 body；响应：`{status:"aborted", welinkSessionId}`
+## 5.2 关键场景时序
 
-#### 1.4 `POST /api/skill/sessions/{sid}/permissions/{permId}` — 权限回包
-- 请求体（`PermissionReplyRequest`）
-  | 字段 | 类型 | 必填 | 说明 |
-  |---|---|---|---|
-  | response | String | 是 | `once` / `always` / `reject` |
-  | subagentSessionId | String | 否 | |
-  | businessExtParam | JsonNode | 否 | |
+### 5.2.1 个人助理对话
 
-#### 1.5 `POST /api/skill/sessions/{sid}/send-to-im` — 转 IM
-- 请求体（`SendToImRequest`）
-  | 字段 | 类型 | 必填 | 说明 |
-  |---|---|---|---|
-  | content | String | 是 | |
-  | chatId | String | 否 | 缺省取 session.businessSessionId |
+> 图：[`./diagrams/05-runtime.drawio`](./diagrams/05-runtime.drawio) · 标签页 *时序-个人助理*
 
-#### 1.6 `POST /api/inbound/messages` — IM 入站
-- 鉴权：`Authorization: Bearer ${skill.im.inbound-token}`
-- 请求体（`ImMessageRequest` record）
-  | 字段 | 类型 | 必填 | 说明 |
-  |---|---|---|---|
-  | businessDomain | String | 是 | 必须 `im` |
-  | sessionType | String | 是 | `group` / `direct` |
-  | sessionId | String | 是 | IM 侧会话 id |
-  | assistantAccount | String | 是 | 数字分身账号 |
-  | senderUserAccount | String | 否 | 发送人账号 |
-  | content | String | 是 | 文本 |
-  | msgType | String | 否 | 默认 `text`，目前仅接受 text |
-  | imageUrl | String | 否 | image 类型（**当前会被拒**） |
-  | chatHistory | List<ChatMessage> | 否 | 群聊上下文 |
-  | businessExtParam | JsonNode | 否 | 业务自定义参数 |
-- `ChatMessage`：`{senderAccount, senderName, content, timestamp:long}`
+用户发一句话 → SS 落库 → SS 识别为个人助理 → 经 GW 下发到对应 PC Agent → Agent 流式产出（文本/工具/计划/思考/搜索/引用 …）→ 经 GW 回流 → SS 翻译 + 落库 + 推回用户。
 
-#### 1.7 `POST /api/external/invoke` — 外部入站
-- 鉴权：external token
-- 请求体（`ExternalInvokeRequest`）—— 信封 + payload 双层
-  | 信封字段 | 类型 | 必填 |
-  |---|---|---|
-  | action | String | 是；`chat` / `question_reply` / `permission_reply` / `rebuild` |
-  | businessDomain | String | 是 |
-  | sessionType | String | 是；`group` / `direct` |
-  | sessionId | String | 是 |
-  | assistantAccount | String | 是 |
-  | senderUserAccount | String | 是 |
-  | businessExtParam | JsonNode | 否 |
-  | payload | JsonNode | 见下 |
-- `payload`（按 action）
-  - `chat`：`{content, msgType, imageUrl, chatHistory}`
-  - `question_reply`：`{content, toolCallId, subagentSessionId}`
-  - `permission_reply`：`{permissionId, response, subagentSessionId}`，response ∈ `once`/`always`/`reject`
-  - `rebuild`：无 payload
-- 响应：`ApiResponse<{businessSessionId, welinkSessionId}>`
+Agent 不在线时，消息暂存最多 30 分钟，Agent 上线后由网关原子取出补发。
 
-#### 1.8 `/api/admin/configs` 系列（**给 GW 反向读**）
-| 方法 | 路径 | 鉴权 | 用途 |
-|---|---|---|---|
-| GET | `/api/admin/configs?type=` | Bearer api-token | 列表 |
-| GET | `/api/admin/configs/value?type=&key=` | 同上 | **GW 跨服务读 sys_config 唯一入口**，响应 `{configValue:String|null}` |
-| POST | `/api/admin/configs` | 同上 | 新增 |
-| PUT | `/api/admin/configs/{id}` | 同上 | 更新 |
-| DELETE | `/api/admin/configs/{id}` | 同上 | 删除 |
+### 5.2.2 业务助理云端对话
 
-### 2. 业务方 → SS（WebSocket）
+> 图：[`./diagrams/05-runtime.drawio`](./diagrams/05-runtime.drawio) · 标签页 *时序-业务助理*
 
-#### 2.1 `/ws/skill/stream` — 小程序流式
-- 握手：Cookie `userId=` 必填，无子协议
-- 客户端→服务端
-  | action | 含义 |
-  |---|---|
-  | `resume` | 重发 snapshot + 当前流式状态 |
-  | `ping` | 心跳 |
-- 服务端→客户端：`StreamMessage` JSON（见 §6）
+用户发一句话 → SS 识别为业务助理 → SS 构造云端协议请求体（含业务自定义参数）→ 经 GW 内部分叉到云端编排 → 编排查 v2 路由配置（缓存命中走缓存；失败走运维侧静态兜底）→ 选 SSE / WS 通道发起调用 → 云端流式回包 → 经 GW 回流 → SS 翻译 + 落库 + 推回用户。
 
-#### 2.2 `/ws/external/stream` — 外部流式
-- 握手：`Sec-WebSocket-Protocol: auth.{base64url(JSON{token, source, instanceId})}`，token = `skill.im.inbound-token`，三字段必填
-- 客户端：`{"action":"ping"}` → 服务端 `{"action":"pong"}`
-- 服务端：从 Redis `stream:{source}` 取消息按 source 路由推送，跨实例靠 `ss:external-relay:{instanceId}`
+业务助理**完全不经过 PC Agent**。
 
-### 3. SS ↔ GW（内部）
+如果是问答回执 / 权限回执，则不走 SSE，而是改走 Webhook 同步推送一次；事件仍然由原本的 SSE/WS 通道异步回流。
 
-#### 3.1 `/ws/skill` 双向消息
-- 握手：`Sec-WebSocket-Protocol: auth.{base64url(JSON{token, source, instanceId})}`
-  - `token`：`skill.gateway.internal-token` / `gateway.skill-server.internal-token`
-  - `source`：必填，源服务标识
-  - `instanceId`：可选；带就走 V2 mesh 路由，不带走 Legacy
-- 双向消息：`GatewayMessage` JSON
-- SS → GW 接受：`invoke`、`route_confirm`、`route_reject`
-- GW → SS 推送：所有上行事件
+### 5.2.3 IM 群聊里 @ 助理
 
-#### 3.2 GW REST `/api/gateway/*`
-| 路径 | 方法 | Body | 用途 |
-|---|---|---|---|
-| `/api/gateway/agents?ak=&userId=` | GET | — | List<AgentSummaryResponse> |
-| `/api/gateway/agents/status?ak=` | GET | — | `{ak, status, opencodeOnline, wsActive}` |
-| `/api/gateway/invoke` | POST | `GatewayMessage` | 按 ak 路由下发，响应 `{success, message}` |
-| `/api/gateway/agents/{id}/invoke` | POST | `GatewayMessage` | 按 DB id 路由 |
-| `/api/gateway/agents/{id}/status` | GET | — | 单 Agent 状态 |
-| `/api/gateway/cloud/im-push` | POST | `ImPushRequest` | 业务方反向回调（**外部调用**） |
+> 图：[`./diagrams/05-runtime.drawio`](./diagrams/05-runtime.drawio) · 标签页 *时序-IM群聊*
 
-鉴权：`Bearer gateway.skill-server.internal-token`（`im-push` 自有校验）
+IM 平台 → SS REST 入站 → 解析助理账号 → 找/建会话（按"业务接入三元组+助理"唯一）→ 群聊时把最近的群聊上下文拼成 prompt 与本条消息一同下发 → 走 §5.2.1 或 §5.2.2 →
+回答阶段：群聊只下推不落库（聊天记录归 IM 管），单聊既下推也落库。
 
-#### 3.3 `ImPushRequest`（im-push 反向）
-| 字段 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| assistantAccount | String | 是 | 助理账号 |
-| userAccount | String | 否 | 接收人；单聊必须等于 assistant 的 create_by，不一致 403 |
-| imGroupId | String | 否 | 群聊 id |
-| topicId | String | 是 | 作为 toolSessionId 路由 |
-| content | String | 是 | 推送文本 |
+### 5.2.4 异常自愈
 
-### 4. GW ↔ Agent
+> 图：[`./diagrams/05-runtime.drawio`](./diagrams/05-runtime.drawio) · 标签页 *时序-异常自愈*
 
-#### 4.1 `/ws/agent` 握手
-- 子协议：`auth.{base64url(JSON{ak, ts, nonce, sign})}`
-  - `ak`：Agent Access Key（**路由主键**）
-  - `ts`：客户端时间戳（毫秒），用于 ±300s 时间窗
-  - `nonce`：随机串，存 `auth:nonce:{nonce}` Redis 300s
-  - `sign`：HMAC-SHA256；mode=remote 时由 IdentityApiClient 远端校验
-- 关闭码：1008 验签 / 4403 设备绑定 / 4408 注册超时 / 4409 重复连接
+三个典型自愈：
 
-#### 4.2 `GatewayMessage` 16 种 type 字段矩阵
+- **助理端 session 失效**：SS 把后续消息暂存到一个 5 分钟有效的待回放队列；抢到自愈锁的实例向助理发"重建 session"指令；收到 session 已建的确认后回放队列。最多 3 次，避免雪崩。
+- **业务助理 v2 路由失败**：编排层立刻切到运维侧静态兜底配置，对调用方表现为一次稍慢的成功调用。
+- **网关跨节点切换**：原子化的"所有权校验"删除避免老节点错删新绑定，保证连接迁移期间不出现"已上线但被误判离线"。
 
-| type | 必填字段（除公共字段外） | 含义 |
+---
+
+# 六、对外契约清单
+
+> 字段级 schema 不在本文展开；详见接口设计工程：**< 待补充 APIDesigner 链接 >**
+
+| 通道 | 入口 / 协议 | 对外能力 |
 |---|---|---|
-| `register` | deviceName, macAddress, os, toolType, toolVersion | Agent 注册 |
-| `register_ok` | — | 注册成功 |
-| `register_rejected` | reason | 注册被拒 |
-| `heartbeat` | — | 心跳 |
-| `invoke` | ak, welinkSessionId, action, payload, userId, source；可选 suppressReply, assistantScope, traceId | SS→GW 下发 |
-| `tool_event` | toolSessionId, event(JsonNode)；可选 subagentSessionId, subagentName | 流式事件 |
-| `tool_done` | toolSessionId, usage(JsonNode) | 完成 |
-| `tool_error` | toolSessionId, error；可选 reason（如 `callback_config_missing`） | 错误 |
-| `session_created` | welinkSessionId, toolSessionId | Agent/云端 session 已建 |
-| `agent_online` | ak, toolType, toolVersion | Agent 上线 |
-| `agent_offline` | ak | Agent 下线 |
-| `status_query` | — | SS 查 Agent 在线 |
-| `status_response` | opencodeOnline (Boolean) | 回 |
-| `permission_request` | toolSessionId, event | 权限请求 |
-| `route_confirm` | toolSessionId, welinkSessionId, source | 路由确认 |
-| `route_reject` | toolSessionId, source | 路由拒绝 |
-| `im_push` | toolSessionId(=topicId), payload(=ImPushRequest) | 业务方反向推 |
+| 小程序 ↔ SS | WebSocket + REST | 建/查/关会话、发送消息、历史拉取、权限回执、中断回答、断线续传 |
+| IM 平台 → SS | REST | 接收 IM 群聊 / 单聊 @ 助理的消息 |
+| 外部系统 ↔ SS | WebSocket | 自定义业务域（会议、文档等）的双向流式 |
+| 业务方云端 → GW | REST | 主动向某会话或某 IM 群推送一条消息 |
+| SS ↔ GW | WebSocket | 系统内部的双向中继通道 |
+| GW ↔ PC Agent | WebSocket | AK/SK 鉴权后的双向中继 |
+| GW ↔ 业务方云端 | HTTP-SSE / WebSocket / Webhook | 业务助理执行通道 |
+| GW → 数字分身平台 | REST | 助理账号解析 |
+| GW → 身份服务 | REST | AK/SK 远端验签 |
+| GW → SS | REST | 受控读取运维配置 |
 
-公共字段：`type, ak, welinkSessionId, userId, source, traceId, agentId, sequenceNumber, gatewayInstanceId`（路由用，下行前 `withoutRoutingContext()` 剥离）。
-
-`invoke` 的 `payload` 因 scope 而异：
-- **personal**：透传 OpenCode 原生命令（chat / question_reply / permission_reply / abort 等）
-- **business**：`{cloudRequest:{...}, toolSessionId:"cloud-{uuid}"}`，cloudRequest 字段：
-  | 字段 | 类型 | 说明 |
-  |---|---|---|
-  | type | String | 默认 `text`（与 SkillMessage.contentType 对齐） |
-  | content | String | 文本 |
-  | assistantAccount | String | **必填**，缺则 IllegalArgumentException |
-  | sendUserAccount | String | **必填** |
-  | imGroupId | String | 群聊 id |
-  | clientLang | String | 默认 `zh` |
-  | clientType | String | 客户端类型 |
-  | topicId | String | = toolSessionId |
-  | messageId | String | 业务侧消息 id |
-  | extParameters | Object | `{businessExtParam, platformExtParam}` |
-  | replyContext | Object | QR/PR 时追加 `{type, toolCallId|permissionId, answers|response}` |
-
-### 5. SS / GW → 外部（出口）
-
-#### 5.1 SS → IM 平台
-| 项 | 值 |
-|---|---|
-| URL | `${skill.im.api-url}/messages/send` |
-| Method | POST |
-| Headers | Content-Type: application/json |
-| Body | `{chatId, content, msgType:"text"}` |
-
-#### 5.2 GW → assistant 解析（im-push 用）
-| 项 | 值 |
-|---|---|
-| URL | `${gateway.assistant-resolve.api-url}?partnerAccount={assistantAccount}` |
-| Method | GET |
-| Headers | `Authorization: Bearer ${gateway.assistant-resolve.bearer-token}` |
-| Resp | `{data:{appKey, create_by}}` |
-| 缓存 | Redis `gw:assistant:resolve:{account}` TTL 300s |
-
-#### 5.3 GW → Cloud Route v1（旧）
-| 项 | 值 |
-|---|---|
-| URL | `${gateway.cloud-route.api-url}` |
-| Method | **GET-with-body** |
-| Headers | `Authorization: Bearer ${gateway.cloud-route.bearer-token}` |
-| Body | `{"ak":"..."}` |
-| 仅支持 scope | `callback:weagent:chat`（reply 不支持） |
-| Resp | `{code:"200", data:{hisAppId, endpoint, protocol("1"=webhook/"2"=sse/"3"=websocket), authType("1"=soa/"2"=apig)}}` |
-
-#### 5.4 GW → Cloud Route v2（新）
-| 项 | 值 |
-|---|---|
-| URL | `${gateway.cloud-route.v2-api-url}` |
-| Method | POST |
-| Headers | `Authorization: Bearer ${gateway.cloud-route.v2-bearer-token}` |
-| Body | `{"ak":"...","scope":"callback:weagent:{chat|question_reply|permission_reply}"}` |
-| Resp | `{code:"200", data:{channelType:int(1=webhook/2=sse/3=websocket), channelAddress, authType:int(0=none/1=soa/2=apig)}}` |
-| `appId` | 始终 null |
-| 缓存 | Redis `gw:cloud:route:v2:{ak}:{scope}` TTL 300s |
-
-#### 5.5 GW → IdentityApiClient（remote 鉴权）
-| 项 | 值 |
-|---|---|
-| URL | `${gateway.auth.identity-api.base-url}/appstore/wecodeapi/open/identity/check` |
-| Method | POST |
-| Headers | `Authorization: Bearer ${gateway.auth.identity-api.bearer-token}` |
-| Body | `{ak, timestamp:long, nonce, sign}` |
-| Resp | `{code, data:{checkResult:bool, userId}}` |
-| 超时 | 3s |
-
-#### 5.6 GW → SS（SkillServerConfigClient）
-| 项 | 值 |
-|---|---|
-| URL | `${gateway.skill-server.api-base}/api/admin/configs/value?type=&key=` |
-| Method | GET |
-| Headers | `Authorization: Bearer ${gateway.skill-server.api-token}` |
-| Resp | `{data:{configValue:String|null}}` |
-| 超时 | 连 2s / 读 3s |
-
-#### 5.7 GW → 云端 SSE
-| 项 | 值 |
-|---|---|
-| URL | `channelAddress`（来自 callback 配置） |
-| Method | POST |
-| Headers | `Content-Type: application/json`、`Accept: text/event-stream`、`X-Trace-Id`、`X-Request-Id`；按 authType：`X-Auth-Type` + `X-App-Id`（appId 非空才写） |
-| Body | cloudRequest JSON（见 §4.2 invoke business payload） |
-| 流格式 | 每行 `data:{json}`，反序列化为 `GatewayMessage` |
-
-#### 5.8 GW → 云端 WebSocket
-| 项 | 值 |
-|---|---|
-| 握手 URL | `channelAddress` |
-| Headers | `X-Trace-Id`、`X-App-Id`（非空时）、Auth 头 |
-| 建联后 | 立即 `sendText(cloudRequest JSON)` |
-| 心跳 | `pingIntervalSeconds`（默认 30s） |
-
-#### 5.9 GW → 云端 Webhook（仅 reply）
-| 项 | 值 |
-|---|---|
-| URL | `channelAddress` |
-| Method | POST |
-| Headers | `Content-Type: application/json`、`X-Trace-Id`、Auth 头 |
-| Body | cloudRequest JSON（含 replyContext） |
-| 超时 | `webhookTimeoutSeconds`（默认 10s） |
-| 失败 | 不重试，回 tool_error |
-
-### 6. SS → 业务方流式协议（StreamMessage）
-
-实际有 **26 种 type**（不是 19，源自 `StreamMessage.java:197-233`）：
-
-| 分类 | type 常量 | 关键字段（除公共） |
-|---|---|---|
-| 文本 | `text.delta` / `text.done` | messageId, partId, role, content |
-| 思考 | `thinking.delta` / `thinking.done` | 同上 |
-| 计划 | `planning.delta` / `planning.done`（云端扩展） | 同上 |
-| 工具 | `tool.update` | tool: `{toolName, toolCallId, input, output, status}`, title |
-| 提问 | `question` | question: `{header, question, options, multiSelect, questions, extParam}` |
-| 文件 | `file` | file: `{fileName, fileUrl, fileMime}` |
-| 步骤 | `step.start` / `step.done` | usage: `{tokens:Map, cost, reason}` |
-| 会话 | `session.status` / `session.title` / `session.error` | sessionStatus / title / error |
-| 权限 | `permission.ask` | permission: `{permissionId, permType, metadata}`, status, title |
-|  | `permission.reply` | permission: `{permissionId, response}`, role=assistant |
-| Agent | `agent.online` / `agent.offline` | （仅 type） |
-| 错误 | `error` | error |
-| 用户回显 | `message.user` | messageId, messageSeq, role=user, content |
-| 重连快照 | `snapshot` | messages, parts |
-|  | `streaming` | sessionStatus |
-| 云端扩展 | `searching` | keywords:List<String> |
-|  | `search_result` | searchResults:List<{index,title,source}> |
-|  | `reference` | references:List<{index,title,source,url,content}> |
-|  | `ask_more` | askMoreQuestions:List<String> |
-
-公共字段：`type, seq, sessionId(@JsonIgnore), welinkSessionId, emittedAt, raw, messageId, messageSeq, role, sourceMessageId, partId, partSeq, content, status, title, error, sessionStatus, messages, parts, subagentSessionId, subagentName`。
-
-> 各 type 实际填充位置：个人助理走 `OpenCodeEventTranslator.java`；业务助理 / 云端走 `CloudEventTranslator.java`。两者均在工作区改动列表内。
+所有对外接口均带链路追踪 id 与必要的鉴权头，日志做敏感字段脱敏。
 
 ---
 
-## 【数据设计】
+# DFX
 
-### 1. 持久化（MySQL，Flyway 实读）
+## 性能
 
-#### SS（V1–V11）
-
-```mermaid
-erDiagram
-  skill_session ||--o{ skill_message : "session_id"
-  skill_message ||--o{ skill_message_part : "message_id"
-  skill_definition
-
-  skill_session {
-    BIGINT id PK "雪花"
-    VARCHAR(128) user_id "idx_user_active"
-    VARCHAR(64) ak "idx_ak"
-    VARCHAR(128) tool_session_id "idx_tool_session_id, business=cloud-{uuid}"
-    VARCHAR title
-    VARCHAR status "ACTIVE/IDLE/CLOSED"
-    VARCHAR(32) business_session_domain "default miniapp"
-    VARCHAR(32) business_session_type "group/direct"
-    VARCHAR(128) business_session_id
-    VARCHAR(128) assistant_account
-    DATETIME created_at
-    DATETIME last_active_at
-  }
-  skill_message {
-    BIGINT id PK
-    BIGINT session_id
-    BIGINT seq "uk(session_id,seq)"
-    VARCHAR role "user/assistant/system/tool"
-    MEDIUMTEXT content
-    VARCHAR content_type
-    VARCHAR(128) message_id "idx"
-    BOOL finished
-    INT tokens_in
-    INT tokens_out
-    DECIMAL cost
-    DATETIME created_at
-    JSON meta
-  }
-  skill_message_part {
-    BIGINT id PK
-    VARCHAR(128) message_id "idx"
-    BIGINT session_id "idx"
-    VARCHAR part_id "uk(session_id,part_id)"
-    INT seq
-    VARCHAR part_type
-    TEXT content
-    VARCHAR tool_name
-    VARCHAR tool_call_id
-    VARCHAR tool_status
-    JSON tool_input
-    TEXT tool_output
-    TEXT tool_error
-    VARCHAR tool_title
-    VARCHAR file_name
-    VARCHAR file_url
-    VARCHAR file_mime
-    VARCHAR(128) subagent_session_id "idx"
-    VARCHAR subagent_name
-  }
-  skill_definition {
-    BIGINT id PK
-    VARCHAR skill_code UK
-    VARCHAR skill_name
-    VARCHAR tool_type "OPENCODE"
-  }
-```
-
-`sys_config(id PK, config_type, config_key, config_value VARCHAR(512), description, status, sort_order, uk_type_key)`
-
-**关键 sys_config 用法清单**：
-
-| config_type | config_key | 用途 | 读取方 |
-|---|---|---|---|
-| `cloud_route` | `v2_enabled` | v1/v2 主开关，"1"=v2 | GW `CallbackConfigService` |
-| `cloud_route` | `v2_fallback_enabled` | v2 失败是否降级到 fallback，"1"=ON | GW `CallbackConfigService` |
-| `cloud_route` | `business_whitelist_enabled` | 业务助理白名单总开关，"1"=启用 | SS `BusinessWhitelistService` |
-| `cloud_route_fallback` | `chat` / `question` / `permission` | v2 兜底配置，value=JSON `{channelAddress,channelType,authType}` | GW `SysConfigFallbackProvider` |
-| `business_cloud_whitelist` | `{businessTag}` | 白名单成员 | SS（缓存 `ss:config:set:business_cloud_whitelist`） |
-| `cloud_request_strategy` | `{appId/businessTag}` | 选择 cloudRequest 构造策略 | SS `CloudRequestBuilder` |
-| `assistant_offline` | `message` | 助理离线兜底文案 | SS `AssistantOfflineMessageProvider` |
-
-迁移要点：
-- V1：建初始三张表
-- V2：消息分 part（`skill_message_part`）
-- V3：`agent_id`→`ak`，`im_chat_id`→`im_group_id`
-- V4：`user_id` 全部 BIGINT→VARCHAR(128)
-- V5：所有 PK 改雪花
-- V6：加业务三元组 `business_session_*` + `assistant_account`，DROP `im_group_id`，ENUM→VARCHAR
-- V7：`skill_message` 加唯一键 (session_id, seq)
-- V8：`skill_message_part` 加 subagent_*
-- V9：`skill_session.tool_session_id` 加索引
-- V10：建 `sys_config` 表 + seed `cloud_request_strategy.uniassistant=default`
-- V11：seed `cloud_route.business_whitelist_enabled=0`
-
-> `skill-server/src/main/resources/db/queries/` 当前是未追踪的空目录（git `??`），暂无 SQL 文件。
-
-#### GW（V1–V5）
-
-```mermaid
-erDiagram
-  agent_connection
-  ak_sk_credential
-
-  agent_connection {
-    BIGINT id PK
-    VARCHAR(128) user_id "idx_user"
-    VARCHAR(64) ak_id "idx_ak"
-    VARCHAR device_name
-    VARCHAR(64) mac_address
-    VARCHAR os
-    VARCHAR tool_type "uk_ak_tooltype"
-    VARCHAR tool_version
-    VARCHAR status "ONLINE/OFFLINE, idx_status"
-    DATETIME last_seen_at
-    DATETIME created_at
-  }
-  ak_sk_credential {
-    BIGINT id PK
-    VARCHAR(64) ak UK
-    VARCHAR(128) sk
-    VARCHAR(128) user_id "idx_user_id"
-    VARCHAR description
-    VARCHAR status "idx_status"
-    DATETIME created_at
-    DATETIME updated_at
-  }
-```
-
-### 2. 缓存（Redis，全部来自代码）
-
-| Key / Channel | 用途 | TTL | 出处 |
-|---|---|---|---|
-| `agent:{agentId}` ch | 推到特定 agent | — | SS RMB:50 |
-| `user-stream:{userId}` ch | 用户级跨实例 fanout | — | SS RMB:55 |
-| `ss:relay:{instanceId}` ch | SS 实例间 relay（带自愈） | — | SS RMB:295 |
-| `ss:tool-session:{toolSessionId}` | toolSession→sessionId 反查 | 24h | SS RMB:358 |
-| `ss:stream-seq:{welinkSessionId}` | 跨实例消息序号 INCR | — | SS RMB:386 |
-| `ss:external-relay:{instanceId}` ch | 外部 WS 跨实例 | — | ExternalStreamHandler |
-| `invoke-source:{sessionId}` | 来源标记 | `${skill.delivery.invoke-source-ttl-seconds:300}` | SS RMB:403 |
-| `external-ws:registry:{domain}` HASH | 外部 WS 实例注册 | 30s（10s 心跳） | SS RMB:434 |
-| `ss:config:set:business_cloud_whitelist` | 业务助理白名单缓存 | `cacheTtlMinutes` | BusinessWhitelistService |
-| `ss:pending-rebuild:{sid}` List | 待回放消息 | 5 min | SessionRebuildService:34 |
-| `ss:rebuild-counter:{sid}` | 重建次数 | — | :36 |
-| `ss:rebuild-lock:{sid}` | 重建分布式锁 | 15s | :40 |
-| `conn:ak:{ak}` | AK→GW 实例（外部） | 120s | GW Handler:319 |
-| `gw:internal:agent:{ak}` | AK→GW 实例（内部） | 120s | GW RMB:60 |
-| `gw:source-conn:{srcType}:{srcId}` HASH | source 连接注册 | 2h | GW RMB:429 |
-| `gw:route:{toolSessionId}` / `gw:route:w:{welinkSessionId}` | sessionRoute L2 | 30 min | GW RMB:701 |
-| `gw:agent:user:{ak}` | AK→userId | — | GW RMB:65 |
-| `gw:pending:{ak}` List | 离线 invoke 缓存 | 30 min | GW RMB:99 |
-| `gw:relay:{instanceId}` ch | V2 GW↔GW 中继 | — | GW RMB:68 |
-| `gw:legacy-relay:{instanceId}` ch | Legacy 中继 | — | GW RMB:71 |
-| `gw:register:lock:{ak}` | 注册并发锁 | 10s | Handler:319 |
-| `gw:cloud:route:v1\|v2:{ak}:{scope}` | callback 配置缓存 | 300s | CallbackConfigService |
-| `gw:assistant:resolve:{account}` | assistant 解析缓存 | 300s | AssistantAccountResolver |
-| `auth:nonce:{nonce}` | 防重放 | 300s | application.yml:78 |
-
-**本地缓存（Caffeine）**：
-- SS：`AssistantInfoService` 300s；`AssistantAccountResolverService` exists 300s / not-exists 60s；`AssistantIdResolverService` 30 min；`MessageHistoryCacheService` 30s + warm=50；`SysConfigService` 5 min。
-- GW：identity-cache L1=300s/max=10000；`SysConfigFallbackProvider` 与 `CallbackConfigService` 配置开关共用 in-memory TTL（`gateway.cloud-route.sysconfig-cache-ttl-ms`，默认 300000ms）；`UpstreamRoutingTable`。
-
-### 3. 运营数据
-- 应用日志：JSON 行，含 `traceId/ak/userId/sessionId/businessDomain/welinkSessionId` MDC（`MdcRequestInterceptor`、`MdcConstants`）。GW logging 包带 `SensitiveDataMasker`。
-- 业务度量：当前未集成 Micrometer，建议补；落地清单见 DFX 监控章节。
-
----
-
-## 【集成设计】
-
-| 集成对象 | 方向 | 协议 | 关键依赖 |
-|---|---|---|---|
-| 小程序 | SS↔小程序 | WS + REST | `/ws/skill/stream` Cookie；`/api/skill/*` |
-| IM 平台 | SS↔IM | REST 双向 | 入站 `/api/inbound/messages` Bearer；出站 `${skill.im.api-url}` + `${skill.im.token}` |
-| 外部系统（meeting/doc 等） | SS↔外部 | WS | `/ws/external/stream`；外部实例信息存 `external-ws:registry:{domain}` |
-| OpenCode PCAgent | GW↔Agent | WS（AK/SK HMAC） | nonce 防重放；mode=gateway/remote |
-| 助理服务（数字分身） | SS→第三方 | REST | `${skill.assistant.resolve-url}` + `${skill.assistant-info.api-url}` |
-| 助理解析（GW im-push 用） | GW→第三方 | REST | `${gateway.assistant-resolve.api-url}` |
-| 身份服务（remote 鉴权） | GW→第三方 | REST | `IdentityApiClient` |
-| 云端业务助理 v1 路由 | GW→第三方 | REST GET-with-body | `${gateway.cloud-route.api-url}` |
-| 云端业务助理 v2 路由 | GW→第三方 | REST POST | `${gateway.cloud-route.v2-api-url}` |
-| 云端业务助理流式 | GW→Cloud | SSE / WS / Webhook | channelAddress 来自 callback 配置 |
-| 业务方反向回调 | 业务方→GW | REST POST | `/api/gateway/cloud/im-push` |
-| MySQL | SS+GW | JDBC + Flyway | 各自 schema |
-| Redis | SS+GW | Lettuce | pub/sub + Lua + 缓存 |
-| Sys 配置共享 | GW→SS | REST | `SkillServerConfigClient` Bearer |
-
----
-
-## 【依赖项及影响面分析】
-
-### 1. 直接依赖
-- **SS** 依赖：GW WS / REST、MySQL skill schema、Redis、第三方 assistant API、IM 平台。
-- **GW** 依赖：SS sys_config 接口、PCAgent、MySQL gateway schema、Redis、IdentityApi（remote）、第三方 assistant 解析、云端业务助理（route + 流式）。
-
-### 2. 间接影响（改谁会牵动什么）
-
-```
-改 StreamMessage 字段
-  → OpenCodeEventTranslator + CloudEventTranslator 都要填新字段
-  → ProtocolMessageMapper（snapshot 一致）
-  → 三个 DeliveryStrategy（输出格式）
-  → 小程序 / 外部前端
-
-改 GatewayMessageRouter
-  → MessagePersistenceService（落库）
-  → DeliveryDispatcher 三策略全受影响
-  → 跨实例 user-stream / ss:relay 广播
-
-改 GW SkillRelayService 三层路由
-  → 全量 Agent + 业务助理上行可达性
-  → ConsistentHashRing 节点变化会让同 sourceType 内的 sessionId 路由变更，
-     必须保证同一 toolSession 内事件顺序在 hashRing 中稳定
-
-改 CloudAgentService / CallbackConfigService
-  → 全部业务助理 chat / question_reply / permission_reply 路径
-  → fallback 链断裂可能导致大面积 tool_error
-
-改 BusinessScopeStrategy.buildInvoke / DefaultCloudRequestStrategy
-  → 全部业务助理 cloudRequest 协议
-  → 跨业务方需对齐发布
-
-改任一 Redis Key 命名 → 跨实例发现 / 路由 / 锁全部受影响（HIGH）
-改 internal-token / api-token → SS↔GW 全链路 + GW→SS REST 同时挂掉（CRITICAL）
-```
-
-### 3. 改之前必须做（来自项目 CLAUDE.md）
-- 改任一类的方法/字段前先 `gitnexus_impact({target, direction:"upstream"})`；HIGH/CRITICAL 风险须告知评审。
-- 重命名走 `gitnexus_rename`，不要全局 find-replace。
-- 高敏感面：`GatewayMessage.Type`、`GatewayWSClient.sendToGateway`、`SkillRelayService.handleInvokeFromSkill / relayToSkill`、`RedisMessageBroker.*`、`AgentWebSocketHandler.handleRegister`、`SessionRebuildService.triggerRebuild`、`OutboundDeliveryDispatcher.dispatch`、`CloudAgentService.handleInvoke`、`CallbackConfigService.getConfig`、`BusinessScopeStrategy.buildInvoke`。
-
-### 4. 上线后看什么（监控关键字）
-- **个人路径**：`gw:register:lock` 等待时长、4403/4408/4409 关闭码计数、`gw:pending` 队列长度
-- **业务路径**：`callback_config_missing` 计数、v2→fallback 切换次数、`gw:cloud:route:*` 缓存命中率、SSE/WS first-event 超时、Webhook 非 2xx
-- **路由**：L1/L2/L3 命中比例、broadcast rate-limit drop、`source_not_allowed/source_mismatch`
-- **pub/sub**：`physicalSubscriberCount=0` 自愈次数
-- **重建**：`ss:pending-rebuild` 队列长度、超 max-attempts=3 的会话
-- **业务接入**：IM 入站 4xx/5xx、`AssistantOfflineMessageProvider` 触发率、im-push 403 比例
-
-> Grafana 看板：**< 待补充 >**
-
----
-
-# DFX 设计
-
-## 【性能设计】
-
-| 指标 | 现状 / 配置 | 出处 |
-|---|---|---|
-| SS↔GW WS 连接数 | 每个 SS 实例 8 条到 GW（可调） | `skill.gateway.connection-count:8` |
-| Agent 心跳 | 30s 巡检；90s 视为离线 | `gateway.agent.heartbeat-*` |
-| SS↔GW 重连 | 1s 起，指数退避到 30s | `GatewayWSClient.java:67-71, 235-237` |
-| GW source-conn 心跳 | 10s 刷一次 ts | `gateway.skill-relay.owner-heartbeat-interval-seconds:10` |
-| GW route L2 缓存 | 30 min | `session-route-ttl-seconds:1800` |
-| GW pending 队列 | 30 min | `SkillRelayService.PENDING_TTL` |
-| nonce 缓存 | 5 min | `gateway.auth.nonce-ttl-seconds:300` |
-| identity-cache | L1=300s / 1 万条；L2=3600s | `gateway.auth.identity-cache.*` |
-| **云端连接 3 阶段超时** | connect=30s / first event=120s / idle=90s / max=1800s | `CloudTimeoutProperties` |
-| 云端 webhook 超时 | 10s，无重试 | 同上 |
-| 云端 callback 配置缓存 | 300s（Redis）+ 30s（GW 进程内开关） | `CallbackConfigService` |
-| 云端 fallback 缓存 | 30s（进程内） | `SysConfigFallbackProvider` |
-| 历史缓存 | 30s + 预热 50 条 | `skill.message-history.*` |
-| 助理存在性缓存 | 存在 300s / 不存在 60s | `skill.assistant.status-cache-ttl-*` |
-| 跨实例消息序号 | Redis INCR `ss:stream-seq:*` | `RedisMessageBroker.java:386-399` |
-| 跨 GW 广播限流 | 每个 source 10 QPS 滑窗 | `SkillRelayService.java:117-123` |
-
-目标 SLO（建议）：
-- IM/External 入站 P99 ≤ 300ms（不含 LLM）
-- GW 注册 P99 ≤ 150ms
-- 业务助理 callback 解析 P99 ≤ 100ms（命中缓存）/ ≤ 800ms（透传 v2）
-- SS 单实例 WS 并发 ≥ 10k
-
-> 压测报告：**< 待补充 >**
-
----
-
-## 【高可用设计】
-
-**接入层**
-- ALB 前置；WS 走 IP-hash 或 sticky 保持长连。
-
-**应用层**
-- SS、GW 全部无状态、可水平扩。
-- GW 三层路由（hashRing → Redis → 广播）容忍单 GW 失效；source-conn 30s TTL 自动收敛。
-- Agent 注册有并发锁（`gw:register:lock` SETNX 10s + Lua 安全释放）。
-- `conn:ak` / `gw:internal:agent` 用 Lua CAS 删除（owner 校验），防止 Agent 快速迁移到别的 GW 时旧 GW 误删新绑定。
-- 注册成功后 Lua 原子 DRAIN pending。
-- `ss:relay` pub/sub 半死自愈。
-- toolSession 失效自愈：max-attempts=3，cooldown=30s。
-- **业务助理云端**：v2 失败自动降级到 SysConfigFallback；callback 配置 Redis 缓存兜底；3 阶段超时防卡死。
-- **业务方白名单**：开关默认关闭（V11 seed=0），即使配错 sys_config 也不会卡住流程。
-- GW 启动清残留 source-conn；SS 关闭把自己 ACTIVE 路由置 CLOSED。
-- 跨 SS 实例：`user-stream:{userId}` + `ss:relay:{instanceId}`，单 SS 重启不丢推送目标。
-
-**数据层**
-- MySQL 主从。Flyway 仅追加。
-- Redis 哨兵或集群。所有关键 Key 都有 TTL 兜底。
-
-**降级链**
-- 个人助理：Agent 离线 → pending 30 min → 上线 DRAIN
-- 业务助理：v2 → v2_fallback（SysConfig 静态） → tool_error 报给业务方
-- AkSk remote：L1 → L2 → L3 IdentityApi
-- 助理离线：sys_config `assistant_offline.message` 兜底文案
-
-SLO 目标：可用性 ≥ 99.9%，MTTR ≤ 15 分钟。
-
----
-
-## 【安全设计】
-
-| 维度 | 怎么做 |
+| 指标 | 目标 / 设计支撑 |
 |---|---|
-| Agent 鉴权 | AK/SK HMAC-SHA256；mode=gateway 查表，mode=remote 调身份服务（带三级缓存） |
-| 防重放 | `auth:nonce:{nonce}` Redis 300s + 时间窗 ±300s |
-| SS↔GW 内部信道 | WS 子协议同时校验 token、source、instanceId |
-| GW→SS REST | Bearer api-token |
-| IM 入站 | Bearer `skill.im.inbound-token`（`ImTokenAuthInterceptor`） |
-| 业务方 im-push | 必填 assistantAccount + content，单聊校验 userAccount==create_by；不一致 403 |
-| 业务助理白名单 | `business_cloud_whitelist` 表 + 总开关 `cloud_route.business_whitelist_enabled` |
-| 个人渠道抑制下发 | `ChannelSuppressReplyWhitelistService` + INVOKE 携带 `suppressReply` |
-| 会话归属 | `SessionAccessControlService` 校验 user↔session 关系 |
-| 云端调用注入 | SSE/WS/Webhook 头自动写 `X-Trace-Id`、按 authType 写 `X-Auth-Type`+`X-App-Id` |
-| 日志脱敏 | `SensitiveDataMasker`（GW logging 包） |
-| 关闭码语义化 | 4403 设备绑定 / 4408 注册超时 / 4409 重复连接 / 1008 验签失败 |
+| 入站 P99（不含模型耗时） | ≤ 300ms；助理账号解析与会话查询全部三级缓存 |
+| 网关注册 P99 | ≤ 150ms；分布式锁限制并发，避免重复注册 |
+| 业务助理路由解析 | 命中缓存 ≤ 100ms；穿透到云端 ≤ 800ms；失败自动兜底 |
+| 单 SS 实例 WebSocket 并发 | ≥ 10k；连接池 + 跨实例广播 |
+| 流式吞吐 | 单会话 ≥ 50 事件 / 秒；片段级缓冲 |
+| 云端通道超时 | 连接 30s / 首事件 120s / 空闲 90s / 总时长 30 分钟 |
+| 离线消息缓冲 | 30 分钟，上线后原子补发 |
 
-待补：sk 当前 V2 seed 是明文，生产应在落库前做 KMS 或 AES 加密；ak 可见、sk 不直接读取，仅参与 HMAC 计算。
+## 可用性
 
-威胁建模（STRIDE 速记）：
-- 假冒：HMAC + 内部 token + IM Bearer + im-push userAccount 校验
-- 篡改：生产强制 wss / https
-- DoS：注册锁 + per-source 广播限流 + 心跳超时即断 + 云端 3 阶段超时
-- 越权：access control + 业务白名单 + im-push 单聊归属校验
-- 凭证泄露：sk 加密落地（待补）
+- 目标：99.9%，故障平均恢复时间 ≤ 15 分钟。
+- 自愈链：助理端 session 失效自愈、跨节点路由自愈、Redis 订阅自愈、业务助理路由自愈、Agent 离线消息缓冲。
+- 任一外部依赖失败均有降级或静态兜底，不让单点故障扩散到用户。
 
----
+## 安全
 
-## 【兼容性设计】
+- 全链路三层鉴权（业务方 / 内部 / 助理）。
+- 敏感动作走用户确认（权限请求）。
+- 业务方反向推送对单聊做归属校验。
+- AK/SK 走 HMAC + nonce + 时间窗。
+- 日志脱敏。
+- 待补：sk 入库加密、生产强制 wss/https。
 
-**协议**
-- GW 同时支持 V2 mesh 路由和 Legacy owner-relay。SS 子协议带不带 `instanceId` 决定走哪条（`gateway.legacy-relay.enabled=true`）。
-- `GatewayMessage.Type` 16 种通过常量声明。新增类型走"先入位、后启用"两步。
-- `StreamMessage` 新增字段（keywords / searchResults / references / askMoreQuestions / subagent_*）默认为空，老前端不解析也不会出错。
-- IM 出站 `ImRestDeliveryStrategy` 当前只识别 4 种 status（TEXT_DONE / ERROR / PERMISSION_ASK / QUESTION，且仅 running/pending），新 status 必须显式扩展，否则会被丢弃。
-- **云端 v1/v2 协议并存**：`v2_enabled` 开关决定走哪条；v1 仅支持 chat scope，reply 必须升级到 v2。
+## 兼容性
 
-**数据**
-- Flyway 仅追加（V1–V11 / V1–V5）。ENUM → VARCHAR 已在 V6 完成。
-- 业务三元组 + assistant_account 在 V6 落地。新业务域只需扩展 `business_session_domain` 取值（如 `meeting`/`doc`），不动 schema。
-
-**配置**
-- v1↔v2 切换：`sys_config: cloud_route.v2_enabled` 开关。
-- v2 失败兜底开关：`cloud_route.v2_fallback_enabled`。
-- 业务助理白名单总开关：`cloud_route.business_whitelist_enabled`（默认 0=不限）。
-- AkSk 双模式（gateway / remote）通过 `gateway.auth.mode` 切换，运行期可切。
-- internal-token / api-token 需双服务同步发布，顺序：双写支持新旧 → 切换流量 → 移除旧。
-
-**周边**
-- 接入新业务域只需三步：① 实现 `OutboundDeliveryStrategy` + `supports(SkillSession)`；② 仿照 `ImSessionManager` 写 findOrCreate；③ 加入站 controller。**不动 DB Schema、不动 GW**。
-- 接入新云端协议（gRPC / HTTP3）：扩展 `cloud/CloudProtocolStrategy`，不影响 V2 路由层。
-- 接入新业务助理 cloudRequest 字段：扩展 `cloud/CloudRequestStrategy`，按 `cloud_request_strategy` SysConfig key 选择。
+- 协议双轨：业务助理 v1 / v2 路由共存，运维侧开关切换；小程序流式协议字段仅做向后兼容追加。
+- 数据库仅追加迁移，老实例可与新实例共存。
+- 配置外置，无需为开关变更重启服务。
+- 接入新业务域：实现一个出站策略 + 一个会话查找逻辑 + 一个入站端点；不动数据库 schema、不动 GW。
+- 接入新云端协议：在云端编排中扩展一个协议策略；不动路由层。
 
 ---
 
-> 文档版本：基于 commit `82bd982` + 工作区未提交修改
-> 维护人：**< 待补充 >**
-> 最后更新：2026-05-08
+# 附录：如何查看本文图
+
+本文所有图采用 draw.io 源文件，按视图分组保存：
+
+| 文件 | 包含 |
+|---|---|
+| `diagrams/01-usecase.drawio` | 上下文模型、用例模型 |
+| `diagrams/02-logical.drawio` | 业务模型、逻辑模型、数据模型、安全韧性模型 |
+| `diagrams/03-development.drawio` | 代码模型、构建模型 |
+| `diagrams/04-deployment.drawio` | 部署模型 |
+| `diagrams/05-runtime.drawio` | 运行模型 + 四个关键场景时序 |
+
+**打开方式（任一）：**
+1. draw.io 桌面版 / VS Code 扩展 *Draw.io Integration*：直接打开 `.drawio` 文件即可编辑。
+2. 浏览器：访问 [app.diagrams.net](https://app.diagrams.net)，*File → Open from → Device* 选中文件。
+
+**导出为 PNG/SVG**：在 draw.io 内 *File → Export as → PNG / SVG*，文件命名建议 `<view>-<sub>.png`，放在 `diagrams/exported/`。导出后可在本文档相应位置追加 `![](./diagrams/exported/xxx.png)` 让 markdown 渲染图片。
