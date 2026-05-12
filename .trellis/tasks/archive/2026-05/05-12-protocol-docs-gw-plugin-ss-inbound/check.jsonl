@@ -1,0 +1,5 @@
+{"file": "docs/superpowers/specs/2026-04-29-business-cloud-agent-protocol-v2.md", "reason": "蓝本 — 校验新文档的章节顺序、字段表风格、字段-代码映射格式是否与之一致"}
+{"file": ".trellis/tasks/05-12-protocol-docs-gw-plugin-ss-inbound/prd.md", "reason": "PRD — 校验 Acceptance Criteria 与 Definition of Done 是否逐项达成"}
+{"file": "docs/superpowers/specs/2026-04-10-stream-protocol.md", "reason": "PR1 miniapp 文档需吸收的现有出站协议，校验字段无遗漏"}
+{"file": "docs/superpowers/specs/2026-04-13-external-ws-channel-design.md", "reason": "PR2 external 文档需要覆盖的设计点，校验 action 与握手协议完整"}
+{"file": ".trellis/guides/code-reuse-thinking-guide.md", "reason": "校验三份文档共享部分是用链接而非复制处理"}
