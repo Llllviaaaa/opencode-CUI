@@ -20,6 +20,8 @@
 - [10. 配置项一览](#10-配置项一览)
 - [11. 字段↔代码映射（实现验证）](#11-字段代码映射实现验证)
 - [12. 给前端开发者的注意事项](#12-给前端开发者的注意事项)
+- [13. Subagent 协议（子代理事件路由）](#13-subagent-协议子代理事件路由)
+- [14. 变更记录](#14-变更记录)
 
 ---
 
@@ -225,7 +227,7 @@ Content-Type: application/json
 |---|---|---|---|
 | `content` | String | ✅ | 用户输入文本；空/纯空白 → 400 |
 | `toolCallId` | String | | 非空 → 路由到 `question_reply`（应答 §7 `question` 事件），与 question 事件中的 `toolCallId` 对齐 |
-| `subagentSessionId` | String | | 仅 subagent 场景：把 reply 路由到子会话；缺省走主 `toolSessionId` |
+| `subagentSessionId` | String | **subagent 场景必填** | **协议路由字段**：业务方应回显本会话最近一条 subagent 出站事件中携带的 `subagentSessionId`；缺失则 plugin 会把应答路由到主对话（落到主 `toolSessionId`），导致子 agent 阻塞或 `tool_error`。详见 §13 |
 | `businessExtParam` | Object | | 业务扩展参数；SS 透传到 `payload.businessExtParam`，最终落到云端 `extParameters.businessExtParam`（不解析、不修改） |
 
 **SS 行为**（`SkillMessageController.sendMessage` + `routeToGateway`）：
@@ -259,7 +261,7 @@ Content-Type: application/json
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `response` | String | ✅ | 合法值：`"once"` / `"always"` / `"reject"`；其他 → 400 |
-| `subagentSessionId` | String | | 同 §5.2 |
+| `subagentSessionId` | String | **subagent 场景必填** | 同 §5.2；权限请求由子 agent 发起时（`permission.ask` 事件带 `subagentSessionId`），应答必须回显，否则授权会落到主对话。详见 §13 |
 | `businessExtParam` | Object | | 同 §5.2 |
 
 **SS 行为**（`SkillMessageController.replyPermission`）：
@@ -289,7 +291,16 @@ Content-Type: application/json
 ```http
 POST /api/skill/sessions/{sessionId}/abort
 Cookie: userId=900001
+Content-Type: application/json
+
+{
+  "subagentSessionId": null
+}
 ```
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `subagentSessionId` | String | **subagent 场景必填** | 中止特定子 agent 会话；缺省则中止主会话整条链路。详见 §13 |
 
 **SS 行为**：向 GW 发 `abort_session`，会话保留可复用；已 CLOSED → 409。
 
@@ -371,8 +382,8 @@ Content-Type: application/json
 | `title` | String | 显示标题 | tool.update / session.title / permission.ask |
 | `error` | String | 错误描述 | session.error / error |
 | `sessionStatus` | String | `"busy"`/`"idle"`/`"retry"` | session.status / streaming |
-| `subagentSessionId` | String | 子代理会话 ID | Part 级（可选） |
-| `subagentName` | String | 子代理名称 | Part 级（可选） |
+| `subagentSessionId` | String | 子代理会话 ID。**协议路由字段**；subagent 场景必传，业务方在对应入站应答（`question_reply` / `permission_reply` / `abort` / `close`）中必须回显，详见 §13 | Part 级（subagent 场景必传） |
+| `subagentName` | String | 子代理显示名；嵌套时以 `" > "` 分隔的路径（例 `"代码审查 > 设计"`），详见 §13 | Part 级（subagent 场景必传） |
 
 **`emittedAt` 排除列表**（`StreamMessageEmitter.EMITTED_AT_EXCLUDED_TYPES`）：
 
@@ -1318,6 +1329,8 @@ WS 建连/重连时 SS 自动推送该用户所有 ACTIVE 会话的快照（`Ski
 | 业务扩展（云端事件） | `businessExtParam` ❌（出站 question） | `extParam` ✅（QuestionInfo 内字段） |
 | token 用量字段 | `usage` / `tokenUsage` ❌ | `tokens` ✅（step.done 内） |
 | 步骤结束原因 | `finishReason` / `stopReason` ❌ | `reason` ✅ |
+| subagent 应答路由 | 忘记在 `question_reply` / `permission_reply` / `abort` 入站 payload 中回显 `subagentSessionId` ❌ | 出站事件带就必传；缺失 → 应答落到主对话或子 agent `tool_error`（§13.4） ✅ |
+| subagent 嵌套表达 | `subagentName` 用 `/` 或 `->` ❌ | 路径分隔符为 `" > "`（含空格），且无嵌套字段（§13.3） ✅ |
 
 ### 12.3 关键不变量
 
@@ -1329,8 +1342,118 @@ WS 建连/重连时 SS 自动推送该用户所有 ACTIVE 会话的快照（`Ski
 
 ---
 
-## 13. 变更记录
+## 13. Subagent 协议（子代理事件路由）
+
+> 本节为业务方实现 subagent 支持的速查规范。完整设计见 [`2026-05-11-subagent-unified-design.md`](./2026-05-11-subagent-unified-design.md) 第 3 节；UI 渲染模式见 [`2026-04-01-subagent-miniapp-display-design.md`](./2026-04-01-subagent-miniapp-display-design.md)。
+
+### 13.1 协议本质
+
+整个 subagent 协议**只有 2 个字段**：
+
+| 字段 | 含义 | 取值 |
+|---|---|---|
+| `subagentSessionId` | 子会话标识 | `null` = 主对话；非空 = 子 agent 会话 |
+| `subagentName` | 子 agent 显示名 | 可用 `" > "` 分隔表达嵌套层级（例 `"代码审查 > 设计"`） |
+
+**架构特征**：skill-server / miniapp / DB **零改动**——bridge plugin 在源头已完成父子 toolSession 映射重写，下游通道（GW → SS → WS → miniapp）仅作字段透传。
+
+### 13.2 哪些 type 会带 subagent 字段
+
+| 携带 | 不携带 |
+|---|---|
+| **所有 Part 级事件**：`text.delta` / `text.done` / `thinking.delta` / `thinking.done` / `tool.update` / `question` / `permission.ask` / `permission.reply` / `file` / `step.start` / `step.done` | **会话级事件**：`session.status` / `session.title` / `session.error` / `agent.online` / `agent.offline` / `error` / `snapshot` / `streaming` / `message.user` |
+
+理由：subagent 字段标记的是「这条 Part 来自哪个子任务」，会话级事件属于主会话，本身没有子任务归属。
+
+### 13.3 嵌套表达：路径化 `subagentName`，无 UI 嵌套
+
+子任务再派生孙任务时，**不做嵌套渲染**、**无新增字段**，靠 `subagentName` 路径化携带层级：
+
+```json
+// parent 子 agent "代码审查" 派生 child 子 agent "设计" 后的 text.delta
+{
+  "type": "text.delta",
+  "welinkSessionId": "1789012345",
+  "partId": "part-x",
+  "content": "考虑使用策略模式...",
+  "subagentSessionId": "sub-002",
+  "subagentName": "代码审查 > 设计"
+}
+```
+
+miniapp 平铺为 1 个折叠块（名字含路径），不要尝试 2 层折叠。
+
+### 13.4 入站应答的路由责任（关键）
+
+出站 Part 级事件带 `subagentSessionId` 时，业务方在以下入站调用 payload 中**必须回显**该 ID：
+
+| 入站接口 | 何时必传 | 缺失后果 |
+|---|---|---|
+| `POST /api/skill/sessions/{id}/messages`（`question_reply` 分支，§5.2） | 收到的 `question` 事件带 `subagentSessionId` | 应答落到主对话；子 agent 阻塞或 `tool_error` |
+| `POST /api/skill/sessions/{id}/permissions/{permId}`（§5.3） | 收到的 `permission.ask` 事件带 `subagentSessionId` | 授权落到主对话；子 agent 报权限失败 |
+| `POST /api/skill/sessions/{id}/abort`（§5.4） | 仅想中止某个子 agent，而非整条主对话链路 | 中止主会话，相当于全停 |
+
+示例 — subagent 内 permission.ask → permission_reply 必须回显：
+
+```json
+// SS → miniapp（出站）
+{
+  "type": "permission.ask",
+  "welinkSessionId": "1789012345",
+  "partId": "part-perm-1",
+  "permissionId": "perm-001",
+  "subagentSessionId": "sub-001",
+  "subagentName": "代码审查"
+}
+
+// miniapp → SS（入站，POST /api/skill/sessions/1789012345/permissions/perm-001）
+{
+  "response": "once",
+  "subagentSessionId": "sub-001"   // ← 必须回显，否则授权走主对话
+}
+```
+
+### 13.5 生命周期
+
+subagent 完成**没有专门的 done 事件**：
+
+- 子 agent 结束 = 它的 Part 流自然停止 + 最后一条 `tool.update` 的 `toolStatus` 取值：
+  - `"completed"`：正常完成；
+  - `"error"`：失败，`toolError` 字段携带失败原因。
+- 父 agent 监听同 `toolCallId` 的 `tool.update` 即可，不需要订阅额外 done 通知。
+
+### 13.6 UI 渲染模式（miniapp）
+
+详见 [`2026-04-01-subagent-miniapp-display-design.md`](./2026-04-01-subagent-miniapp-display-design.md)；要点：
+
+1. **折叠块**：以 `subagentSessionId` 为 key 聚合该子 agent 的所有 Part；默认折叠，展示 `agentName + prompt（首条 user-facing 文本）+ 状态点 + 工具数 + 时长`。
+2. **阻塞性交互冒泡**：`permission.ask` / `question` 必须冒泡到主对话层，附带 agent 名称（路径形态 `subagentName`），避免用户在折叠态错过授权请求。
+3. **嵌套子 agent**：不做 2 层 UI 嵌套，靠 `subagentName` 路径表达。
+
+### 13.7 与上游 GW↔plugin 协议的接缝
+
+详见 [`2026-05-12-gateway-plugin-protocol.md`](./2026-05-12-gateway-plugin-protocol.md)。下游通道只需注意：
+
+| 关注点 | SS / miniapp 视角 |
+|---|---|
+| 子会话 idle 不补 tool_done | 上游 plugin 已处理；SS 不会看到孤立的子会话 `session.idle`，无需特殊兼容 |
+| envelope 改写 | 在 GW↔plugin 层完成；进入 SS 的 StreamMessage 已是「父会话 sessionId + Part 级 subagent 字段」的最终形态 |
+| `toolError` 字段透传 | SS `OpenCodeEventTranslator` 直接透传到 `tool.update`；miniapp 直接读取 |
+
+### 13.8 常见反模式（避免）
+
+| 反模式 | 后果 | 正确做法 |
+|---|---|---|
+| 把会话级事件（`session.status` 等）按 `subagentSessionId` 分发 | 会话级状态永远收不到（这些事件不带该字段） | 会话级状态以 `welinkSessionId` 为 key |
+| 在 `permission_reply` payload 里把 `subagentSessionId` 透传成 `null`（明明出站事件有值） | plugin 路由到主对话 → 子 agent 报错 | 严格回显出站事件中的取值 |
+| 用 `subagentName` 做唯一 key 去聚合 Part | 同名子 agent 多次启动会被混在一起 | 用 `subagentSessionId` 做聚合 key；`subagentName` 仅用于显示 |
+| 把 `subagentName` 路径分隔符替换为 `/` 自行做嵌套展示 | 与协议命名约定不一致，下游/日志检索失配 | 保留 `" > "` 原样展示；嵌套渲染由折叠块自决 |
+
+---
+
+## 14. 变更记录
 
 | 日期 | 版本 | 改动 |
 |---|---|---|
 | 2026-05-12 | v1.0 | 首发：合并 `2026-04-10-stream-protocol.md` 出站章节，新增入站 5 类接口、Cookie 鉴权、保活、错误矩阵、字段-代码映射 |
+| 2026-05-13 | v1.1 | 新增 §13 Subagent 协议；升级出站/入站字段表中 `subagentSessionId` / `subagentName` 描述（"可选" → "协议路由字段，subagent 场景必传"）；§12.2 易混表新增 subagent 相关陷阱 |
