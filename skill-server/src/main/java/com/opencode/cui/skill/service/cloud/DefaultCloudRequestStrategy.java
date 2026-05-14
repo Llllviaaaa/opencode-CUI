@@ -17,7 +17,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class DefaultCloudRequestStrategy implements CloudRequestStrategy {
 
-    static final String STRATEGY_NAME = "default";
+    public static final String STRATEGY_NAME = "default";
 
     private final ObjectMapper objectMapper;
 

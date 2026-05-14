@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.scope.BusinessScopeStrategy;
 import com.opencode.cui.skill.service.scope.PersonalScopeStrategy;
-import com.opencode.cui.skill.service.cloud.CloudRequestBuilder;
+import com.opencode.cui.skill.service.cloud.profile.CloudRequestProfileRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -35,7 +35,10 @@ class EventTranslationScopeTest {
     private CloudEventTranslator cloudEventTranslator;
 
     @Mock
-    private CloudRequestBuilder cloudRequestBuilder;
+    private CloudRequestProfileRegistry profileRegistry;
+
+    @Mock
+    private SnowflakeIdGenerator idGenerator;
 
     @Mock
     private OpenCodeEventTranslator openCodeEventTranslator;
@@ -45,7 +48,7 @@ class EventTranslationScopeTest {
 
     @BeforeEach
     void setUp() {
-        businessStrategy = new BusinessScopeStrategy(cloudRequestBuilder, cloudEventTranslator, objectMapper);
+        businessStrategy = new BusinessScopeStrategy(profileRegistry, cloudEventTranslator, objectMapper, idGenerator);
         personalStrategy = new PersonalScopeStrategy(openCodeEventTranslator, cloudEventTranslator);
     }
 

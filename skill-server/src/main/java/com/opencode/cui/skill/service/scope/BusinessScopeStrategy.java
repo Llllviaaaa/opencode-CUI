@@ -10,8 +10,12 @@ import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.CloudEventTranslator;
 import com.opencode.cui.skill.service.GatewayActions;
+import com.opencode.cui.skill.service.SnowflakeIdGenerator;
 import com.opencode.cui.skill.service.cloud.CloudRequestBuilder;
 import com.opencode.cui.skill.service.cloud.CloudRequestContext;
+import com.opencode.cui.skill.service.cloud.CloudRequestStrategy;
+import com.opencode.cui.skill.service.cloud.profile.CloudRequestProfile;
+import com.opencode.cui.skill.service.cloud.profile.CloudRequestProfileRegistry;
 import com.opencode.cui.skill.logging.MdcHelper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -19,32 +23,37 @@ import org.springframework.stereotype.Component;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 /**
  * 业务助手策略。
  * <ul>
- *   <li>invoke 通过 CloudRequestBuilder 构建云端请求体</li>
- *   <li>toolSessionId 使用 "cloud-" + UUID 预生成</li>
+ *   <li>invoke 通过 {@link CloudRequestProfileRegistry} 选择 profile + strategy 构建云端请求体；
+ *       payload 携带 {@code cloudProfile} 字段供 GW 端选择 decoder</li>
+ *   <li>toolSessionId 使用 Snowflake long ID（字符串形式），让 {@code topicId = Long.parseLong(toolSessionId)} 可成功</li>
  *   <li>不需要 session_created 回调</li>
  *   <li>不需要 Agent 在线检查</li>
  *   <li>事件翻译使用 CloudEventTranslator</li>
  * </ul>
+ *
+ * <p>历史：{@link CloudRequestBuilder} 已 @Deprecated，作为回滚兜底保留。</p>
  */
 @Slf4j
 @Component
 public class BusinessScopeStrategy implements AssistantScopeStrategy {
 
-    private final CloudRequestBuilder cloudRequestBuilder;
+    private final CloudRequestProfileRegistry profileRegistry;
     private final CloudEventTranslator cloudEventTranslator;
     private final ObjectMapper objectMapper;
+    private final SnowflakeIdGenerator idGenerator;
 
-    public BusinessScopeStrategy(CloudRequestBuilder cloudRequestBuilder,
+    public BusinessScopeStrategy(CloudRequestProfileRegistry profileRegistry,
                                  CloudEventTranslator cloudEventTranslator,
-                                 ObjectMapper objectMapper) {
-        this.cloudRequestBuilder = cloudRequestBuilder;
+                                 ObjectMapper objectMapper,
+                                 SnowflakeIdGenerator idGenerator) {
+        this.profileRegistry = profileRegistry;
         this.cloudEventTranslator = cloudEventTranslator;
         this.objectMapper = objectMapper;
+        this.idGenerator = idGenerator;
     }
 
     @Override
@@ -102,14 +111,17 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
                 .replyResponse(replyResponse)
                 .build();
 
-        ObjectNode cloudRequest = cloudRequestBuilder.buildCloudRequest(businessTag, context);
+        CloudRequestProfile profile = profileRegistry.resolve(businessTag);
+        CloudRequestStrategy strategy = profile.requestStrategy();
+        ObjectNode cloudRequest = strategy.build(context);
 
-        // 构建 payload：GW 的 CloudAgentService 期望 payload.cloudRequest 和 payload.toolSessionId
+        // 构建 payload：GW 的 CloudAgentService 期望 payload.cloudRequest / payload.toolSessionId / payload.cloudProfile
         ObjectNode payload = objectMapper.createObjectNode();
         payload.set("cloudRequest", cloudRequest);
         if (toolSessionId != null && !toolSessionId.isBlank()) {
             payload.put("toolSessionId", toolSessionId);
         }
+        payload.put("cloudProfile", profile.name());
 
         // 包装为 Gateway invoke 消息格式
         ObjectNode message = objectMapper.createObjectNode();
@@ -139,7 +151,8 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
 
     @Override
     public String generateToolSessionId() {
-        return "cloud-" + UUID.randomUUID().toString().replace("-", "");
+        // Snowflake long ID（字符串形式），让 topicId = Long.parseLong(toolSessionId) 直接成功
+        return Long.toString(idGenerator.nextId());
     }
 
     @Override

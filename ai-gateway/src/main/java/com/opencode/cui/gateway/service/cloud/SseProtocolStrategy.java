@@ -2,6 +2,11 @@ package com.opencode.cui.gateway.service.cloud;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.gateway.model.GatewayMessage;
+import com.opencode.cui.gateway.service.cloud.decoder.DecoderSession;
+import com.opencode.cui.gateway.service.cloud.decoder.SseEventDecoder;
+import com.opencode.cui.gateway.service.cloud.decoder.SseEventDecoderFactory;
+import com.opencode.cui.gateway.service.cloud.profile.CloudResponseProfile;
+import com.opencode.cui.gateway.service.cloud.profile.CloudResponseProfileRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -14,13 +19,16 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 import java.util.function.Consumer;
 
 /**
  * SSE 协议策略实现。
  *
- * <p>通过 HTTP POST 发送请求，读取 SSE 流，逐行解析 {@code data: {JSON}} 格式的事件。</p>
+ * <p>通过 HTTP POST 发送请求，读取 SSE 流，逐行解析 {@code data: {JSON}} 格式的事件。
+ * 实际事件解析委托给 {@link SseEventDecoder}（按 {@code cloudProfile} 解析），
+ * 让本类只承担传输和生命周期编排，不耦合具体协议格式。</p>
  *
  * <p>使用 Java 11+ HttpClient 同步模式（后续可优化为异步）。
  * HttpClient 通过构造器注入以便测试时 mock。</p>
@@ -32,20 +40,29 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
     private final CloudAuthService cloudAuthService;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
+    private final SseEventDecoderFactory decoderFactory;
+    private final CloudResponseProfileRegistry profileRegistry;
 
     @org.springframework.beans.factory.annotation.Autowired
     public SseProtocolStrategy(CloudAuthService cloudAuthService, ObjectMapper objectMapper,
+            SseEventDecoderFactory decoderFactory,
+            CloudResponseProfileRegistry profileRegistry,
             @org.springframework.beans.factory.annotation.Value("${gateway.cloud.connect-timeout-seconds:30}") int connectTimeoutSeconds) {
-        this(cloudAuthService, objectMapper,
+        this(cloudAuthService, objectMapper, decoderFactory, profileRegistry,
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(connectTimeoutSeconds)).build());
     }
 
     /**
      * 测试友好构造器，允许注入自定义 HttpClient。
      */
-    public SseProtocolStrategy(CloudAuthService cloudAuthService, ObjectMapper objectMapper, HttpClient httpClient) {
+    public SseProtocolStrategy(CloudAuthService cloudAuthService, ObjectMapper objectMapper,
+                               SseEventDecoderFactory decoderFactory,
+                               CloudResponseProfileRegistry profileRegistry,
+                               HttpClient httpClient) {
         this.cloudAuthService = cloudAuthService;
         this.objectMapper = objectMapper;
+        this.decoderFactory = decoderFactory;
+        this.profileRegistry = profileRegistry;
         this.httpClient = httpClient;
     }
 
@@ -57,6 +74,10 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
     @Override
     public void connect(CloudConnectionContext context, CloudConnectionLifecycle lifecycle,
                         Consumer<GatewayMessage> onEvent, Consumer<Throwable> onError) {
+        // 通过 Registry 拼装 profile（查 cloud_protocol_profile_def:<name>，缺失则约定 fallback profile==decoder）
+        CloudResponseProfile profile = profileRegistry.resolve(context.getCloudProfile());
+        SseEventDecoder decoder = decoderFactory.resolveDecoder(profile.responseDecoderName());
+        DecoderSession session = decoder.createSession();
         try {
             // 1. 构建请求体
             String requestBody = objectMapper.writeValueAsString(context.getCloudRequest());
@@ -78,8 +99,9 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
 
             // 4. 发送请求
             HttpRequest request = requestBuilder.build();
-            log.info("[SSE] Connecting: endpoint={}, appId={}, traceId={}",
-                    context.getChannelAddress(), context.getAppId(), context.getTraceId());
+            log.info("[SSE] Connecting: endpoint={}, appId={}, traceId={}, cloudProfile={}, decoder={}",
+                    context.getChannelAddress(), context.getAppId(), context.getTraceId(),
+                    profile.name(), profile.responseDecoderName());
 
             HttpResponse<InputStream> response = sendRequest(request);
 
@@ -95,12 +117,26 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
             }
 
             // 5. 读取 SSE 流
-            readSseStream(response.body(), lifecycle, onEvent, onError, context.getTraceId());
+            readSseStream(response.body(), lifecycle, onEvent, onError,
+                    context.getTraceId(), decoder, session);
 
         } catch (Exception e) {
             log.error("[SSE] Connection error: endpoint={}, traceId={}, error={}",
                     context.getChannelAddress(), context.getTraceId(), e.getMessage());
             onError.accept(e);
+        } finally {
+            // 流终止 / 异常 / 超时三路径都补 flush
+            try {
+                List<GatewayMessage> tail = decoder.flush(session);
+                if (tail != null) {
+                    for (GatewayMessage m : tail) {
+                        onEvent.accept(m);
+                    }
+                }
+            } catch (Exception flushErr) {
+                log.warn("[SSE] decoder flush error: traceId={}, error={}",
+                        context.getTraceId(), flushErr.getMessage());
+            }
         }
     }
 
@@ -118,7 +154,9 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                                CloudConnectionLifecycle lifecycle,
                                Consumer<GatewayMessage> onEvent,
                                Consumer<Throwable> onError,
-                               String traceId) {
+                               String traceId,
+                               SseEventDecoder decoder,
+                               DecoderSession session) {
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
             String line;
@@ -128,7 +166,8 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                     notifyLifecycle(lifecycle, CloudConnectionLifecycle::onHeartbeat);
                     continue;
                 }
-                if (line.startsWith("data:") && handleDataLine(line, lifecycle, onEvent, traceId)) {
+                if (line.startsWith("data:")
+                        && handleDataLine(line, lifecycle, onEvent, traceId, decoder, session)) {
                     return;
                 }
             }
@@ -145,23 +184,39 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
      * @return true 表示遇到终态事件，调用方应停止读取
      */
     private boolean handleDataLine(String line, CloudConnectionLifecycle lifecycle,
-                                   Consumer<GatewayMessage> onEvent, String traceId) {
+                                   Consumer<GatewayMessage> onEvent, String traceId,
+                                   SseEventDecoder decoder, DecoderSession session) {
         String jsonData = line.substring(5).trim();
-        if (jsonData.isEmpty() || "[DONE]".equals(jsonData)) {
+        if (jsonData.isEmpty()) {
             return false;
         }
+        // 业务层心跳：识别后只重置 lifecycle，不下发，不进 decode
+        if (decoder.isHeartbeat(jsonData)) {
+            notifyLifecycle(lifecycle, CloudConnectionLifecycle::onHeartbeat);
+            return false;
+        }
+        // 终止符：触发 flush（由 finally 块统一执行）+ onTerminalEvent，并停止读取
+        if (decoder.isTerminator(jsonData)) {
+            notifyLifecycle(lifecycle, CloudConnectionLifecycle::onTerminalEvent);
+            return true;
+        }
         try {
-            GatewayMessage message = objectMapper.readValue(jsonData, GatewayMessage.class);
-            // T13: 根据事件类型派发 pause/resume idle timer（必须在 onEventReceived 之前，
-            // 让 onEventReceived → resetIdleTimeout 能感知到新设置的 awaitingReply）
-            dispatchIdleTimerByEventType(lifecycle, message);
-            notifyLifecycle(lifecycle, CloudConnectionLifecycle::onEventReceived);
-            onEvent.accept(message);
-            if (message.isType(GatewayMessage.Type.TOOL_DONE)
-                    || message.isType(GatewayMessage.Type.TOOL_ERROR)) {
-                notifyLifecycle(lifecycle, CloudConnectionLifecycle::onTerminalEvent);
-                return true;
+            List<GatewayMessage> messages = decoder.decode(jsonData, session);
+            if (messages == null || messages.isEmpty()) {
+                return false;
             }
+            boolean terminal = false;
+            for (GatewayMessage message : messages) {
+                dispatchIdleTimerByEventType(lifecycle, message);
+                notifyLifecycle(lifecycle, CloudConnectionLifecycle::onEventReceived);
+                onEvent.accept(message);
+                if (message.isType(GatewayMessage.Type.TOOL_DONE)
+                        || message.isType(GatewayMessage.Type.TOOL_ERROR)) {
+                    notifyLifecycle(lifecycle, CloudConnectionLifecycle::onTerminalEvent);
+                    terminal = true;
+                }
+            }
+            return terminal;
         } catch (Exception e) {
             log.warn("[SSE] Failed to parse event: traceId={}, data={}, error={}",
                     traceId, jsonData, e.getMessage());

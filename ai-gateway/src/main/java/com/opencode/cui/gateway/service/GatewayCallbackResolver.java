@@ -98,6 +98,7 @@ public class GatewayCallbackResolver implements CallbackConfigResolver {
             case 0 -> "none";
             case 1 -> "soa";
             case 2 -> "apig";
+            case 3 -> "integration_token";
             default -> null;
         };
     }

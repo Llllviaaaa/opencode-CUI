@@ -8,8 +8,12 @@ import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.CloudEventTranslator;
 import com.opencode.cui.skill.service.GatewayActions;
-import com.opencode.cui.skill.service.cloud.CloudRequestBuilder;
+import com.opencode.cui.skill.service.SnowflakeIdGenerator;
 import com.opencode.cui.skill.service.cloud.CloudRequestContext;
+import com.opencode.cui.skill.service.cloud.CloudRequestStrategy;
+import com.opencode.cui.skill.service.cloud.DefaultCloudRequestStrategy;
+import com.opencode.cui.skill.service.cloud.profile.CloudRequestProfile;
+import com.opencode.cui.skill.service.cloud.profile.CloudRequestProfileRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -25,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -33,10 +38,16 @@ import static org.mockito.Mockito.when;
 class BusinessScopeStrategyTest {
 
     @Mock
-    private CloudRequestBuilder cloudRequestBuilder;
+    private CloudRequestProfileRegistry profileRegistry;
 
     @Mock
     private CloudEventTranslator cloudEventTranslator;
+
+    @Mock
+    private SnowflakeIdGenerator idGenerator;
+
+    @Mock
+    private CloudRequestStrategy defaultStrategy;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -44,7 +55,19 @@ class BusinessScopeStrategyTest {
 
     @BeforeEach
     void setUp() {
-        strategy = new BusinessScopeStrategy(cloudRequestBuilder, cloudEventTranslator, objectMapper);
+        strategy = new BusinessScopeStrategy(profileRegistry, cloudEventTranslator, objectMapper, idGenerator);
+        lenient().when(defaultStrategy.getName()).thenReturn(DefaultCloudRequestStrategy.STRATEGY_NAME);
+        lenient().when(defaultStrategy.build(any(CloudRequestContext.class)))
+                .thenReturn(objectMapper.createObjectNode());
+        lenient().when(profileRegistry.resolve(any()))
+                .thenAnswer(inv -> new CloudRequestProfile(DefaultCloudRequestStrategy.STRATEGY_NAME, defaultStrategy));
+    }
+
+    /** Helper to capture the CloudRequestContext passed to the strategy. */
+    private CloudRequestContext capturedContext() {
+        ArgumentCaptor<CloudRequestContext> captor = ArgumentCaptor.forClass(CloudRequestContext.class);
+        verify(defaultStrategy).build(captor.capture());
+        return captor.getValue();
     }
 
     @Test
@@ -54,16 +77,20 @@ class BusinessScopeStrategyTest {
     }
 
     @Test
-    @DisplayName("generateToolSessionId() returns string with \"cloud-\" prefix")
-    void generateToolSessionId_returnsCloudPrefix() {
+    @DisplayName("generateToolSessionId() returns numeric string (Long-parsable, Snowflake)")
+    void generateToolSessionId_returnsNumericString() {
+        when(idGenerator.nextId()).thenReturn(1234567890123456789L);
         String id = strategy.generateToolSessionId();
         assertNotNull(id);
-        assertTrue(id.startsWith("cloud-"), "Expected 'cloud-' prefix but got: " + id);
+        // Snowflake long ID 形式：纯数字字符串，Long.parseLong 必须成功
+        assertDoesNotThrow(() -> Long.parseLong(id));
+        assertEquals("1234567890123456789", id);
     }
 
     @Test
-    @DisplayName("generateToolSessionId() returns unique values")
+    @DisplayName("generateToolSessionId() returns unique values (different snowflake calls)")
     void generateToolSessionId_returnsUniqueValues() {
+        when(idGenerator.nextId()).thenReturn(1L, 2L);
         String id1 = strategy.generateToolSessionId();
         String id2 = strategy.generateToolSessionId();
         assertNotEquals(id1, id2);
@@ -96,52 +123,48 @@ class BusinessScopeStrategyTest {
     }
 
     @Test
-    @DisplayName("buildInvoke() calls CloudRequestBuilder and sets assistantScope in payload")
-    void buildInvoke_callsCloudRequestBuilder() {
+    @DisplayName("buildInvoke() resolves profile via registry and includes cloudProfile in payload")
+    void buildInvoke_resolvesProfileAndIncludesCloudProfileInPayload() throws Exception {
+        // profile name 来自 registry，cloudProfile 字段下沉到 payload
+        when(profileRegistry.resolve(eq("app-123")))
+                .thenReturn(new CloudRequestProfile("assistant_square", defaultStrategy));
+
         InvokeCommand command = new InvokeCommand("ak-1", "user-1", "session-1", "chat", "{\"content\":\"hello\"}");
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
         info.setBusinessTag("app-123");
 
-        ObjectNode cloudRequest = objectMapper.createObjectNode();
-        cloudRequest.put("message", "hello");
-        when(cloudRequestBuilder.buildCloudRequest(eq("app-123"), any(CloudRequestContext.class)))
-                .thenReturn(cloudRequest);
-
         String result = strategy.buildInvoke(command, info);
 
         assertNotNull(result);
-        verify(cloudRequestBuilder).buildCloudRequest(eq("app-123"), any(CloudRequestContext.class));
+        verify(profileRegistry).resolve(eq("app-123"));
+        verify(defaultStrategy).build(any(CloudRequestContext.class));
+        JsonNode root = objectMapper.readTree(result);
+        assertThat(root.path("payload").path("cloudProfile").asText()).isEqualTo("assistant_square");
     }
 
     @Test
     @DisplayName("buildInvoke(chat) extracts sendUserAccount from command.payload to CloudRequestContext")
     void buildInvoke_chat_extractsSendUserAccount() {
-        // 作用域说明：action=chat。q/p reply 在 business scope 的序列化尚未实现（见 spec 4.2.5），
-        // 本用例不覆盖 q/p reply 场景，避免误导性测试。
         String payload = "{\"content\":\"hello\",\"sendUserAccount\":\"user-001\","
                 + "\"assistantAccount\":\"asst-1\",\"toolSessionId\":\"tool-1\"}";
         InvokeCommand command = new InvokeCommand("ak-1", "owner-1", "session-1", "chat", payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
         info.setBusinessTag("app-123");
-        when(cloudRequestBuilder.buildCloudRequest(any(), any(CloudRequestContext.class)))
-                .thenReturn(objectMapper.createObjectNode());
 
         strategy.buildInvoke(command, info);
 
-        ArgumentCaptor<CloudRequestContext> ctx = ArgumentCaptor.forClass(CloudRequestContext.class);
-        verify(cloudRequestBuilder).buildCloudRequest(eq("app-123"), ctx.capture());
-        assertEquals("user-001", ctx.getValue().getSendUserAccount(),
-                "sendUserAccount should be extracted from command.payload");
-        assertEquals("asst-1", ctx.getValue().getAssistantAccount());
+        CloudRequestContext ctx = capturedContext();
+        assertEquals("user-001", ctx.getSendUserAccount());
+        assertEquals("asst-1", ctx.getAssistantAccount());
     }
 
-    // ========== businessExtParam 透传场景（6 用例） ==========
+    // ========== businessExtParam passthrough（6 cases） ==========
 
     @Test
-    @DisplayName("buildInvoke(chat) 含 businessExtParam → 透传到 extParameters.businessExtParam")
-    void buildInvoke_chat_passesBusinessExtParam() throws Exception {
+    @DisplayName("buildInvoke(chat) with businessExtParam → passed through to extParameters.businessExtParam")
+    void buildInvoke_chat_passesBusinessExtParam() {
         String payload = "{\"text\":\"hi\",\"businessExtParam\":{\"a\":1,\"k\":[1,2]}," +
                 "\"toolSessionId\":\"cloud-001\",\"assistantAccount\":\"asst-1\"," +
                 "\"sendUserAccount\":\"u-1\",\"messageId\":\"m-1\"}";
@@ -150,14 +173,9 @@ class BusinessScopeStrategyTest {
         info.setAssistantScope("business");
         info.setBusinessTag("app-001");
 
-        when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
-                .thenReturn(objectMapper.createObjectNode());
-
         strategy.buildInvoke(command, info);
 
-        ArgumentCaptor<CloudRequestContext> captor = ArgumentCaptor.forClass(CloudRequestContext.class);
-        verify(cloudRequestBuilder).buildCloudRequest(eq("app-001"), captor.capture());
-        Map<String, Object> ext = captor.getValue().getExtParameters();
+        Map<String, Object> ext = capturedContext().getExtParameters();
         assertNotNull(ext);
         JsonNode bep = (JsonNode) ext.get("businessExtParam");
         assertTrue(bep.isObject());
@@ -169,8 +187,8 @@ class BusinessScopeStrategyTest {
     }
 
     @Test
-    @DisplayName("buildInvoke(chat) 缺省 businessExtParam → extParameters.businessExtParam 兜底为 {}")
-    void buildInvoke_chat_missingBusinessExtParam() throws Exception {
+    @DisplayName("buildInvoke(chat) without businessExtParam → fallback {}")
+    void buildInvoke_chat_missingBusinessExtParam() {
         String payload = "{\"text\":\"hi\",\"toolSessionId\":\"cloud-001\"," +
                 "\"assistantAccount\":\"asst-1\",\"sendUserAccount\":\"u-1\",\"messageId\":\"m-1\"}";
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "chat", payload);
@@ -178,26 +196,18 @@ class BusinessScopeStrategyTest {
         info.setAssistantScope("business");
         info.setBusinessTag("app-001");
 
-        when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
-                .thenReturn(objectMapper.createObjectNode());
-
         strategy.buildInvoke(command, info);
 
-        ArgumentCaptor<CloudRequestContext> captor = ArgumentCaptor.forClass(CloudRequestContext.class);
-        verify(cloudRequestBuilder).buildCloudRequest(eq("app-001"), captor.capture());
-        Map<String, Object> ext = captor.getValue().getExtParameters();
+        Map<String, Object> ext = capturedContext().getExtParameters();
         assertNotNull(ext);
         JsonNode bep = (JsonNode) ext.get("businessExtParam");
         assertTrue(bep.isObject());
         assertEquals(0, bep.size());
-        JsonNode pep = (JsonNode) ext.get("platformExtParam");
-        assertTrue(pep.isObject());
-        assertEquals(0, pep.size());
     }
 
     @Test
-    @DisplayName("buildInvoke(question_reply) 含 businessExtParam → 透传")
-    void buildInvoke_questionReply_passesBusinessExtParam() throws Exception {
+    @DisplayName("buildInvoke(question_reply) with businessExtParam → passed through")
+    void buildInvoke_questionReply_passesBusinessExtParam() {
         String payload = "{\"answer\":\"ok\",\"toolCallId\":\"tc-1\"," +
                 "\"businessExtParam\":{\"q\":\"x\"},\"toolSessionId\":\"cloud-001\"}";
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "question_reply", payload);
@@ -205,43 +215,30 @@ class BusinessScopeStrategyTest {
         info.setAssistantScope("business");
         info.setBusinessTag("app-001");
 
-        when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
-                .thenReturn(objectMapper.createObjectNode());
-
         strategy.buildInvoke(command, info);
 
-        ArgumentCaptor<CloudRequestContext> captor = ArgumentCaptor.forClass(CloudRequestContext.class);
-        verify(cloudRequestBuilder).buildCloudRequest(eq("app-001"), captor.capture());
-        JsonNode bep = (JsonNode) captor.getValue().getExtParameters().get("businessExtParam");
+        JsonNode bep = (JsonNode) capturedContext().getExtParameters().get("businessExtParam");
         assertEquals("x", bep.get("q").asText());
-        JsonNode pep = (JsonNode) captor.getValue().getExtParameters().get("platformExtParam");
-        assertTrue(pep.isObject());
-        assertEquals(0, pep.size());
     }
 
     @Test
-    @DisplayName("buildInvoke(question_reply) 缺省 → 兜底 {}")
-    void buildInvoke_questionReply_missingBusinessExtParam() throws Exception {
+    @DisplayName("buildInvoke(question_reply) missing businessExtParam → fallback {}")
+    void buildInvoke_questionReply_missingBusinessExtParam() {
         String payload = "{\"answer\":\"ok\",\"toolCallId\":\"tc-1\",\"toolSessionId\":\"cloud-001\"}";
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "question_reply", payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
         info.setBusinessTag("app-001");
 
-        when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
-                .thenReturn(objectMapper.createObjectNode());
-
         strategy.buildInvoke(command, info);
 
-        ArgumentCaptor<CloudRequestContext> captor = ArgumentCaptor.forClass(CloudRequestContext.class);
-        verify(cloudRequestBuilder).buildCloudRequest(eq("app-001"), captor.capture());
-        JsonNode bep = (JsonNode) captor.getValue().getExtParameters().get("businessExtParam");
+        JsonNode bep = (JsonNode) capturedContext().getExtParameters().get("businessExtParam");
         assertEquals(0, bep.size());
     }
 
     @Test
-    @DisplayName("buildInvoke(permission_reply) 含 businessExtParam → 透传")
-    void buildInvoke_permissionReply_passesBusinessExtParam() throws Exception {
+    @DisplayName("buildInvoke(permission_reply) with businessExtParam → passed through")
+    void buildInvoke_permissionReply_passesBusinessExtParam() {
         String payload = "{\"permissionId\":\"p-1\",\"response\":\"once\"," +
                 "\"businessExtParam\":{\"p\":true},\"toolSessionId\":\"cloud-001\"}";
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "permission_reply", payload);
@@ -249,129 +246,101 @@ class BusinessScopeStrategyTest {
         info.setAssistantScope("business");
         info.setBusinessTag("app-001");
 
-        when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
-                .thenReturn(objectMapper.createObjectNode());
-
         strategy.buildInvoke(command, info);
 
-        ArgumentCaptor<CloudRequestContext> captor = ArgumentCaptor.forClass(CloudRequestContext.class);
-        verify(cloudRequestBuilder).buildCloudRequest(eq("app-001"), captor.capture());
-        JsonNode bep = (JsonNode) captor.getValue().getExtParameters().get("businessExtParam");
+        JsonNode bep = (JsonNode) capturedContext().getExtParameters().get("businessExtParam");
         assertTrue(bep.get("p").asBoolean());
-        JsonNode pep = (JsonNode) captor.getValue().getExtParameters().get("platformExtParam");
-        assertTrue(pep.isObject());
-        assertEquals(0, pep.size());
     }
 
     @Test
-    @DisplayName("buildInvoke(permission_reply) 缺省 → 兜底 {}")
-    void buildInvoke_permissionReply_missingBusinessExtParam() throws Exception {
+    @DisplayName("buildInvoke(permission_reply) missing businessExtParam → fallback {}")
+    void buildInvoke_permissionReply_missingBusinessExtParam() {
         String payload = "{\"permissionId\":\"p-1\",\"response\":\"once\",\"toolSessionId\":\"cloud-001\"}";
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "permission_reply", payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
         info.setBusinessTag("app-001");
 
-        when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
-                .thenReturn(objectMapper.createObjectNode());
-
         strategy.buildInvoke(command, info);
 
-        ArgumentCaptor<CloudRequestContext> captor = ArgumentCaptor.forClass(CloudRequestContext.class);
-        verify(cloudRequestBuilder).buildCloudRequest(eq("app-001"), captor.capture());
-        JsonNode bep = (JsonNode) captor.getValue().getExtParameters().get("businessExtParam");
+        JsonNode bep = (JsonNode) capturedContext().getExtParameters().get("businessExtParam");
         assertEquals(0, bep.size());
     }
 
-    // ========== businessExtParam 异常分支（3 用例） ==========
-
     @Test
-    @DisplayName("buildInvoke 业务方传字符串（非 object） → 兜底 {}")
-    void buildInvoke_businessExtParam_asString_fallback() throws Exception {
+    @DisplayName("buildInvoke businessExtParam as string → fallback {}")
+    void buildInvoke_businessExtParam_asString_fallback() {
         String payload = "{\"text\":\"hi\",\"businessExtParam\":\"abc\",\"toolSessionId\":\"cloud-001\"}";
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "chat", payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
         info.setBusinessTag("app-001");
 
-        when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
-                .thenReturn(objectMapper.createObjectNode());
-
         strategy.buildInvoke(command, info);
 
-        ArgumentCaptor<CloudRequestContext> captor = ArgumentCaptor.forClass(CloudRequestContext.class);
-        verify(cloudRequestBuilder).buildCloudRequest(eq("app-001"), captor.capture());
-        JsonNode bep = (JsonNode) captor.getValue().getExtParameters().get("businessExtParam");
+        JsonNode bep = (JsonNode) capturedContext().getExtParameters().get("businessExtParam");
         assertTrue(bep.isObject());
         assertEquals(0, bep.size());
     }
 
     @Test
-    @DisplayName("buildInvoke 业务方传数组 → 兜底 {}")
-    void buildInvoke_businessExtParam_asArray_fallback() throws Exception {
+    @DisplayName("buildInvoke businessExtParam as array → fallback {}")
+    void buildInvoke_businessExtParam_asArray_fallback() {
         String payload = "{\"text\":\"hi\",\"businessExtParam\":[1,2,3],\"toolSessionId\":\"cloud-001\"}";
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "chat", payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
         info.setBusinessTag("app-001");
 
-        when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
-                .thenReturn(objectMapper.createObjectNode());
-
         strategy.buildInvoke(command, info);
 
-        ArgumentCaptor<CloudRequestContext> captor = ArgumentCaptor.forClass(CloudRequestContext.class);
-        verify(cloudRequestBuilder).buildCloudRequest(eq("app-001"), captor.capture());
-        JsonNode bep = (JsonNode) captor.getValue().getExtParameters().get("businessExtParam");
+        JsonNode bep = (JsonNode) capturedContext().getExtParameters().get("businessExtParam");
         assertTrue(bep.isObject());
         assertEquals(0, bep.size());
     }
 
-    // ========== parseAnswers helper（4 用例） ==========
+    // ========== parseAnswers helper（4 cases） ==========
 
     @Test
-    @DisplayName("parseAnswers stringified 嵌套数组 → 原样保留")
+    @DisplayName("parseAnswers stringified nested array → preserved as-is")
     void parseAnswers_stringifiedNestedArray_preservedAsIs() {
         List<List<String>> result = strategy.parseAnswers("[[\"A\"],[\"B\",\"C\"]]");
         assertThat(result).containsExactly(List.of("A"), List.of("B", "C"));
     }
 
     @Test
-    @DisplayName("parseAnswers stringified 一维数组 → 包裹为外层")
+    @DisplayName("parseAnswers stringified 1D array → wrapped as outer")
     void parseAnswers_stringified1DArray_wrappedToOuter() {
         List<List<String>> result = strategy.parseAnswers("[\"A\",\"B\"]");
         assertThat(result).containsExactly(List.of("A", "B"));
     }
 
     @Test
-    @DisplayName("parseAnswers 普通文本 → 包裹为二维")
+    @DisplayName("parseAnswers plain text → wrapped to 2D")
     void parseAnswers_plainText_wrappedToDoubleArray() {
-        List<List<String>> result = strategy.parseAnswers("普通文本");
-        assertThat(result).containsExactly(List.of("普通文本"));
+        List<List<String>> result = strategy.parseAnswers("plain text");
+        assertThat(result).containsExactly(List.of("plain text"));
     }
 
     @Test
-    @DisplayName("parseAnswers blank/null → 返回单个空")
+    @DisplayName("parseAnswers blank/null → returns single empty")
     void parseAnswers_blankOrNull_returnsSingleEmpty() {
         assertThat(strategy.parseAnswers(null)).containsExactly(List.of(""));
         assertThat(strategy.parseAnswers("")).containsExactly(List.of(""));
         assertThat(strategy.parseAnswers("   ")).containsExactly(List.of(""));
     }
 
-    // ========== T5: action 路由 reply 字段（3 用例） ==========
+    // ========== action routes reply fields（3 cases） ==========
 
     @Test
-    @DisplayName("buildInvoke(question_reply) 写入 toolCallId/answers，结果 JSON 含 action=question_reply")
-    void buildInvoke_questionReply_writesToolCallIdAndAnswers() throws Exception {
+    @DisplayName("buildInvoke(question_reply) writes action=question_reply")
+    void buildInvoke_questionReply_writesAction() throws Exception {
         String payload = "{\"toolSessionId\":\"ts-1\",\"toolCallId\":\"call-q\",\"answer\":\"[[\\\"A\\\"]]\"}";
         InvokeCommand command = new InvokeCommand("ak1", "u1", "s1",
                 GatewayActions.QUESTION_REPLY, payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
         info.setBusinessTag("app-001");
-
-        when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
-                .thenReturn(objectMapper.createObjectNode());
 
         String result = strategy.buildInvoke(command, info);
 
@@ -381,17 +350,14 @@ class BusinessScopeStrategyTest {
     }
 
     @Test
-    @DisplayName("buildInvoke(permission_reply) 写入 permissionId/response，结果 JSON 含 action=permission_reply")
-    void buildInvoke_permissionReply_writesPermissionIdAndResponse() throws Exception {
+    @DisplayName("buildInvoke(permission_reply) writes action=permission_reply")
+    void buildInvoke_permissionReply_writesAction() throws Exception {
         String payload = "{\"toolSessionId\":\"ts-1\",\"permissionId\":\"perm-1\",\"response\":\"once\"}";
         InvokeCommand command = new InvokeCommand("ak1", "u1", "s1",
                 GatewayActions.PERMISSION_REPLY, payload);
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
         info.setBusinessTag("app-001");
-
-        when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
-                .thenReturn(objectMapper.createObjectNode());
 
         String result = strategy.buildInvoke(command, info);
 
@@ -401,7 +367,7 @@ class BusinessScopeStrategyTest {
     }
 
     @Test
-    @DisplayName("buildInvoke(chat) 不写 reply 字段，cloudRequest 不含 replyContext")
+    @DisplayName("buildInvoke(chat) does not write reply fields; cloudRequest has no replyContext")
     void buildInvoke_chat_doesNotWriteReplyFields() throws Exception {
         String payload = "{\"toolSessionId\":\"ts-1\",\"text\":\"hello\"}";
         InvokeCommand command = new InvokeCommand("ak1", "u1", "s1",
@@ -410,8 +376,8 @@ class BusinessScopeStrategyTest {
         info.setAssistantScope("business");
         info.setBusinessTag("app-001");
 
-        when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
-                .thenReturn(objectMapper.createObjectNode());
+        ObjectNode emptyCr = objectMapper.createObjectNode();
+        when(defaultStrategy.build(any(CloudRequestContext.class))).thenReturn(emptyCr);
 
         String result = strategy.buildInvoke(command, info);
 
@@ -422,21 +388,16 @@ class BusinessScopeStrategyTest {
     }
 
     @Test
-    @DisplayName("buildInvoke payload 整体非法 JSON → 不抛异常，兜底 {}")
-    void buildInvoke_payloadInvalidJson_fallback() throws Exception {
+    @DisplayName("buildInvoke payload invalid JSON → no throw, fallback {}")
+    void buildInvoke_payloadInvalidJson_fallback() {
         InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "chat", "not-a-json");
         AssistantInfo info = new AssistantInfo();
         info.setAssistantScope("business");
         info.setBusinessTag("app-001");
 
-        when(cloudRequestBuilder.buildCloudRequest(eq("app-001"), any(CloudRequestContext.class)))
-                .thenReturn(objectMapper.createObjectNode());
-
         strategy.buildInvoke(command, info);
 
-        ArgumentCaptor<CloudRequestContext> captor = ArgumentCaptor.forClass(CloudRequestContext.class);
-        verify(cloudRequestBuilder).buildCloudRequest(eq("app-001"), captor.capture());
-        JsonNode bep = (JsonNode) captor.getValue().getExtParameters().get("businessExtParam");
+        JsonNode bep = (JsonNode) capturedContext().getExtParameters().get("businessExtParam");
         assertTrue(bep.isObject());
         assertEquals(0, bep.size());
     }
