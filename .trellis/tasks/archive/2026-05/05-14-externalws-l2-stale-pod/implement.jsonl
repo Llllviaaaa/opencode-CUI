@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server backend spec 索引和 Pre-Development Checklist 入口"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "skill-server 编码约定，含 RedisTemplate.execute 包 connection 成 proxy 等关键约定 — 涉及 Lettuce/RedisConnection 操作要看"}
+{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "Redis 异常处理范式 — listAlive/HGET 失败时的 fail-open vs fail-closed 决策"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "[ENTRY]/[EXIT]/[CLEANUP] 等日志标签规范，新增方法要遵循"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "返回值/参数类型约束 — listAliveInstances/heldByGetBatch 接口签名要符合规范"}
+{"file": ".trellis/tasks/05-14-externalws-l2-stale-pod/prd.md", "reason": "本任务 PRD：根因 + 决策 + 数据结构 + 数据流 + 改动清单 + AC"}
+{"file": ".trellis/tasks/05-14-externalws-l2-stale-pod/research/redis-presence-patterns.md", "reason": "Redis presence 模式对比 — 验证 owner-only writes + ZSET roster 是业界已验证模式，理解为什么不用 HEXPIRE/Sorted Set 等替代"}
+{"file": ".trellis/tasks/05-14-externalws-l2-stale-pod/research/industry-ws-presence-routing.md", "reason": "业界 WS 多实例 presence 设计（Centrifugo/Phoenix Tracker 等）— 实施时如有架构疑问回看"}
+{"file": "CLAUDE.md", "reason": "项目级编码规则（中文沟通、abcoder SOP、gitnexus impact analysis 等）"}

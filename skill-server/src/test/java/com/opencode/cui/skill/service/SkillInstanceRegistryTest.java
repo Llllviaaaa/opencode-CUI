@@ -14,6 +14,7 @@ import org.springframework.scheduling.TaskScheduler;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.ScheduledFuture;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -71,6 +72,41 @@ class SkillInstanceRegistryTest {
         ArgumentCaptor<Duration> ttlCaptor = ArgumentCaptor.forClass(Duration.class);
         verify(valueOperations).set(eq(REDIS_KEY), eq("alive"), ttlCaptor.capture());
         assertEquals(Duration.ofSeconds(30), ttlCaptor.getValue());
+    }
+
+    @Test
+    @DisplayName("register 写心跳时顺手维护花名册：ZADD instance:roster + lazy GC")
+    void register_shouldMaintainRoster() {
+        registry.register();
+
+        verify(redisMessageBroker).addToInstanceRoster(eq(INSTANCE_ID), anyLong());
+        // pruneRoster 触发：lazy GC 60s 前的过期实例
+        verify(redisMessageBroker).pruneRoster(anyLong());
+    }
+
+    @Test
+    @DisplayName("listAliveInstances 用 now-30s cutoff 调 broker.rangeAliveInstances")
+    void listAliveInstances_usesCutoff() {
+        when(redisMessageBroker.rangeAliveInstances(anyLong()))
+                .thenReturn(List.of("ss-pod-1", "ss-pod-2"));
+
+        List<String> alive = registry.listAliveInstances();
+
+        assertEquals(List.of("ss-pod-1", "ss-pod-2"), alive);
+        ArgumentCaptor<Long> cutoffCap = ArgumentCaptor.forClass(Long.class);
+        verify(redisMessageBroker).rangeAliveInstances(cutoffCap.capture());
+        // cutoff 应在 now - 30s 附近（±5s 容差，避免 CI 抖动）
+        long expected = System.currentTimeMillis() - 30_000L;
+        long actual = cutoffCap.getValue();
+        assertTrue(Math.abs(actual - expected) < 5_000L,
+                "cutoff should be ~now-30s, got delta=" + (actual - expected));
+    }
+
+    @Test
+    @DisplayName("listAliveInstances broker 返回 empty/null 时返回 empty list（L3 降级）")
+    void listAliveInstances_emptyFromBroker() {
+        when(redisMessageBroker.rangeAliveInstances(anyLong())).thenReturn(List.of());
+        assertTrue(registry.listAliveInstances().isEmpty());
     }
 
     @Test
@@ -142,6 +178,8 @@ class SkillInstanceRegistryTest {
 
         verify(scheduledFuture).cancel(false);
         verify(redisTemplate).delete(REDIS_KEY);
+        // 同时从活实例花名册移除自己（graceful 路径）
+        verify(redisMessageBroker).removeFromInstanceRoster(INSTANCE_ID);
     }
 
     @Test
