@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-0.md`
-- **Total Sessions**: 1
-- **Last Active**: 2026-05-10
+- **Total Sessions**: 2
+- **Last Active**: 2026-05-12
 <!-- @@@/auto:current-status -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 2 | 2026-05-12 | Business onboarding protocol docs (3 specs) | `4290ea5`, `51cc552`, `a82a20a` | `main` |
 | 1 | 2026-05-10 | Heartbeat self-check follow-ups + real root cause discovery | `4a48ebf`, `ff7d695` | `main` |
 <!-- @@@/auto:session-history -->
 

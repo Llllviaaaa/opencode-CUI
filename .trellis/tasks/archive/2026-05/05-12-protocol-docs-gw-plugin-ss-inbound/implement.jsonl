@@ -1,0 +1,14 @@
+{"file": "docs/superpowers/specs/2026-04-29-business-cloud-agent-protocol-v2.md", "reason": "体例蓝本：章节骨架/字段表风格/字段-代码映射格式/易混点速查/错误矩阵——三份新文档严格对齐这份"}
+{"file": "docs/superpowers/specs/2026-04-10-stream-protocol.md", "reason": "miniapp↔SS 出站 StreamMessage 协议现状，PR1 需吸收并补足入站章节"}
+{"file": "docs/superpowers/specs/2026-04-13-external-ws-channel-design.md", "reason": "external↔SS 通道设计稿，PR2 升级为接入规范"}
+{"file": "docs/superpowers/specs/2026-04-02-plugin-reply-event-forwarding-design.md", "reason": "GW↔plugin 上行 reply 事件白名单细节，PR3 引用"}
+{"file": "docs/superpowers/specs/2026-04-02-gw-connection-level-routing-design.md", "reason": "GW 连接路由模型，PR3 写下行 action 路由要点时参考"}
+{"file": "docs/superpowers/specs/2026-04-15-inbound-delivery-routing-design.md", "reason": "入站 delivery routing 整体语义，三份文档错误矩阵/链路图需要"}
+{"file": "docs/superpowers/specs/2026-04-16-cloud-connection-lifecycle-design.md", "reason": "长连接保活/lifecycle 设计，三份文档「保活」章节通用素材"}
+{"file": "docs/superpowers/specs/2026-04-22-external-sender-user-account-envelope-design.md", "reason": "external 入站 user account 信封约定，PR2 字段表必含"}
+{"file": "docs/superpowers/specs/2026-04-21-external-offline-response-design.md", "reason": "external 离线处理与错误回流，PR2 错误矩阵需要"}
+{"file": "docs/superpowers/specs/2026-04-16-external-ws-multi-connection-design.md", "reason": "external WS 多连接策略，PR2 握手/会话归属章节"}
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "SS 后端 spec 索引，定位 SkillStreamHandler / ExternalStreamHandler / inbound controller 等代码源"}
+{"file": ".trellis/spec/skill-miniapp/frontend/index.md", "reason": "miniapp 前端 spec 索引，确认 PR1 出站消费方约束"}
+{"file": ".trellis/spec/ai-gateway/backend/index.md", "reason": "GW 后端 spec 索引，PR3 字段-代码映射的代码源入口"}
+{"file": ".trellis/guides/code-reuse-thinking-guide.md", "reason": "三份文档之间共享部分（如 StreamMessage 字段）应链接而非复制，遵循 reuse 原则"}
