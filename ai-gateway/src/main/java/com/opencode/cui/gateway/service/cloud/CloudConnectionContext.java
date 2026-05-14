@@ -26,9 +26,16 @@ public class CloudConnectionContext {
     /** 云端应用 ID（v1 由 hisAppId 映射；v2 为 null） */
     private String appId;
 
-    /** 鉴权类型："none" / "soa" / "apig" */
+    /** 鉴权类型："none" / "soa" / "apig" / "integration_token" */
     private String authType;
 
     /** 跨服务追踪 ID */
     private String traceId;
+
+    /**
+     * 云端协议套餐名（profile name），由 SS 在 invoke payload 中传递。
+     *
+     * <p>用于 GW 端选择 SSE decoder。缺失时默认 {@code "default"}（兼容老 SS）。</p>
+     */
+    private String cloudProfile;
 }

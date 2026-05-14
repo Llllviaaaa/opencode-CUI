@@ -99,9 +99,16 @@ gateway:
     bearer-token: ${ASSISTANT_RESOLVE_TOKEN:}
     cache-ttl-seconds: ${ASSISTANT_RESOLVE_CACHE_TTL:300}
 
+  # 云端协议套餐缓存（CloudResponseProfileRegistry 内存 TTL）
+  cloud-protocol-profile:
+    cache-ttl-ms: ${GW_CLOUD_PROTOCOL_PROFILE_CACHE_TTL_MS:300000}
+
   # 云端连接超时配置
   cloud:
     connect-timeout-seconds: ${CLOUD_CONNECT_TIMEOUT:30}
+    # 助手广场集成 token（生产环境从 secret manager 注入）
+    assistant-square:
+      integration-token: ${GW_ASSISTANT_SQUARE_INTEGRATION_TOKEN:}
     first-event-timeout-seconds: ${CLOUD_FIRST_EVENT_TIMEOUT:120}
     idle-timeout-seconds: ${CLOUD_IDLE_TIMEOUT:90}
     # 单轮对话最大总时长（秒）：30min，覆盖用户思考 q_r/p_r 期间的保活窗口

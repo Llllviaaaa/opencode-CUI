@@ -30,7 +30,10 @@ class OnlineCheckScopeTest {
     private CloudEventTranslator cloudEventTranslator;
 
     @Mock
-    private com.opencode.cui.skill.service.cloud.CloudRequestBuilder cloudRequestBuilder;
+    private com.opencode.cui.skill.service.cloud.profile.CloudRequestProfileRegistry profileRegistry;
+
+    @Mock
+    private SnowflakeIdGenerator idGenerator;
 
     @Mock
     private OpenCodeEventTranslator openCodeEventTranslator;
@@ -42,7 +45,7 @@ class OnlineCheckScopeTest {
     @DisplayName("S59: business scope requiresOnlineCheck returns false")
     void businessScope_requiresOnlineCheck_returnsFalse() {
         BusinessScopeStrategy strategy = new BusinessScopeStrategy(
-                cloudRequestBuilder, cloudEventTranslator, new com.fasterxml.jackson.databind.ObjectMapper());
+                profileRegistry, cloudEventTranslator, new com.fasterxml.jackson.databind.ObjectMapper(), idGenerator);
 
         assertFalse(strategy.requiresOnlineCheck(),
                 "business scope should NOT require online check");
@@ -69,7 +72,7 @@ class OnlineCheckScopeTest {
         // 构造 mock 策略
         AssistantScopeStrategy personalStrategy = new PersonalScopeStrategy(openCodeEventTranslator, cloudEventTranslator);
         BusinessScopeStrategy businessStrategy = new BusinessScopeStrategy(
-                cloudRequestBuilder, cloudEventTranslator, new com.fasterxml.jackson.databind.ObjectMapper());
+                profileRegistry, cloudEventTranslator, new com.fasterxml.jackson.databind.ObjectMapper(), idGenerator);
 
         AssistantScopeDispatcher dispatcher = new AssistantScopeDispatcher(
                 List.of(personalStrategy, businessStrategy),

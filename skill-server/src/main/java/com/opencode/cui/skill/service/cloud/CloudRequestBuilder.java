@@ -11,10 +11,18 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * 云端请求调度器。
- * 根据 appId 查询 SysConfig 获取策略名，选择对应的 {@link CloudRequestStrategy} 构建请求体。
- * 若未配置或策略不存在，则使用 {@link DefaultCloudRequestStrategy}。
+ * 云端请求调度器（已废弃）。
+ *
+ * <p>原职责：根据 appId 查询 SysConfig {@code cloud_request_strategy} 获取策略名，
+ * 选择对应的 {@link CloudRequestStrategy} 构建请求体。</p>
+ *
+ * <p><b>已由 {@code CloudRequestProfileRegistry} 替代</b>（基于 {@code cloud_protocol_profile}
+ * + {@code cloud_protocol_profile_def} 两段 SysConfig 拼装套餐）。本类仅作为回滚兜底保留，
+ * 新逻辑不再读取旧 {@code cloud_request_strategy} 配置。</p>
+ *
+ * @deprecated 使用 {@code com.opencode.cui.skill.service.cloud.profile.CloudRequestProfileRegistry} 代替。
  */
+@Deprecated
 @Slf4j
 @Service
 public class CloudRequestBuilder {

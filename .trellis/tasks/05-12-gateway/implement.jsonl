@@ -1,0 +1,16 @@
+{"file": ".trellis/tasks/05-12-gateway/prd.md", "reason": "本任务 PRD，决策摘要、Requirements、Acceptance Criteria、Out of Scope"}
+{"file": ".trellis/tasks/05-12-gateway/design.md", "reason": "本任务详细设计方案：架构图、时序图、decoder 状态机伪代码、文件改动清单、接口签名、异常处理矩阵"}
+{"file": ".trellis/spec/ai-gateway/backend/index.md", "reason": "GW 后端规范索引，开发前必读清单"}
+{"file": ".trellis/spec/ai-gateway/backend/conventions.md", "reason": "GW 构造器注入、配置注入、WebSocket 注册、服务编排、调度与接口约定（新增 @Component 必读）"}
+{"file": ".trellis/spec/ai-gateway/backend/directory-structure.md", "reason": "GW 包结构与新增文件落点（cloud/decoder 子包、cloud/profile 子包位置）"}
+{"file": ".trellis/spec/ai-gateway/backend/type-safety.md", "reason": "GatewayMessage / RelayMessage 类型设计与 Jackson 序列化约束（新增 cloudProfile 字段需遵循 NON_NULL 规则）"}
+{"file": ".trellis/spec/ai-gateway/backend/error-handling.md", "reason": "GW 错误处理：Controller 直接返回、服务级异常、降级；decoder 异常 + IntegrationTokenAuthStrategy 异常处理需符合"}
+{"file": ".trellis/spec/ai-gateway/backend/logging-guidelines.md", "reason": "[ai-gateway] 日志格式 + [ENTRY]/[EXIT]/[SKIP]/[EXT_CALL] 约定；新增 [SSE_DECODER] / [CLOUD_AUTH] 日志需符合"}
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "SS 后端规范索引，开发前必读"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "SS 构造注入、StreamMessageEmitter 约束、PersonalScopeStrategy 模式（新增 CloudRequestProfile 抽象需对齐）"}
+{"file": ".trellis/spec/skill-server/backend/directory-structure.md", "reason": "SS 包结构（cloud / scope 子包位置，新增 profile 子包参考）"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "SkillSession / SkillMessage / InvokeCommand / ApiResponse 类型约束（payload 新增 cloudProfile 字段需遵循）"}
+{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "ProtocolException / ApiResponse 错误语义；AssistantSquareCloudRequestStrategy 的 fast-fail 异常类型需对齐"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "SS 日志规范；新策略类日志需符合"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本任务横跨 SS → GW → 助手广场三层，必读思考指南"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "新增 strategy/profile 前先搜索现有模式：DefaultCloudRequestStrategy validateAccountFields 模式可复用；CloudAuthService Map 注册模式照搬"}

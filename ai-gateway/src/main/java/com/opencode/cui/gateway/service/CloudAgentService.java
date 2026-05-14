@@ -74,6 +74,11 @@ public class CloudAgentService {
         String action = invokeMessage.getAction();
         JsonNode cloudRequest = invokeMessage.getPayload().path("cloudRequest");
         String toolSessionId = invokeMessage.getPayload().path("toolSessionId").asText(null);
+        // cloudProfile 字段缺失时默认 "default"（向后兼容老 SS）
+        String cloudProfile = invokeMessage.getPayload().path("cloudProfile").asText("default");
+        if (cloudProfile == null || cloudProfile.isBlank()) {
+            cloudProfile = "default";
+        }
 
         log.info("[CLOUD_AGENT] handleInvoke: ak={}, action={}, toolSessionId={}, traceId={}",
                 ak, action, toolSessionId, invokeMessage.getTraceId());
@@ -123,6 +128,7 @@ public class CloudAgentService {
                 .authType(cfg.getAuthType())
                 .cloudRequest(cloudRequest)
                 .traceId(invokeMessage.getTraceId())
+                .cloudProfile(cloudProfile)
                 .build();
 
         // 5. 分叉

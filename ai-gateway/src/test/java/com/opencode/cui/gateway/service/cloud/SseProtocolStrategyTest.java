@@ -2,6 +2,12 @@ package com.opencode.cui.gateway.service.cloud;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.gateway.model.GatewayMessage;
+import com.opencode.cui.gateway.service.cloud.decoder.DecoderSession;
+import com.opencode.cui.gateway.service.cloud.decoder.DefaultSseEventDecoder;
+import com.opencode.cui.gateway.service.cloud.decoder.SseEventDecoder;
+import com.opencode.cui.gateway.service.cloud.decoder.SseEventDecoderFactory;
+import com.opencode.cui.gateway.service.cloud.profile.CloudResponseProfile;
+import com.opencode.cui.gateway.service.cloud.profile.CloudResponseProfileRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -50,8 +56,12 @@ class SseProtocolStrategyTest {
     @Mock
     private HttpClient httpClient;
 
+    @Mock
+    private CloudResponseProfileRegistry profileRegistry;
+
     private ObjectMapper objectMapper;
     private SseProtocolStrategy strategy;
+    private SseEventDecoder assistantSquareStub;
 
     private CloudConnectionLifecycle lifecycle;
 
@@ -63,7 +73,22 @@ class SseProtocolStrategyTest {
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        strategy = spy(new SseProtocolStrategy(cloudAuthService, objectMapper, httpClient));
+        // 助手广场 decoder 用 stub（避免拉一堆 handler 依赖），名字对齐 "assistant_square"
+        assistantSquareStub = mock(SseEventDecoder.class);
+        when(assistantSquareStub.getName()).thenReturn("assistant_square");
+        lenient().when(assistantSquareStub.createSession()).thenReturn(mock(DecoderSession.class));
+        lenient().when(assistantSquareStub.flush(any())).thenReturn(java.util.Collections.emptyList());
+        SseEventDecoderFactory decoderFactory = new SseEventDecoderFactory(
+                java.util.List.of(new DefaultSseEventDecoder(objectMapper), assistantSquareStub));
+        // 默认走 fallback：profile name == decoder name（covers 既有 default 路径）
+        lenient().when(profileRegistry.resolve(any()))
+                .thenAnswer(inv -> {
+                    String n = inv.getArgument(0);
+                    String name = (n == null || n.isBlank()) ? "default" : n;
+                    return new CloudResponseProfile(name, name);
+                });
+        strategy = spy(new SseProtocolStrategy(cloudAuthService, objectMapper, decoderFactory,
+                profileRegistry, httpClient));
         lifecycle = mock(CloudConnectionLifecycle.class);
 
         receivedEvents = new ArrayList<>();
@@ -405,5 +430,56 @@ class SseProtocolStrategyTest {
                 "SseProtocolStrategy 不应直接写 X-App-Id（由 cloudAuthService 内部 strategy 写入）");
         // 但 cloudAuthService.applyAuth 必须被调用一次。
         verify(cloudAuthService).applyAuth(any(HttpRequest.Builder.class), eq("app_test"), eq("soa"));
+    }
+
+    // ==================== Registry 拼装进主路径 ====================
+
+    @Test
+    @DisplayName("Registry: profile_def.response_decoder 指向 assistant_square 时，主路径选用 AssistantSquare decoder")
+    void sse_profileDefRoutesResponseDecoder_picksAssistantSquare() throws Exception {
+        // given: profile name 与 decoder name 不一致；运维通过 profile_def.response_decoder 显式拼装
+        String customProfileName = "default_req_assistant_resp";
+        when(profileRegistry.resolve(customProfileName))
+                .thenReturn(new CloudResponseProfile(customProfileName, "assistant_square"));
+
+        String sseStream = "data: {\"type\":\"tool_event\",\"toolSessionId\":\"sx\",\"event\":{\"text\":\"hi\"}}\n";
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
+
+        CloudConnectionContext context = CloudConnectionContext.builder()
+                .channelAddress("https://cloud.example.com/sse")
+                .cloudRequest(objectMapper.valueToTree(java.util.Map.of("prompt", "hi")))
+                .appId("app_test")
+                .authType("soa")
+                .traceId("trace_reg_1")
+                .cloudProfile(customProfileName)
+                .build();
+
+        // when
+        strategy.connect(context, lifecycle, onEvent, onError);
+
+        // then: Registry 被查；AssistantSquare stub 被选中（createSession 被调用证明它真的进了主路径），
+        // DefaultSseEventDecoder 没被用（receivedEvents 为空，因 stub 不真实解析）
+        verify(profileRegistry).resolve(customProfileName);
+        verify(assistantSquareStub).createSession();
+        verify(assistantSquareStub).flush(any());
+    }
+
+    @Test
+    @DisplayName("Registry: profile_def 缺失走约定 fallback（profile name == decoder name）")
+    void sse_profileDefMissing_fallsBackToProfileNameAsDecoder() throws Exception {
+        // given: cloudProfile 留空 → Registry 默认返回 default/default；走 DefaultSseEventDecoder
+        String sseStream = "data: {\"type\":\"tool_event\",\"toolSessionId\":\"sy\",\"event\":{\"text\":\"ok\"}}\n";
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
+
+        // when
+        strategy.connect(buildContext(), lifecycle, onEvent, onError);
+
+        // then: Registry 仍被查；DefaultDecoder 路径产出事件；AssistantSquare 未被触达
+        verify(profileRegistry).resolve(any());
+        verify(assistantSquareStub, never()).createSession();
+        assertEquals(1, receivedEvents.size());
+        assertEquals("ok", receivedEvents.get(0).getEvent().get("text").asText());
     }
 }

@@ -6,9 +6,10 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.service.CloudEventTranslator;
+import com.opencode.cui.skill.service.SnowflakeIdGenerator;
 import com.opencode.cui.skill.service.SysConfigService;
-import com.opencode.cui.skill.service.cloud.CloudRequestBuilder;
 import com.opencode.cui.skill.service.cloud.DefaultCloudRequestStrategy;
+import com.opencode.cui.skill.service.cloud.profile.CloudRequestProfileRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -38,6 +39,9 @@ class ExtParametersIntegrationTest {
     @Mock
     private SysConfigService sysConfigService;
 
+    @Mock
+    private SnowflakeIdGenerator idGenerator;
+
     private ObjectMapper objectMapper;
     private BusinessScopeStrategy strategy;
 
@@ -45,8 +49,9 @@ class ExtParametersIntegrationTest {
     void setUp() {
         objectMapper = new ObjectMapper();
         DefaultCloudRequestStrategy defaultStrategy = new DefaultCloudRequestStrategy(objectMapper);
-        CloudRequestBuilder builder = new CloudRequestBuilder(List.of(defaultStrategy), sysConfigService);
-        strategy = new BusinessScopeStrategy(builder, cloudEventTranslator, objectMapper);
+        CloudRequestProfileRegistry registry = new CloudRequestProfileRegistry(
+                List.of(defaultStrategy), sysConfigService, objectMapper, 300000L);
+        strategy = new BusinessScopeStrategy(registry, cloudEventTranslator, objectMapper, idGenerator);
     }
 
     @Test
