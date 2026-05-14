@@ -14,12 +14,18 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
+
 
 /**
  * Redis pub/sub message broker for multi-instance coordination.
@@ -441,50 +447,181 @@ public class RedisMessageBroker {
         }
     }
 
-    // ==================== WS 连接注册表 ====================
+    // ==================== WS 实例自管路由表（owner-only writes） ====================
 
-    private static final String WS_REGISTRY_PREFIX = "external-ws:registry:";
+    /**
+     * 每实例自管的 WS 持有路由表 key 前缀。
+     * <p>结构：HASH {@code external-ws:held-by:{instanceId}} → {@code {domain → connectionCount}}。
+     * <p>仅 owner 实例自己写入和续 TTL；任何其他实例不得 EXPIRE/HSET 该 key，
+     * 避免旧实现中"任一活实例 EXPIRE 续整个 hash → 死实例字段被无限期续命"。
+     */
+    private static final String WS_HELD_BY_PREFIX = "external-ws:held-by:";
 
-    public void registerWsConnection(String domain, String instanceId, int connectionCount, int ttlSeconds) {
+    /** 活实例花名册 ZSET key（score = unix-ms 心跳时间）。 */
+    private static final String INSTANCE_ROSTER_KEY = "instance:roster";
+
+    /**
+     * 批量写入本实例持有的 domain → connectionCount，并续 TTL。
+     * 适用于 owner 周期心跳：先 snapshot 本地 connection pool，整批 putAll + EXPIRE。
+     *
+     * @param instanceId 本实例 ID（owner-only）
+     * @param snapshot {@code {domain → connectionCount}}；empty 时跳过（调用方应改走 {@link #heldByDeleteKey}）
+     * @param ttlSeconds key TTL
+     */
+    public void heldByPutAll(String instanceId, Map<String, Integer> snapshot, int ttlSeconds) {
+        if (instanceId == null || instanceId.isBlank() || snapshot == null || snapshot.isEmpty()) {
+            return;
+        }
         try {
-            String key = WS_REGISTRY_PREFIX + domain;
-            redisTemplate.opsForHash().put(key, instanceId, String.valueOf(connectionCount));
+            String key = WS_HELD_BY_PREFIX + instanceId;
+            Map<String, String> stringSnapshot = new HashMap<>(snapshot.size());
+            snapshot.forEach((domain, count) -> stringSnapshot.put(domain, String.valueOf(count)));
+            redisTemplate.opsForHash().putAll(key, stringSnapshot);
             redisTemplate.expire(key, ttlSeconds, TimeUnit.SECONDS);
-            log.debug("Registered WS connection: domain={}, instanceId={}, count={}", domain, instanceId, connectionCount);
+            log.debug("heldByPutAll: instanceId={}, domains={}, ttlSec={}",
+                    instanceId, snapshot.keySet(), ttlSeconds);
         } catch (Exception e) {
-            log.error("Failed to register WS connection: domain={}, error={}", domain, e.getMessage());
+            log.error("Failed to heldByPutAll: instanceId={}, error={}", instanceId, e.getMessage());
         }
     }
 
-    public void unregisterWsConnection(String domain, String instanceId) {
+    /** 删除本实例 held-by hash 中某个 domain 字段。 */
+    public void heldByDeleteField(String instanceId, String domain) {
+        if (instanceId == null || instanceId.isBlank() || domain == null || domain.isBlank()) {
+            return;
+        }
         try {
-            redisTemplate.opsForHash().delete(WS_REGISTRY_PREFIX + domain, instanceId);
-            log.debug("Unregistered WS connection: domain={}, instanceId={}", domain, instanceId);
+            redisTemplate.opsForHash().delete(WS_HELD_BY_PREFIX + instanceId, domain);
         } catch (Exception e) {
-            log.error("Failed to unregister WS connection: domain={}, error={}", domain, e.getMessage());
+            log.error("Failed to heldByDeleteField: instanceId={}, domain={}, error={}",
+                    instanceId, domain, e.getMessage());
         }
     }
 
-    @SuppressWarnings("unchecked")
-    public Map<String, String> getWsRegistry(String domain) {
+    /** 删除本实例 held-by 整个 key（@PreDestroy 或 snapshot empty 时调用）。 */
+    public void heldByDeleteKey(String instanceId) {
+        if (instanceId == null || instanceId.isBlank()) {
+            return;
+        }
         try {
-            Map<Object, Object> entries = redisTemplate.opsForHash().entries(WS_REGISTRY_PREFIX + domain);
-            Map<String, String> result = new java.util.HashMap<>();
-            entries.forEach((k, v) -> result.put(k.toString(), v.toString()));
-            return result;
+            redisTemplate.delete(WS_HELD_BY_PREFIX + instanceId);
+            log.debug("heldByDeleteKey: instanceId={}", instanceId);
         } catch (Exception e) {
-            log.error("Failed to get WS registry: domain={}, error={}", domain, e.getMessage());
-            return java.util.Collections.emptyMap();
+            log.error("Failed to heldByDeleteKey: instanceId={}, error={}", instanceId, e.getMessage());
         }
     }
 
-    public void expireWsRegistry(String domain, int ttlSeconds) {
+    /**
+     * 批量读取多个实例针对同一 domain 的 connectionCount（pipeline HGET）。
+     *
+     * @param instanceIds 候选实例 ID 列表（调用方应先用 {@link #rangeAliveInstances} 过滤死实例）
+     * @param domain WS source / domain
+     * @return {@code {instanceId → count}}；HGET 返回 null 的实例不会出现在结果中
+     */
+    public Map<String, Integer> heldByGetBatch(List<String> instanceIds, String domain) {
+        if (instanceIds == null || instanceIds.isEmpty() || domain == null || domain.isBlank()) {
+            return Collections.emptyMap();
+        }
         try {
-            redisTemplate.expire(WS_REGISTRY_PREFIX + domain, ttlSeconds, TimeUnit.SECONDS);
+            // executePipelined 一次性把多个 HGET 发出去，减少 RTT
+            List<Object> results = redisTemplate.executePipelined(
+                    (org.springframework.data.redis.core.RedisCallback<Object>) connection -> {
+                        for (String id : instanceIds) {
+                            byte[] keyBytes = (WS_HELD_BY_PREFIX + id).getBytes(StandardCharsets.UTF_8);
+                            byte[] fieldBytes = domain.getBytes(StandardCharsets.UTF_8);
+                            connection.hashCommands().hGet(keyBytes, fieldBytes);
+                        }
+                        return null;
+                    });
+            Map<String, Integer> out = new LinkedHashMap<>();
+            for (int i = 0; i < instanceIds.size() && i < results.size(); i++) {
+                Object raw = results.get(i);
+                if (raw == null) {
+                    continue;
+                }
+                Integer count = parseCount(raw);
+                if (count == null) {
+                    continue;
+                }
+                out.put(instanceIds.get(i), count);
+            }
+            return out;
         } catch (Exception e) {
-            log.error("Failed to expire WS registry: domain={}, error={}", domain, e.getMessage());
+            log.error("Failed to heldByGetBatch: domain={}, candidates={}, error={}",
+                    domain, instanceIds.size(), e.getMessage());
+            return Collections.emptyMap();
         }
     }
+
+    private Integer parseCount(Object raw) {
+        try {
+            if (raw instanceof Number n) {
+                return n.intValue();
+            }
+            return Integer.parseInt(raw.toString());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    // ==================== 活实例花名册 ZSET ====================
+
+    /** ZADD instance:roster {nowMs} {instanceId}：owner-only。 */
+    public void addToInstanceRoster(String instanceId, long nowMs) {
+        if (instanceId == null || instanceId.isBlank()) {
+            return;
+        }
+        try {
+            redisTemplate.opsForZSet().add(INSTANCE_ROSTER_KEY, instanceId, (double) nowMs);
+        } catch (Exception e) {
+            log.error("Failed to addToInstanceRoster: instanceId={}, error={}", instanceId, e.getMessage());
+        }
+    }
+
+    /** ZREM instance:roster {instanceId}：owner-only，@PreDestroy graceful 路径加速感知。 */
+    public void removeFromInstanceRoster(String instanceId) {
+        if (instanceId == null || instanceId.isBlank()) {
+            return;
+        }
+        try {
+            redisTemplate.opsForZSet().remove(INSTANCE_ROSTER_KEY, instanceId);
+        } catch (Exception e) {
+            log.error("Failed to removeFromInstanceRoster: instanceId={}, error={}", instanceId, e.getMessage());
+        }
+    }
+
+    /**
+     * ZRANGEBYSCORE instance:roster {cutoffMs} +inf：返回 score >= cutoffMs 的活实例列表。
+     *
+     * @param cutoffMs 时间 cutoff（unix-ms），通常 = now - heartbeatTtlMs
+     * @return 活实例 ID 列表；异常时返回空（调用方走 L3 降级）
+     */
+    public List<String> rangeAliveInstances(long cutoffMs) {
+        try {
+            Set<String> alive = redisTemplate.opsForZSet().rangeByScore(
+                    INSTANCE_ROSTER_KEY, (double) cutoffMs, Double.POSITIVE_INFINITY);
+            if (alive == null || alive.isEmpty()) {
+                return Collections.emptyList();
+            }
+            return new java.util.ArrayList<>(alive);
+        } catch (Exception e) {
+            log.error("Failed to rangeAliveInstances: cutoffMs={}, error={}", cutoffMs, e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * ZREMRANGEBYSCORE instance:roster 0 {beforeMs}：lazy GC 过期实例条目。
+     * 由 owner 顺手在心跳时执行，无需独立调度。
+     */
+    public void pruneRoster(long beforeMs) {
+        try {
+            redisTemplate.opsForZSet().removeRangeByScore(INSTANCE_ROSTER_KEY, 0d, (double) beforeMs);
+        } catch (Exception e) {
+            log.error("Failed to pruneRoster: beforeMs={}, error={}", beforeMs, e.getMessage());
+        }
+    }
+
 
     /**
      * 尝试获取分布式去重锁（SET NX + TTL）。

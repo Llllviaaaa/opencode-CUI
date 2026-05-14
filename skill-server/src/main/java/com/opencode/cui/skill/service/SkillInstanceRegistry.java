@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -49,6 +50,19 @@ public class SkillInstanceRegistry {
 
     /** 心跳 key TTL（秒）：比刷新间隔（10s）留足 3× 余量，避免误判失联。 */
     private static final int HEARTBEAT_TTL_SECONDS = 30;
+
+    /**
+     * 活实例花名册 ZSET 过期 cutoff（毫秒）；与 {@link #HEARTBEAT_TTL_SECONDS} 对齐。
+     * <p>{@code listAliveInstances()} 用 {@code now - this} 作 ZRANGEBYSCORE 下界，
+     * 即"最近 30s 内心跳过的实例"视为活实例。</p>
+     */
+    private static final long ALIVE_CUTOFF_MS = HEARTBEAT_TTL_SECONDS * 1000L;
+
+    /**
+     * 花名册 lazy GC 阈值（毫秒）；比 {@link #ALIVE_CUTOFF_MS} 留更长冗余，
+     * 避免误删刚好在 cutoff 边界的实例条目（GC 比 cutoff 滞后一个心跳周期）。
+     */
+    private static final long ROSTER_GC_BEFORE_MS = 60_000L;
 
     /** SS relay channel 前缀，用于 pub/sub 自检。 */
     private static final String SS_RELAY_CHANNEL_PREFIX = "ss:relay:";
@@ -153,6 +167,8 @@ public class SkillInstanceRegistry {
             future.cancel(false);
         }
         redisTemplate.delete(redisKey());
+        // 从活实例花名册移除自己，加速其他实例 L2 投递感知本实例下线（graceful 路径）
+        redisMessageBroker.removeFromInstanceRoster(instanceId);
         log.info("[EXIT] SkillInstanceRegistry.destroy: instanceId={}", instanceId);
     }
 
@@ -167,6 +183,21 @@ public class SkillInstanceRegistry {
      */
     public boolean isInstanceAlive(String targetInstanceId) {
         return Boolean.TRUE.equals(redisTemplate.hasKey("ss:internal:instance:" + targetInstanceId));
+    }
+
+    /**
+     * 列出当前所有活实例（基于 {@code instance:roster} ZSET）。
+     *
+     * <p>cutoff = {@code now - 30s}（与 {@link #HEARTBEAT_TTL_SECONDS} 一致）：
+     * 任何最近 30s 内心跳过的实例视为活实例。</p>
+     *
+     * <p>用于 L2 投递候选枚举（替代旧的"共享 hash 枚举字段"），符合"禁用 SCAN/KEYS"约束。</p>
+     *
+     * @return 活实例 ID 列表；Redis 异常时返回空列表（调用方走 L3 降级）
+     */
+    public List<String> listAliveInstances() {
+        long cutoff = System.currentTimeMillis() - ALIVE_CUTOFF_MS;
+        return redisMessageBroker.rangeAliveInstances(cutoff);
     }
 
     /**
@@ -192,6 +223,10 @@ public class SkillInstanceRegistry {
 
     private void writeHeartbeat() {
         redisTemplate.opsForValue().set(redisKey(), "alive", Duration.ofSeconds(HEARTBEAT_TTL_SECONDS));
+        // 花名册 ZADD + lazy GC：每次心跳顺手维护，避免独立调度
+        long now = System.currentTimeMillis();
+        redisMessageBroker.addToInstanceRoster(instanceId, now);
+        redisMessageBroker.pruneRoster(now - ROSTER_GC_BEFORE_MS);
     }
 
     private String redisKey() {

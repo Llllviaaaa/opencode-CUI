@@ -5,6 +5,7 @@ import com.opencode.cui.skill.config.DeliveryProperties;
 import com.opencode.cui.skill.service.ExternalWsRegistry;
 import com.opencode.cui.skill.service.RedisMessageBroker;
 import com.opencode.cui.skill.service.SkillInstanceRegistry;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -23,6 +24,7 @@ import org.springframework.web.socket.server.HandshakeInterceptor;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -215,7 +217,20 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
         }
     }
 
-    @Scheduled(fixedRate = 30_000)
+    /**
+     * 周期任务：清理 idle 连接 + 整批同步本实例 held-by hash。
+     *
+     * <p>周期 10s 与 {@link SkillInstanceRegistry} 心跳一致；TTL 30s = 3× 心跳，
+     * 给 GC pause / 网络抖动留余量，避免误过期。</p>
+     *
+     * <p>实现要点（owner-only writes）：
+     * <ul>
+     *   <li>取本地 {@code connectionPool.snapshotCountsBySource()}</li>
+     *   <li>空 snapshot → {@code DEL external-ws:held-by:{selfId}}（避免残留过时字段）</li>
+     *   <li>非空 → {@code HSET ... putAll(snapshot)} + {@code EXPIRE key 30s}</li>
+     * </ul>
+     */
+    @Scheduled(fixedRate = 10_000)
     public void checkHeartbeatTimeouts() {
         Instant timeout = Instant.now().minusSeconds(60);
         connectionPool.forEachAll(session -> {
@@ -229,8 +244,21 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
                 }
             }
         });
-        for (String source : connectionPool.sources()) {
-            wsRegistry.heartbeat(source);
+        Map<String, Integer> snapshot = connectionPool.snapshotCountsBySource();
+        wsRegistry.heartbeatBatch(snapshot);
+    }
+
+    /**
+     * 服务关闭时主动删除本实例 held-by key，加速其他实例 L2 投递跳过本实例（graceful 路径）。
+     */
+    @PreDestroy
+    public void cleanupHeldBy() {
+        try {
+            wsRegistry.clearOnShutdown();
+            log.info("[CLEANUP] ExternalStreamHandler.cleanupHeldBy: instanceId={}",
+                    instanceRegistry.getInstanceId());
+        } catch (Exception e) {
+            log.warn("[CLEANUP] ExternalStreamHandler.cleanupHeldBy failed: error={}", e.getMessage());
         }
     }
 
@@ -334,6 +362,25 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
 
         java.util.Set<String> sources() {
             return pool.keySet();
+        }
+
+        /**
+         * 整体 snapshot 本实例持有的 {@code {source → totalCount}}。
+         * 用于 owner 周期心跳整批同步 Redis {@code held-by:{selfId}} hash，
+         * 一次 putAll + EXPIRE 完成续命，避免逐 domain 多次 RTT。
+         */
+        Map<String, Integer> snapshotCountsBySource() {
+            Map<String, Integer> snap = new HashMap<>();
+            for (var entry : pool.entrySet()) {
+                int total = 0;
+                for (var sessions : entry.getValue().values()) {
+                    total += sessions.size();
+                }
+                if (total > 0) {
+                    snap.put(entry.getKey(), total);
+                }
+            }
+            return snap;
         }
 
         void forEach(String source, java.util.function.BiConsumer<String, WebSocketSession> action) {

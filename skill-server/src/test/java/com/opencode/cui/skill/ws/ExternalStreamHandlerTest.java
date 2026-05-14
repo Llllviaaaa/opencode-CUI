@@ -220,6 +220,38 @@ class ExternalStreamHandlerTest {
     }
 
     @Test
+    @DisplayName("checkHeartbeatTimeouts: snapshot 非空 → wsRegistry.heartbeatBatch(snapshot)")
+    void checkHeartbeatTimeouts_nonEmptySnapshot_callsHeartbeatBatch() throws Exception {
+        // 建立一条 im connection 让 snapshot 非空
+        WebSocketSession s1 = mock(WebSocketSession.class);
+        Map<String, Object> attrs1 = new HashMap<>(Map.of("source", "im", "instanceId", "im-1"));
+        when(s1.getAttributes()).thenReturn(attrs1);
+        when(s1.getId()).thenReturn("ws-1");
+        lenient().when(s1.isOpen()).thenReturn(true);
+        handler.afterConnectionEstablished(s1);
+
+        handler.checkHeartbeatTimeouts();
+
+        // 期望 heartbeatBatch 收到 {"im" -> 1}
+        verify(wsRegistry).heartbeatBatch(Map.of("im", 1));
+    }
+
+    @Test
+    @DisplayName("checkHeartbeatTimeouts: snapshot 为空 → wsRegistry.heartbeatBatch(empty) 触发 DEL key")
+    void checkHeartbeatTimeouts_emptySnapshot_callsHeartbeatBatchEmpty() {
+        // 没有任何连接
+        handler.checkHeartbeatTimeouts();
+        verify(wsRegistry).heartbeatBatch(Map.of());
+    }
+
+    @Test
+    @DisplayName("cleanupHeldBy (@PreDestroy): 调用 wsRegistry.clearOnShutdown()")
+    void cleanupHeldBy_callsClearOnShutdown() {
+        handler.cleanupHeldBy();
+        verify(wsRegistry).clearOnShutdown();
+    }
+
+    @Test
     @DisplayName("pushToOne returns false when all connections fail")
     void pushToOneAllFail() throws Exception {
         WebSocketSession s1 = mock(WebSocketSession.class);
@@ -353,6 +385,24 @@ class ExternalStreamHandlerTest {
         @DisplayName("countBySource returns 0 for unknown source")
         void countBySourceUnknown() {
             assertEquals(0, pool.countBySource("unknown"));
+        }
+
+        @Test
+        @DisplayName("snapshotCountsBySource: 返回 {source -> totalCount}")
+        void snapshotCountsBySource() {
+            pool.add("im", "im-1", mockSession("s1", true));
+            pool.add("im", "im-2", mockSession("s2", true));
+            pool.add("crm", "crm-1", mockSession("s3", true));
+            Map<String, Integer> snap = pool.snapshotCountsBySource();
+            assertEquals(2, snap.get("im"));
+            assertEquals(1, snap.get("crm"));
+        }
+
+        @Test
+        @DisplayName("snapshotCountsBySource: 无连接时返回空 map")
+        void snapshotCountsBySource_empty() {
+            Map<String, Integer> snap = pool.snapshotCountsBySource();
+            assertTrue(snap.isEmpty());
         }
 
         private WebSocketSession mockSession(String id, boolean open) {
