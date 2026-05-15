@@ -74,9 +74,13 @@ class OnlineCheckScopeTest {
         BusinessScopeStrategy businessStrategy = new BusinessScopeStrategy(
                 profileRegistry, cloudEventTranslator, new com.fasterxml.jackson.databind.ObjectMapper(), idGenerator);
 
+        // PR2: AssistantScopeDispatcher 新增 ruleService + defaultStrategy 依赖。本测试只跑老 API
+        // getStrategy(String scope) 不依赖这两个 → 传 mock + null 即可。
         AssistantScopeDispatcher dispatcher = new AssistantScopeDispatcher(
                 List.of(personalStrategy, businessStrategy),
-                Mockito.mock(BusinessWhitelistService.class));
+                Mockito.mock(BusinessWhitelistService.class),
+                Mockito.mock(DefaultAssistantRuleService.class),
+                null);
 
         AssistantScopeStrategy resolved = dispatcher.getStrategy("business");
 
