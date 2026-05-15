@@ -103,14 +103,20 @@ public class GatewayRelayService {
         }
 
         // 根据助手类型（scope）选择构建策略
+        // PR3 收口（方案 B）：调 dispatcher 新 API getStrategy(domain, domainType, info)
+        // strategy 选择全部收口到 dispatcher 一处；caller 不再自己 findByAk 反查。
+        // 老 caller 不传 domain/domainType（命令字段为 null），dispatcher 内部 lookup(null, null)
+        // 返 empty → 委托老 API getStrategy(info)，行为完全不变。
         String messageText;
         AssistantInfo info = assistantInfoService.getAssistantInfo(command.ak());
-        AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(info);
-        if ("business".equals(strategy.getScope())) {
+        AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(
+                command.domain(), command.domainType(), info);
+        String scope = strategy.getScope();
+        if ("business".equals(scope) || "default_assistant".equals(scope)) {
             messageText = strategy.buildInvoke(command, info);
             if (messageText == null) {
-                log.warn("[SKIP] GatewayRelayService.sendInvokeToGateway: reason=strategy_build_null, ak={}, scope=business",
-                        command.ak());
+                log.warn("[SKIP] GatewayRelayService.sendInvokeToGateway: reason=strategy_build_null, ak={}, scope={}",
+                        command.ak(), scope);
                 return;
             }
         } else {

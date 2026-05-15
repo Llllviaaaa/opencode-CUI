@@ -211,4 +211,87 @@ class SkillSessionServiceTest {
         assertNotNull(result);
         assertEquals(55L, result.getId());
     }
+
+    // ==================== PR3: createSessionWithDefaultAssistant ====================
+
+    @Test
+    @DisplayName("createSessionWithDefaultAssistant: 单事务一次写入 (INSERT + createRoute + Redis 都就绪)")
+    void createSessionWithDefaultAssistantHappyPath() {
+        SkillSession reloaded = new SkillSession();
+        reloaded.setId(42L);
+        reloaded.setAk("AK_V");
+        reloaded.setAssistantAccount("ACC_V");
+        reloaded.setToolSessionId("ts-1");
+        reloaded.setUserId("u-1");
+        reloaded.setBusinessSessionDomain("helpdesk");
+        reloaded.setBusinessSessionType("direct");
+        reloaded.setBusinessSessionId("biz-1");
+        reloaded.setStatus(SkillSession.Status.ACTIVE);
+        when(sessionRepository.findById(42L)).thenReturn(reloaded);
+
+        SkillSession result = service.createSessionWithDefaultAssistant(
+                "u-1", "AK_V", "ACC_V", "Title",
+                "helpdesk", "direct", "biz-1", "ts-1");
+
+        // INSERT skill_session
+        verify(sessionRepository).insert(any(SkillSession.class));
+        // createRoute 写 session ownership
+        verify(sessionRouteService).createRoute(eq("AK_V"), eq(42L), eq("skill-server"), eq("u-1"));
+        // Redis 写 toolSessionId → sessionId 映射
+        verify(redisMessageBroker).setToolSessionMapping("ts-1", "42");
+        // 返回从 DB 重读的最新 session 对象
+        assertNotNull(result);
+        assertEquals(42L, result.getId());
+        assertEquals("AK_V", result.getAk());
+        assertEquals("ACC_V", result.getAssistantAccount());
+        assertEquals("ts-1", result.getToolSessionId());
+    }
+
+    @Test
+    @DisplayName("createSessionWithDefaultAssistant: Redis 写失败宽松 (异常 → log warn, DB 事务仍提交)")
+    void createSessionWithDefaultAssistantRedisFailureIsLenient() {
+        SkillSession reloaded = new SkillSession();
+        reloaded.setId(42L);
+        reloaded.setAk("AK_V");
+        reloaded.setAssistantAccount("ACC_V");
+        reloaded.setToolSessionId("ts-1");
+        reloaded.setStatus(SkillSession.Status.ACTIVE);
+        when(sessionRepository.findById(42L)).thenReturn(reloaded);
+        // mock Redis 抛异常
+        doThrow(new RuntimeException("Redis 拖头"))
+                .when(redisMessageBroker).setToolSessionMapping(any(), any());
+
+        // 不抛异常
+        SkillSession result = service.createSessionWithDefaultAssistant(
+                "u-1", "AK_V", "ACC_V", "Title",
+                "helpdesk", "direct", "biz-1", "ts-1");
+
+        // DB INSERT 仍然成功
+        verify(sessionRepository).insert(any(SkillSession.class));
+        // createRoute 仍然成功
+        verify(sessionRouteService).createRoute(any(), any(), any(), any());
+        // 接口仍返 200（session 非 null）
+        assertNotNull(result);
+        assertEquals(42L, result.getId());
+    }
+
+    @Test
+    @DisplayName("createSessionWithDefaultAssistant: 返回 from-DB 重读的最新 session")
+    void createSessionWithDefaultAssistantReturnsReloaded() {
+        // mock findById 返回带最新字段的对象（不是 INSERT 时构造的对象）
+        SkillSession reloaded = new SkillSession();
+        reloaded.setId(42L);
+        reloaded.setAk("AK_V");
+        reloaded.setAssistantAccount("ACC_V");
+        reloaded.setToolSessionId("ts-1");
+        // 仅 reloaded 对象才带 createdAt
+        reloaded.setCreatedAt(java.time.LocalDateTime.now());
+        when(sessionRepository.findById(42L)).thenReturn(reloaded);
+
+        SkillSession result = service.createSessionWithDefaultAssistant(
+                "u-1", "AK_V", "ACC_V", "Title", "d", "t", "bid", "ts-1");
+
+        verify(sessionRepository).findById(42L);
+        assertNotNull(result.getCreatedAt(), "Should return from-DB reloaded session");
+    }
 }
