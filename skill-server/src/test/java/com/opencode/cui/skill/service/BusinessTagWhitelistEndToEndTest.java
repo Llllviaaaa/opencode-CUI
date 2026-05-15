@@ -71,8 +71,14 @@ class BusinessTagWhitelistEndToEndTest {
         BusinessWhitelistService whitelistService =
                 new BusinessWhitelistService(sysConfigService, sysConfigMapper, redisTemplate,
                         properties, new ObjectMapper());
+        // PR2: AssistantScopeDispatcher 新增 DefaultAssistantRuleService + DefaultAssistantScopeStrategy 依赖。
+        // 本测试只跑老 API getStrategy(AssistantInfo)，与 default-assistant 路径无关，
+        // 用真实 SysConfigService 反查（sys_config 表里没 default_assistant_rule → lookup 返 empty） + null default strategy。
+        DefaultAssistantRuleService ruleService =
+                new DefaultAssistantRuleService(sysConfigService, new ObjectMapper());
         dispatcher = new AssistantScopeDispatcher(
-                List.of(personalStrategy, businessStrategy), whitelistService);
+                List.of(personalStrategy, businessStrategy), whitelistService,
+                ruleService, null);
     }
 
     // -------- 工具方法 --------

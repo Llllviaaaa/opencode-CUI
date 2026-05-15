@@ -87,7 +87,12 @@ class PersonalScopeCloudProtocolIntegrationTest {
 
         openCodeEventTranslator = new OpenCodeEventTranslator(objectMapper, new TranslatorSessionCache());
         personalStrategy = new PersonalScopeStrategy(openCodeEventTranslator, cloudEventTranslator);
-        scopeDispatcher = new AssistantScopeDispatcher(List.of(personalStrategy), whitelistService);
+        // PR2: AssistantScopeDispatcher 新增 ruleService + defaultStrategy 依赖。本集成测试不走默认助手分支：
+        // 传 mock ruleService（默认 lookup 返 empty） + null defaultStrategy 即可。
+        scopeDispatcher = new AssistantScopeDispatcher(
+                List.of(personalStrategy), whitelistService,
+                org.mockito.Mockito.mock(com.opencode.cui.skill.service.DefaultAssistantRuleService.class),
+                null);
 
         lenient().when(skillInstanceRegistry.getInstanceId()).thenReturn(LOCAL_INSTANCE);
         lenient().when(sessionRouteService.getOwnerInstance(any())).thenReturn(LOCAL_INSTANCE);
