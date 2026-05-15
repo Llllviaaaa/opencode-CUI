@@ -48,7 +48,8 @@ class CallbackConfigServiceTest {
         StringRedisTemplate redis = mockRedisWithCachedJson(
                 "gw:cloud:route:v1:AK1:callback:weagent:chat", cachedCfgJson("AK1"));
         SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
-        CallbackConfigService svc = new CallbackConfigService(List.of(v1), redis, mapper, ss, fallback, 300, 300_000L);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
         CallbackConfig result = svc.getConfig("AK1", "callback:weagent:chat");
         assertThat(result.getAk()).isEqualTo("AK1");
         verify(v1, never()).resolve(any(), any());
@@ -66,7 +67,8 @@ class CallbackConfigServiceTest {
         when(v1.resolve("AK1", "callback:weagent:chat")).thenReturn(cfg);
         StringRedisTemplate redis = mockEmptyRedis();
         SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
-        CallbackConfigService svc = new CallbackConfigService(List.of(v1), redis, mapper, ss, fallback, 300, 300_000L);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
         CallbackConfig result = svc.getConfig("AK1", "callback:weagent:chat");
         assertThat(result).isNotNull();
         verify(redis.opsForValue()).set(eq("gw:cloud:route:v1:AK1:callback:weagent:chat"),
@@ -81,7 +83,8 @@ class CallbackConfigServiceTest {
         when(v1.resolve(any(), any())).thenReturn(null);
         StringRedisTemplate redis = mockEmptyRedis();
         SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
-        CallbackConfigService svc = new CallbackConfigService(List.of(v1), redis, mapper, ss, fallback, 300, 300_000L);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
         assertThat(svc.getConfig("AK1", "callback:weagent:question_reply")).isNull();
         verify(redis.opsForValue(), never()).set(anyString(), anyString(), anyLong(), any());
     }
@@ -99,7 +102,8 @@ class CallbackConfigServiceTest {
             return c;
         });
         SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
-        CallbackConfigService svc = new CallbackConfigService(List.of(v1), redis, mapper, ss, fallback, 300, 300_000L);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
         svc.getConfig("AK1", "callback:weagent:chat");
         svc.getConfig("AK1", "callback:weagent:question_reply");
         verify(redis.opsForValue()).set(eq("gw:cloud:route:v1:AK1:callback:weagent:chat"),
@@ -122,7 +126,8 @@ class CallbackConfigServiceTest {
         when(v2.resolve("AK1", "callback:weagent:question_reply")).thenReturn(cfg);
         StringRedisTemplate redis = mockEmptyRedis();
         SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
-        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, 300, 300_000L);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
         CallbackConfig result = svc.getConfig("AK1", "callback:weagent:question_reply");
         assertThat(result).isNotNull();
         verify(v2).resolve("AK1", "callback:weagent:question_reply");
@@ -143,7 +148,8 @@ class CallbackConfigServiceTest {
         when(v1.resolve("AK1", "callback:weagent:chat")).thenReturn(cfg);
         StringRedisTemplate redis = mockEmptyRedis();
         SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
-        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, 300, 300_000L);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
         CallbackConfig result = svc.getConfig("AK1", "callback:weagent:chat");
         assertThat(result).isNotNull();
         verify(v1).resolve("AK1", "callback:weagent:chat");
@@ -161,7 +167,8 @@ class CallbackConfigServiceTest {
         when(v1.resolve(any(), any())).thenReturn(null);
         StringRedisTemplate redis = mockEmptyRedis();
         SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
-        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, 300, 300_000L);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
         svc.getConfig("AK1", "callback:weagent:chat");
         verify(v1).resolve("AK1", "callback:weagent:chat");
         verify(v2, never()).resolve(any(), any());
@@ -177,7 +184,8 @@ class CallbackConfigServiceTest {
         when(v2.resolve(any(), any())).thenReturn(null);
         StringRedisTemplate redis = mockEmptyRedis();
         SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
-        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, 300, 300_000L);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
         // 三次调用，SS 的 v2_enabled 应只被打 1 次（in-memory cache 在 TTL 窗口内有效）
         svc.getConfig("AK1", "callback:weagent:chat");
         svc.getConfig("AK1", "callback:weagent:question_reply");
@@ -207,7 +215,8 @@ class CallbackConfigServiceTest {
         fbCfg.setAuthType("none");
         when(fallback.load("AK1", "callback:weagent:chat")).thenReturn(fbCfg);
         StringRedisTemplate redis = mockEmptyRedis();
-        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, 300, 300_000L);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
 
         CallbackConfig result = svc.getConfig("AK1", "callback:weagent:chat");
 
@@ -236,7 +245,8 @@ class CallbackConfigServiceTest {
         when(v2.resolve("AK1", "callback:weagent:chat")).thenReturn(v2Cfg);
         SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
         StringRedisTemplate redis = mockEmptyRedis();
-        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, 300, 300_000L);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
 
         CallbackConfig result = svc.getConfig("AK1", "callback:weagent:chat");
 
@@ -266,7 +276,8 @@ class CallbackConfigServiceTest {
         fbCfg.setAuthType("soa");
         when(fallback.load("AK1", "callback:weagent:question_reply")).thenReturn(fbCfg);
         StringRedisTemplate redis = mockEmptyRedis();
-        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, 300, 300_000L);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
 
         CallbackConfig result = svc.getConfig("AK1", "callback:weagent:question_reply");
 
@@ -289,7 +300,8 @@ class CallbackConfigServiceTest {
         SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
         when(fallback.load(any(), any())).thenReturn(null); // SysConfig 缺失
         StringRedisTemplate redis = mockEmptyRedis();
-        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, 300, 300_000L);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
 
         CallbackConfig result = svc.getConfig("AK1", "callback:weagent:permission_reply");
 
@@ -310,7 +322,8 @@ class CallbackConfigServiceTest {
         SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
         when(fallback.load(any(), any())).thenReturn(null);
         StringRedisTemplate redis = mockEmptyRedis();
-        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, 300, 300_000L);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
 
         CallbackConfig result = svc.getConfig("AK1", "callback:weagent:chat");
 
@@ -329,7 +342,8 @@ class CallbackConfigServiceTest {
         when(v1.resolve(any(), any())).thenReturn(null);
         SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
         StringRedisTemplate redis = mockEmptyRedis();
-        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, 300, 300_000L);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
 
         svc.getConfig("AK1", "callback:weagent:chat");
 
@@ -337,6 +351,257 @@ class CallbackConfigServiceTest {
         verify(fallback, never()).load(any(), any());
         // 总开关也不应被读取（v1 路径无需关心）
         verify(ss, never()).getConfigValue("cloud_route", "v2_fallback_enabled");
+    }
+
+    // -----------------------------------------------------------------------
+    // cloudProfile 路径分派（D10 / PR1：新老 cache key 完全分立）
+    // -----------------------------------------------------------------------
+
+    @Test
+    void getConfig_3arg_cloudProfileNull_routesToV1Path_oldCacheKeyUnchanged() throws Exception {
+        CallbackConfigResolver v1 = mockResolver("v1");
+        SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
+        when(ss.getConfigValue("cloud_route", "v2_enabled")).thenReturn(null);
+        CallbackConfig cfg = new CallbackConfig();
+        cfg.setAk("AK1");
+        cfg.setScope("callback:weagent:chat");
+        cfg.setChannelType("sse");
+        when(v1.resolve("AK1", "callback:weagent:chat")).thenReturn(cfg);
+        StringRedisTemplate redis = mockEmptyRedis();
+        SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
+
+        CallbackConfig result = svc.getConfig("AK1", "callback:weagent:chat", null);
+
+        assertThat(result).isNotNull();
+        verify(v1).resolve("AK1", "callback:weagent:chat");
+        // 老 cache key 完全不变（不含 v2 literal discriminator，不含 cloudProfile suffix）
+        verify(redis.opsForValue()).set(eq("gw:cloud:route:v1:AK1:callback:weagent:chat"),
+                anyString(), eq(300L), eq(TimeUnit.SECONDS));
+        // V2 fallback 不应被触碰
+        verify(fallbackV2, never()).load(any(), any(), any());
+    }
+
+    @Test
+    void getConfig_3arg_cloudProfileBlank_routesToV1Path() throws Exception {
+        CallbackConfigResolver v1 = mockResolver("v1");
+        SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
+        when(ss.getConfigValue("cloud_route", "v2_enabled")).thenReturn(null);
+        CallbackConfig cfg = new CallbackConfig();
+        cfg.setAk("AK1");
+        cfg.setScope("callback:weagent:chat");
+        cfg.setChannelType("sse");
+        when(v1.resolve("AK1", "callback:weagent:chat")).thenReturn(cfg);
+        StringRedisTemplate redis = mockEmptyRedis();
+        SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
+
+        CallbackConfig result = svc.getConfig("AK1", "callback:weagent:chat", "");
+
+        assertThat(result).isNotNull();
+        verify(v1).resolve("AK1", "callback:weagent:chat");
+        verify(redis.opsForValue()).set(eq("gw:cloud:route:v1:AK1:callback:weagent:chat"),
+                anyString(), eq(300L), eq(TimeUnit.SECONDS));
+        verify(fallbackV2, never()).load(any(), any(), any());
+    }
+
+    @Test
+    void getConfig_3arg_cloudProfileDefault_routesToV1Path() throws Exception {
+        CallbackConfigResolver v1 = mockResolver("v1");
+        SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
+        when(ss.getConfigValue("cloud_route", "v2_enabled")).thenReturn(null);
+        CallbackConfig cfg = new CallbackConfig();
+        cfg.setAk("AK1");
+        cfg.setScope("callback:weagent:chat");
+        cfg.setChannelType("sse");
+        when(v1.resolve("AK1", "callback:weagent:chat")).thenReturn(cfg);
+        StringRedisTemplate redis = mockEmptyRedis();
+        SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
+
+        CallbackConfig result = svc.getConfig("AK1", "callback:weagent:chat", "default");
+
+        assertThat(result).isNotNull();
+        verify(v1).resolve("AK1", "callback:weagent:chat");
+        verify(redis.opsForValue()).set(eq("gw:cloud:route:v1:AK1:callback:weagent:chat"),
+                anyString(), eq(300L), eq(TimeUnit.SECONDS));
+        verify(fallbackV2, never()).load(any(), any(), any());
+    }
+
+    @Test
+    void getConfig_3arg_legacy2argMethod_equivalentToV1Path() throws Exception {
+        CallbackConfigResolver v1 = mockResolver("v1");
+        SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
+        when(ss.getConfigValue("cloud_route", "v2_enabled")).thenReturn(null);
+        CallbackConfig cfg = new CallbackConfig();
+        cfg.setAk("AK1");
+        cfg.setScope("callback:weagent:chat");
+        cfg.setChannelType("sse");
+        when(v1.resolve("AK1", "callback:weagent:chat")).thenReturn(cfg);
+        StringRedisTemplate redis = mockEmptyRedis();
+        SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
+
+        // 调老 2 参数方法 → 与传 null 等价，走 V1 路径
+        CallbackConfig result = svc.getConfig("AK1", "callback:weagent:chat");
+
+        assertThat(result).isNotNull();
+        verify(v1).resolve("AK1", "callback:weagent:chat");
+        verify(redis.opsForValue()).set(eq("gw:cloud:route:v1:AK1:callback:weagent:chat"),
+                anyString(), eq(300L), eq(TimeUnit.SECONDS));
+        verify(fallbackV2, never()).load(any(), any(), any());
+    }
+
+    @Test
+    void getConfig_3arg_cloudProfileSpecific_routesToV2Path_newCacheKey() throws Exception {
+        CallbackConfigResolver v1 = mockResolver("v1");
+        CallbackConfigResolver v2 = mockResolver("v2");
+        SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
+        when(ss.getConfigValue("cloud_route", "v2_enabled")).thenReturn("1");
+        when(ss.getConfigValue("cloud_route", "v2_fallback_enabled")).thenReturn("1");
+        when(v2.resolve(any(), any())).thenReturn(null); // 让 V2 resolver 返 null，触发 fallback
+        SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfig fbCfg = new CallbackConfig();
+        fbCfg.setAk("AK1");
+        fbCfg.setScope("callback:weagent:chat");
+        fbCfg.setChannelType("sse");
+        fbCfg.setChannelAddress("http://v2-as");
+        fbCfg.setAuthType("soa");
+        when(fallbackV2.load("AK1", "callback:weagent:chat", "assistant_square")).thenReturn(fbCfg);
+        StringRedisTemplate redis = mockEmptyRedis();
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
+
+        CallbackConfig result = svc.getConfig("AK1", "callback:weagent:chat", "assistant_square");
+
+        assertThat(result).isNotNull();
+        assertThat(result.getChannelAddress()).isEqualTo("http://v2-as");
+        // 新 cache key 格式：gw:cloud:route:v2:{version}:{ak}:{scope}:{cloudProfile}
+        verify(redis.opsForValue()).set(eq("gw:cloud:route:v2:v2:AK1:callback:weagent:chat:assistant_square"),
+                anyString(), eq(300L), eq(TimeUnit.SECONDS));
+        // V2 fallback provider 被调用，老 fallback provider 不被触碰
+        verify(fallbackV2).load("AK1", "callback:weagent:chat", "assistant_square");
+        verify(fallback, never()).load(any(), any());
+    }
+
+    @Test
+    void getConfig_3arg_cloudProfileSpecific_v2ResolverReturns200_doesNotCallFallback() throws Exception {
+        CallbackConfigResolver v1 = mockResolver("v1");
+        CallbackConfigResolver v2 = mockResolver("v2");
+        SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
+        when(ss.getConfigValue("cloud_route", "v2_enabled")).thenReturn("1");
+        when(ss.getConfigValue("cloud_route", "v2_fallback_enabled")).thenReturn("1");
+        CallbackConfig v2Cfg = new CallbackConfig();
+        v2Cfg.setAk("AK1");
+        v2Cfg.setScope("callback:weagent:chat");
+        v2Cfg.setChannelType("sse");
+        v2Cfg.setChannelAddress("http://v2-resolver");
+        v2Cfg.setAuthType("none");
+        when(v2.resolve("AK1", "callback:weagent:chat")).thenReturn(v2Cfg);
+        SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        StringRedisTemplate redis = mockEmptyRedis();
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
+
+        CallbackConfig result = svc.getConfig("AK1", "callback:weagent:chat", "assistant_square");
+
+        assertThat(result).isNotNull();
+        assertThat(result.getChannelAddress()).isEqualTo("http://v2-resolver");
+        verify(v2).resolve("AK1", "callback:weagent:chat");
+        // resolver 正常返回，零 fallback 调用
+        verify(fallbackV2, never()).load(any(), any(), any());
+        verify(fallback, never()).load(any(), any());
+        verify(redis.opsForValue()).set(eq("gw:cloud:route:v2:v2:AK1:callback:weagent:chat:assistant_square"),
+                anyString(), anyLong(), any());
+    }
+
+    @Test
+    void getConfig_3arg_cloudProfileSpecific_fallbackV2MissReturnsNull_doesNotFallthroughToV1() throws Exception {
+        CallbackConfigResolver v1 = mockResolver("v1");
+        CallbackConfigResolver v2 = mockResolver("v2");
+        SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
+        when(ss.getConfigValue("cloud_route", "v2_enabled")).thenReturn("1");
+        when(ss.getConfigValue("cloud_route", "v2_fallback_enabled")).thenReturn("1");
+        when(v2.resolve(any(), any())).thenReturn(null);
+        SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        when(fallbackV2.load(any(), any(), any())).thenReturn(null);
+        StringRedisTemplate redis = mockEmptyRedis();
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
+
+        CallbackConfig result = svc.getConfig("AK1", "callback:weagent:chat", "assistant_square");
+
+        assertThat(result).isNull();
+        verify(v2).resolve("AK1", "callback:weagent:chat");
+        verify(fallbackV2).load("AK1", "callback:weagent:chat", "assistant_square");
+        // V2 fallback miss 后 **不** 回查老 fallback
+        verify(fallback, never()).load(any(), any());
+        verify(redis.opsForValue(), never()).set(anyString(), anyString(), anyLong(), any());
+    }
+
+    @Test
+    void getConfig_3arg_cloudProfileSpecific_fallbackSwitchOff_skipsResolverGoesV2Fallback() throws Exception {
+        CallbackConfigResolver v1 = mockResolver("v1");
+        CallbackConfigResolver v2 = mockResolver("v2");
+        SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
+        when(ss.getConfigValue("cloud_route", "v2_enabled")).thenReturn("1");
+        when(ss.getConfigValue("cloud_route", "v2_fallback_enabled")).thenReturn(null); // OFF
+        SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        CallbackConfig fbCfg = new CallbackConfig();
+        fbCfg.setAk("AK1");
+        fbCfg.setScope("callback:weagent:chat");
+        fbCfg.setChannelType("sse");
+        fbCfg.setChannelAddress("http://v2-as");
+        fbCfg.setAuthType("soa");
+        when(fallbackV2.load("AK1", "callback:weagent:chat", "assistant_square")).thenReturn(fbCfg);
+        StringRedisTemplate redis = mockEmptyRedis();
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
+
+        CallbackConfig result = svc.getConfig("AK1", "callback:weagent:chat", "assistant_square");
+
+        assertThat(result).isNotNull();
+        assertThat(result.getChannelAddress()).isEqualTo("http://v2-as");
+        // 总开关 OFF → v2 resolver 完全不被调用
+        verify(v2, never()).resolve(any(), any());
+        verify(fallbackV2).load("AK1", "callback:weagent:chat", "assistant_square");
+        // 老 fallback 一根不动
+        verify(fallback, never()).load(any(), any());
+    }
+
+    @Test
+    void getConfig_3arg_oldAndNewCacheKeys_doNotPolluteEachOther() throws Exception {
+        // 同一 ak + scope，但 cloudProfile 不同 → 应该产生独立 cache entry
+        CallbackConfigResolver v1 = mockResolver("v1");
+        CallbackConfigResolver v2 = mockResolver("v2");
+        SkillServerConfigClient ss = mock(SkillServerConfigClient.class);
+        when(ss.getConfigValue("cloud_route", "v2_enabled")).thenReturn("1");
+        when(ss.getConfigValue("cloud_route", "v2_fallback_enabled")).thenReturn("1");
+        CallbackConfig v2Cfg = new CallbackConfig();
+        v2Cfg.setAk("AK1");
+        v2Cfg.setScope("callback:weagent:chat");
+        v2Cfg.setChannelType("sse");
+        v2Cfg.setChannelAddress("http://v2");
+        when(v2.resolve("AK1", "callback:weagent:chat")).thenReturn(v2Cfg);
+        SysConfigFallbackProvider fallback = mock(SysConfigFallbackProvider.class);
+        SysConfigFallbackProviderV2 fallbackV2 = mock(SysConfigFallbackProviderV2.class);
+        StringRedisTemplate redis = mockEmptyRedis();
+        CallbackConfigService svc = new CallbackConfigService(List.of(v1, v2), redis, mapper, ss, fallback, fallbackV2, 300, 300_000L);
+
+        // 老调用方（cloudProfile=null）
+        svc.getConfig("AK1", "callback:weagent:chat", null);
+        // 新调用方（cloudProfile=assistant_square）
+        svc.getConfig("AK1", "callback:weagent:chat", "assistant_square");
+
+        // 两个独立的 cache key entry
+        verify(redis.opsForValue()).set(eq("gw:cloud:route:v2:AK1:callback:weagent:chat"),
+                anyString(), anyLong(), any());
+        verify(redis.opsForValue()).set(eq("gw:cloud:route:v2:v2:AK1:callback:weagent:chat:assistant_square"),
+                anyString(), anyLong(), any());
     }
 
     // -----------------------------------------------------------------------

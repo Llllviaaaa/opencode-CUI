@@ -120,7 +120,7 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("chat action → 走 CloudProtocolClient (SSE)")
         void handleInvoke_chatAction_routesToSseProtocol() {
-            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE, "default"))
                     .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
 
             cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
@@ -132,7 +132,7 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("chat action → 走 CloudProtocolClient (WebSocket)")
         void handleInvoke_chatAction_routesToWebSocketProtocol() {
-            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE, "default"))
                     .thenReturn(buildCfg("websocket", "wss://cloud.example.com/chat", "soa", "app-1"));
 
             cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
@@ -144,7 +144,7 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("question_reply action → 走 WebHookExecutor")
         void handleInvoke_questionReplyAction_routesToWebHook() {
-            when(callbackConfigService.getConfig(TEST_AK, QR_SCOPE))
+            when(callbackConfigService.getConfig(TEST_AK, QR_SCOPE, "default"))
                     .thenReturn(buildCfg("webhook", "https://cloud.example.com/qr", "soa", null));
 
             GatewayMessage invoke = buildInvoke("question_reply", TEST_AK);
@@ -158,7 +158,7 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("permission_reply action → 走 WebHookExecutor")
         void handleInvoke_permissionReplyAction_routesToWebHook() {
-            when(callbackConfigService.getConfig(TEST_AK, PR_SCOPE))
+            when(callbackConfigService.getConfig(TEST_AK, PR_SCOPE, "default"))
                     .thenReturn(buildCfg("webhook", "https://cloud.example.com/pr", "soa", null));
 
             GatewayMessage invoke = buildInvoke("permission_reply", TEST_AK);
@@ -196,7 +196,7 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("chat 收到 webhook channel → tool_error")
         void handleInvoke_chatWithWebhookChannel_emitsToolError() {
-            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE, "default"))
                     .thenReturn(buildCfg("webhook", "https://x", "soa", null));
 
             cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
@@ -213,7 +213,7 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("question_reply 收到 sse channel → tool_error")
         void handleInvoke_questionReplyWithSseChannel_emitsToolError() {
-            when(callbackConfigService.getConfig(TEST_AK, QR_SCOPE))
+            when(callbackConfigService.getConfig(TEST_AK, QR_SCOPE, "default"))
                     .thenReturn(buildCfg("sse", "https://x", "soa", "app-1"));
 
             cloudAgentService.handleInvoke(buildInvoke("question_reply", TEST_AK), onRelay);
@@ -230,7 +230,7 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("permission_reply 收到 websocket channel → tool_error")
         void handleInvoke_permissionReplyWithWebSocketChannel_emitsToolError() {
-            when(callbackConfigService.getConfig(TEST_AK, PR_SCOPE))
+            when(callbackConfigService.getConfig(TEST_AK, PR_SCOPE, "default"))
                     .thenReturn(buildCfg("websocket", "wss://x", "soa", "app-1"));
 
             cloudAgentService.handleInvoke(buildInvoke("permission_reply", TEST_AK), onRelay);
@@ -255,7 +255,7 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("chat 配置缺失 → tool_error，错误消息保留 'Cloud route info not found'")
         void handleInvoke_chatConfigMissing_emitsLegacyErrorMessage() {
-            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE)).thenReturn(null);
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE, "default")).thenReturn(null);
 
             cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
 
@@ -277,7 +277,7 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("v1 模式 question_reply 配置缺失 → tool_error 含 'not enabled'")
         void handleInvoke_v1ModeQuestionReplyReturnsNullConfig_emitsToolError() {
-            when(callbackConfigService.getConfig(TEST_AK, QR_SCOPE)).thenReturn(null);
+            when(callbackConfigService.getConfig(TEST_AK, QR_SCOPE, "default")).thenReturn(null);
 
             cloudAgentService.handleInvoke(buildInvoke("question_reply", TEST_AK), onRelay);
 
@@ -294,7 +294,7 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("v1 模式 permission_reply 配置缺失 → tool_error 含 'not enabled'")
         void handleInvoke_v1ModePermissionReplyReturnsNullConfig_emitsToolError() {
-            when(callbackConfigService.getConfig(TEST_AK, PR_SCOPE)).thenReturn(null);
+            when(callbackConfigService.getConfig(TEST_AK, PR_SCOPE, "default")).thenReturn(null);
 
             cloudAgentService.handleInvoke(buildInvoke("permission_reply", TEST_AK), onRelay);
 
@@ -319,7 +319,7 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("构建正确的 CloudConnectionContext (含 channelType / scope)")
         void shouldBuildCorrectConnectionContext() {
-            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE, "default"))
                     .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app_36209"));
 
             cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
@@ -345,7 +345,7 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("云端事件注入路由上下文后通过 onRelay 转发")
         void shouldInjectRoutingContextAndRelayEvents() {
-            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE, "default"))
                     .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
 
             cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
@@ -378,7 +378,7 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("云端事件已有 toolSessionId 时不覆盖")
         void shouldNotOverrideExistingToolSessionId() {
-            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE, "default"))
                     .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
 
             cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
@@ -415,7 +415,7 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("云端连接异常时 onError 通过 onRelay 构建 tool_error 转发")
         void shouldRelayToolErrorOnCloudConnectionFailure() {
-            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE, "default"))
                     .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
 
             cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
@@ -441,7 +441,7 @@ class CloudAgentServiceTest {
         @Test
         @DisplayName("云端超时时通过 onRelay 返回包含超时信息的 tool_error")
         void shouldRelayToolErrorWithTimeoutInfoOnTimeout() {
-            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE))
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE, "default"))
                     .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
 
             cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
@@ -462,6 +462,78 @@ class CloudAgentServiceTest {
             assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
             assertTrue(err.getError().contains("idle_timeout"));
             assertNull(err.getReason());
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // cloudProfile 透传（PR1：把 cloudProfile 传进 CallbackConfigService.getConfig）
+    // ---------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("cloudProfile 透传到 CallbackConfigService")
+    class CloudProfilePropagationTests {
+
+        @Test
+        @DisplayName("payload 无 cloudProfile → 默认 'default'，CallbackConfigService 收到 'default'")
+        void handleInvoke_payloadWithoutCloudProfile_defaultsToDefault() {
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE, "default"))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
+
+            cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
+
+            verify(callbackConfigService).getConfig(TEST_AK, CHAT_SCOPE, "default");
+        }
+
+        @Test
+        @DisplayName("payload cloudProfile=null → 默认 'default'")
+        void handleInvoke_payloadCloudProfileNull_defaultsToDefault() {
+            GatewayMessage invoke = buildInvoke("chat", TEST_AK);
+            ((ObjectNode) invoke.getPayload()).putNull("cloudProfile");
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE, "default"))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
+
+            cloudAgentService.handleInvoke(invoke, onRelay);
+
+            verify(callbackConfigService).getConfig(TEST_AK, CHAT_SCOPE, "default");
+        }
+
+        @Test
+        @DisplayName("payload cloudProfile=\"\" → 默认 'default'")
+        void handleInvoke_payloadCloudProfileBlank_defaultsToDefault() {
+            GatewayMessage invoke = buildInvoke("chat", TEST_AK);
+            ((ObjectNode) invoke.getPayload()).put("cloudProfile", "");
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE, "default"))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
+
+            cloudAgentService.handleInvoke(invoke, onRelay);
+
+            verify(callbackConfigService).getConfig(TEST_AK, CHAT_SCOPE, "default");
+        }
+
+        @Test
+        @DisplayName("payload cloudProfile=\"assistant_square\" → 透传到 CallbackConfigService")
+        void handleInvoke_payloadCloudProfileSpecific_propagatesValue() {
+            GatewayMessage invoke = buildInvoke("chat", TEST_AK);
+            ((ObjectNode) invoke.getPayload()).put("cloudProfile", "assistant_square");
+            when(callbackConfigService.getConfig(TEST_AK, CHAT_SCOPE, "assistant_square"))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/as", "soa", null));
+
+            cloudAgentService.handleInvoke(invoke, onRelay);
+
+            verify(callbackConfigService).getConfig(TEST_AK, CHAT_SCOPE, "assistant_square");
+        }
+
+        @Test
+        @DisplayName("cloudProfile 在 question_reply / permission_reply 上同样透传")
+        void handleInvoke_payloadCloudProfileSpecific_propagatesOnWebhookActions() {
+            GatewayMessage invoke = buildInvoke("question_reply", TEST_AK);
+            ((ObjectNode) invoke.getPayload()).put("cloudProfile", "assistant_square");
+            when(callbackConfigService.getConfig(TEST_AK, QR_SCOPE, "assistant_square"))
+                    .thenReturn(buildCfg("webhook", "https://x/q", "soa", null));
+
+            cloudAgentService.handleInvoke(invoke, onRelay);
+
+            verify(callbackConfigService).getConfig(TEST_AK, QR_SCOPE, "assistant_square");
         }
     }
 }
