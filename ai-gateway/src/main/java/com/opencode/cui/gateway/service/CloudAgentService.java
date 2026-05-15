@@ -92,8 +92,10 @@ public class CloudAgentService {
             return;
         }
 
-        // 2. 拉取 (ak, scope) 对应的回调配置（v1/v2 由 service 内部按 SS SysConfig 决定）
-        CallbackConfig cfg = callbackConfigService.getConfig(ak, scope);
+        // 2. 拉取 (ak, scope, cloudProfile) 对应的回调配置
+        //    cloudProfile == null/blank/"default" → V1 路径（老 cache key + 老 provider，零 cold miss）
+        //    cloudProfile 具体值（如 "assistant_square"） → V2 路径（独立 cache key + 新 provider）
+        CallbackConfig cfg = callbackConfigService.getConfig(ak, scope, cloudProfile);
         if (cfg == null) {
             String reason = "chat".equals(action)
                     ? "Cloud route info not found for ak: " + ak
