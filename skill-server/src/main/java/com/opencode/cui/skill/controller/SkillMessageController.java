@@ -15,6 +15,7 @@ import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.config.AssistantIdProperties;
 import com.opencode.cui.skill.service.AssistantAccountResolverService;
+import com.opencode.cui.skill.service.DefaultAssistantRuleService;
 import com.opencode.cui.skill.service.GatewayApiClient;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.ImMessageService;
@@ -75,6 +76,7 @@ public class SkillMessageController {
     private final AssistantScopeDispatcher scopeDispatcher;
     private final AssistantOfflineMessageProvider offlineMessageProvider;
     private final AssistantAccountResolverService assistantAccountResolverService;
+    private final DefaultAssistantRuleService ruleService;
 
     public SkillMessageController(SkillMessageService messageService,
             SkillSessionService sessionService,
@@ -88,7 +90,8 @@ public class SkillMessageController {
             AssistantInfoService assistantInfoService,
             AssistantScopeDispatcher scopeDispatcher,
             AssistantOfflineMessageProvider offlineMessageProvider,
-            AssistantAccountResolverService assistantAccountResolverService) {
+            AssistantAccountResolverService assistantAccountResolverService,
+            DefaultAssistantRuleService ruleService) {
         this.messageService = messageService;
         this.sessionService = sessionService;
         this.gatewayRelayService = gatewayRelayService;
@@ -102,6 +105,7 @@ public class SkillMessageController {
         this.scopeDispatcher = scopeDispatcher;
         this.offlineMessageProvider = offlineMessageProvider;
         this.assistantAccountResolverService = assistantAccountResolverService;
+        this.ruleService = ruleService;
     }
 
     /**
@@ -136,10 +140,16 @@ public class SkillMessageController {
         }
 
         // 助理删除校验（在 saveUserMessage 之前；不写用户消息 / 不广播 / 不 routeToGateway）
-        ApiResponse<ProtocolMessageView> deletionBlock = checkAssistantDeletion(
-                session.getAssistantAccount(), sessionId, "sendMessage");
-        if (deletionBlock != null) {
-            return ResponseEntity.ok(deletionBlock);
+        // Req 12 短路：命中默认助手规则 → 跳过 deletion check（virtual assistantAccount 上游本就不存在）
+        if (!ruleService.lookup(session.getBusinessSessionDomain(), session.getBusinessSessionType()).isPresent()) {
+            ApiResponse<ProtocolMessageView> deletionBlock = checkAssistantDeletion(
+                    session.getAssistantAccount(), sessionId, "sendMessage");
+            if (deletionBlock != null) {
+                return ResponseEntity.ok(deletionBlock);
+            }
+        } else {
+            log.info("[SKIP] sendMessage.deletionCheck: reason=default_assistant_rule_matched, sessionId={}, domain={}, type={}",
+                    sessionId, session.getBusinessSessionDomain(), session.getBusinessSessionType());
         }
 
         // 持久化用户消息
@@ -207,6 +217,8 @@ public class SkillMessageController {
 
         String action;
         String payload;
+        String effectiveUserId = userIdCookie != null && !userIdCookie.isBlank()
+                ? userIdCookie : session.getUserId();
         if (request.getToolCallId() != null && !request.getToolCallId().isBlank()) {
             action = GatewayActions.QUESTION_REPLY;
             // 使用子 session 真实 ID（如果是 subagent 的 question reply）
@@ -217,6 +229,9 @@ public class SkillMessageController {
             qr.put("answer", request.getContent());
             qr.put("toolCallId", request.getToolCallId());
             qr.put("toolSessionId", targetToolSessionId);
+            // D8 修复：补 assistantAccount + sendUserAccount（默认助手 + business 都补，老 chat 已含）
+            qr.put("assistantAccount", session.getAssistantAccount());
+            qr.put("sendUserAccount", effectiveUserId);
             qr.put("businessExtParam", request.getBusinessExtParam());
             payload = PayloadBuilder.buildPayloadWithObjects(objectMapper, qr);
         } else {
@@ -225,8 +240,7 @@ public class SkillMessageController {
             payloadFields.put("text", request.getContent());
             payloadFields.put("toolSessionId", session.getToolSessionId());
             // 优先使用实际操作用户（cookie），兜底用 session 创建人
-            payloadFields.put("sendUserAccount",
-                    userIdCookie != null && !userIdCookie.isBlank() ? userIdCookie : session.getUserId());
+            payloadFields.put("sendUserAccount", effectiveUserId);
             payloadFields.put("assistantAccount", session.getAssistantAccount());
             payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
             payloadFields.put("businessExtParam", request.getBusinessExtParam());
@@ -235,10 +249,12 @@ public class SkillMessageController {
 
         log.info("SkillMessageController.routeToGateway: sessionId={}, action={}, ak={}",
                 sessionId, action, session.getAk());
-        String effectiveUserId = userIdCookie != null && !userIdCookie.isBlank()
-                ? userIdCookie : session.getUserId();
+        // N1 收口：InvokeCommand 塞入 session 的 domain/domainType，让 dispatcher 走新 API
         gatewayRelayService.sendInvokeToGateway(
-                new InvokeCommand(session.getAk(), effectiveUserId, sessionId, action, payload));
+                new InvokeCommand(session.getAk(), effectiveUserId, sessionId, action, payload,
+                        null,
+                        session.getBusinessSessionDomain(),
+                        session.getBusinessSessionType()));
     }
 
     /**
@@ -399,10 +415,16 @@ public class SkillMessageController {
         }
 
         // 助理删除校验（必须在 online check 之前，否则 agent 离线 503 会掩盖删除态 410）
-        ApiResponse<Map<String, Object>> deletionBlock = checkAssistantDeletionForMap(
-                session.getAssistantAccount(), sessionId, "replyPermission");
-        if (deletionBlock != null) {
-            return ResponseEntity.ok(deletionBlock);
+        // Req 12 短路：命中默认助手规则 → 跳过 deletion check（virtual assistantAccount 上游本就不存在）
+        if (!ruleService.lookup(session.getBusinessSessionDomain(), session.getBusinessSessionType()).isPresent()) {
+            ApiResponse<Map<String, Object>> deletionBlock = checkAssistantDeletionForMap(
+                    session.getAssistantAccount(), sessionId, "replyPermission");
+            if (deletionBlock != null) {
+                return ResponseEntity.ok(deletionBlock);
+            }
+        } else {
+            log.info("[SKIP] replyPermission.deletionCheck: reason=default_assistant_rule_matched, sessionId={}, domain={}, type={}",
+                    sessionId, session.getBusinessSessionDomain(), session.getBusinessSessionType());
         }
 
         // Agent 在线检查：云端助手永远在线（跳过），个人助手需要检查
@@ -426,20 +448,29 @@ public class SkillMessageController {
                 ? request.getSubagentSessionId()
                 : session.getToolSessionId();
 
+        String effectiveUserId = userIdCookie != null && !userIdCookie.isBlank()
+                ? userIdCookie : session.getUserId();
         Map<String, Object> pr = new LinkedHashMap<>();
         pr.put("permissionId", permId);
         pr.put("response", request.getResponse());
         pr.put("toolSessionId", targetToolSessionId);
+        // D8 修复：补 assistantAccount + sendUserAccount（默认助手 + business 都补，老 chat 已含）
+        pr.put("assistantAccount", session.getAssistantAccount());
+        pr.put("sendUserAccount", effectiveUserId);
         pr.put("businessExtParam", request.getBusinessExtParam());
         String payload = PayloadBuilder.buildPayloadWithObjects(objectMapper, pr);
 
         // 向 AI-Gateway 发送 permission_reply invoke 命令
+        // N1 收口：InvokeCommand 塞入 session 的 domain/domainType，让 dispatcher 走新 API
         gatewayRelayService.sendInvokeToGateway(
                 new InvokeCommand(session.getAk(),
-                        session.getUserId(),
+                        effectiveUserId,
                         sessionId,
                         GatewayActions.PERMISSION_REPLY,
-                        payload));
+                        payload,
+                        null,
+                        session.getBusinessSessionDomain(),
+                        session.getBusinessSessionType()));
 
         StreamMessage replyMessage = StreamMessage.builder()
                 .type(StreamMessage.Types.PERMISSION_REPLY)

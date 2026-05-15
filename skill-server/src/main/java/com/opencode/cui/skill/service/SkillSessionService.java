@@ -80,6 +80,77 @@ public class SkillSessionService {
         return session;
     }
 
+    /**
+     * 默认助手单事务创建会话（PR3 收口；用于 D1 优先级矩阵中"规则命中"分支）。
+     *
+     * <p>与 {@link #createSession} + {@link #updateToolSessionId} 两次调用相比，
+     * 本方法在<b>同一个事务内</b>完成 3 件事：
+     * <ol>
+     *   <li>INSERT skill_session（ak / assistantAccount / toolSessionId / 业务字段 / status=ACTIVE）</li>
+     *   <li>createRoute 写 session ownership（与 {@link #createSession} 同款副作用）</li>
+     *   <li>Redis 写 {@code toolSessionId → sessionId} 映射（复用 {@code setToolSessionMapping}）</li>
+     * </ol>
+     * 避免老的两步路径中存在的"session 有 ak 但无 toolSessionId（且无 Redis 映射）"中间窗口。
+     *
+     * <p><b>Redis 失败宽松策略（PRD D6 拍板）</b>：Redis 写抛异常 → log WARN，
+     * MySQL 事务<b>仍提交</b>，方法仍返回 session。极小窗口内 GW 上行事件
+     * 按 toolSessionId 反查 sessionId 可能找不到映射 → 这条消息被丢弃；
+     * 但 DB session 已就绪，后续请求走 controller 入口的规则反查仍能恢复。
+     *
+     * <p>老 {@code createSession + updateToolSessionId} 两步路径保留不动，
+     * 给 personal scope / 显式 business ak 使用。
+     *
+     * @return 从 DB 重读的最新 session（避免依赖 ORM 一级缓存返回旧版本）
+     */
+    @Transactional
+    public SkillSession createSessionWithDefaultAssistant(String userId, String ak, String assistantAccount,
+            String title,
+            String businessDomain,
+            String businessType,
+            String businessSessionId,
+            String toolSessionId) {
+        SkillSession session = SkillSession.builder()
+                .id(snowflakeIdGenerator.nextId())
+                .userId(userId)
+                .ak(ak)
+                .assistantAccount(assistantAccount)
+                .toolSessionId(toolSessionId)
+                .title(title)
+                .businessSessionDomain(
+                        businessDomain != null && !businessDomain.isBlank()
+                                ? businessDomain
+                                : SkillSession.DOMAIN_MINIAPP)
+                .businessSessionType(businessType)
+                .businessSessionId(businessSessionId)
+                .status(SkillSession.Status.ACTIVE)
+                .build();
+
+        sessionRepository.insert(session);
+
+        // 同步写入路由表（与现有 createSession 同款副作用）
+        if (ak != null) {
+            sessionRouteService.createRoute(ak, session.getId(), "skill-server", userId);
+        }
+
+        // Redis 写 toolSessionId → sessionId 映射；失败宽松：log WARN，事务仍提交
+        if (toolSessionId != null && !toolSessionId.isBlank()) {
+            try {
+                redisMessageBroker.setToolSessionMapping(toolSessionId, session.getId().toString());
+            } catch (Exception e) {
+                log.warn("[createSession] Redis mapping failed for toolSessionId={}, sessionId={}: {}",
+                        toolSessionId, session.getId(), e.getMessage());
+            }
+        }
+
+        log.info("Created default-assistant skill session: id={}, userId={}, ak={}, assistantAccount={}, "
+                + "domain={}, type={}, toolSessionId={}",
+                session.getId(), userId, ak, assistantAccount,
+                session.getBusinessSessionDomain(), session.getBusinessSessionType(), toolSessionId);
+
+        // from-DB 重读，避免 ORM 二级缓存返回旧版本
+        return sessionRepository.findById(session.getId());
+    }
+
     @Transactional(readOnly = true)
     public SkillSession findByIdSafe(Long sessionId) {
         if (sessionId == null) {
