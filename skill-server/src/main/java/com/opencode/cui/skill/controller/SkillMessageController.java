@@ -229,6 +229,11 @@ public class SkillMessageController {
             qr.put("answer", request.getContent());
             qr.put("toolCallId", request.getToolCallId());
             qr.put("toolSessionId", targetToolSessionId);
+            // D8：仅当 requestId 非空白时塞入 payload（避免下游 JSON 含 null/空字符串污染，让 plugin 走 fallback）
+            String requestId = request.getRequestId();
+            if (requestId != null && !requestId.isBlank()) {
+                qr.put("requestId", requestId);
+            }
             // D8 修复：补 assistantAccount + sendUserAccount（默认助手 + business 都补，老 chat 已含）
             qr.put("assistantAccount", session.getAssistantAccount());
             qr.put("sendUserAccount", effectiveUserId);
@@ -559,6 +564,12 @@ public class SkillMessageController {
         private String toolCallId;
         /** 可选：subagent 的真实 toolSessionId，用于将 question reply 路由到正确的子会话 */
         private String subagentSessionId;
+        /**
+         * 可选：opencode question request id（personal scope 快路径）。
+         * 非空时 SS 透传给 plugin，新版 plugin 直接 POST /question/{requestID}/reply。
+         * 缺失/空白走老路径（plugin GET /question 反查）。
+         */
+        private String requestId;
         /** 可选：业务扩展参数，透传到云端 extParameters.businessExtParam */
         private JsonNode businessExtParam;
     }

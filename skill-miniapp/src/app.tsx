@@ -102,12 +102,20 @@ const App: React.FC = () => {
   );
 
   const handleQuestionAnswer = useCallback(
-    (answer: string, toolCallId?: string) => {
+    (answer: string, toolCallId?: string, _subagentSessionId?: string, requestId?: string) => {
       if (!activeSessionId) {
         void handleSendMessage(answer);
         return;
       }
-      void sendMessage(answer, toolCallId ? { toolCallId } : undefined);
+      // 透传 requestId（personal scope 快路径，D9：历史恢复时 requestId 为 undefined → SS 走 fallback）
+      const options: { toolCallId?: string; requestId?: string } = {};
+      if (toolCallId) {
+        options.toolCallId = toolCallId;
+      }
+      if (requestId) {
+        options.requestId = requestId;
+      }
+      void sendMessage(answer, Object.keys(options).length > 0 ? options : undefined);
     },
     [activeSessionId, handleSendMessage, sendMessage],
   );

@@ -130,6 +130,16 @@ public class StreamMessage {
         private Boolean multiSelect;
         private List<QuestionItem> questions;
         private JsonNode extParam;
+        /**
+         * opencode question request id。来源：question.asked event 的 properties.id。
+         *
+         * <p>与 {@link StreamMessage#partId} 同源（partId 保留给跨事件配对使用）。
+         * 通过 {@code @JsonUnwrapped} 平铺到 StreamMessage JSON 顶层，miniapp 侧字段名 {@code requestId}。</p>
+         *
+         * <p>新版 plugin 收到 question_reply payload 含 requestId 时可走快路径
+         * (POST /question/{requestID}/reply)，跳过 GET /question 反查。</p>
+         */
+        private String requestId;
     }
 
     /** 多问题列表中的单个问题项（QuestionInfo.questions 元素） */

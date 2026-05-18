@@ -25,7 +25,7 @@ export interface UseSkillStreamReturn {
   isStreaming: boolean;
   agentStatus: AgentStatus;
   socketReady: boolean;
-  sendMessage: (text: string, options?: { toolCallId?: string }) => Promise<void>;
+  sendMessage: (text: string, options?: { toolCallId?: string; requestId?: string }) => Promise<void>;
   replyPermission: (permissionId: string, response: 'once' | 'always' | 'reject', subagentSessionId?: string) => Promise<void>;
   error: string | null;
 }
@@ -311,6 +311,7 @@ function streamMessageToSubPart(msg: StreamMessage): MessagePart | null {
         header: msg.header,
         question: msg.question,
         options: msg.options,
+        requestId: msg.requestId,
         subagentSessionId: msg.subagentSessionId,
         subagentName: msg.subagentName,
       };
@@ -1048,7 +1049,7 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
   }, [clearHeartbeatTimer, connect]);
 
   const sendMessageFn = useCallback(
-    async (text: string, options?: { toolCallId?: string }) => {
+    async (text: string, options?: { toolCallId?: string; requestId?: string }) => {
       if (!sessionId) {
         return;
       }
@@ -1066,7 +1067,7 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
       setMessages((prev) => upsertMessage(prev, optimisticMessage));
 
       try {
-        const saved = await api.sendMessage(sessionId, text, options?.toolCallId);
+        const saved = await api.sendMessage(sessionId, text, options?.toolCallId, options?.requestId);
         const normalized = normalizeHistoryMessage(saved as unknown as Record<string, unknown>);
         setMessages((prev) => {
           const nextMessages = prev.filter((message) => message.id !== tempId && message.id !== normalized.id);

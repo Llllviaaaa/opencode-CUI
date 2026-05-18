@@ -277,10 +277,19 @@ export function sendMessage(
   sessionId: string | number,
   content: string,
   toolCallId?: string,
+  requestId?: string,
 ): Promise<Message> {
+  const body: Record<string, string> = { content };
+  if (toolCallId) {
+    body.toolCallId = toolCallId;
+  }
+  // personal scope 快路径：requestId 非空才上送（空白等同未提供，SS D8 处理）
+  if (requestId && requestId.trim()) {
+    body.requestId = requestId;
+  }
   return request<Message>(`/api/skill/sessions/${sessionId}/messages`, {
     method: 'POST',
-    body: JSON.stringify(toolCallId ? { content, toolCallId } : { content }),
+    body: JSON.stringify(body),
   });
 }
 
