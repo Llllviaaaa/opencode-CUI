@@ -1,0 +1,13 @@
+{"file": ".trellis/tasks/05-18-personal-question-requestid/research/codex-review.md", "reason": "codex round 1 评审发现 (1 Critical + 4 Major + 3 Minor + 2 Nit)。PRD v2 已吸收，但实施时需对照原始评审看每一处具体源码定位与代码证据。"}
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server 后端规范导航。改 StreamMessage / Translator / Controller 前必读。"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "Spring 构造注入、Jackson、StreamMessageEmitter 约束。改 StreamMessage 模型时遵循。"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "StreamMessage / InvokeCommand / SkillMessage 协议字段约定。本任务给 QuestionInfo 加 requestId 字段必须对齐。"}
+{"file": ".trellis/spec/skill-miniapp/frontend/index.md", "reason": "miniapp 前端架构导航 + 改动锚点定位（components / hooks / protocol 分层）。"}
+{"file": ".trellis/spec/skill-miniapp/frontend/type-safety.md", "reason": "protocol/types.ts 的 StreamMessage / MessagePart 类型约定。本任务两个类型都要加 requestId 字段。"}
+{"file": ".trellis/spec/skill-miniapp/frontend/state-management.md", "reason": "React state vs refs vs protocol objects 划分。StreamAssembler / streamMessageToSubPart / question state 改动必须遵循。"}
+{"file": ".trellis/spec/skill-miniapp/frontend/component-guidelines.md", "reason": "Part-renderer / callback 模式。QuestionCard / SubtaskBlock / MessageBubble / ConversationView 的回调签名扩展要对齐。"}
+{"file": ".trellis/spec/skill-miniapp/frontend/hook-guidelines.md", "reason": "useSkillStream 等 hook 的输入输出约定。question reply HTTP 入口改动须对齐。"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "本任务给 4 个层加同名 requestId 字段，要主动 grep 现有 requestId / questionRequestId 命名是否已被占用，避免引入命名分裂。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本任务跨 SS / plugin / miniapp 三层 + opencode SDK 四层贯通 requestId 字段名。每一层失踪都会丢字段（codex Major 1 已暴露）。"}
+{"file": "docs/superpowers/specs/2026-05-12-miniapp-skill-server-protocol.md", "reason": "miniapp ↔ SS 协议文档，本任务 PRD Requirements 17 要求同 PR 更新 line 246-259 + 263-267 的 question_reply body / payload 字段说明。"}
+{"file": "docs/superpowers/specs/2026-05-12-gateway-plugin-protocol.md", "reason": "GW ↔ plugin 协议文档，本任务 PRD Requirements 17 要求同 PR 更新 line 1005-1018 的 plugin question_reply payload 字段与 fallback 语义。"}

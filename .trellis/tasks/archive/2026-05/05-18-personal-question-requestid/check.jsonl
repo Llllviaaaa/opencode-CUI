@@ -1,0 +1,13 @@
+{"file": ".trellis/tasks/05-18-personal-question-requestid/research/codex-review.md", "reason": "验收时对照原始评审：1 Critical / 4 Major / 3 Minor 是否全部闭合，特别是 plugin normalizer 是否真改了、miniapp 13 处锚点是否全改、3 份协议文档是否同步。"}
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server 改动是否符合包结构、命名、入站协议约束。"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "Jackson @JsonUnwrapped 序列化行为、StreamMessageEmitter 约束、构造注入是否遵循。"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "QuestionInfo.requestId 字段类型、可空、@JsonInclude.NON_NULL 行为是否对齐。"}
+{"file": ".trellis/spec/skill-miniapp/frontend/type-safety.md", "reason": "StreamMessage / MessagePart 类型扩展是否符合 protocol/types.ts 约定。"}
+{"file": ".trellis/spec/skill-miniapp/frontend/state-management.md", "reason": "StreamAssembler / streamMessageToSubPart / history.ts 等 protocol 层是否保持 React-free。"}
+{"file": ".trellis/spec/skill-miniapp/frontend/component-guidelines.md", "reason": "回调签名扩展是否未破坏 part-renderer delegation 模式。"}
+{"file": ".trellis/spec/skill-miniapp/frontend/hook-guidelines.md", "reason": "useSkillStream HTTP 入口 / api.ts sendMessage body 扩展是否保持 typed-return-object 模式。"}
+{"file": ".trellis/spec/skill-miniapp/frontend/quality-guidelines.md", "reason": "build / typecheck / extension checklist 通过门禁。"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "四层同名 requestId 是否引起命名分裂或重复定义。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本任务跨四层数据流是否每一层都正确透传（codex Major 1 教训）。"}
+{"file": "docs/superpowers/specs/2026-05-12-miniapp-skill-server-protocol.md", "reason": "验证协议文档是否同步更新 question_reply body / payload 字段说明（PRD Requirements 17）。"}
+{"file": "docs/superpowers/specs/2026-05-12-gateway-plugin-protocol.md", "reason": "验证协议文档是否同步更新 plugin question_reply payload + fallback 语义（PRD Requirements 17）。"}
