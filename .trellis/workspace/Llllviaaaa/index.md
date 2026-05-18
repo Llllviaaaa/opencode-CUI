@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-0.md`
-- **Total Sessions**: 6
+- **Total Sessions**: 7
 - **Last Active**: 2026-05-18
 <!-- @@@/auto:current-status -->
 
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-05-18 | personal scope question_reply 协议加 requestId 字段（主仓 + plugin + 文档同步） | `ccbd1e3` | `feat/personal-question-requestid` |
 | 6 | 2026-05-18 | 无 ak 与 assistantAccount 场景默认助手能力（PR1-PR4 全链路上线） | `2349d1c`, `92c070a`, `736b540`, `5a166d9` | `feat/noauth-pr4-docs-tests` |
 | 5 | 2026-05-14 | externalws L2 投递死 pod 修复（owner-only held-by + ZSET 花名册） | `c7049b8`, `5a68079` | `fix/externalws-l2-stale-pod-routing` |
 | 4 | 2026-05-14 | gateway 助手广场非标协议适配器 MVP | `df8160f` | `feat/gateway-assistant-square-adapter` |
