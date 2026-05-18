@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "校验构造器注入、@PostConstruct/ApplicationReadyEvent、Redis subscriber 与 TaskScheduler 的实现是否符合现有约束（测试 mock 不能跨抽象层、redisTemplate.execute callback cast 反模式等）"}
+{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "校验 bind-default-assistant 接口的错误码（400/404/409）和文案是否与 ApiResponse 既定语义一致；createSession 注入失败时的日志/降级是否合规"}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "校验 sys_config 新增 config_type 是否按规范分类、缓存 TTL 与 pub-sub invalidate 是否复用现有机制、事务边界是否正确"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "校验所有新增日志点（rule-injected、rule-rejected、bind 成功/拒绝、cache invalidate）是否使用 [ENTRY]/[EXIT]/[SKIP]/[ERROR] 模式 + 必要 MDC key"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "校验 DefaultAssistantRule record / bind 请求体 / 服务层方法签名是否遵循类型安全规范"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "校验是否重新发明轮子——SysConfigService、AssistantInfoService、AssistantAccountResolverService、BusinessScopeStrategy.generateToolSessionId() 必须被复用而非重写"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "校验 controller → service → mapper/cache 的跨层契约一致性，避免新逻辑在某一层失配"}
+{"file": "docs/superpowers/specs/2026-05-12-miniapp-skill-server-protocol.md", "reason": "校验 createSession 注入与 bind 接口在协议文档上的描述是否完整、字段流转是否准确（D6 回写承诺、D9 拒绝矩阵）"}
+{"file": ".trellis/tasks/05-15-noauth-conversation-permission/prd.md", "reason": "校验实现对 9 条决策 + AC A/B/C/D 四块的覆盖完整性；任何 AC 未通过即 fail"}
