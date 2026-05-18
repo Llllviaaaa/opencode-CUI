@@ -557,6 +557,8 @@ public class OpenCodeEventTranslator {
                         .header(firstQuestion.path("header").asText(null))
                         .question(firstQuestion.path("question").asText(null))
                         .options(options)
+                        // requestId 与 partId 同源（properties.id），供 plugin 端走快路径使用
+                        .requestId(partId)
                         .build())
                 .build();
     }

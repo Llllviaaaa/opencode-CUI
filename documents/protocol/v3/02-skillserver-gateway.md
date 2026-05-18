@@ -211,7 +211,9 @@ Step 5: 投递到 Agent
 | `close_session` | 关闭会话 | `{toolSessionId}` |
 | `abort_session` | 中止会话 | `{toolSessionId}` |
 | `permission_reply` | 权限回复 | `{permissionId, response, toolSessionId}` |
-| `question_reply` | 问题回复 | `{answer, toolCallId?, toolSessionId}` |
+| `question_reply` | 问题回复 | `{answer, toolCallId?, toolSessionId, requestId?}` |
+
+> `requestId`（personal scope 快路径）：opencode question request id，非空时 plugin adapter 直接 `POST /question/{requestID}/reply`，跳过 `GET /question` 反查。SS 仅在 `requestId != null && !requestId.isBlank()` 时塞入 payload（D8 空白视为缺失）；缺失则 plugin 走 fallback（toolCallId 反查）。历史恢复时 miniapp 不带 requestId（D9）。仅 personal scope 出现，business/default_assistant scope 不带（CloudEventTranslator 不动）。
 
 ### 2.3 多实例下行全链路示意
 

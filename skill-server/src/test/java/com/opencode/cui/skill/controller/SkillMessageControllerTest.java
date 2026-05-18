@@ -828,6 +828,87 @@ class SkillMessageControllerTest {
     }
 
     @Test
+    @DisplayName("sendMessage question_reply: requestId 非空 → payload 含 requestId（personal scope 快路径）")
+    void sendMessageQuestionReplyPayloadHasRequestIdWhenProvided() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("AK");
+        session.setUserId("u");
+        session.setAssistantAccount("ACC");
+        session.setToolSessionId("ts");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "u")).thenReturn(session);
+        SkillMessage msg = SkillMessage.builder().id(2L).sessionId(1L).role(SkillMessage.Role.USER).content("a").build();
+        when(messageService.saveUserMessage(eq(1L), eq("a"))).thenReturn(msg);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("a");
+        request.setToolCallId("tc-1");
+        request.setRequestId("req-uuid-1");
+        controller.sendMessage("u", "1", request);
+
+        ArgumentCaptor<InvokeCommand> capt = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(capt.capture());
+        com.fasterxml.jackson.databind.JsonNode payload = om.readTree(capt.getValue().payload());
+        assertEquals("req-uuid-1", payload.get("requestId").asText());
+    }
+
+    @Test
+    @DisplayName("sendMessage question_reply: requestId 为 null → payload 无 requestId key（D8）")
+    void sendMessageQuestionReplyPayloadOmitsRequestIdWhenAbsent() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("AK");
+        session.setUserId("u");
+        session.setAssistantAccount("ACC");
+        session.setToolSessionId("ts");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "u")).thenReturn(session);
+        SkillMessage msg = SkillMessage.builder().id(2L).sessionId(1L).role(SkillMessage.Role.USER).content("a").build();
+        when(messageService.saveUserMessage(eq(1L), eq("a"))).thenReturn(msg);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("a");
+        request.setToolCallId("tc-1");
+        // requestId 不设置（null）
+        controller.sendMessage("u", "1", request);
+
+        ArgumentCaptor<InvokeCommand> capt = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(capt.capture());
+        com.fasterxml.jackson.databind.JsonNode payload = om.readTree(capt.getValue().payload());
+        org.junit.jupiter.api.Assertions.assertFalse(payload.has("requestId"), "payload 不应含 requestId key");
+    }
+
+    @Test
+    @DisplayName("sendMessage question_reply: requestId 为空白 → payload 无 requestId key（D8）")
+    void sendMessageQuestionReplyPayloadOmitsRequestIdWhenBlank() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("AK");
+        session.setUserId("u");
+        session.setAssistantAccount("ACC");
+        session.setToolSessionId("ts");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "u")).thenReturn(session);
+        SkillMessage msg = SkillMessage.builder().id(2L).sessionId(1L).role(SkillMessage.Role.USER).content("a").build();
+        when(messageService.saveUserMessage(eq(1L), eq("a"))).thenReturn(msg);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("a");
+        request.setToolCallId("tc-1");
+        request.setRequestId("   "); // blank
+        controller.sendMessage("u", "1", request);
+
+        ArgumentCaptor<InvokeCommand> capt = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(capt.capture());
+        com.fasterxml.jackson.databind.JsonNode payload = om.readTree(capt.getValue().payload());
+        org.junit.jupiter.api.Assertions.assertFalse(payload.has("requestId"), "blank requestId 应被视为缺失");
+    }
+
+    @Test
     @DisplayName("PR3 D8: replyPermission → payload 补 assistantAccount + sendUserAccount，InvokeCommand 带 domain/domainType")
     void replyPermissionPayloadHasAssistantAccountAndSendUser() throws Exception {
         com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();

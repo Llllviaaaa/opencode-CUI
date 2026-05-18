@@ -246,6 +246,7 @@ Content-Type: application/json
 {
   "content": "JDK21 有什么新特性？",
   "toolCallId": null,
+  "requestId": null,
   "subagentSessionId": null,
   "businessExtParam": null
 }
@@ -255,6 +256,7 @@ Content-Type: application/json
 |---|---|---|---|
 | `content` | String | ✅ | 用户输入文本；空/纯空白 → 400 |
 | `toolCallId` | String | | 非空 → 路由到 `question_reply`（应答 §7 `question` 事件），与 question 事件中的 `toolCallId` 对齐 |
+| `requestId` | String | | **personal scope 快路径**：opencode question request id（来源：§7 `question` 事件顶层 `requestId` 字段）。非空 → SS 透传给 plugin，新版 plugin 直接 `POST /question/{requestID}/reply`，跳过 `GET /question` 反查。缺失/空白 → SS 不塞 payload → plugin 走 fallback（toolCallId 反查）。空白字符串视为缺失（D8）。历史恢复时为空（D9 fallback） |
 | `subagentSessionId` | String | **subagent 场景必填** | **协议路由字段**：业务方应回显本会话最近一条 subagent 出站事件中携带的 `subagentSessionId`；缺失则 plugin 会把应答路由到主对话（落到主 `toolSessionId`），导致子 agent 阻塞或 `tool_error`。详见 §13 |
 | `businessExtParam` | Object | | 业务扩展参数；SS 透传到 `payload.businessExtParam`，最终落到云端 `extParameters.businessExtParam`（不解析、不修改） |
 
@@ -263,7 +265,7 @@ Content-Type: application/json
 1. 持久化 user 消息（`saveUserMessage`），分配 `messageId` 与 `messageSeq`。
 2. **WebSocket 广播** `message.user` 事件给同会话所有连接（多端同步）。
 3. 路由到 GW：
-   - `toolCallId` 非空 → action=`question_reply`，payload 含 `{answer, toolCallId, toolSessionId, businessExtParam}`。
+   - `toolCallId` 非空 → action=`question_reply`，payload 含 `{answer, toolCallId, toolSessionId, businessExtParam}`；当 `requestId` 非空白时额外塞 `requestId`（personal scope 快路径）。
    - `toolCallId` 空 + 有 `toolSessionId` → action=`chat`，payload 含 `{text, toolSessionId, sendUserAccount, assistantAccount, messageId, businessExtParam}`。
    - `toolSessionId` 缺失 → 触发 `rebuildToolSession`。
 4. 同步返回持久化 `ProtocolMessageView`。
@@ -699,7 +701,8 @@ Content-Type: application/json
   "header": "确认",
   "question": "继续吗？",
   "options": ["Yes", "No"],
-  "multiSelect": false
+  "multiSelect": false,
+  "requestId": "qreq-uuid-abc"
 }
 ```
 
@@ -734,6 +737,7 @@ Content-Type: application/json
 | `question` | String | | running | 单题问题文本 |
 | `options` | List\<String\> | | running | 选项 label 数组 |
 | `multiSelect` | Boolean | | running | 单/多选；默认 false |
+| `requestId` | String | | running | **personal scope**：opencode question request id（顶层字段，来源 `QuestionInfo.requestId` 经 `@JsonUnwrapped` 平铺）。miniapp 回答时回传到 §5.2 `requestId`，让新版 plugin 走快路径 `POST /question/{requestID}/reply`。historical replay 不带（D9 fallback） |
 | `output` | String | | completed | 用户应答（label 字符串） |
 
 > completed 阶段**不带** header/question/options，前端用之前 running 缓存的 part 展示。

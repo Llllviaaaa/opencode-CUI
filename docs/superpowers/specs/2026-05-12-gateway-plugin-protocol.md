@@ -1005,7 +1005,8 @@ status_query                                            ← §7.7
   "payload": {
     "toolSessionId": "sess_abc123",
     "answer": "IT 部",
-    "toolCallId": "call_tool_001"
+    "toolCallId": "call_tool_001",
+    "requestId": "qreq-uuid-abc"
   }
 }
 ```
@@ -1015,12 +1016,15 @@ status_query                                            ← §7.7
 | `toolSessionId` | String | ✅ | 会话 ID |
 | `answer` | String | ✅ | 用户应答（**字符串**；多选场景由业务方自行拼接） |
 | `toolCallId` | String | | 对应 §5.13 的 `callID` ⚠️；可选——某些场景下 question 与 tool 解耦 |
+| `requestId` | String | | **personal scope 快路径**：opencode question request id。非空 → plugin adapter 直接 `POST /question/{requestID}/reply`，跳过 `GET /question` 反查；缺失/空白 → 走 fallback（toolCallId 反查）。空白字符串视为缺失（D8）。SS 端 normalizer 与 plugin 端 normalizer 都按这一规则处理 |
 
 #### 回执
 
 成功：`tool_done`。plugin 内部 `QuestionReplyResultData = { requestId, replied: true }`，不直接回 GW。
 
 失败：`tool_error`。
+
+> 兼容性：旧版 plugin 的 `DownstreamMessageNormalizer` 白名单不含 `requestId`，会将该字段静默丢弃，等同 fallback。新旧两侧自治，无握手。SS 端 rollout 必须先于 miniapp 端，避免老 SS + 新 miniapp 组合（D5）。
 
 > ⚠️ `answer: String` 与云端协议 v2 的 `answers: List<List<String>>` 二维结构**不一致** —— 这是 GW↔plugin 与云端协议两条独立链路的设计差异。GW 在转发时会做协议转换。
 
