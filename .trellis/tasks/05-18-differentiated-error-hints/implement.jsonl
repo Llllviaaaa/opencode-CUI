@@ -1,0 +1,18 @@
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server 包级 spec 入口，含 Pre-Development Checklist 指向下面具体规范"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "skill-server 编码约定：Lombok、Service 命名、DI 风格，新建 AssistantAvailabilityService / AvailabilityResult / InternalAuthProperties 时必读"}
+{"file": ".trellis/spec/skill-server/backend/directory-structure.md", "reason": "确定新文件落点（service / model / config / client 包），avoid 散落"}
+{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "FALLBACK_ERROR 的异常分类、503 返回口径、catch 范围（参考既有 §5.2.3 RuntimeException 收紧规则）"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "差异化分支日志（NOT_CONFIGURED / OFFLINE_TYPED / OFFLINE_DEFAULT / FALLBACK_ERROR）的级别和字段约定"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "record + enum + Optional 使用规范，AvailabilityResult / AvailabilitySource 落地需要遵守"}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "skill-server V13/V14 flyway 迁移命名 + sys_config TEXT 升级约束"}
+{"file": ".trellis/spec/ai-gateway/backend/index.md", "reason": "ai-gateway 包级 spec 入口；新增 /internal/agent/availability 接口和 V6 索引迁移要遵守"}
+{"file": ".trellis/spec/ai-gateway/backend/conventions.md", "reason": "ai-gateway controller/service 规范，AgentController 新 endpoint + AgentRegistryService.queryAvailability"}
+{"file": ".trellis/spec/ai-gateway/backend/database-guidelines.md", "reason": "V6 agent_connection 索引迁移、COALESCE(last_seen_at, created_at) 用法"}
+{"file": ".trellis/spec/ai-gateway/backend/error-handling.md", "reason": "internal endpoint 鉴权失败 / 缺 AK 的状态码约定，确保 missing AK = 200 {exists:false}"}
+{"file": ".trellis/spec/ai-gateway/backend/logging-guidelines.md", "reason": "availability 查询和 evict 事件日志规范"}
+{"file": ".trellis/spec/ai-gateway/backend/type-safety.md", "reason": "DTO / repository 返回类型规范"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本任务跨 skill-server / ai-gateway + Redis + DB migration 多层；需要按 thinking-guide 校验跨层一致性"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "AssistantOfflineMessageProvider 从『单 key』演进到 『按 source/toolType 计算』属于关键模式复用决策；避免在 caller 散落判定逻辑"}
+{"file": "docs/superpowers/specs/2026-04-21-external-offline-response-design.md", "reason": "上一轮 offline 响应改造的设计稿（v3.1），含 SysConfig 兜底、scope 术语、catch 收紧到 RuntimeException 等约束；本期为其延伸，必须沿用已确立的不变量"}
+{"file": "documents/protocol/v3/02-skillserver-gateway.md", "reason": "skill-server ↔ gateway 协议文档；新增 /internal/agent/availability 段需要落进该文档"}
+{"file": ".trellis/tasks/05-18-differentiated-error-hints/prd.md", "reason": "本任务 PRD v3，包含 Offline 覆盖矩阵 / R1-R6 / Fallback Matrix / D7 决策 / AC / DoD 全部约束"}
