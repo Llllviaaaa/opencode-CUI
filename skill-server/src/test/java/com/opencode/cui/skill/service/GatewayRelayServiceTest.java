@@ -95,6 +95,11 @@ class GatewayRelayServiceTest {
                 // scopeDispatcher always returns a lenient strategy to avoid NPE in tool_event handling
                 // nullable 覆盖 getAssistantInfo 返回 null 的情况
                 org.mockito.Mockito.lenient().when(scopeDispatcher.getStrategy(nullable(AssistantInfo.class))).thenReturn(scopeStrategy);
+                // PR3 收口：sendInvokeToGateway 走 3-arg API；默认返 personal scopeStrategy 行为不变
+                org.mockito.Mockito.lenient().when(scopeDispatcher.getStrategy(
+                                nullable(String.class), nullable(String.class), nullable(AssistantInfo.class)))
+                                .thenReturn(scopeStrategy);
+                org.mockito.Mockito.lenient().when(scopeStrategy.getScope()).thenReturn("personal");
                 // scopeStrategy.translateEvent 默认委派给 translator.translate（模拟 PersonalScopeStrategy 行为）
                 org.mockito.Mockito.lenient().when(scopeStrategy.translateEvent(any(), any()))
                         .thenAnswer(invocation -> translator.translate(invocation.getArgument(0)));
@@ -829,5 +834,77 @@ class GatewayRelayServiceTest {
                 } catch (Exception e) {
                         throw new AssertionError("Failed to parse published payload", e);
                 }
+        }
+
+        // ==================== PR3: dispatcher 3-arg API 收口 ====================
+
+        @Test
+        @DisplayName("PR3: command 带 domain/domainType + 规则命中 → dispatcher 返 DefaultAssistantScopeStrategy → 走 strategy.buildInvoke")
+        void sendInvokeWithDomainTriggersDefaultAssistantStrategy() {
+                when(gatewayRelayTarget.hasActiveConnection()).thenReturn(true);
+                when(gatewayRelayTarget.sendToGateway(any())).thenReturn(true);
+
+                // mock default_assistant strategy
+                AssistantScopeStrategy defaultStrategy = org.mockito.Mockito.mock(AssistantScopeStrategy.class);
+                org.mockito.Mockito.when(defaultStrategy.getScope()).thenReturn("default_assistant");
+                org.mockito.Mockito.when(defaultStrategy.buildInvoke(any(InvokeCommand.class), nullable(AssistantInfo.class)))
+                                .thenReturn("{\"type\":\"invoke\",\"assistantScope\":\"business\",\"payload\":{\"cloudProfile\":\"assistant_square\"}}");
+                // virtual ak 上游不存在
+                when(assistantInfoService.getAssistantInfo("AK_V")).thenReturn(null);
+                // dispatcher 3-arg API 命中规则 → 返 defaultStrategy
+                org.mockito.Mockito.when(scopeDispatcher.getStrategy(eq("helpdesk"), eq("direct"), nullable(AssistantInfo.class)))
+                                .thenReturn(defaultStrategy);
+
+                InvokeCommand cmd = new InvokeCommand("AK_V", "u-1", "100", "chat",
+                                "{\"text\":\"hi\"}", null, "helpdesk", "direct");
+                service.sendInvokeToGateway(cmd);
+
+                // strategy.buildInvoke 被调
+                verify(defaultStrategy).buildInvoke(eq(cmd), nullable(AssistantInfo.class));
+                // 通过 GW sendToGateway
+                verify(gatewayRelayTarget).sendToGateway(contains("assistant_square"));
+        }
+
+        @Test
+        @DisplayName("PR3: command 不带 domain (老 caller) → dispatcher 内部 lookup(null, null) 返 empty → 委托老 strategy")
+        void sendInvokeWithoutDomainDelegatesToLegacyStrategy() {
+                when(gatewayRelayTarget.hasActiveConnection()).thenReturn(true);
+                when(gatewayRelayTarget.sendToGateway(any())).thenReturn(true);
+
+                // dispatcher 3-arg API：domain=null/null → 返 personal scopeStrategy
+                org.mockito.Mockito.when(scopeDispatcher.getStrategy(nullable(String.class), nullable(String.class), nullable(AssistantInfo.class)))
+                                .thenReturn(scopeStrategy);
+                org.mockito.Mockito.when(scopeStrategy.getScope()).thenReturn("personal");
+
+                // 老 5 参数构造器 (domain/domainType 默认 null)
+                InvokeCommand cmd = new InvokeCommand("legacy-ak", "u-1", "42", "chat", "{\"text\":\"hi\"}");
+                service.sendInvokeToGateway(cmd);
+
+                // 走 buildInvokeMessage 本地构造（含 ak 字段）
+                verify(gatewayRelayTarget).sendToGateway(contains("\"ak\":\"legacy-ak\""));
+        }
+
+        @Test
+        @DisplayName("PR3: command 带 domain + 规则未命中 + business scope → 走 strategy.buildInvoke (business)")
+        void sendInvokeWithDomainAndBusinessScopeStillBuildsInvoke() {
+                when(gatewayRelayTarget.hasActiveConnection()).thenReturn(true);
+                when(gatewayRelayTarget.sendToGateway(any())).thenReturn(true);
+
+                AssistantScopeStrategy businessStrategy = org.mockito.Mockito.mock(AssistantScopeStrategy.class);
+                org.mockito.Mockito.when(businessStrategy.getScope()).thenReturn("business");
+                org.mockito.Mockito.when(businessStrategy.buildInvoke(any(InvokeCommand.class), any(AssistantInfo.class)))
+                                .thenReturn("{\"type\":\"invoke\",\"assistantScope\":\"business\"}");
+                AssistantInfo info = new AssistantInfo();
+                info.setAssistantScope("business");
+                when(assistantInfoService.getAssistantInfo("real-business-ak")).thenReturn(info);
+                // dispatcher 3-arg：domain 命中规则失败 → 委托老 API 拿 business
+                org.mockito.Mockito.when(scopeDispatcher.getStrategy(eq("unknown"), eq("unknown"), eq(info)))
+                                .thenReturn(businessStrategy);
+
+                InvokeCommand cmd = new InvokeCommand("real-business-ak", "u-1", "42", "chat",
+                                "{\"text\":\"hi\"}", null, "unknown", "unknown");
+                service.sendInvokeToGateway(cmd);
+
+                verify(businessStrategy).buildInvoke(eq(cmd), eq(info));
         }
 }

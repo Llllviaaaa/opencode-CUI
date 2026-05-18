@@ -15,6 +15,7 @@ import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.AssistantAccountResolverService;
 import com.opencode.cui.skill.service.AssistantInfoService;
 import com.opencode.cui.skill.service.AssistantOfflineMessageProvider;
+import com.opencode.cui.skill.service.DefaultAssistantRuleService;
 import com.opencode.cui.skill.service.GatewayApiClient;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.ImMessageService;
@@ -23,6 +24,7 @@ import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillMessageService;
 import com.opencode.cui.skill.service.SkillSessionService;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
+import com.opencode.cui.skill.model.DefaultAssistantRule;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -33,6 +35,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -68,6 +71,8 @@ class SkillMessageControllerTest {
     private AssistantOfflineMessageProvider offlineMessageProvider;
     @Mock
     private AssistantAccountResolverService assistantAccountResolverService;
+    @Mock
+    private DefaultAssistantRuleService ruleService;
 
     private AssistantIdProperties assistantIdProperties;
     private SkillMessageController controller;
@@ -82,12 +87,14 @@ class SkillMessageControllerTest {
         lenient().when(assistantAccountResolverService.isSkipOnNullAssistantAccount()).thenReturn(true);
         lenient().when(assistantAccountResolverService.getDeletionMessage()).thenReturn("该助理已被删除");
         lenient().when(assistantAccountResolverService.check(any())).thenReturn(ExistenceStatus.EXISTS);
+        // 默认 ruleService 未命中规则（PR3 老路径行为不变）
+        lenient().when(ruleService.lookup(any(), any())).thenReturn(Optional.empty());
 
         controller = new SkillMessageController(
                 messageService, sessionService, gatewayRelayService,
                 gatewayApiClient, assistantIdProperties, imMessageService, new ObjectMapper(),
                 accessControlService, messageRouter, assistantInfoService, scopeDispatcher,
-                offlineMessageProvider, assistantAccountResolverService);
+                offlineMessageProvider, assistantAccountResolverService, ruleService);
         // 默认 scopeDispatcher 返回 personal 策略（requiresOnlineCheck=true）
         com.opencode.cui.skill.service.scope.AssistantScopeStrategy personalStrategy =
                 org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
@@ -742,5 +749,198 @@ class SkillMessageControllerTest {
         com.fasterxml.jackson.databind.JsonNode payload = om.readTree(capt.getValue().payload());
         assertNotNull(payload.get("businessExtParam"));
         assertTrue(payload.get("businessExtParam").get("p").asBoolean());
+    }
+
+    // ==================== PR3 D8: payload 补 assistantAccount + sendUserAccount ====================
+
+    @Test
+    @DisplayName("PR3 D8: sendMessage chat 分支 → payload 含 assistantAccount + sendUserAccount，InvokeCommand 带 domain/domainType")
+    void sendMessageChatPayloadHasAssistantAccountAndSendUser() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("AK_V");
+        session.setUserId("u-1");
+        session.setAssistantAccount("ACC_V");
+        session.setToolSessionId("ts-1");
+        session.setBusinessSessionDomain("helpdesk");
+        session.setBusinessSessionType("direct");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "cookie-u-1")).thenReturn(session);
+
+        SkillMessage msg = SkillMessage.builder()
+                .id(1L).sessionId(1L).role(SkillMessage.Role.USER).content("Hello").build();
+        when(messageService.saveUserMessage(eq(1L), eq("Hello"))).thenReturn(msg);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("Hello");
+
+        controller.sendMessage("cookie-u-1", "1", request);
+
+        ArgumentCaptor<InvokeCommand> capt = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(capt.capture());
+        InvokeCommand cmd = capt.getValue();
+        assertEquals("chat", cmd.action());
+        // domain/domainType 塞入
+        assertEquals("helpdesk", cmd.domain());
+        assertEquals("direct", cmd.domainType());
+        // payload 含 assistantAccount + sendUserAccount（cookie 优先）
+        com.fasterxml.jackson.databind.JsonNode payload = om.readTree(cmd.payload());
+        assertEquals("ACC_V", payload.get("assistantAccount").asText());
+        assertEquals("cookie-u-1", payload.get("sendUserAccount").asText());
+    }
+
+    @Test
+    @DisplayName("PR3 D8: sendMessage question_reply 分支 → payload 补 assistantAccount + sendUserAccount (修复)")
+    void sendMessageQuestionReplyPayloadHasAssistantAccountAndSendUser() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("AK_V");
+        session.setUserId("u-1");
+        session.setAssistantAccount("ACC_V");
+        session.setToolSessionId("ts-1");
+        session.setBusinessSessionDomain("helpdesk");
+        session.setBusinessSessionType("direct");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "cookie-u-1")).thenReturn(session);
+
+        SkillMessage msg = SkillMessage.builder()
+                .id(2L).sessionId(1L).role(SkillMessage.Role.USER).content("yes").build();
+        when(messageService.saveUserMessage(eq(1L), eq("yes"))).thenReturn(msg);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("yes");
+        request.setToolCallId("tc-1");
+
+        controller.sendMessage("cookie-u-1", "1", request);
+
+        ArgumentCaptor<InvokeCommand> capt = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(capt.capture());
+        InvokeCommand cmd = capt.getValue();
+        assertEquals("question_reply", cmd.action());
+        assertEquals("helpdesk", cmd.domain());
+        assertEquals("direct", cmd.domainType());
+        // D8 修复：payload 补 assistantAccount + sendUserAccount
+        com.fasterxml.jackson.databind.JsonNode payload = om.readTree(cmd.payload());
+        assertEquals("ACC_V", payload.get("assistantAccount").asText());
+        assertEquals("cookie-u-1", payload.get("sendUserAccount").asText());
+    }
+
+    @Test
+    @DisplayName("PR3 D8: replyPermission → payload 补 assistantAccount + sendUserAccount，InvokeCommand 带 domain/domainType")
+    void replyPermissionPayloadHasAssistantAccountAndSendUser() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("AK_V");
+        session.setUserId("u-1");
+        session.setAssistantAccount("ACC_V");
+        session.setToolSessionId("ts-1");
+        session.setBusinessSessionDomain("helpdesk");
+        session.setBusinessSessionType("direct");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "cookie-u-1")).thenReturn(session);
+
+        var request = new SkillMessageController.PermissionReplyRequest();
+        request.setResponse("once");
+
+        controller.replyPermission("cookie-u-1", "1", "perm-1", request);
+
+        ArgumentCaptor<InvokeCommand> capt = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(capt.capture());
+        InvokeCommand cmd = capt.getValue();
+        assertEquals("permission_reply", cmd.action());
+        assertEquals("helpdesk", cmd.domain());
+        assertEquals("direct", cmd.domainType());
+        com.fasterxml.jackson.databind.JsonNode payload = om.readTree(cmd.payload());
+        assertEquals("ACC_V", payload.get("assistantAccount").asText());
+        assertEquals("cookie-u-1", payload.get("sendUserAccount").asText());
+    }
+
+    // ==================== PR3 Req 12: deletion check 短路 ====================
+
+    @Test
+    @DisplayName("PR3 Req 12: sendMessage 命中默认助手规则 → 跳过 deletion check (resolver.check 不被调)")
+    void sendMessageDefaultAssistantSkipsDeletionCheck() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("AK_V");
+        session.setUserId("u-1");
+        session.setAssistantAccount("ACC_V");
+        session.setToolSessionId("ts-1");
+        session.setBusinessSessionDomain("helpdesk");
+        session.setBusinessSessionType("direct");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "u-1")).thenReturn(session);
+        // 命中规则
+        when(ruleService.lookup("helpdesk", "direct"))
+                .thenReturn(Optional.of(new DefaultAssistantRule("AK_V", "ACC_V", "assistant_square")));
+
+        SkillMessage msg = SkillMessage.builder()
+                .id(1L).sessionId(1L).role(SkillMessage.Role.USER).content("hi").build();
+        when(messageService.saveUserMessage(eq(1L), eq("hi"))).thenReturn(msg);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("hi");
+
+        controller.sendMessage("u-1", "1", request);
+        // resolver.check 完全不被调用
+        verify(assistantAccountResolverService, never()).check(any());
+        verify(assistantAccountResolverService, never()).isSkipOnNullAssistantAccount();
+        // 消息仍被保存
+        verify(messageService).saveUserMessage(eq(1L), eq("hi"));
+    }
+
+    @Test
+    @DisplayName("PR3 Req 12: sendMessage 未命中规则 → 走老 deletion check (resolver.check 被调)")
+    void sendMessageLegacyStillRunsDeletionCheck() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("99");
+        session.setUserId("u-1");
+        session.setAssistantAccount("real-acc");
+        session.setToolSessionId("ts-1");
+        session.setBusinessSessionDomain("miniapp");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "u-1")).thenReturn(session);
+        when(ruleService.lookup(any(), any())).thenReturn(Optional.empty());
+
+        SkillMessage msg = SkillMessage.builder()
+                .id(1L).sessionId(1L).role(SkillMessage.Role.USER).content("hi").build();
+        when(messageService.saveUserMessage(eq(1L), eq("hi"))).thenReturn(msg);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("hi");
+
+        controller.sendMessage("u-1", "1", request);
+        // resolver.check 被调
+        verify(assistantAccountResolverService).check("real-acc");
+    }
+
+    @Test
+    @DisplayName("PR3 Req 12: replyPermission 命中默认助手规则 → 跳过 deletion check")
+    void replyPermissionDefaultAssistantSkipsDeletionCheck() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("AK_V");
+        session.setUserId("u-1");
+        session.setAssistantAccount("ACC_V");
+        session.setToolSessionId("ts-1");
+        session.setBusinessSessionDomain("helpdesk");
+        session.setBusinessSessionType("direct");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(1L, "u-1")).thenReturn(session);
+        when(ruleService.lookup("helpdesk", "direct"))
+                .thenReturn(Optional.of(new DefaultAssistantRule("AK_V", "ACC_V", "assistant_square")));
+
+        var request = new SkillMessageController.PermissionReplyRequest();
+        request.setResponse("once");
+
+        var response = controller.replyPermission("u-1", "1", "perm-1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(0, response.getBody().getCode());
+        // resolver.check 完全不被调用
+        verify(assistantAccountResolverService, never()).check(any());
     }
 }

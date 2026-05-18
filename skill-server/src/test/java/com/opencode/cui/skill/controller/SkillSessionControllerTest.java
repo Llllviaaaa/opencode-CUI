@@ -2,16 +2,21 @@ package com.opencode.cui.skill.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.AssistantInfo;
+import com.opencode.cui.skill.model.DefaultAssistantRule;
 import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.service.AssistantAccountResolverService;
 import com.opencode.cui.skill.service.AssistantInfoService;
+import com.opencode.cui.skill.service.DefaultAssistantRuleService;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.ProtocolException;
 import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillSessionService;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
+import com.opencode.cui.skill.service.scope.DefaultAssistantScopeStrategy;
+
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -43,6 +48,10 @@ class SkillSessionControllerTest {
     private AssistantScopeDispatcher scopeDispatcher;
     @Mock
     private AssistantAccountResolverService assistantAccountResolverService;
+    @Mock
+    private DefaultAssistantRuleService ruleService;
+    @Mock
+    private DefaultAssistantScopeStrategy defaultAssistantScopeStrategy;
 
     private SkillSessionController controller;
 
@@ -61,9 +70,12 @@ class SkillSessionControllerTest {
         org.mockito.Mockito.lenient().when(assistantAccountResolverService.isSkipOnNullAssistantAccount()).thenReturn(true);
         org.mockito.Mockito.lenient().when(assistantAccountResolverService.getDeletionMessage()).thenReturn("该助理已被删除");
         org.mockito.Mockito.lenient().when(assistantAccountResolverService.check(any())).thenReturn(ExistenceStatus.EXISTS);
+        // 默认 ruleService 未命中规则（PR3 老路径行为不变）
+        org.mockito.Mockito.lenient().when(ruleService.lookup(any(), any())).thenReturn(Optional.empty());
 
         controller = new SkillSessionController(sessionService, gatewayRelayService, accessControlService,
-                new ObjectMapper(), assistantInfoService, scopeDispatcher, assistantAccountResolverService);
+                new ObjectMapper(), assistantInfoService, scopeDispatcher, assistantAccountResolverService,
+                ruleService, defaultAssistantScopeStrategy);
     }
 
     @Test
@@ -282,5 +294,236 @@ class SkillSessionControllerTest {
         var response = controller.createSession("1", request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(0, response.getBody().getCode());
+    }
+
+    // ==================== PR3 AC §B: 默认助手路径 ====================
+
+    @Test
+    @DisplayName("AC §B: createSession 命中规则 (domain+type) → 注入 ak/assistantAccount + 单事务 + 不发 CREATE_SESSION")
+    void createSessionRuleHitInjects() {
+        when(accessControlService.requireUserId("1")).thenReturn("1");
+        // 命中规则
+        DefaultAssistantRule rule = new DefaultAssistantRule("AK_V", "ACC_V", "assistant_square");
+        when(ruleService.lookup("helpdesk", "direct")).thenReturn(Optional.of(rule));
+        when(defaultAssistantScopeStrategy.generateToolSessionId()).thenReturn("ts-snowflake-1");
+
+        SkillSession injected = new SkillSession();
+        injected.setId(100L);
+        injected.setAk("AK_V");
+        injected.setAssistantAccount("ACC_V");
+        injected.setToolSessionId("ts-snowflake-1");
+        injected.setBusinessSessionDomain("helpdesk");
+        injected.setBusinessSessionType("direct");
+        injected.setStatus(SkillSession.Status.ACTIVE);
+        when(sessionService.createSessionWithDefaultAssistant(
+                eq("1"), eq("AK_V"), eq("ACC_V"), any(),
+                eq("helpdesk"), eq("direct"), any(), eq("ts-snowflake-1")))
+                .thenReturn(injected);
+
+        var request = new SkillSessionController.CreateSessionRequest();
+        request.setTitle("Test");
+        request.setBusinessSessionDomain("helpdesk");
+        request.setBusinessSessionType("direct");
+        request.setBusinessSessionId("biz-1");
+        // 不传 ak / assistantAccount
+
+        var response = controller.createSession("1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(0, response.getBody().getCode());
+        assertEquals("AK_V", response.getBody().getData().getAk());
+        assertEquals("ACC_V", response.getBody().getData().getAssistantAccount());
+        assertEquals("ts-snowflake-1", response.getBody().getData().getToolSessionId());
+        assertEquals(SkillSession.Status.ACTIVE, response.getBody().getData().getStatus());
+
+        // 不走老 createSession 流程
+        verify(sessionService, never()).createSession(any(), any(), any(), any(), any(), any(), any());
+        // 不发 CREATE_SESSION 给 gateway
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+        // 不走 deletion check
+        verify(assistantAccountResolverService, never()).check(any());
+        // 调用了单事务方法
+        verify(sessionService).createSessionWithDefaultAssistant(
+                eq("1"), eq("AK_V"), eq("ACC_V"), eq("Test"),
+                eq("helpdesk"), eq("direct"), eq("biz-1"), eq("ts-snowflake-1"));
+    }
+
+    @Test
+    @DisplayName("AC §B: createSession 不传 ak/assistantAccount + 规则未命中 → 400 'ak 和 assistantAccount 必填'")
+    void createSessionNoExplicitNoRuleMiss400() {
+        when(accessControlService.requireUserId("1")).thenReturn("1");
+        // 规则未命中
+        when(ruleService.lookup(any(), any())).thenReturn(Optional.empty());
+
+        var request = new SkillSessionController.CreateSessionRequest();
+        request.setBusinessSessionDomain("unknown");
+        request.setBusinessSessionType("unknown");
+        // 不传 ak / assistantAccount
+
+        var response = controller.createSession("1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(400, response.getBody().getCode());
+        assertEquals("ak 和 assistantAccount 必填", response.getBody().getErrormsg());
+        verify(sessionService, never()).createSession(any(), any(), any(), any(), any(), any(), any());
+        verify(sessionService, never()).createSessionWithDefaultAssistant(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+    }
+
+    @Test
+    @DisplayName("AC §B: createSession 不传 ak/assistantAccount + domain 为空 → 400 (rule lookup 内部返 empty)")
+    void createSessionNoExplicitDomainBlank400() {
+        when(accessControlService.requireUserId("1")).thenReturn("1");
+        // lookup 内部对 blank domain 返 empty
+        when(ruleService.lookup(eq(null), any())).thenReturn(Optional.empty());
+
+        var request = new SkillSessionController.CreateSessionRequest();
+        request.setBusinessSessionDomain(null);
+        request.setBusinessSessionType("direct");
+
+        var response = controller.createSession("1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(400, response.getBody().getCode());
+        assertEquals("ak 和 assistantAccount 必填", response.getBody().getErrormsg());
+    }
+
+    // ==================== PR3 AC §C: 老路径不回归 ====================
+
+    @Test
+    @DisplayName("AC §C: 显式传 ak (即使 domain/type 命中规则) → 不走规则注入；走老路径；DB ak 是显式值")
+    void createSessionExplicitAkSkipsRuleEvenIfRuleMatches() {
+        when(accessControlService.requireUserId("1")).thenReturn("1");
+        // 即使规则命中
+        DefaultAssistantRule rule = new DefaultAssistantRule("AK_V", "ACC_V", "assistant_square");
+        org.mockito.Mockito.lenient().when(ruleService.lookup("helpdesk", "direct")).thenReturn(Optional.of(rule));
+
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setAk("REAL_AK");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(sessionService.createSession(any(), eq("REAL_AK"), any(), any(), any(), any(), any())).thenReturn(session);
+
+        var request = new SkillSessionController.CreateSessionRequest();
+        request.setAk("REAL_AK");
+        request.setBusinessSessionDomain("helpdesk");
+        request.setBusinessSessionType("direct");
+
+        var response = controller.createSession("1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(0, response.getBody().getCode());
+        assertEquals("REAL_AK", response.getBody().getData().getAk());
+
+        // 走老 createSession，不走单事务方法
+        verify(sessionService).createSession(any(), eq("REAL_AK"), any(), any(), any(), any(), any());
+        verify(sessionService, never()).createSessionWithDefaultAssistant(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("AC §C: 显式传 assistantAccount (即使 domain/type 命中规则) → 不走规则注入")
+    void createSessionExplicitAssistantAccountSkipsRule() {
+        when(accessControlService.requireUserId("1")).thenReturn("1");
+        DefaultAssistantRule rule = new DefaultAssistantRule("AK_V", "ACC_V", "assistant_square");
+        org.mockito.Mockito.lenient().when(ruleService.lookup("helpdesk", "direct")).thenReturn(Optional.of(rule));
+
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(sessionService.createSession(any(), any(), any(), any(), any(), any(), eq("EXPLICIT_ACC"))).thenReturn(session);
+
+        var request = new SkillSessionController.CreateSessionRequest();
+        request.setAssistantAccount("EXPLICIT_ACC");
+        request.setBusinessSessionDomain("helpdesk");
+        request.setBusinessSessionType("direct");
+
+        var response = controller.createSession("1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(0, response.getBody().getCode());
+
+        verify(sessionService).createSession(any(), any(), any(), any(), any(), any(), eq("EXPLICIT_ACC"));
+        verify(sessionService, never()).createSessionWithDefaultAssistant(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    // ==================== PR3 close/abort: 默认助手会话跳过发 GW invoke ====================
+
+    @Test
+    @DisplayName("PR3 D7: closeSession 命中默认助手规则 → 只 DB 标 CLOSED，不发 CLOSE_SESSION invoke")
+    void closeSessionDefaultAssistantSkipsGatewayInvoke() {
+        SkillSession session = new SkillSession();
+        session.setId(42L);
+        session.setAk("AK_V");
+        session.setUserId("1");
+        session.setToolSessionId("ts-1");
+        session.setBusinessSessionDomain("helpdesk");
+        session.setBusinessSessionType("direct");
+        when(accessControlService.requireSessionAccess(42L, "1")).thenReturn(session);
+        // 命中规则
+        when(ruleService.lookup("helpdesk", "direct"))
+                .thenReturn(Optional.of(new DefaultAssistantRule("AK_V", "ACC_V", "assistant_square")));
+
+        controller.closeSession("1", "42");
+        verify(sessionService).closeSession(42L);
+        // 不发 invoke
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+    }
+
+    @Test
+    @DisplayName("PR3 D7: abortSession 命中默认助手规则 → 不发 ABORT_SESSION invoke")
+    void abortSessionDefaultAssistantSkipsGatewayInvoke() {
+        SkillSession session = new SkillSession();
+        session.setId(42L);
+        session.setAk("AK_V");
+        session.setUserId("1");
+        session.setToolSessionId("ts-1");
+        session.setBusinessSessionDomain("helpdesk");
+        session.setBusinessSessionType("direct");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(42L, "1")).thenReturn(session);
+        when(ruleService.lookup("helpdesk", "direct"))
+                .thenReturn(Optional.of(new DefaultAssistantRule("AK_V", "ACC_V", "assistant_square")));
+
+        var response = controller.abortSession("1", "42");
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        // 不发 invoke
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+    }
+
+    @Test
+    @DisplayName("PR3 D7: closeSession 未命中规则（老 personal scope）→ 仍发 CLOSE_SESSION invoke")
+    void closeSessionLegacyStillSendsInvoke() {
+        SkillSession session = new SkillSession();
+        session.setId(42L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("ts-1");
+        session.setBusinessSessionDomain("miniapp");
+        session.setBusinessSessionType(null);
+        when(accessControlService.requireSessionAccess(42L, "1")).thenReturn(session);
+        when(ruleService.lookup(any(), any())).thenReturn(Optional.empty());
+
+        controller.closeSession("1", "42");
+        // 仍发 invoke
+        ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
+        assertEquals("close_session", cmdCaptor.getValue().action());
+        // InvokeCommand 带 domain/domainType
+        assertEquals("miniapp", cmdCaptor.getValue().domain());
+    }
+
+    @Test
+    @DisplayName("PR3 D7: abortSession 未命中规则（老 personal scope）→ 仍发 ABORT_SESSION invoke")
+    void abortSessionLegacyStillSendsInvoke() {
+        SkillSession session = new SkillSession();
+        session.setId(42L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("ts-1");
+        session.setBusinessSessionDomain("miniapp");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(42L, "1")).thenReturn(session);
+        when(ruleService.lookup(any(), any())).thenReturn(Optional.empty());
+
+        controller.abortSession("1", "42");
+        ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
+        assertEquals("abort_session", cmdCaptor.getValue().action());
+        assertEquals("miniapp", cmdCaptor.getValue().domain());
     }
 }

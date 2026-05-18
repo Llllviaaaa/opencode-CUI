@@ -76,6 +76,10 @@ class GatewayRelayServiceScopeTest {
         lenient().when(personalStrategy.getScope()).thenReturn("personal");
         // default: getStrategy(null/personal info) → personalStrategy
         lenient().when(scopeDispatcher.getStrategy(nullable(AssistantInfo.class))).thenReturn(personalStrategy);
+        // PR3 收口：sendInvokeToGateway 走 3-arg API；默认返 personalStrategy（domain/domainType=null 等同未命中）
+        lenient().when(scopeDispatcher.getStrategy(
+                nullable(String.class), nullable(String.class), nullable(AssistantInfo.class)))
+                .thenReturn(personalStrategy);
     }
 
     @Test
@@ -86,7 +90,8 @@ class GatewayRelayServiceScopeTest {
         info.setAssistantScope("business");
         info.setBusinessTag("app-001");
         when(assistantInfoService.getAssistantInfo("ak-biz")).thenReturn(info);
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        when(scopeDispatcher.getStrategy(nullable(String.class), nullable(String.class), eq(info)))
+                .thenReturn(businessStrategy);
 
         // strategy.buildInvoke returns a JSON with assistantScope=business and cloudRequest payload
         String strategyResult = "{\"type\":\"invoke\",\"ak\":\"ak-biz\",\"source\":\"skill-server\""
@@ -144,7 +149,8 @@ class GatewayRelayServiceScopeTest {
         info.setAssistantScope("business");
         info.setBusinessTag("app-001");
         when(assistantInfoService.getAssistantInfo("ak-biz")).thenReturn(info);
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        when(scopeDispatcher.getStrategy(nullable(String.class), nullable(String.class), eq(info)))
+                .thenReturn(businessStrategy);
 
         String strategyResult = "{\"type\":\"invoke\",\"ak\":\"ak-biz\",\"source\":\"skill-server\""
                 + ",\"action\":\"chat\",\"assistantScope\":\"business\""
