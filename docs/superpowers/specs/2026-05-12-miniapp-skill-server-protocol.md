@@ -208,6 +208,34 @@ Content-Type: application/json
 
 ---
 
+### 5.1.1 默认助手注入（任务 05-15-noauth-conversation-permission）
+
+#### 场景
+
+特定接入方调 `POST /api/skill/sessions` **不传** `ak` / `assistantAccount`，只传 `(businessSessionDomain, businessSessionType, businessSessionId)` + cookie userId。
+
+服务端按 `(domain, type)` 查 `sys_config[default_assistant_rule]` 规则表，命中即注入虚拟身份并落 DB；后续 chat / question_reply / permission_reply 走与 business scope 对称的云端 HTTP 路径，但身份是 SS / GW 协同的"虚拟"身份。
+
+#### 触发条件（D1 优先级矩阵）
+
+| `request.ak` / `request.assistantAccount` | `(domain, type)` 入参 + 规则查找 | 行为 |
+|---|---|---|
+| 任一非空 | 任意（**规则不查**） | 走老路径（显式 override） |
+| 两个都为空 | `domain` / `type` 都非空且精确命中规则 | 默认助手路径（注入虚拟身份 + 单事务落 DB） |
+| 两个都为空 | `domain` 或 `type` 任一为空 OR 都非空但未命中 | 400 `ak 和 assistantAccount 必填` |
+
+#### 客户端契约
+
+- 默认助手 session 字段（SS 落库后返回）：`ak` / `assistantAccount` 是虚拟值；客户端**不要硬编码**这俩值，按请求返回处理
+- chat / question_reply / permission_reply / close / abort：与现有 miniapp 通道行为对称——客户端代码无需区分
+- close / abort：默认助手 session 不发 GW invoke（SS DB 标 CLOSED），但客户端看到的响应一致
+
+#### 运维入口
+
+新增规则用现有 `/api/admin/configs/**` update 接口（参 `docs/superpowers/specs/2026-05-15-default-assistant-rule-ops.md`）。
+
+---
+
 ### 5.2 发送用户消息 / question_reply
 
 ```http
