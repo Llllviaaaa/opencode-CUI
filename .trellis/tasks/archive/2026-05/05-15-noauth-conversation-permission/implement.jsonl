@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/skill-server/backend/directory-structure.md", "reason": "确认 DefaultAssistantRule (model)、DefaultAssistantRuleService (service)、新增 SkillSessionService 方法、Mapper XML 的目标包/目录"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "构造器注入、@PostConstruct/ApplicationReadyEvent 启动加载、TaskScheduler vs @Scheduled、Redis subscriber 生命周期约束——本任务的 DefaultAssistantRuleService 全部需要遵循"}
+{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "ApiResponse code 400/404/409/410 的语义，本任务 bind-default-assistant 接口要按这套返回错误"}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "sys_config 表用法、Redis key/TTL/pub-sub 约定、事务边界——本任务 sys_config 新增 config_type=default_assistant_rule，缓存与 invalidate 必须复用现有机制"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "[ENTRY]/[EXIT]/[SKIP]/[ERROR] 日志模式与 MDC key——createSession 规则注入日志、bind 接口日志、规则校验失败 ERROR 日志全部需要遵循"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "DefaultAssistantRule record 设计、SkillSession 字段语义、ApiResponse 信封——避免新增模型时与现有 type 体系冲突"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "本任务复用密度高：SysConfigService 缓存+pub-sub、AssistantInfoService.getAssistantInfo(ak)、AssistantAccountResolverService.check()、BusinessScopeStrategy.generateToolSessionId()——禁止重写已存在的工具"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "controller → service → mapper/Redis 三层数据流——createSession 注入逻辑跨这三层，需要按此 guide 检查无遗漏"}
+{"file": "docs/superpowers/specs/2026-05-12-miniapp-skill-server-protocol.md", "reason": "miniapp REST/WS 协议契约——本任务在此协议上新增『默认助手注入』和『bind-default-assistant』接口；新增前需理解现有 createSession 字段、ApiResponse 包装、错误码"}
+{"file": ".trellis/tasks/05-15-noauth-conversation-permission/prd.md", "reason": "本任务的需求/AC/9 条决策/Implementation Plan，sub-agent 必读"}
