@@ -1,0 +1,17 @@
+{"file": ".trellis/tasks/05-18-differentiated-error-hints/prd.md", "reason": "校验代码是否兑现 PRD v3 的 R1-R6 / Fallback Matrix / Offline 覆盖矩阵 / 全部 AC / DoD"}
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server pre-check 入口"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "校验新增 Service / record / Properties 是否符合 skill-server 编码约定"}
+{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "校验 FALLBACK_ERROR 路径的 catch 范围（RuntimeException 收紧）、503 返回口径、Redis 异常是否被错误吞为离线判定"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "校验差异化分支日志字段完整性（ak / source / toolType / latency）"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "校验 AvailabilityResult record / AvailabilitySource enum 的可空性和 Optional 处理"}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "校验 V13/V14 编号没撞车、sys_config TEXT 升级与回滚策略合规"}
+{"file": ".trellis/spec/ai-gateway/backend/index.md", "reason": "ai-gateway pre-check 入口"}
+{"file": ".trellis/spec/ai-gateway/backend/conventions.md", "reason": "校验 AgentController 新 endpoint + repository 三个查询符合 gateway 规范"}
+{"file": ".trellis/spec/ai-gateway/backend/database-guidelines.md", "reason": "校验 V6 索引迁移和 COALESCE(last_seen_at, created_at) 排序"}
+{"file": ".trellis/spec/ai-gateway/backend/error-handling.md", "reason": "校验 missing AK = 200 {exists:false}（非 404），鉴权失败 401 等口径"}
+{"file": ".trellis/spec/ai-gateway/backend/logging-guidelines.md", "reason": "校验 availability 查询 + evict 事件日志"}
+{"file": ".trellis/spec/ai-gateway/backend/type-safety.md", "reason": "校验 AgentAvailabilityResponse DTO 类型与 nullable 字段"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层一致性校验：缓存失效、文案一份到底、token 全覆盖"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "校验 AssistantOfflineMessageProvider 是否被正确退化为内部 helper，没有在 caller 散落判定"}
+{"file": "docs/superpowers/specs/2026-04-21-external-offline-response-design.md", "reason": "校验是否沿用上一轮设计的不变量（SysConfig fallback、catch RuntimeException、scope 术语 business）"}
+{"file": "documents/protocol/v3/02-skillserver-gateway.md", "reason": "校验协议文档已新增 /internal/agent/availability 段、字段语义与代码一致"}
