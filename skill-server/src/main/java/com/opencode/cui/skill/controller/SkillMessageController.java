@@ -14,6 +14,7 @@ import com.opencode.cui.skill.model.AgentSummary;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.config.AssistantIdProperties;
+import com.opencode.cui.skill.service.AllowedSlashCommandsResolver;
 import com.opencode.cui.skill.service.AssistantAccountResolverService;
 import com.opencode.cui.skill.service.DefaultAssistantRuleService;
 import com.opencode.cui.skill.service.GatewayApiClient;
@@ -77,6 +78,7 @@ public class SkillMessageController {
     private final AssistantOfflineMessageProvider offlineMessageProvider;
     private final AssistantAccountResolverService assistantAccountResolverService;
     private final DefaultAssistantRuleService ruleService;
+    private final AllowedSlashCommandsResolver allowedSlashCommandsResolver;
 
     public SkillMessageController(SkillMessageService messageService,
             SkillSessionService sessionService,
@@ -91,7 +93,8 @@ public class SkillMessageController {
             AssistantScopeDispatcher scopeDispatcher,
             AssistantOfflineMessageProvider offlineMessageProvider,
             AssistantAccountResolverService assistantAccountResolverService,
-            DefaultAssistantRuleService ruleService) {
+            DefaultAssistantRuleService ruleService,
+            AllowedSlashCommandsResolver allowedSlashCommandsResolver) {
         this.messageService = messageService;
         this.sessionService = sessionService;
         this.gatewayRelayService = gatewayRelayService;
@@ -106,6 +109,7 @@ public class SkillMessageController {
         this.offlineMessageProvider = offlineMessageProvider;
         this.assistantAccountResolverService = assistantAccountResolverService;
         this.ruleService = ruleService;
+        this.allowedSlashCommandsResolver = allowedSlashCommandsResolver;
     }
 
     /**
@@ -254,13 +258,25 @@ public class SkillMessageController {
 
         log.info("SkillMessageController.routeToGateway: sessionId={}, action={}, ak={}",
                 sessionId, action, session.getAk());
+        // A4: allowed-slash-commands action guard + personal scope gating
+        //   - action guard: 仅 CHAT 走 resolver；reply/create/close/abort 一律 null
+        //   - personal scope gating: personal strategy.generateToolSessionId() 返 null
+        //     business / default_assistant 即使 CHAT 也不调 resolver（避免 sysconfig 热路径污染）
+        boolean isChat = GatewayActions.CHAT.equals(action);
+        boolean isPersonalScope = scopeStrategy.generateToolSessionId() == null;
+        List<String> allowedSlashCommands = (isChat && isPersonalScope)
+                ? allowedSlashCommandsResolver.resolve(
+                        session.getBusinessSessionDomain(),
+                        session.getBusinessSessionType())
+                : null;
         // N1 收口：InvokeCommand 塞入 session 的 domain/domainType，让 dispatcher 走新 API
         gatewayRelayService.sendInvokeToGateway(
                 new InvokeCommand(session.getAk(), effectiveUserId, sessionId, action, payload,
                         null,
                         session.getBusinessSessionDomain(),
                         session.getBusinessSessionType(),
-                        session.getBusinessSessionId()));
+                        session.getBusinessSessionId(),
+                        allowedSlashCommands));
     }
 
     /**

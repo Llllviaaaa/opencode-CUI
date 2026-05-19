@@ -32,7 +32,7 @@
 - `SkillMessage`：`skill-server/src/main/java/com/opencode/cui/skill/model/SkillMessage.java:14-76`
 - `SkillMessagePart`：`skill-server/src/main/java/com/opencode/cui/skill/model/SkillMessagePart.java:19-109`
 - `StreamMessage`：`skill-server/src/main/java/com/opencode/cui/skill/model/StreamMessage.java:23-277`
-- `InvokeCommand`：`skill-server/src/main/java/com/opencode/cui/skill/model/InvokeCommand.java:14-20`
+- `InvokeCommand`：`skill-server/src/main/java/com/opencode/cui/skill/model/InvokeCommand.java:54-102`
 
 ---
 
@@ -94,11 +94,23 @@ public record InvokeCommand(
                 String userId,
                 String sessionId,
                 String action,
-                String payload) {
+                String payload,
+                Boolean suppressReply,
+                String domain,
+                String domainType,
+                String businessSessionId,
+                @Nullable List<String> allowedSlashCommands) {
+    // 5/6/8/9 参 secondary constructor 兼容旧 caller（test + 非升级生产代码）
 }
 ```
 
-来源：`skill-server/src/main/java/com/opencode/cui/skill/model/InvokeCommand.java:14-20`
+字段语义：
+- 前 5 个：核心调用参数（ak / userId / sessionId / action / payload）
+- `suppressReply`：null = 不写入 INVOKE 报文；仅群聊 + plugin channel 命中"禁群聊"白名单时置 true
+- `domain` / `domainType` / `businessSessionId`：`SkillSession.businessSession*` 三字段，用于 `AssistantScopeDispatcher` 反查默认助手规则 + 构造 `platformExtParam`
+- `allowedSlashCommands`（v3 allowed-slash-commands 任务）：personal scope CHAT 允许的 slash 命令清单；从 `sys_config(allowed_slash_commands, ${domain}_${type})` 解析得到；null = 不下发该 platformExtParam key；仅 A 表 3 处（A4 CHAT 分支 / A7 dispatchChatToGateway / A10 retryPendingMessages）显式传 list，其余 9 处生产代码 + 62 处 test callsite 通过 secondary constructor 默认 null
+
+来源：`skill-server/src/main/java/com/opencode/cui/skill/model/InvokeCommand.java:54-102`
 
 ```java
 public record ImMessageRequest(

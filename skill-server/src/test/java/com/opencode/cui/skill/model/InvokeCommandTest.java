@@ -3,6 +3,8 @@ package com.opencode.cui.skill.model;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -95,5 +97,99 @@ class InvokeCommandTest {
         InvokeCommand eight = new InvokeCommand("ak", "u", "s", "chat", "{}",
                 null, null, null);
         assertEquals(five, eight);
+    }
+
+    // ==================== v3 allowed-slash-commands: 10 参 canonical + AC11 ====================
+
+    @Test
+    @DisplayName("AC11 secondary 9 参（无 list）→ allowedSlashCommands 默认 null（reply / create / close / abort 路径）")
+    void nineArgSecondary_allowedSlashCommandsDefaultsNull() {
+        InvokeCommand cmd = new InvokeCommand(
+                "ak-1", "user-1", "session-1", "question_reply", "{}",
+                null, "im", "group", "wx-g-1");
+
+        assertNull(cmd.allowedSlashCommands(),
+                "AC11: 非 CHAT 路径必须传 null（reply / create / close / abort）");
+    }
+
+    @Test
+    @DisplayName("AC11 secondary 8 参 → allowedSlashCommands 默认 null")
+    void eightArgSecondary_allowedSlashCommandsDefaultsNull() {
+        InvokeCommand cmd = new InvokeCommand(
+                "ak-1", "user-1", "session-1", "chat", "{}",
+                null, "im", "group");
+
+        assertNull(cmd.allowedSlashCommands());
+        assertNull(cmd.businessSessionId());
+    }
+
+    @Test
+    @DisplayName("AC11 secondary 6 参 → allowedSlashCommands 默认 null")
+    void sixArgSecondary_allowedSlashCommandsDefaultsNull() {
+        InvokeCommand cmd = new InvokeCommand(
+                "ak-1", "user-1", "session-1", "chat", "{}", Boolean.TRUE);
+
+        assertNull(cmd.allowedSlashCommands());
+    }
+
+    @Test
+    @DisplayName("AC11 secondary 5 参 → allowedSlashCommands 默认 null")
+    void fiveArgSecondary_allowedSlashCommandsDefaultsNull() {
+        InvokeCommand cmd = new InvokeCommand("ak-1", "user-1", "session-1", "chat", "{}");
+
+        assertNull(cmd.allowedSlashCommands());
+    }
+
+    @Test
+    @DisplayName("10 参 canonical / list 非空 → accessor 返回相同 list")
+    void canonicalTenArg_listAccessor() {
+        List<String> list = List.of("plan", "ask", "run");
+        InvokeCommand cmd = new InvokeCommand(
+                "ak-1", "user-1", "session-1", "chat", "{}",
+                null, "im", "group", "wx-g-1",
+                list);
+
+        assertNotNull(cmd.allowedSlashCommands());
+        assertEquals(3, cmd.allowedSlashCommands().size());
+        assertEquals("plan", cmd.allowedSlashCommands().get(0));
+    }
+
+    @Test
+    @DisplayName("10 参 canonical / list = null → accessor 返回 null（business / 非 CHAT 路径）")
+    void canonicalTenArg_listNull() {
+        InvokeCommand cmd = new InvokeCommand(
+                "ak-1", "user-1", "session-1", "chat", "{}",
+                null, "im", "group", "wx-g-1",
+                null);
+
+        assertNull(cmd.allowedSlashCommands());
+    }
+
+    @Test
+    @DisplayName("9 参 secondary vs 10 参 canonical（list=null）→ record 相等")
+    void nineArgEquivalentToTenArgWithNullList() {
+        InvokeCommand nine = new InvokeCommand(
+                "ak", "u", "s", "chat", "{}", null, "im", "group", "wx-g-1");
+        InvokeCommand ten = new InvokeCommand(
+                "ak", "u", "s", "chat", "{}", null, "im", "group", "wx-g-1", null);
+        assertEquals(nine, ten);
+    }
+
+    @Test
+    @DisplayName("equals/hashCode：allowedSlashCommands 参与 equals")
+    void equalsHashCode_considersAllowedSlashCommands() {
+        InvokeCommand a = new InvokeCommand(
+                "ak", "u", "s", "chat", "{}", null, "im", "group", "wx",
+                List.of("plan", "ask"));
+        InvokeCommand b = new InvokeCommand(
+                "ak", "u", "s", "chat", "{}", null, "im", "group", "wx",
+                List.of("plan", "ask"));
+        InvokeCommand c = new InvokeCommand(
+                "ak", "u", "s", "chat", "{}", null, "im", "group", "wx",
+                List.of("plan", "run")); // 不同 list
+
+        assertEquals(a, b);
+        assertEquals(a.hashCode(), b.hashCode());
+        assertNotEquals(a, c);
     }
 }

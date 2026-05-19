@@ -251,10 +251,18 @@ public record PendingChatRequest(
         String sendUserAccount,
         String imGroupId,
         String messageId,
-        Map<String, Object> businessExtParam) {
+        JsonNode businessExtParam,
+        String businessSessionDomain,           // PR2 platformExtParam
+        String businessSessionType,             // PR2 platformExtParam
+        @Nullable List<String> allowedSlashCommands  // v3 allowed-slash-commands
+) {
+    // 8 参 secondary constructor 兼容 v3 前老 entry
+    // (allowedSlashCommands 默认 null，retry 时不下发该 platformExtParam key)
     ...
 }
 ```
+
+> 字段升级是向后兼容的：老 entry（Redis 里旧格式 JSON）反序列化时 `allowedSlashCommands` 自动为 null（Jackson `@JsonCreator` 行为），由 `GatewayMessageRouter.retryPendingMessages` 通过 `PlatformExtParamBuilder` 5 参重载在 list==null 时不下发该 key 实现"frozen 复用"语义。详见 PRD `.trellis/tasks/05-19-allowed-slash-commands/prd.md`。
 
 参考：`PendingChatRequest`、`InvokeCommand`、`SaveMessageCommand`。
 

@@ -222,11 +222,16 @@ public class GatewayRelayService {
             } else {
                 extParameters.set("businessExtParam", objectMapper.createObjectNode());
             }
+            // C1 (v3 allowed-slash-commands): 升 5 参 builder 传 command.allowedSlashCommands()。
+            //   personal scope CHAT normal 路径在此汇聚（caller A4 + A7 已 gated 仅 personal CHAT 显式传 list）；
+            //   其他 callsite（非 CHAT / business / default_assistant）均通过 secondary constructor 传入 null,
+            //   builder 5 参 list==null 自然不下发该 key —— 双重保险。
             extParameters.set("platformExtParam",
                     PlatformExtParamBuilder.build(objectMapper,
                             command.domain(),
                             command.domainType(),
-                            command.businessSessionId()));
+                            command.businessSessionId(),
+                            command.allowedSlashCommands()));
             payloadObj.set("extParameters", extParameters);
         }
 

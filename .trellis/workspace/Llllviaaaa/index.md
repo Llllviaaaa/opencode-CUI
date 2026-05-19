@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-0.md`
-- **Total Sessions**: 9
+- **Total Sessions**: 10
 - **Last Active**: 2026-05-19
 <!-- @@@/auto:current-status -->
 
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-05-19 | allowed-slash-commands: platformExtParam 加 slash 白名单（personal scope, sysconfig 驱动） | `cc5f553`, `0ae1de9`, `7bd6bf0` | `task/05-19-allowed-slash-commands` |
 | 9 | 2026-05-19 | GW 清理 Source 路由 Legacy + question.requestId → questionId 全链路重命名 | `cfdf868`, `41dc7ae` | `refactor/gw-cleanup-legacy-source-route` |
 | 8 | 2026-05-19 | platformExtParam 落地三字段（businessSession{Domain,Type,Id}） | `0b6266a` | `main` |
 | 7 | 2026-05-19 | 首次对话 retry chat payload 补全上下文字段 | `2b2075f` | `main` |

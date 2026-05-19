@@ -72,6 +72,8 @@ class InboundProcessingServiceTest {
     private ChannelLookupService channelLookupService;
     @Mock
     private ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService;
+    @Mock
+    private AllowedSlashCommandsResolver allowedSlashCommandsResolver;
 
     private AssistantIdProperties assistantIdProperties;
     private DeliveryProperties deliveryProperties;
@@ -87,6 +89,9 @@ class InboundProcessingServiceTest {
         assistantIdProperties.setTargetToolType("assistant");
 
         deliveryProperties = new DeliveryProperties();
+
+        // resolver 默认返 null（未配置）
+        lenient().when(allowedSlashCommandsResolver.resolve(anyString(), anyString())).thenReturn(null);
 
         service = new InboundProcessingService(
                 resolverService,
@@ -107,7 +112,8 @@ class InboundProcessingServiceTest {
                 sessionService,
                 redisTemplate,
                 channelLookupService,
-                channelSuppressReplyWhitelistService);
+                channelSuppressReplyWhitelistService,
+                allowedSlashCommandsResolver);
 
         // 默认 scope 策略：personal（requiresOnlineCheck=true）
         AssistantScopeStrategy personalStrategy = mock(AssistantScopeStrategy.class);
