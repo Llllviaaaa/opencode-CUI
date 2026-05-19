@@ -2,12 +2,15 @@ package com.opencode.cui.skill.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.PendingChatRequest;
 import com.opencode.cui.skill.model.SkillMessage;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.repository.SkillMessageRepository;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
+import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -47,6 +50,18 @@ class SessionRebuildServiceTest {
 
     @Mock
     private ListOperations<String, String> listOperations;
+
+    @Mock
+    private AllowedSlashCommandsResolver allowedSlashCommandsResolver;
+
+    @Mock
+    private AssistantInfoService assistantInfoService;
+
+    @Mock
+    private AssistantScopeDispatcher scopeDispatcher;
+
+    @Mock
+    private AssistantScopeStrategy personalStrategy;
 
     private ObjectMapper objectMapper;
     private SessionRebuildService service;
@@ -111,8 +126,23 @@ class SessionRebuildServiceTest {
         lenient().when(redisTemplate.delete(anyString())).thenReturn(true);
 
         objectMapper = new ObjectMapper();
+        // resolver / scope mocks 默认无 stub —— lenient 配合即可
+        lenient().when(allowedSlashCommandsResolver.resolve(anyString(), anyString())).thenReturn(null);
+        // personal scope strategy: generateToolSessionId() == null
+        lenient().when(personalStrategy.generateToolSessionId()).thenReturn(null);
+        lenient().when(scopeDispatcher.getStrategy(nullable(AssistantInfo.class))).thenReturn(personalStrategy);
+
         // maxRebuildAttempts=3, rebuildCooldownSeconds=30
-        service = new SessionRebuildService(objectMapper, sessionService, messageRepository, redisTemplate, 3, 30);
+        service = new SessionRebuildService(
+                objectMapper,
+                sessionService,
+                messageRepository,
+                redisTemplate,
+                allowedSlashCommandsResolver,
+                assistantInfoService,
+                scopeDispatcher,
+                3,
+                30);
     }
 
     // ==================== 既有回归测试：rebuildToolSession 计数器 ====================
@@ -722,5 +752,141 @@ class SessionRebuildServiceTest {
         // 但 create_session 仍要发
         assertEquals(1, cb.invokes.size());
         assertEquals(GatewayActions.CREATE_SESSION, cb.invokes.get(0).action());
+    }
+
+    // ==================== v3 allowed-slash-commands: legacy String overload personal scope gating ====================
+
+    @Test
+    @DisplayName("v3 AC13: legacy String overload / personal scope + sysconfig 命中 → list 写入 pending entry")
+    void rebuildToolSession_legacyStringOverload_personalScope_writesAllowedSlash() throws Exception {
+        String sessionId = "8001";
+        String key = "ss:pending-rebuild:" + sessionId;
+        stubRedisCounter(sessionId);
+
+        SkillSession session = buildImGroupSession(8001L, "owner-v3-1", "assist-v3-1", "biz-v3-1");
+        session.setAk("ak-v3-1");
+        // sysconfig 命中：personal scope strategy.generateToolSessionId() == null + resolver 返 list
+        lenient().when(allowedSlashCommandsResolver.resolve("im", "group"))
+                .thenReturn(java.util.List.of("plan", "ask"));
+
+        CapturingCallback cb = new CapturingCallback();
+        service.rebuildToolSession(sessionId, session, "personal scope text", cb);
+
+        ArgumentCaptor<String> raw = ArgumentCaptor.forClass(String.class);
+        verify(listOperations).rightPush(eq(key), raw.capture());
+        PendingChatRequest req = objectMapper.readValue(raw.getValue(), PendingChatRequest.class);
+        assertEquals("personal scope text", req.text());
+        assertNotNull(req.allowedSlashCommands(), "personal scope 命中 sysconfig → 写入 list");
+        assertEquals(2, req.allowedSlashCommands().size());
+        assertEquals("plan", req.allowedSlashCommands().get(0));
+        assertEquals("ask", req.allowedSlashCommands().get(1));
+    }
+
+    @Test
+    @DisplayName("v3 AC14: legacy String overload / business self-heal scope（strategy 返非 null）→ 不调 resolver + entry 不含 list")
+    void rebuildToolSession_legacyStringOverload_businessScope_skipsResolver() throws Exception {
+        String sessionId = "8002";
+        String key = "ss:pending-rebuild:" + sessionId;
+        stubRedisCounter(sessionId);
+
+        SkillSession session = buildImGroupSession(8002L, "owner-v3-2", "assist-v3-2", "biz-v3-2");
+        session.setAk("ak-v3-2");
+
+        // business scope: strategy.generateToolSessionId() != null
+        AssistantScopeStrategy businessStrategy = org.mockito.Mockito.mock(AssistantScopeStrategy.class);
+        lenient().when(businessStrategy.generateToolSessionId()).thenReturn("cloud-pre-gen");
+        lenient().when(scopeDispatcher.getStrategy(nullable(AssistantInfo.class))).thenReturn(businessStrategy);
+
+        CapturingCallback cb = new CapturingCallback();
+        service.rebuildToolSession(sessionId, session, "business self-heal text", cb);
+
+        ArgumentCaptor<String> raw = ArgumentCaptor.forClass(String.class);
+        verify(listOperations).rightPush(eq(key), raw.capture());
+        PendingChatRequest req = objectMapper.readValue(raw.getValue(), PendingChatRequest.class);
+        assertEquals("business self-heal text", req.text());
+        assertNull(req.allowedSlashCommands(), "business scope → 不下发 + entry 不含 list");
+        // resolver 不被 invoke（business scope 零次 sysconfig 查询）
+        verify(allowedSlashCommandsResolver, never())
+                .resolve(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    @DisplayName("v3: legacy String overload / personal + resolver 返 null（未配置）→ entry allowedSlashCommands=null")
+    void rebuildToolSession_legacyStringOverload_personalScopeNoConfig_entryListNull() throws Exception {
+        String sessionId = "8003";
+        String key = "ss:pending-rebuild:" + sessionId;
+        stubRedisCounter(sessionId);
+
+        SkillSession session = buildImGroupSession(8003L, "owner-v3-3", "assist-v3-3", "biz-v3-3");
+        session.setAk("ak-v3-3");
+        // resolver 默认返 null（与 setUp 一致），不需 stub
+
+        CapturingCallback cb = new CapturingCallback();
+        service.rebuildToolSession(sessionId, session, "no config text", cb);
+
+        ArgumentCaptor<String> raw = ArgumentCaptor.forClass(String.class);
+        verify(listOperations).rightPush(eq(key), raw.capture());
+        PendingChatRequest req = objectMapper.readValue(raw.getValue(), PendingChatRequest.class);
+        assertEquals("no config text", req.text());
+        assertNull(req.allowedSlashCommands());
+    }
+
+    @Test
+    @DisplayName("v3: legacy String overload / scope gating 异常 → 降级 list=null（不阻塞 rebuild 主流程）")
+    void rebuildToolSession_legacyStringOverload_scopeGatingException_degradesToNull() throws Exception {
+        String sessionId = "8004";
+        String key = "ss:pending-rebuild:" + sessionId;
+        stubRedisCounter(sessionId);
+
+        SkillSession session = buildImGroupSession(8004L, "owner-v3-4", "assist-v3-4", "biz-v3-4");
+        session.setAk("ak-v3-4");
+
+        // scopeDispatcher 抛异常（模拟下游 service 故障）
+        lenient().when(scopeDispatcher.getStrategy(nullable(AssistantInfo.class)))
+                .thenThrow(new RuntimeException("simulated scope dispatcher failure"));
+
+        CapturingCallback cb = new CapturingCallback();
+        service.rebuildToolSession(sessionId, session, "scope exception text", cb);
+
+        // rebuild 主流程不应被阻塞
+        ArgumentCaptor<String> raw = ArgumentCaptor.forClass(String.class);
+        verify(listOperations).rightPush(eq(key), raw.capture());
+        PendingChatRequest req = objectMapper.readValue(raw.getValue(), PendingChatRequest.class);
+        assertEquals("scope exception text", req.text());
+        assertNull(req.allowedSlashCommands(), "scope gating 异常时降级为 null");
+
+        // create_session 仍要发
+        assertEquals(1, cb.invokes.size());
+        assertEquals(GatewayActions.CREATE_SESSION, cb.invokes.get(0).action());
+    }
+
+    @Test
+    @DisplayName("v3: legacy String overload / IAE 兜底 → entry allowedSlashCommands=null（保守降级）")
+    void rebuildToolSession_legacyStringOverload_iaeFallback_listNull() throws Exception {
+        String sessionId = "8005";
+        String key = "ss:pending-rebuild:" + sessionId;
+        stubRedisCounter(sessionId);
+
+        // assistantAccount 缺失触发 IAE
+        SkillSession brokenSession = new SkillSession();
+        brokenSession.setId(8005L);
+        brokenSession.setUserId("owner-iae");
+        brokenSession.setAssistantAccount(null);
+        brokenSession.setAk("ak-iae");
+        brokenSession.setBusinessSessionDomain(SkillSession.DOMAIN_IM);
+        brokenSession.setBusinessSessionType(SkillSession.SESSION_TYPE_DIRECT);
+
+        lenient().when(allowedSlashCommandsResolver.resolve("im", "direct"))
+                .thenReturn(java.util.List.of("plan"));
+
+        CapturingCallback cb = new CapturingCallback();
+        service.rebuildToolSession(sessionId, brokenSession, "iae text", cb);
+
+        ArgumentCaptor<String> raw = ArgumentCaptor.forClass(String.class);
+        verify(listOperations).rightPush(eq(key), raw.capture());
+        PendingChatRequest req = objectMapper.readValue(raw.getValue(), PendingChatRequest.class);
+        assertEquals("iae text", req.text());
+        // B4 IAE 兜底分支保守传 null（即使 resolver 有 list 也不写）
+        assertNull(req.allowedSlashCommands(), "IAE 兜底分支应保守传 null");
     }
 }

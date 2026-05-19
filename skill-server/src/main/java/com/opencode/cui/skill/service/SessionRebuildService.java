@@ -4,12 +4,14 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.PendingChatRequest;
 import com.opencode.cui.skill.model.SkillMessage;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.repository.SkillMessageRepository;
+import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -65,6 +67,9 @@ public class SessionRebuildService {
     private final SkillSessionService sessionService;
     private final SkillMessageRepository messageRepository;
     private final StringRedisTemplate redisTemplate;
+    private final AllowedSlashCommandsResolver allowedSlashCommandsResolver;
+    private final AssistantInfoService assistantInfoService;
+    private final AssistantScopeDispatcher scopeDispatcher;
     private final int maxRebuildAttempts;
     private final int rebuildCooldownSeconds;
 
@@ -72,12 +77,18 @@ public class SessionRebuildService {
             SkillSessionService sessionService,
             SkillMessageRepository messageRepository,
             StringRedisTemplate redisTemplate,
+            AllowedSlashCommandsResolver allowedSlashCommandsResolver,
+            AssistantInfoService assistantInfoService,
+            AssistantScopeDispatcher scopeDispatcher,
             @org.springframework.beans.factory.annotation.Value("${skill.session.rebuild-max-attempts:3}") int maxRebuildAttempts,
             @org.springframework.beans.factory.annotation.Value("${skill.session.rebuild-cooldown-seconds:30}") int rebuildCooldownSeconds) {
         this.objectMapper = objectMapper;
         this.sessionService = sessionService;
         this.messageRepository = messageRepository;
         this.redisTemplate = redisTemplate;
+        this.allowedSlashCommandsResolver = allowedSlashCommandsResolver;
+        this.assistantInfoService = assistantInfoService;
+        this.scopeDispatcher = scopeDispatcher;
         this.maxRebuildAttempts = maxRebuildAttempts;
         this.rebuildCooldownSeconds = rebuildCooldownSeconds;
     }
@@ -193,15 +204,39 @@ public class SessionRebuildService {
             String pendingMessage, RebuildCallback callback) {
         PendingChatRequest pendingRequest = null;
         if (pendingMessage != null && !pendingMessage.isBlank()) {
+            // v3 allowed-slash-commands: personal scope gating
+            //   legacy String overload 不止被 miniapp first（personal）调用，
+            //   还被 IM/External case B personal + business self-heal fallback 调用。
+            //   business self-heal 进入此处时 isPersonalScope=false → list=null → 写入 pending 的 entry
+            //   allowedSlashCommands=null，retry 下发不含该 key。双重保险（与 ImSessionManager:163 business
+            //   即时分支 + BusinessScopeStrategy 4 参 builder 协同）。
+            List<String> allowedSlashCommands = null;
             try {
-                pendingRequest = PendingChatRequest.fromSessionFallback(session, pendingMessage);
-                log.warn("[WARN] rebuildToolSession(legacy String overload): reason=rebuild_legacy_string_overload, fields_degraded=businessExtParam, sessionId={}, assistantAccount={}, sender={}, imGroupId={}",
+                if (session != null && session.getAk() != null) {
+                    AssistantInfo info = assistantInfoService.getAssistantInfo(session.getAk());
+                    boolean isPersonalScope = scopeDispatcher.getStrategy(info).generateToolSessionId() == null;
+                    if (isPersonalScope) {
+                        allowedSlashCommands = allowedSlashCommandsResolver.resolve(
+                                session.getBusinessSessionDomain(),
+                                session.getBusinessSessionType());
+                    }
+                }
+            } catch (RuntimeException e) {
+                // assistantInfoService / scopeDispatcher 异常不能阻塞 rebuild 主流程：降级为不下发。
+                log.warn("[WARN] rebuildToolSession(legacy String overload): personal scope gating failed, sessionId={}, error={}",
+                        sessionId, e.getMessage());
+                allowedSlashCommands = null;
+            }
+            try {
+                pendingRequest = PendingChatRequest.fromSessionFallback(session, pendingMessage, allowedSlashCommands);
+                log.warn("[WARN] rebuildToolSession(legacy String overload): reason=rebuild_legacy_string_overload, fields_degraded=businessExtParam, sessionId={}, assistantAccount={}, sender={}, imGroupId={}, hasAllowedSlash={}",
                         sessionId, pendingRequest.assistantAccount(),
-                        pendingRequest.sendUserAccount(), pendingRequest.imGroupId());
+                        pendingRequest.sendUserAccount(), pendingRequest.imGroupId(),
+                        allowedSlashCommands != null);
             } catch (IllegalArgumentException iae) {
                 log.error("[ERROR] rebuildToolSession(legacy String overload): reason=fallback_account_missing_on_legacy_overload, sessionId={}, error={}",
                         sessionId, iae.getMessage());
-                // 仍把 pendingRequest 设为半填 entry,保留消息让 retry 路径暴露问题,不静默吞
+                // B4 IAE 兜底：保守传 null（degraded path），保持 8 参 secondary（PRD 决策）
                 pendingRequest = new PendingChatRequest(
                         pendingMessage, null, null, null,
                         String.valueOf(System.currentTimeMillis()), null,

@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -40,6 +41,7 @@ public class ImSessionManager {
     private final ObjectMapper objectMapper; // JSON 序列化
     private final AssistantInfoService assistantInfoService; // 助手信息查询服务
     private final AssistantScopeDispatcher scopeDispatcher; // 助手作用域调度器
+    private final AllowedSlashCommandsResolver allowedSlashCommandsResolver; // personal scope slash 白名单
     private final int autoCreateTimeoutSeconds; // 同步创建模式的超时秒数
 
     public ImSessionManager(
@@ -50,6 +52,7 @@ public class ImSessionManager {
             ObjectMapper objectMapper,
             AssistantInfoService assistantInfoService,
             AssistantScopeDispatcher scopeDispatcher,
+            AllowedSlashCommandsResolver allowedSlashCommandsResolver,
             @org.springframework.beans.factory.annotation.Value("${skill.session.auto-create-timeout-seconds:30}") int autoCreateTimeoutSeconds) {
         this.sessionService = sessionService;
         this.gatewayRelayService = gatewayRelayService;
@@ -58,6 +61,7 @@ public class ImSessionManager {
         this.objectMapper = objectMapper;
         this.assistantInfoService = assistantInfoService;
         this.scopeDispatcher = scopeDispatcher;
+        this.allowedSlashCommandsResolver = allowedSlashCommandsResolver;
         this.autoCreateTimeoutSeconds = autoCreateTimeoutSeconds;
     }
 
@@ -184,6 +188,10 @@ public class ImSessionManager {
                     String effectiveSender = "group".equals(sessionType)
                             && senderUserAccount != null && !senderUserAccount.isBlank()
                             ? senderUserAccount : ownerWelinkId;
+                    // B3 (v3): personal 分支已确认（else 块），直接 resolve 不需再做 scope gating。
+                    //   frozen 语义：first 入 pending 时 resolve 一次，retry 复用 frozen 值。
+                    List<String> allowedSlashCommands =
+                            allowedSlashCommandsResolver.resolve(businessDomain, sessionType);
                     pendingRequest = new PendingChatRequest(
                             pendingMessage,
                             assistantAccount,
@@ -192,7 +200,8 @@ public class ImSessionManager {
                             String.valueOf(System.currentTimeMillis()),
                             businessExtParam,
                             businessDomain,
-                            sessionType);
+                            sessionType,
+                            allowedSlashCommands);
                     log.info("[ENTRY] createSessionAsync.appendPendingChatRequest: sessionId={}, sessionType={}, hasExt={}, isGroup={}",
                             created.getId(), sessionType,
                             businessExtParam != null,

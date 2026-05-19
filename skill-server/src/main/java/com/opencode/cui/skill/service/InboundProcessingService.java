@@ -69,6 +69,7 @@ public class InboundProcessingService {
     private final StringRedisTemplate redisTemplate;
     private final ChannelLookupService channelLookupService;
     private final ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService;
+    private final AllowedSlashCommandsResolver allowedSlashCommandsResolver;
 
     public InboundProcessingService(
             AssistantAccountResolverService resolverService,
@@ -89,7 +90,8 @@ public class InboundProcessingService {
             SkillSessionService sessionService,
             StringRedisTemplate redisTemplate,
             ChannelLookupService channelLookupService,
-            ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService) {
+            ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService,
+            AllowedSlashCommandsResolver allowedSlashCommandsResolver) {
         this.resolverService = resolverService;
         this.assistantIdProperties = assistantIdProperties;
         this.gatewayApiClient = gatewayApiClient;
@@ -109,6 +111,7 @@ public class InboundProcessingService {
         this.redisTemplate = redisTemplate;
         this.channelLookupService = channelLookupService;
         this.channelSuppressReplyWhitelistService = channelSuppressReplyWhitelistService;
+        this.allowedSlashCommandsResolver = allowedSlashCommandsResolver;
     }
 
     /**
@@ -355,10 +358,19 @@ public class InboundProcessingService {
                 ? senderUserAccount : ownerWelinkId;
         String messageId = String.valueOf(System.currentTimeMillis());
 
+        // A7 + B2: allowed-slash-commands personal scope gating
+        //   appendToPending == true ≡ personal scope（business 路径 strategy.generateToolSessionId() != null,
+        //   走 self-heal 分支调用 dispatchChatToGateway(..., appendToPending=false, ...)；唯一 appendToPending=true
+        //   入口是 caseC personal 路径）。resolver 仅 personal scope 调一次，复用给 B2 PendingChatRequest + A7 InvokeCommand。
+        List<String> allowedSlashCommands = appendToPending
+                ? allowedSlashCommandsResolver.resolve(businessDomain, sessionType)
+                : null;
+
         if (appendToPending) {
             // PR3: 切到新 API，传完整结构化 PendingChatRequest（含 sender / assistantAccount /
             // imGroupId / businessExtParam）— 这是 personal 助手"情况 C"分支唯一调用点,
             // business 助手 appendToPending=false 永远不进。
+            // B2 (v3): 加入 allowedSlashCommands（personal scope 命中时 resolved list，retry frozen 复用）
             PendingChatRequest pendingRequest = new PendingChatRequest(
                     prompt,
                     assistantAccount,
@@ -367,7 +379,8 @@ public class InboundProcessingService {
                     messageId,
                     businessExtParam,
                     businessDomain,
-                    sessionType);
+                    sessionType,
+                    allowedSlashCommands);
             rebuildService.appendPendingMessage(String.valueOf(session.getId()), pendingRequest);
         }
 
@@ -394,6 +407,9 @@ public class InboundProcessingService {
             }
         }
 
+        // A7 (v3): 升 10 参 canonical 传 allowedSlashCommands
+        //   business scope 时 allowedSlashCommands=null（caller null + 下游 BusinessScopeStrategy 用
+        //   4 参 builder 自然不下发）—— 双重保险。
         gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
                 ak, ownerWelinkId, String.valueOf(session.getId()),
                 GatewayActions.CHAT,
@@ -401,7 +417,8 @@ public class InboundProcessingService {
                 suppressReply,
                 businessDomain,
                 sessionType,
-                sessionId));
+                sessionId,
+                allowedSlashCommands));
 
         writeInvokeSource(session, inboundSource);
         return InboundResult.ok(sessionId, String.valueOf(session.getId()));

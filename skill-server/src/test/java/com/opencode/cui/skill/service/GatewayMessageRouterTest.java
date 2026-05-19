@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -834,6 +835,115 @@ class GatewayMessageRouterTest {
         r.route("session_created", "ak", "user", node);
 
         verify(sender, times(1)).sendInvokeToGateway(any());
+    }
+
+    // ==================== v3 allowed-slash-commands: AC2 frozen 复用 ====================
+
+    @Test
+    @DisplayName("v3 AC2: pending 含 allowedSlashCommands → retry InvokeCommand + platformExtParam 都 frozen 复用")
+    void retryPendingMessages_allowedSlashCommandsFrozenInRetry() throws Exception {
+        GatewayMessageRouter r = buildRouter(true);
+        GatewayMessageRouter.DownstreamSender sender =
+                org.mockito.Mockito.mock(GatewayMessageRouter.DownstreamSender.class);
+        r.setDownstreamSender(sender);
+
+        String welinkSessionId = "3001";
+        String toolSessionId = "tool-3001";
+        String ak = "ak-3001";
+
+        SkillSession s = new SkillSession();
+        s.setId(3001L);
+        s.setBusinessSessionDomain("im");
+        s.setBusinessSessionType("group");
+        s.setBusinessSessionId("biz-3001");
+        when(sessionService.findByIdSafe(3001L)).thenReturn(s);
+
+        com.opencode.cui.skill.model.PendingChatRequest req =
+                new com.opencode.cui.skill.model.PendingChatRequest(
+                        "hello",
+                        "assist-v3",
+                        "sender-v3",
+                        "biz-3001",
+                        "msg-v3",
+                        null,
+                        "im",
+                        "group",
+                        java.util.List.of("plan", "ask"));
+        when(rebuildService.consumePendingRequests(welinkSessionId))
+                .thenReturn(java.util.List.of(req));
+
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("toolSessionId", toolSessionId);
+        node.put("welinkSessionId", welinkSessionId);
+
+        r.route("session_created", ak, "user-v3", node);
+
+        org.mockito.ArgumentCaptor<com.opencode.cui.skill.model.InvokeCommand> captor =
+                org.mockito.ArgumentCaptor.forClass(com.opencode.cui.skill.model.InvokeCommand.class);
+        verify(sender, times(1)).sendInvokeToGateway(captor.capture());
+        com.opencode.cui.skill.model.InvokeCommand cmd = captor.getValue();
+
+        // A10 InvokeCommand 字段 frozen 复用
+        assertEquals(java.util.List.of("plan", "ask"), cmd.allowedSlashCommands());
+
+        // C2 platformExtParam 5 参 builder 也 frozen 写入
+        com.fasterxml.jackson.databind.JsonNode payloadJson = objectMapper.readTree(cmd.payload());
+        com.fasterxml.jackson.databind.JsonNode platformExt = payloadJson
+                .path("extParameters").path("platformExtParam");
+        assertTrue(platformExt.has("allowedSlashCommands"));
+        assertTrue(platformExt.get("allowedSlashCommands").isArray());
+        assertEquals(2, platformExt.get("allowedSlashCommands").size());
+        assertEquals("plan", platformExt.get("allowedSlashCommands").get(0).asText());
+        assertEquals("ask", platformExt.get("allowedSlashCommands").get(1).asText());
+    }
+
+    @Test
+    @DisplayName("v3 AC8: 老 entry（allowedSlashCommands=null）→ retry 不下发该 platformExtParam key")
+    void retryPendingMessages_legacyEntryNullList_keyAbsent() throws Exception {
+        GatewayMessageRouter r = buildRouter(true);
+        GatewayMessageRouter.DownstreamSender sender =
+                org.mockito.Mockito.mock(GatewayMessageRouter.DownstreamSender.class);
+        r.setDownstreamSender(sender);
+
+        String welinkSessionId = "3002";
+        String toolSessionId = "tool-3002";
+
+        SkillSession s = new SkillSession();
+        s.setId(3002L);
+        s.setBusinessSessionDomain("im");
+        s.setBusinessSessionType("direct");
+        when(sessionService.findByIdSafe(3002L)).thenReturn(s);
+
+        com.opencode.cui.skill.model.PendingChatRequest legacyReq =
+                new com.opencode.cui.skill.model.PendingChatRequest(
+                        "hello", "assist", "user", null, "msg-l", null,
+                        "im", "direct"); // 8 参 secondary → allowedSlashCommands=null
+        when(rebuildService.consumePendingRequests(welinkSessionId))
+                .thenReturn(java.util.List.of(legacyReq));
+
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("toolSessionId", toolSessionId);
+        node.put("welinkSessionId", welinkSessionId);
+
+        r.route("session_created", "ak-l", "user-l", node);
+
+        org.mockito.ArgumentCaptor<com.opencode.cui.skill.model.InvokeCommand> captor =
+                org.mockito.ArgumentCaptor.forClass(com.opencode.cui.skill.model.InvokeCommand.class);
+        verify(sender, times(1)).sendInvokeToGateway(captor.capture());
+        com.opencode.cui.skill.model.InvokeCommand cmd = captor.getValue();
+
+        // A10 InvokeCommand: null
+        assertNull(cmd.allowedSlashCommands());
+
+        // C2 platformExtParam: 不含 key
+        com.fasterxml.jackson.databind.JsonNode payloadJson = objectMapper.readTree(cmd.payload());
+        com.fasterxml.jackson.databind.JsonNode platformExt = payloadJson
+                .path("extParameters").path("platformExtParam");
+        assertFalse(platformExt.has("allowedSlashCommands"));
+        // 三字段仍保留
+        assertTrue(platformExt.has("businessSessionDomain"));
+        assertTrue(platformExt.has("businessSessionType"));
+        assertTrue(platformExt.has("businessSessionId"));
     }
 
     /** 测试专用 Caffeine Ticker，可推进虚拟纳秒时间。 */

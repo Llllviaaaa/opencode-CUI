@@ -925,11 +925,14 @@ public class GatewayMessageRouter {
             }
             // PR2: businessSessionId 来源复用 req.imGroupId()（PRD R9 命名冗余约定）；
             // 单聊场景 imGroupId == null → platformExtParam.businessSessionId = JSON null。
+            // C2 (v3): 升 5 参 builder 传 req.allowedSlashCommands() —— first 入 pending 时 frozen，
+            //   retry 复用 frozen 值（sysconfig 期间被更新不影响 retry 下发）。
             extParameters.set("platformExtParam",
                     PlatformExtParamBuilder.build(objectMapper,
                             req.businessSessionDomain(),
                             req.businessSessionType(),
-                            req.imGroupId()));
+                            req.imGroupId(),
+                            req.allowedSlashCommands()));
             chatPayload.set("extParameters", extParameters);
 
             String payloadStr;
@@ -938,13 +941,14 @@ public class GatewayMessageRouter {
             } catch (JsonProcessingException e) {
                 payloadStr = "{}";
             }
-            // PR2 9 参 InvokeCommand：补 domain/domainType/businessSessionId, 让 strategy 反查 + 出站
-            // platformExtParam 都拿到正确上下文。businessSessionId 复用 req.imGroupId()（PRD R9）。
+            // A10 (v3): 升 10 参 canonical 传 req.allowedSlashCommands()，与 platformExtParam 5 参 builder
+            //   语义对齐（personal scope CHAT retry 路径 frozen 复用 first 时刻的 list）。
             sender.sendInvokeToGateway(new InvokeCommand(
                     ak, userId, sessionId, GatewayActions.CHAT, payloadStr, suppressReply,
                     req.businessSessionDomain(),
                     req.businessSessionType(),
-                    req.imGroupId()));
+                    req.imGroupId(),
+                    req.allowedSlashCommands()));
             sent++;
         }
 

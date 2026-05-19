@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -50,6 +51,8 @@ class SessionCreationScopeTest {
     private AssistantScopeStrategy businessStrategy;
     @Mock
     private AssistantScopeStrategy personalStrategy;
+    @Mock
+    private AllowedSlashCommandsResolver allowedSlashCommandsResolver;
 
     private ImSessionManager sessionManager;
 
@@ -60,6 +63,8 @@ class SessionCreationScopeTest {
         lenient().when(valueOps.setIfAbsent(any(), any(), any())).thenReturn(true);
         // 模拟 findByBusinessSession 返回 null（确保走创建路径）
         lenient().when(sessionService.findByBusinessSession(any(), any(), any(), any())).thenReturn(null);
+        // resolver 默认返 null
+        lenient().when(allowedSlashCommandsResolver.resolve(anyString(), anyString())).thenReturn(null);
 
         sessionManager = new ImSessionManager(
                 sessionService,
@@ -69,6 +74,7 @@ class SessionCreationScopeTest {
                 new ObjectMapper(),
                 assistantInfoService,
                 scopeDispatcher,
+                allowedSlashCommandsResolver,
                 30);
     }
 

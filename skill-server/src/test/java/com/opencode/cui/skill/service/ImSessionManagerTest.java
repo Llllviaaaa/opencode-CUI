@@ -57,6 +57,8 @@ class ImSessionManagerTest {
     private AssistantScopeStrategy personalStrategy;
     @Mock
     private AssistantScopeStrategy businessStrategy;
+    @Mock
+    private AllowedSlashCommandsResolver allowedSlashCommandsResolver;
 
     private ImSessionManager sessionManager;
 
@@ -67,6 +69,8 @@ class ImSessionManagerTest {
         lenient().when(valueOps.setIfAbsent(any(), any(), any())).thenReturn(true);
         // findByBusinessSession 默认返 null，走"新建 session"路径
         lenient().when(sessionService.findByBusinessSession(any(), any(), any(), any())).thenReturn(null);
+        // resolver 默认返 null（未配置，与生产兜底语义一致）
+        lenient().when(allowedSlashCommandsResolver.resolve(anyString(), anyString())).thenReturn(null);
 
         sessionManager = new ImSessionManager(
                 sessionService,
@@ -76,6 +80,7 @@ class ImSessionManagerTest {
                 new ObjectMapper(),
                 assistantInfoService,
                 scopeDispatcher,
+                allowedSlashCommandsResolver,
                 30);
     }
 
