@@ -122,6 +122,34 @@ public record ImMessageRequest(
 - service 间传递的命令 / 查询参数，优先考虑 `record`
 - 会被 MyBatis 直接填充、或需要逐步 mutate 的对象，不要改成 `record`
 
+### 2.1 record 静态工厂命名：禁止与 accessor 重名
+
+record 的每个 component 会自动生成同名 accessor 方法（如 `boolean online()` 生成 `public boolean online()`）。如果在 record 内定义同名的**静态**方法，Java 编译器不允许"返回值不同但参数为空"的两个方法共存，会报编译错误。
+
+错误模式（`AvailabilityResult` 实际踩坑）：
+```java
+// ❌ static factory online() 与 accessor boolean online() 同名冲突
+public record AvailabilityResult(boolean online, ...) {
+    public static AvailabilityResult online() { ... }  // 编译错误
+}
+```
+
+正确模式 — 静态工厂统一用 `of` 前缀：
+```java
+// ✅ 静态工厂用 of 前缀，与 accessor 区分
+public record AvailabilityResult(boolean online, ...) {
+    public static AvailabilityResult ofOnline() { ... }
+    public static AvailabilityResult ofOfflineTyped(String message, String toolType) { ... }
+}
+```
+
+来源：`skill-server/src/main/java/com/opencode/cui/skill/model/AvailabilityResult.java`
+
+规则：
+
+- record 静态工厂方法**必须**加 `of` 前缀（如 `ofOnline()`、`ofError()`），避免与 component accessor 方法名冲突。
+- 静态工厂只用于"固定场景的便利构造"，不替代 Builder 或全参构造。
+
 ---
 
 ## SkillSession / SkillMessage / SkillMessagePart

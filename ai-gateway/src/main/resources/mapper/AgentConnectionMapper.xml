@@ -107,4 +107,19 @@
         DELETE FROM agent_connection WHERE id = #{id}
     </delete>
 
+    <select id="existsByAkId" resultType="boolean">
+        SELECT EXISTS(SELECT 1 FROM agent_connection WHERE ak_id = #{akId})
+    </select>
+
+    <select id="existsOnlineActiveByAkId" resultType="boolean">
+        SELECT EXISTS(SELECT 1 FROM agent_connection WHERE ak_id = #{akId} AND status = 'ONLINE')
+    </select>
+
+    <select id="findLatestByAkIdOrderByLastSeenAtDescIdDesc" resultMap="AgentConnectionResultMap">
+        SELECT * FROM agent_connection
+        WHERE ak_id = #{akId}
+        ORDER BY COALESCE(last_seen_at, created_at) DESC, id DESC
+        LIMIT 1
+    </select>
+
 </mapper>

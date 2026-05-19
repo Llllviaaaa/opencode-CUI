@@ -99,6 +99,8 @@ class GatewayMessageRouterTest {
     com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter;
     @Mock
     GatewayMessageRouter.RouteResponseSender routeResponseSender;
+    @Mock
+    private AssistantAvailabilityService availabilityService;
 
     private MutableClock clock;
     private FakeTicker ticker;
@@ -143,6 +145,7 @@ class GatewayMessageRouterTest {
                 scopeDispatcher,
                 outboundDeliveryDispatcher,
                 emitter,
+                null, // availabilityService not needed for routing tests
                 120,
                 dedupEnabled,
                 CONFIRM_CACHE_EXPIRE_MINUTES,
@@ -394,6 +397,67 @@ class GatewayMessageRouterTest {
         router.route("tool_error", null, null, node);
 
         verify(rebuildService, never()).handleSessionNotFound(anyString(), any(), any());
+    }
+
+    // ==================== agent_online / agent_offline evict ====================
+
+    private GatewayMessageRouter buildRouterWithAvailability(boolean dedupEnabled) {
+        lenient().when(sessionService.findActiveByAk(any())).thenReturn(java.util.Collections.emptyList());
+        lenient().doNothing().when(emitter).emitToClient(any(), any(), any());
+        GatewayMessageRouter r = new GatewayMessageRouter(
+                objectMapper,
+                messageService,
+                sessionService,
+                redisMessageBroker,
+                translator,
+                persistenceService,
+                bufferService,
+                rebuildService,
+                interactionStateService,
+                imOutboundService,
+                sessionRouteService,
+                skillInstanceRegistry,
+                assistantInfoService,
+                channelLookupService,
+                channelSuppressReplyWhitelistService,
+                scopeDispatcher,
+                outboundDeliveryDispatcher,
+                emitter,
+                availabilityService, // non-null to test evict
+                120,              // ownerDeadThresholdSeconds
+                dedupEnabled,
+                CONFIRM_CACHE_EXPIRE_MINUTES,
+                clock,
+                ticker);
+        r.initConfirmDedupCache();
+        r.setRouteResponseSender(routeResponseSender);
+        return r;
+    }
+
+    @Test
+    @DisplayName("agent_online: evict(ak) is called before broadcasting session status")
+    void agentOnlineEvictsAvailabilityCache() {
+        GatewayMessageRouter r = buildRouterWithAvailability(true);
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("type", "agent_online");
+        node.put("toolType", "opencode");
+        node.put("toolVersion", "1.0");
+
+        r.route("agent_online", "ak-1", "user-1", node);
+
+        verify(availabilityService).evict("ak-1");
+    }
+
+    @Test
+    @DisplayName("agent_offline: evict(ak) is called before broadcasting session status")
+    void agentOfflineEvictsAvailabilityCache() {
+        GatewayMessageRouter r = buildRouterWithAvailability(true);
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("type", "agent_offline");
+
+        r.route("agent_offline", "ak-1", "user-1", node);
+
+        verify(availabilityService).evict("ak-1");
     }
 
     // ============= Helpers: MutableClock + FakeTicker =============

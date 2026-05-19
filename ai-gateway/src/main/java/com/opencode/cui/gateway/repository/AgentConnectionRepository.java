@@ -72,4 +72,13 @@ public interface AgentConnectionRepository {
 
         /** 按主键删除 */
         int deleteById(@Param("id") Long id);
+
+        /** 判断指定 AK 是否有任何连接记录（不限状态） */
+        boolean existsByAkId(@Param("akId") String akId);
+
+        /** 判断指定 AK 是否有在线且活跃的连接 */
+        boolean existsOnlineActiveByAkId(@Param("akId") String akId);
+
+        /** 查询指定 AK 的最新连接记录（所有状态），按 last_seen_at DESC, id DESC 取第一条 */
+        AgentConnection findLatestByAkIdOrderByLastSeenAtDescIdDesc(@Param("akId") String akId);
 }

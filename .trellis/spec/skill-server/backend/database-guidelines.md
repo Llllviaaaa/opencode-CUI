@@ -287,6 +287,53 @@ public long physicalSubscriberCount(String channel) {
 
 ---
 
+## Redis 对象缓存序列化：用 JSON，不要裸字符串拼接
+
+当 Redis value 需要缓存复合对象（多个字段，且字段值包含自由文本），**禁止用管道分隔符（`|`）或任意分隔符拼接**。自由文本字段可能包含分隔符本身（如 markdown 表格中的 `|`），导致反序列化时字段错位。
+
+错误模式：
+```java
+// ❌ 管道分隔：message 含 markdown 表格的 | 会破坏字段解析
+String serialized = r.source().name() + "|" + r.message() + "|" + r.toolType();
+redisTemplate.opsForValue().set(key, serialized, ttl);
+```
+
+正确模式 — Jackson `ObjectMapper` 读写 JSON：
+```java
+// ✅ JSON 序列化：类型安全，不受字段内容影响
+private final ObjectMapper objectMapper;
+
+private String serialize(AvailabilityResult r) {
+    try {
+        return objectMapper.writeValueAsString(r);
+    } catch (JsonProcessingException e) {
+        log.warn("Failed to serialize {}: {}", r.source(), e.getMessage());
+        return null;
+    }
+}
+
+private AvailabilityResult deserialize(String cached) {
+    try {
+        return objectMapper.readValue(cached, AvailabilityResult.class);
+    } catch (Exception e) {
+        log.warn("Failed to deserialize availability cache: {}", e.getMessage());
+        return null;
+    }
+}
+```
+
+来源：`skill-server/src/main/java/com/opencode/cui/skill/service/AssistantAvailabilityService.java`
+
+规则：
+
+- 对象缓存值统一用 Jackson JSON 序列化，不用手工拼接字符串
+- 对应的 record 加 `@JsonInclude(NON_NULL)` + `@JsonIgnoreProperties(ignoreUnknown = true)`（向后兼容字段变更）
+- 序列化失败 → 返回 null 并跳过 Redis 写入（不抛异常）
+- 反序列化失败 → 返回 null，调用方视同 cache miss
+- 简单位元数据（单字段、无特殊字符）可继续用 `String.format()` 拼接
+
+---
+
 ## 事务边界
 
 ### 会话创建

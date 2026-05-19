@@ -30,7 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  *
  * <p>本测试用唯一前缀 tag（rt_e2e_*）避免污染已存在数据。
  */
-@SpringBootTest
+@SpringBootTest(properties = {"skill.gateway.internal-token=test-e2e-token"})
 @Transactional
 class BusinessTagWhitelistRealE2ETest {
 

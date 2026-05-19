@@ -72,7 +72,7 @@ import static org.mockito.Mockito.when;
  *
  * <p>@Transactional 自动回滚 DB；@AfterEach 清 Redis 残留。
  */
-@SpringBootTest
+@SpringBootTest(properties = {"skill.gateway.internal-token=test-e2e-token"})
 @Transactional
 class DefaultAssistantRuleE2EIntegrationTest {
 

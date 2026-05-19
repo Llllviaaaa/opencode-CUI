@@ -10,10 +10,12 @@ import com.opencode.cui.skill.model.SkillMessage;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.config.AssistantIdProperties;
 import com.opencode.cui.skill.model.AgentSummary;
+import com.opencode.cui.skill.model.AvailabilityResult;
 import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.AssistantAccountResolverService;
 import com.opencode.cui.skill.service.AssistantInfoService;
+import com.opencode.cui.skill.service.AssistantAvailabilityService;
 import com.opencode.cui.skill.service.AssistantOfflineMessageProvider;
 import com.opencode.cui.skill.service.DefaultAssistantRuleService;
 import com.opencode.cui.skill.service.GatewayApiClient;
@@ -70,6 +72,8 @@ class SkillMessageControllerTest {
     @Mock
     private AssistantOfflineMessageProvider offlineMessageProvider;
     @Mock
+    private AssistantAvailabilityService availabilityService;
+    @Mock
     private AssistantAccountResolverService assistantAccountResolverService;
     @Mock
     private DefaultAssistantRuleService ruleService;
@@ -94,7 +98,7 @@ class SkillMessageControllerTest {
                 messageService, sessionService, gatewayRelayService,
                 gatewayApiClient, assistantIdProperties, imMessageService, new ObjectMapper(),
                 accessControlService, messageRouter, assistantInfoService, scopeDispatcher,
-                offlineMessageProvider, assistantAccountResolverService, ruleService);
+                offlineMessageProvider, availabilityService, assistantAccountResolverService, ruleService);
         // 默认 scopeDispatcher 返回 personal 策略（requiresOnlineCheck=true）
         com.opencode.cui.skill.service.scope.AssistantScopeStrategy personalStrategy =
                 org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
@@ -104,8 +108,8 @@ class SkillMessageControllerTest {
         defaultPersonalInfo.setAssistantScope("personal");
         lenient().when(assistantInfoService.getAssistantInfo(any())).thenReturn(defaultPersonalInfo);
         // 默认 Agent 在线，离线场景在专用测试中覆盖
-        lenient().when(gatewayApiClient.getAgentByAk(any()))
-                .thenReturn(AgentSummary.builder().ak("99").toolType("assistant").build());
+        lenient().when(availabilityService.resolve(any()))
+                .thenReturn(AvailabilityResult.ofOnline());
     }
 
     @Test
@@ -332,7 +336,8 @@ class SkillMessageControllerTest {
         session.setToolSessionId("tool-session-1");
         session.setStatus(SkillSession.Status.ACTIVE);
         when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
-        when(gatewayApiClient.getAgentByAk("99")).thenReturn(null); // Agent 离线
+        when(availabilityService.resolve("99")).thenReturn(
+                AvailabilityResult.ofOfflineDefault("MOCK_OFFLINE_MSG", null)); // Agent 离线
 
         var request = new SkillMessageController.PermissionReplyRequest();
         request.setResponse("once");
@@ -370,8 +375,8 @@ class SkillMessageControllerTest {
         var response = controller.replyPermission("1", "1", "p-abc", request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(0, response.getBody().getCode());
-        // 不应调用 getAgentByAk — 云端助手跳过在线检查
-        verify(gatewayApiClient, never()).getAgentByAk("biz-ak");
+        // 不应调用 availabilityService — 云端助手跳过在线检查
+        verify(availabilityService, never()).resolve("biz-ak");
         verify(gatewayRelayService).sendInvokeToGateway(any());
     }
 
@@ -636,7 +641,8 @@ class SkillMessageControllerTest {
         session.setToolSessionId("tool-session-1");
         session.setStatus(SkillSession.Status.ACTIVE);
         when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
-        when(gatewayApiClient.getAgentByAk("99")).thenReturn(null); // Agent 离线
+        when(availabilityService.resolve("99")).thenReturn(
+                AvailabilityResult.ofOfflineDefault("MOCK_OFFLINE_MSG", null)); // Agent 离线
 
         SkillMessage msg = SkillMessage.builder()
                 .id(1L).sessionId(1L).role(SkillMessage.Role.USER).content("Hello").build();

@@ -1,16 +1,15 @@
 package com.opencode.cui.gateway;
 
+import com.opencode.cui.gateway.config.InternalAuthProperties;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
-/**
- * AI Gateway 启动类。
- * 负责 Agent WebSocket 连接管理、AK/SK 认证和消息路由。
- */
 @SpringBootApplication
 @EnableScheduling
+@EnableConfigurationProperties(InternalAuthProperties.class)
 @MapperScan("com.opencode.cui.gateway.repository")
 public class GatewayApplication {
 

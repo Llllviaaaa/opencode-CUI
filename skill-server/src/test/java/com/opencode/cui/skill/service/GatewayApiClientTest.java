@@ -1,6 +1,7 @@
 package com.opencode.cui.skill.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.config.InternalAuthProperties;
 import com.opencode.cui.skill.model.AgentSummary;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -24,6 +25,8 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class GatewayApiClientTest {
 
+    private static final InternalAuthProperties AUTH = new InternalAuthProperties("test-token");
+
     @Mock
     private RestTemplate restTemplate;
 
@@ -36,7 +39,7 @@ class GatewayApiClientTest {
                 restTemplate,
                 objectMapper,
                 "http://localhost:8081",
-                "test-token");
+                AUTH);
     }
 
     @Test

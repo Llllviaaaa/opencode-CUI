@@ -8,6 +8,7 @@ import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.ImMessageRequest;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.ResolveOutcome;
+import com.opencode.cui.skill.model.AvailabilityResult;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.delivery.StreamMessageEmitter;
@@ -64,6 +65,7 @@ public class InboundProcessingService {
     private final DeliveryProperties deliveryProperties;
     private final RedisMessageBroker redisMessageBroker;
     private final AssistantOfflineMessageProvider offlineMessageProvider;
+    private final AssistantAvailabilityService availabilityService;
     private final SkillSessionService sessionService;
     private final StringRedisTemplate redisTemplate;
     private final ChannelLookupService channelLookupService;
@@ -85,6 +87,7 @@ public class InboundProcessingService {
             DeliveryProperties deliveryProperties,
             RedisMessageBroker redisMessageBroker,
             AssistantOfflineMessageProvider offlineMessageProvider,
+            AssistantAvailabilityService availabilityService,
             SkillSessionService sessionService,
             StringRedisTemplate redisTemplate,
             ChannelLookupService channelLookupService,
@@ -104,6 +107,7 @@ public class InboundProcessingService {
         this.deliveryProperties = deliveryProperties;
         this.redisMessageBroker = redisMessageBroker;
         this.offlineMessageProvider = offlineMessageProvider;
+        this.availabilityService = availabilityService;
         this.sessionService = sessionService;
         this.redisTemplate = redisTemplate;
         this.channelLookupService = channelLookupService;
@@ -600,15 +604,17 @@ public class InboundProcessingService {
         AssistantInfo checkInfo = assistantInfoService.getAssistantInfo(ak);
         AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(checkInfo);
         if (!scopeStrategy.requiresOnlineCheck()) return null;
-        if (gatewayApiClient.getAgentByAk(ak) != null) return null;
 
-        log.warn("[SKIP] checkAgentOnline: reason=agent_offline, ak={}, domain={}, sessionType={}, sessionId={}",
-                ak, businessDomain, sessionType, sessionId);
+        AvailabilityResult r = availabilityService.resolve(ak);
+        if (r.online()) return null;
+
+        log.warn("[SKIP] checkAgentOnline: reason=agent_offline, ak={}, domain={}, sessionType={}, sessionId={}, source={}",
+                ak, businessDomain, sessionType, sessionId, r.source());
         SkillSession existing = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
-        handleAgentOffline(businessDomain, sessionType, sessionId, ak, assistantAccount);
+        handleAgentOffline(businessDomain, sessionType, sessionId, ak, assistantAccount, r.message());
         return InboundResult.error(
                 503,
-                offlineMessageProvider.get(),
+                r.message(),
                 sessionId,
                 existing != null ? String.valueOf(existing.getId()) : null);
     }
@@ -618,10 +624,10 @@ public class InboundProcessingService {
      * 并在单聊 session 中持久化系统消息。
      */
     void handleAgentOffline(String businessDomain, String sessionType,
-                                     String sessionId, String ak, String assistantAccount) {
+                                     String sessionId, String ak, String assistantAccount,
+                                     String offlineMessage) {
         SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
         if (session != null) {
-            String offlineMessage = offlineMessageProvider.get();
             StreamMessage offlineMsg = StreamMessage.builder()
                     .type(StreamMessage.Types.ERROR)
                     .error(offlineMessage)
