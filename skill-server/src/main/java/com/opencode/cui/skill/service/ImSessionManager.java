@@ -3,6 +3,7 @@ package com.opencode.cui.skill.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.InvokeCommand;
+import com.opencode.cui.skill.model.PendingChatRequest;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
@@ -169,8 +170,29 @@ public class ImSessionManager {
                             created.getId(), ak);
                 }
             } else {
-                // 个人助手：向 Gateway 请求创建 toolSession，等待 session_created 回调
-                requestToolSession(created, pendingMessage);
+                // 个人助手：向 Gateway 请求创建 toolSession，等待 session_created 回调。
+                // PR3：构造完整 PendingChatRequest（含 sender / assistantAccount / imGroupId /
+                // businessExtParam）入 Redis pending list, 让 retryPendingMessages 重建完整
+                // chat invoke payload — 首次对话 plugin 端不再丢字段。
+                PendingChatRequest pendingRequest = null;
+                if (pendingMessage != null && !pendingMessage.isBlank()) {
+                    // effectiveSender 语义与 dispatchChatToGateway 一致：群聊用真实发送者,单聊用 owner
+                    String effectiveSender = "group".equals(sessionType)
+                            && senderUserAccount != null && !senderUserAccount.isBlank()
+                            ? senderUserAccount : ownerWelinkId;
+                    pendingRequest = new PendingChatRequest(
+                            pendingMessage,
+                            assistantAccount,
+                            effectiveSender,
+                            "group".equals(sessionType) ? sessionId : null,
+                            String.valueOf(System.currentTimeMillis()),
+                            businessExtParam);
+                    log.info("[ENTRY] createSessionAsync.appendPendingChatRequest: sessionId={}, sessionType={}, hasExt={}, isGroup={}",
+                            created.getId(), sessionType,
+                            businessExtParam != null,
+                            "group".equals(sessionType));
+                }
+                requestToolSession(created, pendingRequest);
             }
         } finally {
             releaseCreateLock(lockKey, lockValue, locked);
@@ -178,13 +200,37 @@ public class ImSessionManager {
     }
 
     /**
-     * 缓存待发消息并请求 Gateway 创建 toolSession。
-     * 当 Gateway 返回 session_created 时，{@link GatewayMessageRouter} 会自动重发待发消息。
+     * 缓存待发消息并请求 Gateway 创建 toolSession（PR3 新签名，接收完整 {@link PendingChatRequest}）。
+     *
+     * <p>当 Gateway 返回 session_created 时，{@link GatewayMessageRouter} 会自动重发待发消息,
+     * 此时 retry 路径从 {@link PendingChatRequest} 重建完整 chat invoke payload（6 字段齐全）。
+     *
+     * @param pendingRequest 完整结构化 pending 消息；为 null 表示无 pending 仅请求建会话
      */
+    public void requestToolSession(SkillSession session, PendingChatRequest pendingRequest) {
+        String sessionIdStr = String.valueOf(session.getId());
+        gatewayRelayService.rebuildToolSession(sessionIdStr, session, pendingRequest);
+        log.info("Requested tool session creation for welinkSession={}, ak={}, hasPendingRequest={}",
+                sessionIdStr, session.getAk(), pendingRequest != null);
+    }
+
+    /**
+     * 缓存待发消息并请求 Gateway 创建 toolSession（老 String 入参重载，被 {@code InboundProcessingService}
+     * 情况 B personal 分支 / business self-heal 降级使用）。
+     *
+     * <p>本重载内部委托给 {@code GatewayRelayService.rebuildToolSession(String, SkillSession, String)}
+     * 老入口, 该入口走 {@code SessionRebuildService.rebuildToolSession} 老 String 重载, 在 fallback +
+     * WARN 路径下自动转成半填 {@link PendingChatRequest}（fields_degraded=businessExtParam）。
+     *
+     * @deprecated TODO follow-up: remove after all callers migrate to PendingChatRequest API.
+     *             目前留作 {@code InboundProcessingService.processChat} 情况 B personal 分支 /
+     *             business self-heal 降级路径用 — 这些路径手上只有 prompt + session，没有完整上下文。
+     */
+    @Deprecated
     public void requestToolSession(SkillSession session, String pendingMessage) {
         String sessionIdStr = String.valueOf(session.getId());
         gatewayRelayService.rebuildToolSession(sessionIdStr, session, pendingMessage);
-        log.info("Requested tool session creation for welinkSession={}, ak={}",
+        log.info("Requested tool session creation (legacy String overload) for welinkSession={}, ak={}",
                 sessionIdStr, session.getAk());
     }
 
@@ -273,7 +319,9 @@ public class ImSessionManager {
             // 已存在但无 toolSession：触发重建
             log.info("Rebuilding tool session: skillSessionId={}, ak={}",
                     session.getId(), session.getAk());
-            gatewayRelayService.rebuildToolSession(String.valueOf(session.getId()), session, null);
+            // 显式强转 null 到 PendingChatRequest，避免 String/PendingChatRequest 重载歧义
+            gatewayRelayService.rebuildToolSession(String.valueOf(session.getId()),
+                    session, (PendingChatRequest) null);
         }
 
         return waitForToolSession(session.getId()); // 阻塞等待 Gateway 回填 toolSessionId

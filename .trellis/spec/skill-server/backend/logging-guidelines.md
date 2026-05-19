@@ -183,6 +183,41 @@ log.warn("[SKIP] checkAgentOnline: reason=agent_offline, ak={}, domain={}, sessi
 
 ---
 
+## 降级路径的量化可观测字段
+
+`[SKIP] reason=...` 解释了"为什么降级"，但 SRE 还需要知道"降级到什么程度、命中频率多高"。fallback / 兼容 / 重试路径必须额外带**量化字段**，让 ELK / metric 能聚合出降级率，而不是只看到分散的 WARN 文本。
+
+约定字段命名：
+
+| 字段 | 含义 | 取值示例 |
+|------|------|---------|
+| `<entity>_format` | 反序列化时识别到的格式分支 | `json` / `plain` / `fallback_invalid_json` |
+| `fields_degraded` | 本条记录的关键字段是否走了 fallback | `true` / `false`（bool） |
+| `<entity>_count` | 本次批处理 / 重试涉及的条数 | 整数 |
+| `retry_count` | 第几次重试 | 整数 |
+
+```java
+// retry / 反序列化入口结构化字段
+log.info("[ENTRY] retryPendingMessages: sessionId={}, pending_count={}, retry_count={}",
+        sessionId, messages.size(), retryCount);
+
+for (PendingChatRequest req : messages) {
+    log.info("retryPendingMessages.consume: pending_format={}, fields_degraded={}",
+            req.pendingFormat(), req.isFieldsDegraded());
+    ...
+}
+```
+
+参考实现：`skill-server/src/main/java/com/opencode/cui/skill/service/GatewayMessageRouter.java::retryPendingMessages`、`SessionRebuildService.java::consumePendingMessages`。
+
+规则：
+
+- 凡有 fallback / 老格式兼容 / 重试的代码路径，**必须**至少带 `<entity>_format` + `fields_degraded` 两个字段。
+- 字段值用稳定 enum 字符串（`json` / `plain` / ...），不要拼可变上下文（如 `"json_for_session_xxx"`），否则 ELK 聚合不出来。
+- 同一 fallback 概念在不同模块（pending / cache / config）复用同一组字段名前缀，不要每个模块发明一套。
+
+---
+
 ## 外部调用计时
 
 `LogTimer` 是当前推荐的外部调用计时工具：

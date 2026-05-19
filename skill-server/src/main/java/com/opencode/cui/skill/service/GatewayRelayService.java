@@ -344,13 +344,49 @@ public class GatewayRelayService {
     }
 
     /**
-     * 触发 toolSession 重建。
+     * 触发 toolSession 重建（老 String 入参重载，被 {@code SkillMessageController.routeToGateway} 等使用）。
      * 缓存待发消息 → 通知前端重试 → 发送 create_session 到 Gateway。
+     *
+     * <p>PR3 改造：内部委托给
+     * {@code SessionRebuildService.rebuildToolSession(String, SkillSession, String, RebuildCallback)}
+     * 老 String 重载, 该重载在 {@code SessionRebuildService} 内已自动 fallback +
+     * WARN（{@code reason=rebuild_legacy_string_overload}），所以 caller 无感升级。
      */
     public void rebuildToolSession(String sessionId, SkillSession session, String pendingMessage) {
         log.info("Initiating toolSession rebuild: sessionId={}, ak={}, hasPendingMessage={}",
                 sessionId, session != null ? session.getAk() : null, pendingMessage != null);
         rebuildService.rebuildToolSession(sessionId, session, pendingMessage,
+                new SessionRebuildService.RebuildCallback() {
+                    @Override
+                    public void broadcast(String sid, String uid, StreamMessage msg) {
+                        emitter.emitToClient(sid, uid, msg);
+                    }
+
+                    @Override
+                    public void sendInvoke(InvokeCommand command) {
+                        sendInvokeToGateway(command);
+                    }
+                });
+    }
+
+    /**
+     * 触发 toolSession 重建（PR3 新签名，接收完整 {@link com.opencode.cui.skill.model.PendingChatRequest}）。
+     *
+     * <p>用于 {@link ImSessionManager} 个人助手分支 — 首次对话场景需要把 sender / assistantAccount /
+     * imGroupId / businessExtParam 完整入 Redis pending list, 等 Gateway 回 session_created
+     * 触发 retry 时由 {@code GatewayMessageRouter.retryPendingMessages} 重建完整 chat invoke payload。
+     *
+     * <p>内部直接调用 {@code SessionRebuildService.rebuildToolSession} 新签名,
+     * 避开老 String 重载的 fallback + WARN 日志。
+     *
+     * @param pendingRequest 完整 {@link com.opencode.cui.skill.model.PendingChatRequest}（可为 null,
+     *                       表示无 pending 消息只重建 session）
+     */
+    public void rebuildToolSession(String sessionId, SkillSession session,
+            com.opencode.cui.skill.model.PendingChatRequest pendingRequest) {
+        log.info("Initiating toolSession rebuild (PendingChatRequest API): sessionId={}, ak={}, hasPendingRequest={}",
+                sessionId, session != null ? session.getAk() : null, pendingRequest != null);
+        rebuildService.rebuildToolSession(sessionId, session, pendingRequest,
                 new SessionRebuildService.RebuildCallback() {
                     @Override
                     public void broadcast(String sid, String uid, StreamMessage msg) {

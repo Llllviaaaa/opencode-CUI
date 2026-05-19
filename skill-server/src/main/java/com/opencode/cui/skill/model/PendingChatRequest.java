@@ -1,0 +1,127 @@
+package com.opencode.cui.skill.model;
+
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.JsonNode;
+
+/**
+ * IM 入站消息在 personal 助手"首次对话" / 情况 C 路径下排队等待 toolSessionId 绑定时，
+ * Redis pending list（{@code ss:pending-rebuild:{sessionId}}）里缓存的结构化条目。
+ *
+ * <p><strong>定位</strong>：Redis pending list 的内部传输 DTO，<em>不是</em>外部 API 契约。
+ * 仅用于 {@code SessionRebuildService.appendPendingMessage} 入队 + JSON 序列化、
+ * {@code SessionRebuildService.consumePendingMessages} 反序列化出队、
+ * 然后由 {@code GatewayMessageRouter.retryPendingMessages} 重建完整 chat invoke payload。
+ *
+ * <p><strong>字段顺序固定</strong>：用于稳定 JSON 字段顺序（便于排查 / diff），与 PRD §Requirements 1 对齐。
+ * 字段 6 个，逐一对应 {@code dispatchChatToGateway} 构造的 chat payload 关键字段。
+ *
+ * <p><strong>不含 {@code assistantId}</strong>：assistantId 由
+ * {@code GatewayRelayService.buildInvokeMessage} 在 CHAT / CREATE_SESSION 时自动注入，
+ * 在 pending DTO 里再保存会造成"双写"语义不清，参见 PRD Codex Review Minor m1。
+ *
+ * <p><strong>JSON 形状示例</strong>：
+ * <pre>{@code
+ * {
+ *   "text": "你好",
+ *   "assistantAccount": "assist-01",
+ *   "sendUserAccount": "user-real-sender",
+ *   "imGroupId": "group-001",
+ *   "messageId": "1717939200000",
+ *   "businessExtParam": {"foo": "bar"}
+ * }
+ * }</pre>
+ *
+ * <p><strong>降级路径</strong>：当上下文不全（如 {@code rebuildFromStoredUserMessage} 仅有 text + session）时，
+ * 通过 {@link #fromSessionFallback(SkillSession, String)} 用 session 反查 owner / businessSessionId 兜底；
+ * sender 退化为 owner、businessExtParam = null。fallback 之前会校验 {@code assistantAccount} / {@code userId} 非空，
+ * 缺失即抛 {@link IllegalArgumentException}，避免后续云端 fast-fail，参见 PRD Codex Review Major M5。
+ *
+ * @param text             用户输入的纯文本 prompt
+ * @param assistantAccount 助手账号（信封层必填，下游云端策略消费）
+ * @param sendUserAccount  实际发送者账号（群聊真实 sender；单聊场景为 owner）
+ * @param imGroupId        群聊业务会话 ID（== {@code SkillSession.businessSessionId}）；单聊场景为 null
+ * @param messageId        消息 ID（首次对话用毫秒时间戳即可，无业务幂等语义）
+ * @param businessExtParam 业务扩展参数（透传给下游，可为 null）
+ */
+public record PendingChatRequest(
+        @JsonProperty("text") String text,
+        @JsonProperty("assistantAccount") String assistantAccount,
+        @JsonProperty("sendUserAccount") String sendUserAccount,
+        @JsonProperty("imGroupId") String imGroupId,
+        @JsonProperty("messageId") String messageId,
+        @JsonProperty("businessExtParam") JsonNode businessExtParam) {
+
+    /**
+     * 显式 {@link JsonCreator} 注解 + {@link JsonProperty} 让 Jackson 反序列化稳定工作，
+     * 无需依赖 {@code -parameters} 编译标志或 {@code ParameterNamesModule} 自动注册。
+     * 与同包的 {@link DefaultAssistantRule} 保持一致风格。
+     */
+    @JsonCreator
+    public PendingChatRequest {
+        // 注：本任务（PR1）不在 record canonical constructor 中对字段做非空校验：
+        //   - retryPendingMessages 路径允许 imGroupId / businessExtParam 为 null（单聊场景）。
+        //   - text / sender / assistantAccount 由上游调用方保证（dispatchChatToGateway 或 fromSessionFallback）。
+        //   - 仅 fromSessionFallback 工厂方法对 session.assistantAccount / session.userId 强制校验。
+    }
+
+    /**
+     * 从 {@link SkillSession} 反查构造降级 {@code PendingChatRequest}。
+     * <p>
+     * 用途：
+     * <ol>
+     *   <li>{@code consumePendingMessages} 反序列化检测到老格式 plain-string entry，
+     *       原文当 text，其他字段用 session 反查兜底。</li>
+     *   <li>{@code SessionRebuildService.rebuildFromStoredUserMessage} 从 DB 拉取
+     *       lastUserMessage 触发 rebuild，DB 里只有 text，sender/ext 不可知 → 降级到 owner + null。</li>
+     * </ol>
+     *
+     * <p><strong>规则</strong>：
+     * <ul>
+     *   <li>{@code assistantAccount} = {@code session.getAssistantAccount()}</li>
+     *   <li>{@code sendUserAccount}  = {@code session.getUserId()}（owner，群聊语义降级）</li>
+     *   <li>{@code imGroupId}        = {@code session.isImGroupSession()} ?
+     *       <strong>{@code session.getBusinessSessionId()}</strong> : null
+     *       （绝对不能误用 {@code session.getId()}：那是 skill 主键，不是 IM 业务 ID。
+     *        参见 PRD Codex Review Major M3）</li>
+     *   <li>{@code messageId}        = {@code System.currentTimeMillis()}（重发时刻时间戳）</li>
+     *   <li>{@code businessExtParam} = {@code null}</li>
+     * </ul>
+     *
+     * <p><strong>校验</strong>：{@code session.getAssistantAccount()} 或 {@code session.getUserId()} 任一空白即抛
+     * {@link IllegalArgumentException}，调用方应 catch 并记 ERROR + 保留 pending 供人工排查，
+     * 不要静默 fallback 后让下游云端策略 fast-fail。参见 PRD Codex Review Major M5。
+     *
+     * @param session 已就绪的 {@link SkillSession}（非 null）
+     * @param text    用户原始文本 prompt（可为 null / 空，调用方自行决定是否入队）
+     * @return 反查降级后的 {@link PendingChatRequest}
+     * @throws IllegalArgumentException session 为 null，或 assistantAccount / userId 空白
+     */
+    public static PendingChatRequest fromSessionFallback(SkillSession session, String text) {
+        if (session == null) {
+            throw new IllegalArgumentException("PendingChatRequest.fromSessionFallback: session must not be null");
+        }
+        String assistantAccount = session.getAssistantAccount();
+        String userId = session.getUserId();
+        if (isBlank(assistantAccount) || isBlank(userId)) {
+            throw new IllegalArgumentException(
+                    "PendingChatRequest.fromSessionFallback: session fields must be non-blank,"
+                            + " assistantAccount=" + assistantAccount
+                            + ", userId=" + userId
+                            + ", skillSessionId=" + session.getId());
+        }
+        String imGroupId = session.isImGroupSession() ? session.getBusinessSessionId() : null;
+        String messageId = String.valueOf(System.currentTimeMillis());
+        return new PendingChatRequest(
+                text,
+                assistantAccount,
+                userId,
+                imGroupId,
+                messageId,
+                null);
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
+    }
+}
