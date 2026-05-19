@@ -1,9 +1,0 @@
-{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server 包级 spec 入口；check 需要按 Pre-Development Checklist 反查所有规范遵守情况"}
-{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "回归检查：PendingChatRequest record / 命名 / Lombok / DI 是否遵循"}
-{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "回归检查：record nullability、Jackson 注解、Optional 使用；fromSessionFallback 工厂方法约束"}
-{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "回归检查：fromSessionFallback 缺关键 account 时不静默 fast-fail；consumePendingMessages 反序列化异常都被吞并降级"}
-{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "回归检查：新增 pending_format / retry_count / fields_degraded 字段是否一致；WARN/ERROR 级别是否匹配规范"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "校验 chat invoke 报文字段在 dispatchChatToGateway / retryPendingMessages 两处保持一致；retry 不应额外引入新字段"}
-{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "检查 PendingChatRequest -> CHAT payload 转换是否抽出复用，避免在 retryPendingMessages / dispatchChatToGateway 漂移"}
-{"file": ".trellis/tasks/05-19-plugin-first-chat-missing-context/research/codex-review.md", "reason": "check 阶段对照 codex 反馈逐项核查是否完成：M1 / M3 / M5 / m1 / m2 / m4 已采纳项 + C1 / C2 / M2 / M4 / m3 / m5 已显式拒绝或推迟项"}
-{"file": ".trellis/tasks/05-19-plugin-first-chat-missing-context/prd.md", "reason": "本任务 PRD；check 阶段对照 Acceptance Criteria 与 Definition of Done 逐项验收"}
