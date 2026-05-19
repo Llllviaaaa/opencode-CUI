@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-0.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-05-19
 <!-- @@@/auto:current-status -->
 
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-05-19 | platformExtParam 落地三字段（businessSession{Domain,Type,Id}） | `0b6266a` | `main` |
 | 7 | 2026-05-19 | 首次对话 retry chat payload 补全上下文字段 | `2b2075f` | `main` |
 | 6 | 2026-05-18 | 无 ak 与 assistantAccount 场景默认助手能力（PR1-PR4 全链路上线） | `2349d1c`, `92c070a`, `736b540`, `5a166d9` | `feat/noauth-pr4-docs-tests` |
 | 5 | 2026-05-14 | externalws L2 投递死 pod 修复（owner-only held-by + ZSET 花名册） | `c7049b8`, `5a68079` | `fix/externalws-l2-stale-pod-routing` |
