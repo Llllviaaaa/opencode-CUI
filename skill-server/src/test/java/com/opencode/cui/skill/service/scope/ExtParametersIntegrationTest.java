@@ -88,7 +88,15 @@ class ExtParametersIntegrationTest {
         JsonNode pep = ext.get("platformExtParam");
         assertNotNull(pep);
         assertTrue(pep.isObject());
-        assertEquals(0, pep.size());
+        // platformExtParam 现在含三字段 key（PR1：domain/domainType/businessSessionId 均未传，
+        // 序列化为 JSON null，key 保留）
+        assertEquals(3, pep.size());
+        assertTrue(pep.has("businessSessionDomain"));
+        assertTrue(pep.get("businessSessionDomain").isNull());
+        assertTrue(pep.has("businessSessionType"));
+        assertTrue(pep.get("businessSessionType").isNull());
+        assertTrue(pep.has("businessSessionId"));
+        assertTrue(pep.get("businessSessionId").isNull());
     }
 
     @Test
@@ -113,6 +121,10 @@ class ExtParametersIntegrationTest {
         assertTrue(ext.get("businessExtParam").isObject());
         assertEquals(0, ext.get("businessExtParam").size());
         assertTrue(ext.get("platformExtParam").isObject());
-        assertEquals(0, ext.get("platformExtParam").size());
+        // platformExtParam 现在含三字段 key（PR1：均未传 → JSON null）
+        assertEquals(3, ext.get("platformExtParam").size());
+        assertTrue(ext.get("platformExtParam").get("businessSessionDomain").isNull());
+        assertTrue(ext.get("platformExtParam").get("businessSessionType").isNull());
+        assertTrue(ext.get("platformExtParam").get("businessSessionId").isNull());
     }
 }

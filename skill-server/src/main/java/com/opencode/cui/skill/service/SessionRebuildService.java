@@ -164,7 +164,11 @@ public class SessionRebuildService {
                 session.getUserId(),
                 sessionId,
                 GatewayActions.CREATE_SESSION,
-                payloadStr));
+                payloadStr,
+                null,
+                session.getBusinessSessionDomain(),
+                session.getBusinessSessionType(),
+                session.getBusinessSessionId()));
         log.info("Rebuild create_session sent for welinkSession={}, ak={}", sessionId, session.getAk());
     }
 

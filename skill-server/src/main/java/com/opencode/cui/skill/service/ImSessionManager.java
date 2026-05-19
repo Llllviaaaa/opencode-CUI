@@ -165,7 +165,11 @@ public class ImSessionManager {
                             ownerWelinkId,
                             String.valueOf(created.getId()),
                             GatewayActions.CHAT,
-                            PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields)));
+                            PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields),
+                            null,
+                            businessDomain,
+                            sessionType,
+                            sessionId));
                     log.info("Business assistant: chat invoke sent immediately, skillSessionId={}, ak={}",
                             created.getId(), ak);
                 }
@@ -314,7 +318,11 @@ public class ImSessionManager {
                     session.getUserId(),
                     String.valueOf(session.getId()),
                     GatewayActions.CREATE_SESSION,
-                    PayloadBuilder.buildPayload(objectMapper, Map.of("title", session.getTitle()))));
+                    PayloadBuilder.buildPayload(objectMapper, Map.of("title", session.getTitle())),
+                    null,
+                    session.getBusinessSessionDomain(),
+                    session.getBusinessSessionType(),
+                    session.getBusinessSessionId()));
         } else {
             // 已存在但无 toolSession：触发重建
             log.info("Rebuilding tool session: skillSessionId={}, ak={}",

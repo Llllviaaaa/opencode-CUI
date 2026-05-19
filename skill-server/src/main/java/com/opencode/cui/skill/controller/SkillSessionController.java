@@ -178,7 +178,8 @@ public class SkillSessionController {
                                                 : Map.of()),
                                 null,
                                 session.getBusinessSessionDomain(),
-                                session.getBusinessSessionType()));
+                                session.getBusinessSessionType(),
+                                session.getBusinessSessionId()));
             }
         }
 
@@ -256,7 +257,8 @@ public class SkillSessionController {
                                     Map.of("toolSessionId", session.getToolSessionId())),
                             null,
                             session.getBusinessSessionDomain(),
-                            session.getBusinessSessionType()));
+                            session.getBusinessSessionType(),
+                            session.getBusinessSessionId()));
         }
         sessionService.closeSession(sessionId);
         log.info("[EXIT] closeSession: sessionId={}", id);
@@ -297,7 +299,8 @@ public class SkillSessionController {
                                     Map.of("toolSessionId", session.getToolSessionId())),
                             null,
                             session.getBusinessSessionDomain(),
-                            session.getBusinessSessionType()));
+                            session.getBusinessSessionType(),
+                            session.getBusinessSessionId()));
         }
 
         log.info("[EXIT] abortSession: sessionId={}", id);

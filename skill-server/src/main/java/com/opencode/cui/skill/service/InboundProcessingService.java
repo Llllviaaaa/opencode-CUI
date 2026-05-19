@@ -217,12 +217,14 @@ public class InboundProcessingService {
                         // D17 + PR3 决策：保留语义，用当前请求的 assistantAccount / senderUserAccount
                         // / businessExtParam=null，不复用 legacy.assistantAccount() 等字段。
                         dispatchChatToGateway(session, legacyText, ak, ownerWelinkId, assistantAccount,
-                                senderUserAccount, sessionType, sessionId, inboundSource, legacyText, false,
+                                senderUserAccount, businessDomain, sessionType, sessionId,
+                                inboundSource, legacyText, false,
                                 null);
                     }
                 }
                 return dispatchChatToGateway(session, prompt, ak, ownerWelinkId, assistantAccount,
-                        senderUserAccount, sessionType, sessionId, inboundSource, content, false,
+                        senderUserAccount, businessDomain, sessionType, sessionId,
+                        inboundSource, content, false,
                         businessExtParam);
             }
             // personal / scope 识别降级：保持现行 rebuild 路径
@@ -243,7 +245,8 @@ public class InboundProcessingService {
         AssistantScopeStrategy caseCStrategy = scopeDispatcher.getStrategy(caseCInfo);
         boolean appendToPending = caseCStrategy.generateToolSessionId() == null;
         return dispatchChatToGateway(session, prompt, ak, ownerWelinkId, assistantAccount,
-                senderUserAccount, sessionType, sessionId, inboundSource, content, appendToPending,
+                senderUserAccount, businessDomain, sessionType, sessionId,
+                inboundSource, content, appendToPending,
                 businessExtParam);
     }
 
@@ -335,7 +338,8 @@ public class InboundProcessingService {
      */
     private InboundResult dispatchChatToGateway(SkillSession session, String prompt,
             String ak, String ownerWelinkId, String assistantAccount,
-            String senderUserAccount, String sessionType, String sessionId,
+            String senderUserAccount, String businessDomain,
+            String sessionType, String sessionId,
             String inboundSource, String content, boolean appendToPending,
             JsonNode businessExtParam) {
         log.info("Session ready, forwarding to gateway: skillSessionId={}, toolSessionId={}, sessionType={}",
@@ -392,7 +396,10 @@ public class InboundProcessingService {
                 ak, ownerWelinkId, String.valueOf(session.getId()),
                 GatewayActions.CHAT,
                 PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields),
-                suppressReply));
+                suppressReply,
+                businessDomain,
+                sessionType,
+                sessionId));
 
         writeInvokeSource(session, inboundSource);
         return InboundResult.ok(sessionId, String.valueOf(session.getId()));
@@ -456,7 +463,11 @@ public class InboundProcessingService {
         gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
                 ak, ownerWelinkId, String.valueOf(session.getId()),
                 GatewayActions.QUESTION_REPLY,
-                PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields)));
+                PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields),
+                null,
+                businessDomain,
+                sessionType,
+                sessionId));
 
         writeInvokeSource(session, inboundSource);
         return InboundResult.ok(sessionId, String.valueOf(session.getId()));
@@ -520,7 +531,11 @@ public class InboundProcessingService {
         gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
                 ak, ownerWelinkId, String.valueOf(session.getId()),
                 GatewayActions.PERMISSION_REPLY,
-                PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields)));
+                PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields),
+                null,
+                businessDomain,
+                sessionType,
+                sessionId));
 
         // 广播权限回复消息到前端
         StreamMessage replyMsg = StreamMessage.builder()
