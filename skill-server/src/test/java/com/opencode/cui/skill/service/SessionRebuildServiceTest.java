@@ -233,7 +233,7 @@ class SessionRebuildServiceTest {
 
         JsonNode ext = objectMapper.readTree("{\"topicId\":42}");
         PendingChatRequest original = new PendingChatRequest(
-                "hello", "assist-01", "user-real", "group-001", "msg-1", ext);
+                "hello", "assist-01", "user-real", "group-001", "msg-1", ext, "im", "group");
 
         // 用 ArgumentCaptor 捕获 rightPush 的 value，然后让 range 返回它（模拟 list FIFO）
         List<String> captured = new ArrayList<>();
@@ -264,7 +264,7 @@ class SessionRebuildServiceTest {
         String key = "ss:pending-rebuild:" + sessionId;
 
         PendingChatRequest req = new PendingChatRequest(
-                "peek-text", "assist-02", "owner-2", null, "msg-x", null);
+                "peek-text", "assist-02", "owner-2", null, "msg-x", null, "im", "direct");
         String json = objectMapper.writeValueAsString(req);
 
         when(listOperations.range(eq(key), eq(0L), eq(-1L))).thenReturn(List.of(json));
@@ -395,7 +395,7 @@ class SessionRebuildServiceTest {
         String key = "ss:pending-rebuild:" + sessionId;
 
         PendingChatRequest newFormat = new PendingChatRequest(
-                "new-msg", "assist-A", "user-A", "group-A", "id-A", null);
+                "new-msg", "assist-A", "user-A", "group-A", "id-A", null, "im", "group");
         String newFormatJson = objectMapper.writeValueAsString(newFormat);
         String legacyPlain = "legacy-msg";
 
@@ -429,7 +429,7 @@ class SessionRebuildServiceTest {
         String key = "ss:pending-rebuild:" + sessionId;
 
         PendingChatRequest req = new PendingChatRequest(
-                "deprecated-peek", "assist-P", "user-P", null, "id-P", null);
+                "deprecated-peek", "assist-P", "user-P", null, "id-P", null, "im", "direct");
         when(listOperations.range(eq(key), eq(0L), eq(-1L)))
                 .thenReturn(List.of(objectMapper.writeValueAsString(req)));
 
@@ -579,7 +579,7 @@ class SessionRebuildServiceTest {
 
         // pending list 已经有一条
         PendingChatRequest existing = new PendingChatRequest(
-                "已有消息", "assist-3", "owner-3", "biz-group-3", "msg-pre-existing", null);
+                "已有消息", "assist-3", "owner-3", "biz-group-3", "msg-pre-existing", null, "im", "group");
         when(listOperations.range(eq(key), eq(0L), eq(-1L)))
                 .thenReturn(List.of(objectMapper.writeValueAsString(existing)));
 
@@ -691,7 +691,7 @@ class SessionRebuildServiceTest {
         JsonNode ext = objectMapper.readTree("{\"topicId\":99}");
         PendingChatRequest req = new PendingChatRequest(
                 "完整 PendingChatRequest", "assist-10", "real-sender-10",
-                "biz-group-10", "msg-pr3", ext);
+                "biz-group-10", "msg-pr3", ext, "im", "group");
 
         CapturingCallback cb = new CapturingCallback();
         service.rebuildToolSession(sessionId, session, req, cb);

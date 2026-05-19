@@ -183,7 +183,11 @@ class BusinessScopeStrategyTest {
         assertTrue(bep.get("k").isArray());
         JsonNode pep = (JsonNode) ext.get("platformExtParam");
         assertTrue(pep.isObject());
-        assertEquals(0, pep.size());
+        // PR1: platformExtParam 含三字段 key（domain/domainType/businessSessionId 均未传 → JSON null）
+        assertEquals(3, pep.size());
+        assertTrue(pep.get("businessSessionDomain").isNull());
+        assertTrue(pep.get("businessSessionType").isNull());
+        assertTrue(pep.get("businessSessionId").isNull());
     }
 
     @Test
@@ -297,6 +301,51 @@ class BusinessScopeStrategyTest {
         JsonNode bep = (JsonNode) capturedContext().getExtParameters().get("businessExtParam");
         assertTrue(bep.isObject());
         assertEquals(0, bep.size());
+    }
+
+    // ========== PR1: platformExtParam 三字段填充（2 cases） ==========
+
+    @Test
+    @DisplayName("buildInvoke with InvokeCommand domain/domainType/businessSessionId → platformExtParam 三字段填充")
+    void buildInvoke_platformExtParam_allThreeFieldsPopulated() {
+        String payload = "{\"text\":\"hi\",\"toolSessionId\":\"cloud-001\","
+                + "\"assistantAccount\":\"asst-1\",\"sendUserAccount\":\"u-1\"}";
+        // 9 参构造器：domain="im", domainType="group", businessSessionId="wx-group-abc"
+        InvokeCommand command = new InvokeCommand(
+                "ak-1", "u-1", "1", "chat", payload,
+                null, "im", "group", "wx-group-abc");
+        AssistantInfo info = new AssistantInfo();
+        info.setAssistantScope("business");
+        info.setBusinessTag("app-001");
+
+        strategy.buildInvoke(command, info);
+
+        JsonNode pep = (JsonNode) capturedContext().getExtParameters().get("platformExtParam");
+        assertTrue(pep.isObject());
+        assertEquals(3, pep.size());
+        assertEquals("im", pep.get("businessSessionDomain").asText());
+        assertEquals("group", pep.get("businessSessionType").asText());
+        assertEquals("wx-group-abc", pep.get("businessSessionId").asText());
+    }
+
+    @Test
+    @DisplayName("buildInvoke with InvokeCommand 5-arg (no domain fields) → platformExtParam 三字段全 JSON null（key 保留）")
+    void buildInvoke_platformExtParam_missingFieldsSerializedAsNull() {
+        String payload = "{\"text\":\"hi\",\"toolSessionId\":\"cloud-001\"}";
+        // 5 参构造器：domain/domainType/businessSessionId 均 null
+        InvokeCommand command = new InvokeCommand("ak-1", "u-1", "1", "chat", payload);
+        AssistantInfo info = new AssistantInfo();
+        info.setAssistantScope("business");
+        info.setBusinessTag("app-001");
+
+        strategy.buildInvoke(command, info);
+
+        JsonNode pep = (JsonNode) capturedContext().getExtParameters().get("platformExtParam");
+        assertTrue(pep.isObject());
+        assertEquals(3, pep.size());
+        assertTrue(pep.get("businessSessionDomain").isNull());
+        assertTrue(pep.get("businessSessionType").isNull());
+        assertTrue(pep.get("businessSessionId").isNull());
     }
 
     // ========== parseAnswers helper（4 cases） ==========

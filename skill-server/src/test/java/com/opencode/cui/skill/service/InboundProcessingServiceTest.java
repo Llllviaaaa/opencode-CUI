@@ -1003,9 +1003,9 @@ class InboundProcessingServiceTest {
 
         // PR3: pending list 里有两条 legacy + 一条与当前 prompt 重复（应被 skip）— 切到 consumePendingRequests
         List<PendingChatRequest> legacy = Arrays.asList(
-                new PendingChatRequest("legacy-1", "old-assist", "old-sender", null, "old-id-1", null),
-                new PendingChatRequest("legacy-2", "old-assist", "old-sender", null, "old-id-2", null),
-                new PendingChatRequest("hello", "old-assist", "old-sender", null, "old-id-3", null));
+                new PendingChatRequest("legacy-1", "old-assist", "old-sender", null, "old-id-1", null, null, null),
+                new PendingChatRequest("legacy-2", "old-assist", "old-sender", null, "old-id-2", null, null, null),
+                new PendingChatRequest("hello", "old-assist", "old-sender", null, "old-id-3", null, null, null));
         when(rebuildService.consumePendingRequests("101")).thenReturn(legacy);
 
         InboundResult result = service.processChat(

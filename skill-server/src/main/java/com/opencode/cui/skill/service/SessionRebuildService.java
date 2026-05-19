@@ -164,7 +164,11 @@ public class SessionRebuildService {
                 session.getUserId(),
                 sessionId,
                 GatewayActions.CREATE_SESSION,
-                payloadStr));
+                payloadStr,
+                null,
+                session.getBusinessSessionDomain(),
+                session.getBusinessSessionType(),
+                session.getBusinessSessionId()));
         log.info("Rebuild create_session sent for welinkSession={}, ak={}", sessionId, session.getAk());
     }
 
@@ -200,7 +204,8 @@ public class SessionRebuildService {
                 // 仍把 pendingRequest 设为半填 entry,保留消息让 retry 路径暴露问题,不静默吞
                 pendingRequest = new PendingChatRequest(
                         pendingMessage, null, null, null,
-                        String.valueOf(System.currentTimeMillis()), null);
+                        String.valueOf(System.currentTimeMillis()), null,
+                        null, null);
             }
         }
         rebuildToolSession(sessionId, session, pendingRequest, callback);
@@ -555,7 +560,7 @@ public class SessionRebuildService {
         if (session == null) {
             log.warn("[WARN] buildPlainTextFallback: reason=session_not_found_for_plain_text_pending, sessionId={}",
                     sessionId);
-            return new PendingChatRequest(rawText, null, null, null, null, null);
+            return new PendingChatRequest(rawText, null, null, null, null, null, null, null);
         }
         try {
             PendingChatRequest req = PendingChatRequest.fromSessionFallback(session, rawText);
@@ -567,7 +572,8 @@ public class SessionRebuildService {
             // 由 retryPendingMessages 的 critical_field_missing ERROR 日志暴露问题。
             log.error("[ERROR] buildPlainTextFallback: reason=fallback_account_missing, sessionId={}, fields_degraded=skip, error={}",
                     sessionId, iae.getMessage());
-            return new PendingChatRequest(rawText, null, null, null, null, null);
+            return new PendingChatRequest(rawText, null, null, null, null, null,
+                    session.getBusinessSessionDomain(), session.getBusinessSessionType());
         }
     }
 

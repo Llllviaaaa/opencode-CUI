@@ -912,11 +912,25 @@ public class GatewayMessageRouter {
             // （让下游 BusinessScopeStrategy 反向 extract 时能区分"未发"和"主动 null"）
             chatPayload.put("imGroupId", req.imGroupId());
             chatPayload.put("messageId", req.messageId());
-            // businessExtParam 三态：null / NullNode 都不写入；object 才写入
+
+            // PR2 platformExtParam：直接把 businessExtParam + platformExtParam 一并放进
+            // extParameters 信封, 与 P2a wire 形态对齐。GatewayRelayService.buildInvokeMessage 内的
+            // 幂等保护会检测到 extParameters 已存在 -> 不再二次注入。
             JsonNode ext = req.businessExtParam();
+            ObjectNode extParameters = objectMapper.createObjectNode();
             if (ext != null && !ext.isNull()) {
-                chatPayload.set("businessExtParam", ext);
+                extParameters.set("businessExtParam", ext);
+            } else {
+                extParameters.set("businessExtParam", objectMapper.createObjectNode());
             }
+            // PR2: businessSessionId 来源复用 req.imGroupId()（PRD R9 命名冗余约定）；
+            // 单聊场景 imGroupId == null → platformExtParam.businessSessionId = JSON null。
+            extParameters.set("platformExtParam",
+                    PlatformExtParamBuilder.build(objectMapper,
+                            req.businessSessionDomain(),
+                            req.businessSessionType(),
+                            req.imGroupId()));
+            chatPayload.set("extParameters", extParameters);
 
             String payloadStr;
             try {
@@ -924,8 +938,13 @@ public class GatewayMessageRouter {
             } catch (JsonProcessingException e) {
                 payloadStr = "{}";
             }
+            // PR2 9 参 InvokeCommand：补 domain/domainType/businessSessionId, 让 strategy 反查 + 出站
+            // platformExtParam 都拿到正确上下文。businessSessionId 复用 req.imGroupId()（PRD R9）。
             sender.sendInvokeToGateway(new InvokeCommand(
-                    ak, userId, sessionId, GatewayActions.CHAT, payloadStr, suppressReply));
+                    ak, userId, sessionId, GatewayActions.CHAT, payloadStr, suppressReply,
+                    req.businessSessionDomain(),
+                    req.businessSessionType(),
+                    req.imGroupId()));
             sent++;
         }
 

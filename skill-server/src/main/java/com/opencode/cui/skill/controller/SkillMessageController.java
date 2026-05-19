@@ -259,7 +259,8 @@ public class SkillMessageController {
                 new InvokeCommand(session.getAk(), effectiveUserId, sessionId, action, payload,
                         null,
                         session.getBusinessSessionDomain(),
-                        session.getBusinessSessionType()));
+                        session.getBusinessSessionType(),
+                        session.getBusinessSessionId()));
     }
 
     /**
@@ -475,7 +476,8 @@ public class SkillMessageController {
                         payload,
                         null,
                         session.getBusinessSessionDomain(),
-                        session.getBusinessSessionType()));
+                        session.getBusinessSessionType(),
+                        session.getBusinessSessionId()));
 
         StreamMessage replyMessage = StreamMessage.builder()
                 .type(StreamMessage.Types.PERMISSION_REPLY)

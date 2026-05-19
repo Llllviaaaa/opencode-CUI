@@ -203,6 +203,33 @@ public class GatewayRelayService {
             }
         }
 
+        // PR2 platformExtParam：personal scope（buildInvokeMessage 是其唯一出站路径）也补
+        // extParameters 信封，与 business / default_assistant 形态对齐。同时把 payload 顶层的
+        // businessExtParam 搬到 extParameters.businessExtParam，跟 business wire 形态一致（P2a）。
+        //
+        // 幂等保护：如果 payload 已经有 extParameters（例如 retryPendingMessages 提前构造好），
+        // 不要覆盖，避免双注入。
+        JsonNode payloadAfterAssistantId = message.get("payload");
+        if (payloadAfterAssistantId instanceof ObjectNode payloadObj
+                && !payloadObj.has("extParameters")) {
+            // 1) 把 payload 顶层 businessExtParam 摘出来（与 P2a 对齐：搬入 extParameters）
+            JsonNode removedBusinessExt = payloadObj.remove("businessExtParam");
+
+            // 2) 构造 extParameters 信封：businessExtParam（兜底 {}）+ platformExtParam（三字段）
+            ObjectNode extParameters = objectMapper.createObjectNode();
+            if (removedBusinessExt != null && !removedBusinessExt.isNull()) {
+                extParameters.set("businessExtParam", removedBusinessExt);
+            } else {
+                extParameters.set("businessExtParam", objectMapper.createObjectNode());
+            }
+            extParameters.set("platformExtParam",
+                    PlatformExtParamBuilder.build(objectMapper,
+                            command.domain(),
+                            command.domainType(),
+                            command.businessSessionId()));
+            payloadObj.set("extParameters", extParameters);
+        }
+
         try {
             return objectMapper.writeValueAsString(message);
         } catch (JsonProcessingException e) {
