@@ -19,14 +19,10 @@ import java.util.List;
  *   <li><b>to-source</b>: delivers {@code originalMessage} to a local Source WebSocket connection
  *       identified by {@code targetSourceType} and {@code targetSourceInstanceId}.</li>
  * </ul>
- *
- * <p>Note: the legacy upstream path (Agent->SS) uses a separate channel
- * {@code gw:legacy-relay:{instanceId}} with raw {@code GatewayMessage} JSON,
- * and does not use this wrapper.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record RelayMessage(
-        /** Always {@code "relay"} -- used to distinguish from legacy raw GatewayMessage JSON. */
+        /** Always {@code "relay"}. */
         String type,
 
         /**

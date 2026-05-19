@@ -18,7 +18,6 @@ import java.time.Instant;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -41,11 +40,9 @@ import java.util.function.Consumer;
  *
  * <h3>Channel 模式</h3>
  * <ul>
- *   <li>{@code agent:{ak}} — 路由 invoke 命令到持有 Agent WS 的 Gateway 实例（保留，Phase 2 后可废弃）</li>
+ *   <li>{@code agent:{ak}} — 路由消息到持有 Agent WS 的 Gateway 实例（{@link EventRelayService} 使用）</li>
  *   <li>{@code gw:relay:{instanceId}} — V2 GW 实例间 relay 通道（下行，SS→Agent），
  *       消息格式为 {@link RelayMessage} JSON</li>
- *   <li>{@code gw:legacy-relay:{instanceId}} — Legacy GW 实例间 relay 通道（上行，Agent→SS），
- *       消息格式为裸 {@link GatewayMessage} JSON</li>
  * </ul>
  */
 @Slf4j
@@ -66,17 +63,6 @@ public class RedisMessageBroker {
 
     /** Channel prefix for GW-to-GW relay: gw:relay:{instanceId} */
     private static final String GW_RELAY_CHANNEL_PREFIX = "gw:relay:";
-
-    /** Channel prefix for Legacy GW-to-GW relay: gw:legacy-relay:{instanceId} */
-    private static final String GW_LEGACY_RELAY_CHANNEL_PREFIX = "gw:legacy-relay:";
-
-    // ==================== 废弃的 Key/Channel 前缀（Phase 1.3 重写后移除） ====================
-    @Deprecated
-    private static final String SOURCE_OWNER_KEY_PREFIX = "gw:source:owner:";
-    @Deprecated
-    private static final String SOURCE_OWNERS_SET_PREFIX = "gw:source:owners:";
-    @Deprecated
-    private static final String AGENT_SOURCE_KEY_PREFIX = "gw:agent:source:";
 
     private final StringRedisTemplate redisTemplate;
     private final RedisMessageListenerContainer listenerContainer;
@@ -364,40 +350,6 @@ public class RedisMessageBroker {
     public void unsubscribeFromGwRelay(String instanceId) {
         String channel = GW_RELAY_CHANNEL_PREFIX + instanceId;
         unsubscribe(channel);
-    }
-
-    // ==================== Legacy GW relay pub/sub ====================
-
-    /**
-     * 将 {@link GatewayMessage} 发布到目标 GW 实例的 legacy relay channel
-     * {@code gw:legacy-relay:{targetInstanceId}}。
-     *
-     * <p>供 {@link LegacySkillRelayStrategy} 处理上行（Agent→SS）跨 GW 路由时使用。
-     *
-     * @param instanceId 目标 GW 实例 ID
-     * @param message    需要中转的 GatewayMessage
-     */
-    public void publishToLegacyRelay(String instanceId, GatewayMessage message) {
-        publishMessage(legacyRelayChannel(instanceId), message);
-    }
-
-    /**
-     * 订阅 legacy relay channel {@code gw:legacy-relay:{instanceId}}。
-     *
-     * @param instanceId 本 GW 实例 ID
-     * @param handler    接收反序列化后 {@link GatewayMessage} 的回调
-     */
-    public void subscribeToLegacyRelay(String instanceId, Consumer<GatewayMessage> handler) {
-        subscribe(legacyRelayChannel(instanceId), handler);
-    }
-
-    /**
-     * 取消订阅 legacy relay channel {@code gw:legacy-relay:{instanceId}}。
-     *
-     * @param instanceId 本 GW 实例 ID
-     */
-    public void unsubscribeFromLegacyRelay(String instanceId) {
-        unsubscribe(legacyRelayChannel(instanceId));
     }
 
     // ==================== agentUser（保留） ====================
@@ -794,127 +746,6 @@ public class RedisMessageBroker {
         }
     }
 
-    // ==================== 废弃方法（Phase 1.3 SkillRelayService 重写后删除） ====================
-
-    @Deprecated
-    public void publishToRelay(String instanceId, GatewayMessage message) {
-        publishToLegacyRelay(instanceId, message);
-    }
-
-    @Deprecated
-    public void subscribeToRelay(String instanceId, Consumer<GatewayMessage> handler) {
-        subscribeToLegacyRelay(instanceId, handler);
-    }
-
-    @Deprecated
-    public void unsubscribeFromRelay(String instanceId) {
-        unsubscribeFromLegacyRelay(instanceId);
-    }
-
-    @Deprecated
-    public void refreshSourceOwner(String source, String instanceId, Duration ttl) {
-        if (source == null || source.isBlank() || instanceId == null || instanceId.isBlank()) {
-            return;
-        }
-        String ownerKey = sourceOwnerMember(source, instanceId);
-        redisTemplate.opsForValue().set(sourceOwnerKey(ownerKey), "alive", ttl);
-        redisTemplate.opsForSet().add(sourceOwnersSetKey(source), ownerKey);
-    }
-
-    @Deprecated
-    public void removeSourceOwner(String source, String instanceId) {
-        if (source == null || source.isBlank() || instanceId == null || instanceId.isBlank()) {
-            return;
-        }
-        String ownerKey = sourceOwnerMember(source, instanceId);
-        redisTemplate.delete(sourceOwnerKey(ownerKey));
-        redisTemplate.opsForSet().remove(sourceOwnersSetKey(source), ownerKey);
-    }
-
-    @Deprecated
-    public boolean hasActiveSourceOwner(String source, String instanceId) {
-        if (source == null || source.isBlank() || instanceId == null || instanceId.isBlank()) {
-            return false;
-        }
-        return Boolean.TRUE.equals(redisTemplate.hasKey(sourceOwnerKey(sourceOwnerMember(source, instanceId))));
-    }
-
-    @Deprecated
-    public Set<String> getActiveSourceOwners(String source) {
-        if (source == null || source.isBlank()) {
-            return Set.of();
-        }
-        Set<String> owners = redisTemplate.opsForSet().members(sourceOwnersSetKey(source));
-        if (owners == null || owners.isEmpty()) {
-            return Set.of();
-        }
-        Set<String> activeOwners = new LinkedHashSet<>();
-        for (String owner : owners) {
-            if (owner == null || owner.isBlank()) {
-                continue;
-            }
-            String ownerSource = sourceFromOwnerKey(owner);
-            String ownerInstanceId = instanceIdFromOwnerKey(owner);
-            if (!source.equals(ownerSource) || ownerInstanceId == null) {
-                redisTemplate.opsForSet().remove(sourceOwnersSetKey(source), owner);
-                continue;
-            }
-            if (hasActiveSourceOwner(ownerSource, ownerInstanceId)) {
-                activeOwners.add(owner);
-            } else {
-                redisTemplate.opsForSet().remove(sourceOwnersSetKey(source), owner);
-            }
-        }
-        return activeOwners;
-    }
-
-    @Deprecated
-    public static String sourceOwnerMember(String source, String instanceId) {
-        return source + ":" + instanceId;
-    }
-
-    @Deprecated
-    public static String sourceFromOwnerKey(String ownerKey) {
-        int separatorIndex = ownerKey != null ? ownerKey.indexOf(':') : -1;
-        if (separatorIndex <= 0) {
-            return null;
-        }
-        return ownerKey.substring(0, separatorIndex);
-    }
-
-    @Deprecated
-    public static String instanceIdFromOwnerKey(String ownerKey) {
-        int separatorIndex = ownerKey != null ? ownerKey.indexOf(':') : -1;
-        if (separatorIndex <= 0 || separatorIndex == ownerKey.length() - 1) {
-            return null;
-        }
-        return ownerKey.substring(separatorIndex + 1);
-    }
-
-    @Deprecated
-    public void bindAgentSource(String ak, String source) {
-        if (ak == null || ak.isBlank() || source == null || source.isBlank()) {
-            return;
-        }
-        redisTemplate.opsForValue().set(agentSourceKey(ak), source);
-    }
-
-    @Deprecated
-    public String getAgentSource(String ak) {
-        if (ak == null || ak.isBlank()) {
-            return null;
-        }
-        return redisTemplate.opsForValue().get(agentSourceKey(ak));
-    }
-
-    @Deprecated
-    public void removeAgentSource(String ak) {
-        if (ak == null || ak.isBlank()) {
-            return;
-        }
-        redisTemplate.delete(agentSourceKey(ak));
-    }
-
     // ==================== Internal methods ====================
 
     private void publishMessage(String channel, GatewayMessage message) {
@@ -966,24 +797,5 @@ public class RedisMessageBroker {
 
     private String agentUserKey(String ak) {
         return AGENT_USER_KEY_PREFIX + ak;
-    }
-
-    private String legacyRelayChannel(String instanceId) {
-        return GW_LEGACY_RELAY_CHANNEL_PREFIX + instanceId;
-    }
-
-    @Deprecated
-    private String sourceOwnerKey(String ownerKey) {
-        return SOURCE_OWNER_KEY_PREFIX + ownerKey;
-    }
-
-    @Deprecated
-    private String sourceOwnersSetKey(String source) {
-        return SOURCE_OWNERS_SET_PREFIX + source;
-    }
-
-    @Deprecated
-    private String agentSourceKey(String ak) {
-        return AGENT_SOURCE_KEY_PREFIX + ak;
     }
 }
