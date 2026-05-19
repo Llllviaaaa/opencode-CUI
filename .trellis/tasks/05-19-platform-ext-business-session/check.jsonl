@@ -1,9 +1,0 @@
-{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server 包 Pre-Development Checklist 入口"}
-{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "代码风格 / 命名 / 注释 检查"}
-{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "JsonNode/NullNode 序列化策略检查（缺失字段→null 而非省略 key）"}
-{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "新增/修改 callsite 的日志规范检查"}
-{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "兜底逻辑（非 object / null / missing）一致性检查"}
-{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "三 strategy + personal builder 中重复的 platformExtParam 构造是否抽公共逻辑"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "businessExtParam 移位、pending queue 升级等跨层影响的完整性检查"}
-{"file": "docs/superpowers/specs/2026-04-27-extparams-passthrough-design.md", "reason": "原始 spec — 检查 D2/D5/D16/D17/D19 是否同步更新"}
-{"file": "docs/superpowers/specs/2026-04-07-cloud-agent-protocol.md", "reason": "下游协议文档 — 检查 extParameters 字段说明是否需要同步"}
