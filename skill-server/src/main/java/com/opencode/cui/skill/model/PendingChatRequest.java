@@ -14,7 +14,15 @@ import com.fasterxml.jackson.databind.JsonNode;
  * 然后由 {@code GatewayMessageRouter.retryPendingMessages} 重建完整 chat invoke payload。
  *
  * <p><strong>字段顺序固定</strong>：用于稳定 JSON 字段顺序（便于排查 / diff），与 PRD §Requirements 1 对齐。
- * 字段 6 个，逐一对应 {@code dispatchChatToGateway} 构造的 chat payload 关键字段。
+ * 字段 8 个（PR2 platformExtParam 新增 2 个），逐一对应 {@code dispatchChatToGateway} / retryPendingMessages
+ * 构造的 chat payload 关键字段。
+ *
+ * <p><strong>businessSessionDomain / businessSessionType</strong>（PR2 platformExtParam 新增）：
+ * 用于 {@code retryPendingMessages} 重建 chat payload 时构造 {@code extParameters.platformExtParam}
+ * 的三字段之一。{@code businessSessionId} 复用现有 {@link #imGroupId} 字段语义（PRD R9），
+ * 不额外新增字段；imGroupId 与 businessSessionId 短期同值并存（命名冗余约定）。
+ * 缺失（老格式 JSON entry / fallback 未补齐）时各字段为 Java null，
+ * Jackson 反序列化对缺字段的老 entry 自动兜底 null（{@link JsonCreator} 注解保留 default null）。
  *
  * <p><strong>不含 {@code assistantId}</strong>：assistantId 由
  * {@code GatewayRelayService.buildInvokeMessage} 在 CHAT / CREATE_SESSION 时自动注入，
@@ -28,21 +36,27 @@ import com.fasterxml.jackson.databind.JsonNode;
  *   "sendUserAccount": "user-real-sender",
  *   "imGroupId": "group-001",
  *   "messageId": "1717939200000",
- *   "businessExtParam": {"foo": "bar"}
+ *   "businessExtParam": {"foo": "bar"},
+ *   "businessSessionDomain": "im",
+ *   "businessSessionType": "group"
  * }
  * }</pre>
  *
  * <p><strong>降级路径</strong>：当上下文不全（如 {@code rebuildFromStoredUserMessage} 仅有 text + session）时，
  * 通过 {@link #fromSessionFallback(SkillSession, String)} 用 session 反查 owner / businessSessionId 兜底；
- * sender 退化为 owner、businessExtParam = null。fallback 之前会校验 {@code assistantAccount} / {@code userId} 非空，
+ * sender 退化为 owner、businessExtParam = null，businessSessionDomain / businessSessionType 从
+ * {@code session.getBusinessSession*()} 取值。fallback 之前会校验 {@code assistantAccount} / {@code userId} 非空，
  * 缺失即抛 {@link IllegalArgumentException}，避免后续云端 fast-fail，参见 PRD Codex Review Major M5。
  *
- * @param text             用户输入的纯文本 prompt
- * @param assistantAccount 助手账号（信封层必填，下游云端策略消费）
- * @param sendUserAccount  实际发送者账号（群聊真实 sender；单聊场景为 owner）
- * @param imGroupId        群聊业务会话 ID（== {@code SkillSession.businessSessionId}）；单聊场景为 null
- * @param messageId        消息 ID（首次对话用毫秒时间戳即可，无业务幂等语义）
- * @param businessExtParam 业务扩展参数（透传给下游，可为 null）
+ * @param text                  用户输入的纯文本 prompt
+ * @param assistantAccount      助手账号（信封层必填，下游云端策略消费）
+ * @param sendUserAccount       实际发送者账号（群聊真实 sender；单聊场景为 owner）
+ * @param imGroupId             群聊业务会话 ID（== {@code SkillSession.businessSessionId}）；单聊场景为 null；
+ *                              亦作为 platformExtParam.businessSessionId 来源
+ * @param messageId             消息 ID（首次对话用毫秒时间戳即可，无业务幂等语义）
+ * @param businessExtParam      业务扩展参数（透传给下游，可为 null）
+ * @param businessSessionDomain 业务域（PR2 platformExtParam 新增；来自 {@code SkillSession.businessSessionDomain}）
+ * @param businessSessionType   业务会话类型（PR2 platformExtParam 新增；来自 {@code SkillSession.businessSessionType}）
  */
 public record PendingChatRequest(
         @JsonProperty("text") String text,
@@ -50,17 +64,22 @@ public record PendingChatRequest(
         @JsonProperty("sendUserAccount") String sendUserAccount,
         @JsonProperty("imGroupId") String imGroupId,
         @JsonProperty("messageId") String messageId,
-        @JsonProperty("businessExtParam") JsonNode businessExtParam) {
+        @JsonProperty("businessExtParam") JsonNode businessExtParam,
+        @JsonProperty("businessSessionDomain") String businessSessionDomain,
+        @JsonProperty("businessSessionType") String businessSessionType) {
 
     /**
      * 显式 {@link JsonCreator} 注解 + {@link JsonProperty} 让 Jackson 反序列化稳定工作，
      * 无需依赖 {@code -parameters} 编译标志或 {@code ParameterNamesModule} 自动注册。
      * 与同包的 {@link DefaultAssistantRule} 保持一致风格。
+     *
+     * <p>老格式 JSON entry（缺 businessSessionDomain / businessSessionType）反序列化时，
+     * Jackson 自动把缺失字段映射为 Java null，record canonical constructor 不做强校验。
      */
     @JsonCreator
     public PendingChatRequest {
-        // 注：本任务（PR1）不在 record canonical constructor 中对字段做非空校验：
-        //   - retryPendingMessages 路径允许 imGroupId / businessExtParam 为 null（单聊场景）。
+        // 注：本任务不在 record canonical constructor 中对字段做非空校验：
+        //   - retryPendingMessages 路径允许 imGroupId / businessExtParam / businessSessionDomain / businessSessionType 为 null（单聊 / 老 entry 场景）。
         //   - text / sender / assistantAccount 由上游调用方保证（dispatchChatToGateway 或 fromSessionFallback）。
         //   - 仅 fromSessionFallback 工厂方法对 session.assistantAccount / session.userId 强制校验。
     }
@@ -86,6 +105,8 @@ public record PendingChatRequest(
      *        参见 PRD Codex Review Major M3）</li>
      *   <li>{@code messageId}        = {@code System.currentTimeMillis()}（重发时刻时间戳）</li>
      *   <li>{@code businessExtParam} = {@code null}</li>
+     *   <li>{@code businessSessionDomain} = {@code session.getBusinessSessionDomain()}</li>
+     *   <li>{@code businessSessionType}   = {@code session.getBusinessSessionType()}</li>
      * </ul>
      *
      * <p><strong>校验</strong>：{@code session.getAssistantAccount()} 或 {@code session.getUserId()} 任一空白即抛
@@ -118,7 +139,9 @@ public record PendingChatRequest(
                 userId,
                 imGroupId,
                 messageId,
-                null);
+                null,
+                session.getBusinessSessionDomain(),
+                session.getBusinessSessionType());
     }
 
     private static boolean isBlank(String s) {

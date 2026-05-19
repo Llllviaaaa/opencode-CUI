@@ -365,7 +365,9 @@ public class InboundProcessingService {
                     effectiveSender,
                     "group".equals(sessionType) ? sessionId : null,
                     messageId,
-                    businessExtParam);
+                    businessExtParam,
+                    businessDomain,
+                    sessionType);
             rebuildService.appendPendingMessage(String.valueOf(session.getId()), pendingRequest);
         }
 

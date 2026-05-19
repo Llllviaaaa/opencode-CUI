@@ -190,7 +190,9 @@ public class ImSessionManager {
                             effectiveSender,
                             "group".equals(sessionType) ? sessionId : null,
                             String.valueOf(System.currentTimeMillis()),
-                            businessExtParam);
+                            businessExtParam,
+                            businessDomain,
+                            sessionType);
                     log.info("[ENTRY] createSessionAsync.appendPendingChatRequest: sessionId={}, sessionType={}, hasExt={}, isGroup={}",
                             created.getId(), sessionType,
                             businessExtParam != null,

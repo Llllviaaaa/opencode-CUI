@@ -453,9 +453,9 @@ class GatewayMessageRouterTest {
 
         // PR2: retryPendingMessages 现在调 consumePendingRequests 返回 List<PendingChatRequest>
         com.opencode.cui.skill.model.PendingChatRequest req1 = new com.opencode.cui.skill.model.PendingChatRequest(
-                "hello", "assist-1", "sender-real-1", "biz-group-001", "msg-1", null);
+                "hello", "assist-1", "sender-real-1", "biz-group-001", "msg-1", null, "im", "group");
         com.opencode.cui.skill.model.PendingChatRequest req2 = new com.opencode.cui.skill.model.PendingChatRequest(
-                "world", "assist-1", "sender-real-2", "biz-group-001", "msg-2", null);
+                "world", "assist-1", "sender-real-2", "biz-group-001", "msg-2", null, "im", "group");
         when(rebuildService.consumePendingRequests(welinkSessionId))
                 .thenReturn(java.util.List.of(req1, req2));
         when(channelLookupService.getToolType(ak)).thenReturn(java.util.Optional.of("plugin-x"));
@@ -500,7 +500,7 @@ class GatewayMessageRouterTest {
         when(sessionService.findByIdSafe(1002L)).thenReturn(directSession);
 
         com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
-                "ping", "assist-2", "owner-2", null, "msg-d", null);
+                "ping", "assist-2", "owner-2", null, "msg-d", null, "im", "direct");
         when(rebuildService.consumePendingRequests(welinkSessionId))
                 .thenReturn(java.util.List.of(req));
 
@@ -544,7 +544,7 @@ class GatewayMessageRouterTest {
 
         com.fasterxml.jackson.databind.JsonNode ext = objectMapper.readTree("{\"topicId\":777,\"source\":\"im\"}");
         com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
-                "你好", "assist-full", "sender-real-77", "biz-group-2001", "1717939200000", ext);
+                "你好", "assist-full", "sender-real-77", "biz-group-2001", "1717939200000", ext, "im", "group");
         when(rebuildService.consumePendingRequests(welinkSessionId)).thenReturn(java.util.List.of(req));
 
         ObjectNode node = objectMapper.createObjectNode();
@@ -565,13 +565,22 @@ class GatewayMessageRouterTest {
         assertEquals("sender-real-77", payload.path("sendUserAccount").asText());
         assertEquals("biz-group-2001", payload.path("imGroupId").asText());
         assertEquals("1717939200000", payload.path("messageId").asText());
-        assertTrue(payload.has("businessExtParam"), "businessExtParam must appear in payload");
-        assertEquals(777, payload.path("businessExtParam").path("topicId").asInt());
-        assertEquals("im", payload.path("businessExtParam").path("source").asText());
+        // PR2: businessExtParam 已搬到 extParameters.businessExtParam（不再 payload 顶层）
+        assertFalse(payload.has("businessExtParam"),
+                "PR2: businessExtParam must NOT appear at payload top-level, moved into extParameters");
+        com.fasterxml.jackson.databind.JsonNode extParameters = payload.path("extParameters");
+        assertTrue(extParameters.isObject(), "PR2: extParameters envelope must be injected");
+        assertEquals(777, extParameters.path("businessExtParam").path("topicId").asInt());
+        assertEquals("im", extParameters.path("businessExtParam").path("source").asText());
+        // platformExtParam 三字段：businessSessionDomain / businessSessionType / businessSessionId
+        com.fasterxml.jackson.databind.JsonNode platform = extParameters.path("platformExtParam");
+        assertEquals("im", platform.path("businessSessionDomain").asText());
+        assertEquals("group", platform.path("businessSessionType").asText());
+        assertEquals("biz-group-2001", platform.path("businessSessionId").asText());
     }
 
     @Test
-    @DisplayName("PR2: businessExtParam = Java null -> payload 不含 businessExtParam 字段")
+    @DisplayName("PR2 platformExtParam: businessExtParam = Java null -> extParameters.businessExtParam = {}（顶层不出现）")
     void retryPendingMessages_businessExtParamJavaNull_omitFromPayload() throws Exception {
         GatewayMessageRouter r = buildRouter(true);
         GatewayMessageRouter.DownstreamSender sender =
@@ -586,7 +595,7 @@ class GatewayMessageRouterTest {
         when(sessionService.findByIdSafe(2002L)).thenReturn(s);
 
         com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
-                "t", "assist-x", "user-x", null, "m-1", null);
+                "t", "assist-x", "user-x", null, "m-1", null, "im", "direct");
         when(rebuildService.consumePendingRequests(welinkSessionId)).thenReturn(java.util.List.of(req));
 
         ObjectNode node = objectMapper.createObjectNode();
@@ -599,12 +608,16 @@ class GatewayMessageRouterTest {
         verify(sender, times(1)).sendInvokeToGateway(captor.capture());
         com.fasterxml.jackson.databind.JsonNode payload = objectMapper.readTree(captor.getValue().payload());
 
+        // PR2 platformExtParam: 顶层 businessExtParam 永远不出现; extParameters.businessExtParam 兜底 {}
         assertFalse(payload.has("businessExtParam"),
-                "Java null businessExtParam must be omitted (not written as 'businessExtParam':null)");
+                "PR2: businessExtParam must NOT appear at payload top-level");
+        com.fasterxml.jackson.databind.JsonNode bep = payload.path("extParameters").path("businessExtParam");
+        assertTrue(bep.isObject(), "extParameters.businessExtParam must default to empty {} when Java null");
+        assertEquals(0, bep.size(), "default extParameters.businessExtParam should be empty {}");
     }
 
     @Test
-    @DisplayName("PR2: businessExtParam = NullNode -> payload 不含 businessExtParam 字段")
+    @DisplayName("PR2 platformExtParam: businessExtParam = NullNode -> extParameters.businessExtParam = {}（顶层不出现）")
     void retryPendingMessages_businessExtParamNullNode_omitFromPayload() throws Exception {
         GatewayMessageRouter r = buildRouter(true);
         GatewayMessageRouter.DownstreamSender sender =
@@ -620,7 +633,7 @@ class GatewayMessageRouterTest {
 
         com.fasterxml.jackson.databind.node.NullNode nullNode = com.fasterxml.jackson.databind.node.NullNode.getInstance();
         com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
-                "t", "assist-x", "user-x", null, "m-1", nullNode);
+                "t", "assist-x", "user-x", null, "m-1", nullNode, "im", "direct");
         when(rebuildService.consumePendingRequests(welinkSessionId)).thenReturn(java.util.List.of(req));
 
         ObjectNode node = objectMapper.createObjectNode();
@@ -633,12 +646,16 @@ class GatewayMessageRouterTest {
         verify(sender, times(1)).sendInvokeToGateway(captor.capture());
         com.fasterxml.jackson.databind.JsonNode payload = objectMapper.readTree(captor.getValue().payload());
 
+        // PR2 platformExtParam: NullNode 与 Java null 同语义, 兜底 {}
         assertFalse(payload.has("businessExtParam"),
-                "NullNode businessExtParam must be omitted (NullNode != Java null but PR2 normalizes both)");
+                "PR2: businessExtParam must NOT appear at payload top-level");
+        com.fasterxml.jackson.databind.JsonNode bep = payload.path("extParameters").path("businessExtParam");
+        assertTrue(bep.isObject(), "extParameters.businessExtParam must default to empty {} when NullNode");
+        assertEquals(0, bep.size());
     }
 
     @Test
-    @DisplayName("PR2: businessExtParam = ObjectNode -> payload 含 businessExtParam JsonNode")
+    @DisplayName("PR2 platformExtParam: businessExtParam = ObjectNode -> 出现在 extParameters.businessExtParam 内")
     void retryPendingMessages_businessExtParamObject_includedInPayload() throws Exception {
         GatewayMessageRouter r = buildRouter(true);
         GatewayMessageRouter.DownstreamSender sender =
@@ -654,7 +671,7 @@ class GatewayMessageRouterTest {
 
         com.fasterxml.jackson.databind.JsonNode ext = objectMapper.readTree("{\"k\":\"v\"}");
         com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
-                "t", "assist-x", "user-x", null, "m-1", ext);
+                "t", "assist-x", "user-x", null, "m-1", ext, "im", "direct");
         when(rebuildService.consumePendingRequests(welinkSessionId)).thenReturn(java.util.List.of(req));
 
         ObjectNode node = objectMapper.createObjectNode();
@@ -667,8 +684,12 @@ class GatewayMessageRouterTest {
         verify(sender, times(1)).sendInvokeToGateway(captor.capture());
         com.fasterxml.jackson.databind.JsonNode payload = objectMapper.readTree(captor.getValue().payload());
 
-        assertTrue(payload.has("businessExtParam"));
-        assertEquals("v", payload.path("businessExtParam").path("k").asText());
+        // PR2: businessExtParam 已搬到 extParameters.businessExtParam
+        assertFalse(payload.has("businessExtParam"),
+                "PR2: businessExtParam must NOT appear at payload top-level");
+        com.fasterxml.jackson.databind.JsonNode extParameters = payload.path("extParameters");
+        assertTrue(extParameters.path("businessExtParam").isObject());
+        assertEquals("v", extParameters.path("businessExtParam").path("k").asText());
     }
 
     @Test
@@ -688,7 +709,7 @@ class GatewayMessageRouterTest {
         when(sessionService.findByIdSafe(2005L)).thenReturn(group);
 
         com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
-                "群消息", "assist-G", "sender-G", "biz-real-group-id-555", "m-G", null);
+                "群消息", "assist-G", "sender-G", "biz-real-group-id-555", "m-G", null, "im", "group");
         when(rebuildService.consumePendingRequests(welinkSessionId)).thenReturn(java.util.List.of(req));
 
         ObjectNode node = objectMapper.createObjectNode();
@@ -720,7 +741,7 @@ class GatewayMessageRouterTest {
         when(sessionService.findByIdSafe(2006L)).thenReturn(direct);
 
         com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
-                "单聊消息", "assist-D", "owner-D", null, "m-D", null);
+                "单聊消息", "assist-D", "owner-D", null, "m-D", null, "im", "direct");
         when(rebuildService.consumePendingRequests(welinkSessionId)).thenReturn(java.util.List.of(req));
 
         ObjectNode node = objectMapper.createObjectNode();
@@ -755,7 +776,7 @@ class GatewayMessageRouterTest {
 
         // 半填 entry：text 有, assistantAccount 缺 → critical_field_missing
         com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
-                "broken", null, "user-x", null, "m-broken", null);
+                "broken", null, "user-x", null, "m-broken", null, "im", "direct");
         when(rebuildService.consumePendingRequests(welinkSessionId)).thenReturn(java.util.List.of(req));
 
         ObjectNode node = objectMapper.createObjectNode();
@@ -801,9 +822,9 @@ class GatewayMessageRouterTest {
         when(sessionService.findByIdSafe(2009L)).thenReturn(s);
 
         com.opencode.cui.skill.model.PendingChatRequest blankText = new com.opencode.cui.skill.model.PendingChatRequest(
-                "", "assist", "user", null, "m-b", null);
+                "", "assist", "user", null, "m-b", null, "im", "direct");
         com.opencode.cui.skill.model.PendingChatRequest goodOne = new com.opencode.cui.skill.model.PendingChatRequest(
-                "real", "assist", "user", null, "m-r", null);
+                "real", "assist", "user", null, "m-r", null, "im", "direct");
         when(rebuildService.consumePendingRequests(welinkSessionId))
                 .thenReturn(java.util.List.of(blankText, goodOne));
 

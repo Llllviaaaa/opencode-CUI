@@ -16,6 +16,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -797,10 +798,10 @@ class GatewayRelayServiceTest {
         }
 
         @Test
-        @DisplayName("ⓕ-2: personal scope chat invoke：businessExtParam 字段随 payload 原样透下游不剥离")
+        @DisplayName("ⓕ-2 (PR2 platformExtParam 升级)：personal scope chat invoke 把 businessExtParam 搬到 extParameters.businessExtParam + 注入 platformExtParam 三字段")
         void personalScopeDoesNotStripBusinessExtParam() throws Exception {
-                // personal scope：isBusiness() == false → GatewayRelayService 走 buildInvokeMessage(command)
-                // buildInvokeMessage 把 payload 解析后直接 set，不剥离任何字段
+                // PR2 升级前：personal 路径透传 businessExtParam 到 payload 顶层
+                // PR2 升级后：personal 路径与 business 对齐, businessExtParam 搬到 extParameters.businessExtParam
                 AssistantInfo personalInfo = new AssistantInfo();
                 personalInfo.setAssistantScope("personal");
                 when(assistantInfoService.getAssistantInfo("ak-personal")).thenReturn(personalInfo);
@@ -812,20 +813,31 @@ class GatewayRelayServiceTest {
 
                 String payload = "{\"text\":\"hi\",\"toolSessionId\":\"open-1\","
                         + "\"businessExtParam\":{\"k\":\"v\"}}";
-                InvokeCommand cmd = new InvokeCommand("ak-personal", "u-1", "42", "chat", payload);
+                // PR2: 9 参 InvokeCommand 携带 domain/domainType/businessSessionId, 让 buildInvokeMessage 注入 platformExtParam
+                InvokeCommand cmd = new InvokeCommand("ak-personal", "u-1", "42", "chat", payload,
+                                null, "im", "direct", "biz-42");
                 service.sendInvokeToGateway(cmd);
 
                 ArgumentCaptor<String> messageCap = ArgumentCaptor.forClass(String.class);
                 verify(gatewayRelayTarget).sendToGateway(messageCap.capture());
 
-                // buildInvokeMessage: message.set("payload", parsedPayloadNode)
-                // → 出站消息的 payload 节点即为解析后的 payload，businessExtParam 应原样保留
+                // PR2 wire 形态: 顶层 businessExtParam 不再出现, 搬入 extParameters.businessExtParam
                 JsonNode sent = objectMapper.readTree(messageCap.getValue());
                 JsonNode sentPayload = sent.get("payload");
                 assertNotNull(sentPayload);
-                assertTrue(sentPayload.has("businessExtParam"));
-                assertTrue(sentPayload.get("businessExtParam").isObject());
-                assertEquals("v", sentPayload.get("businessExtParam").get("k").asText());
+                assertFalse(sentPayload.has("businessExtParam"),
+                                "PR2: businessExtParam must NOT appear at payload top-level");
+
+                JsonNode extParameters = sentPayload.get("extParameters");
+                assertNotNull(extParameters, "PR2: extParameters envelope must be injected on personal path");
+                assertTrue(extParameters.get("businessExtParam").isObject());
+                assertEquals("v", extParameters.get("businessExtParam").get("k").asText());
+
+                // platformExtParam 三字段
+                JsonNode platform = extParameters.get("platformExtParam");
+                assertEquals("im", platform.get("businessSessionDomain").asText());
+                assertEquals("direct", platform.get("businessSessionType").asText());
+                assertEquals("biz-42", platform.get("businessSessionId").asText());
         }
 
         private JsonNode readPublishedMessage(String payload) {
