@@ -7,7 +7,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.socket.TextMessage;
@@ -20,7 +19,6 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -28,7 +26,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -41,8 +38,6 @@ class SkillRelayServiceV2Test {
 
     @Mock
     private RedisMessageBroker redisMessageBroker;
-    @Mock
-    private LegacySkillRelayStrategy legacyStrategy;
     @Mock
     private EventRelayService eventRelayService;
     @Mock
@@ -65,7 +60,7 @@ class SkillRelayServiceV2Test {
     @BeforeEach
     void setUp() {
         routingTable = new UpstreamRoutingTable(100000, 30);
-        service = new SkillRelayService(redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, legacyStrategy, List.of());
+        service = new SkillRelayService(redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, List.of());
         service.setEventRelayService(eventRelayService);
     }
 
@@ -427,34 +422,6 @@ class SkillRelayServiceV2Test {
         }
     }
 
-    // ==================== Legacy fallback ====================
-
-    @Nested
-    @DisplayName("Legacy fallback")
-    class LegacyFallbackTests {
-
-        @Test
-        @DisplayName("relayToSkill always calls legacy (for cross-Pod Redis relay), returns false when both fail")
-        void relayToSkill_legacyDisabled_noFallback() {
-            // No Mesh connections, Legacy always attempted for cross-Pod relay capability.
-            // Legacy returns false when resolveMessageSource finds no agent-source binding.
-            when(legacyStrategy.relayToSkill(any())).thenReturn(false);
-
-            GatewayMessage msg = GatewayMessage.builder()
-                    .type(GatewayMessage.Type.TOOL_EVENT)
-                    .toolSessionId("T1")
-                    .source(SOURCE_TYPE_SKILL)
-                    .build();
-
-            boolean result = service.relayToSkill(msg);
-
-            assertFalse(result);
-            // Legacy is always called — removed getActiveConnectionCount guard
-            // to support cross-Pod relay via Redis owner mechanism
-            verify(legacyStrategy).relayToSkill(any());
-        }
-    }
-
     // ==================== Heartbeat refresh ====================
 
     @Nested
@@ -590,8 +557,6 @@ class SkillRelayServiceV2Test {
             registerSs1();
             registerSs1B();
             registerSs2();
-
-            when(legacyStrategy.getActiveConnectionCount()).thenReturn(0);
 
             assertEquals(3, service.getActiveSourceConnectionCount());
         }

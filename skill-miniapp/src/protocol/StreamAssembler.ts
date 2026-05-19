@@ -199,9 +199,9 @@ export class StreamAssembler {
         part.header = msg.header ?? questionFields.header ?? part.header;
         part.question = msg.question ?? questionFields.question ?? part.question;
         part.options = questionFields.options ?? normalizeQuestionOptions(msg.options) ?? part.options;
-        // personal scope 快路径：透传 SS 顶层 requestId 到 MessagePart（D9：历史恢复时 msg.requestId 为 undefined）
-        if (msg.requestId) {
-          part.requestId = msg.requestId;
+        // personal scope 快路径：透传 SS 顶层 questionId 到 MessagePart（D9：历史恢复时 msg.questionId 为 undefined）
+        if (msg.questionId) {
+          part.questionId = msg.questionId;
         }
         part.subagentSessionId = msg.subagentSessionId ?? part.subagentSessionId;
         part.subagentName = msg.subagentName ?? part.subagentName;

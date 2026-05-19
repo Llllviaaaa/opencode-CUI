@@ -8,7 +8,7 @@ import { QuestionCard } from './QuestionCard';
 interface SubtaskBlockProps {
   part: MessagePart;
   onPermissionDecision?: (permissionId: string, response: 'once' | 'always' | 'reject', subagentSessionId?: string) => void;
-  onQuestionAnswer?: (answer: string, toolCallId?: string, subagentSessionId?: string, requestId?: string) => void;
+  onQuestionAnswer?: (answer: string, toolCallId?: string, subagentSessionId?: string, questionId?: string) => void;
 }
 
 export const SubtaskBlock: React.FC<SubtaskBlockProps> = ({

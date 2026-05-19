@@ -189,13 +189,13 @@ class OpenCodeEventTranslatorTest {
     assertEquals("Choose one", translated.getQuestionInfo().getHeader());
     assertEquals("Which option?", translated.getQuestionInfo().getQuestion());
     assertEquals(java.util.List.of("A", "B"), translated.getQuestionInfo().getOptions());
-    // requestId 与 properties.id == partId 同源（personal scope 快路径）
-    assertEquals("question-1", translated.getQuestionInfo().getRequestId());
-    assertEquals(translated.getPartId(), translated.getQuestionInfo().getRequestId());
+    // questionId 与 properties.id == partId 同源（personal scope 快路径）
+    assertEquals("question-1", translated.getQuestionInfo().getQuestionId());
+    assertEquals(translated.getPartId(), translated.getQuestionInfo().getQuestionId());
   }
 
   @Test
-  @DisplayName("question.asked: requestId == partId == properties.id (personal scope fast-path)")
+  @DisplayName("question.asked: questionId == partId == properties.id (personal scope fast-path)")
   void questionRequestIdMatchesPartIdAndPropertiesId() throws Exception {
     var event = objectMapper.readTree("""
         {
@@ -212,11 +212,11 @@ class OpenCodeEventTranslatorTest {
     assertNotNull(m);
     assertEquals("req-uuid-abc", m.getPartId());
     assertNotNull(m.getQuestionInfo());
-    assertEquals("req-uuid-abc", m.getQuestionInfo().getRequestId());
+    assertEquals("req-uuid-abc", m.getQuestionInfo().getQuestionId());
   }
 
   @Test
-  @DisplayName("StreamMessage @JsonUnwrapped surfaces QuestionInfo.requestId at top level")
+  @DisplayName("StreamMessage @JsonUnwrapped surfaces QuestionInfo.questionId at top level")
   void questionInfoRequestIdSerializedAtTopLevel() throws Exception {
     StreamMessage m = StreamMessage.builder()
         .type(StreamMessage.Types.QUESTION)
@@ -224,13 +224,13 @@ class OpenCodeEventTranslatorTest {
         .questionInfo(StreamMessage.QuestionInfo.builder()
             .header("h")
             .question("q")
-            .requestId("req-1")
+            .questionId("req-1")
             .build())
         .build();
     String json = objectMapper.writeValueAsString(m);
     // @JsonUnwrapped: QuestionInfo 字段平铺到顶层（no nested questionInfo wrapper）
     var node = objectMapper.readTree(json);
-    assertEquals("req-1", node.path("requestId").asText());
+    assertEquals("req-1", node.path("questionId").asText());
     assertEquals("req-1", node.path("partId").asText());
   }
 

@@ -5,7 +5,7 @@ import type { Message } from '../protocol/types';
 interface ConversationViewProps {
   messages: Message[];
   loading?: boolean;
-  onQuestionAnswer?: (answer: string, toolCallId?: string, subagentSessionId?: string, requestId?: string) => void;
+  onQuestionAnswer?: (answer: string, toolCallId?: string, subagentSessionId?: string, questionId?: string) => void;
   onPermissionDecision?: (permissionId: string, response: 'once' | 'always' | 'reject', subagentSessionId?: string) => void;
 }
 

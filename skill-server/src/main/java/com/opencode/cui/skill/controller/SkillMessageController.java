@@ -229,10 +229,10 @@ public class SkillMessageController {
             qr.put("answer", request.getContent());
             qr.put("toolCallId", request.getToolCallId());
             qr.put("toolSessionId", targetToolSessionId);
-            // D8：仅当 requestId 非空白时塞入 payload（避免下游 JSON 含 null/空字符串污染，让 plugin 走 fallback）
-            String requestId = request.getRequestId();
-            if (requestId != null && !requestId.isBlank()) {
-                qr.put("requestId", requestId);
+            // D8：仅当 questionId 非空白时塞入 payload（避免下游 JSON 含 null/空字符串污染，让 plugin 走 fallback）
+            String questionId = request.getQuestionId();
+            if (questionId != null && !questionId.isBlank()) {
+                qr.put("questionId", questionId);
             }
             // D8 修复：补 assistantAccount + sendUserAccount（默认助手 + business 都补，老 chat 已含）
             qr.put("assistantAccount", session.getAssistantAccount());
@@ -571,7 +571,7 @@ public class SkillMessageController {
          * 非空时 SS 透传给 plugin，新版 plugin 直接 POST /question/{requestID}/reply。
          * 缺失/空白走老路径（plugin GET /question 反查）。
          */
-        private String requestId;
+        private String questionId;
         /** 可选：业务扩展参数，透传到云端 extParameters.businessExtParam */
         private JsonNode businessExtParam;
     }

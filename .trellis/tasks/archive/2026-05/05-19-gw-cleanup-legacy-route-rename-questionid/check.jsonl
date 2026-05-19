@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/ai-gateway/backend/index.md", "reason": "ai-gateway spec 索引"}
+{"file": ".trellis/spec/ai-gateway/backend/conventions.md", "reason": "PR1 主战场代码约定核查"}
+{"file": ".trellis/spec/ai-gateway/backend/logging-guidelines.md", "reason": "日志规范一致性核查"}
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server spec 索引"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "JsonProperty/字段命名核查"}
+{"file": ".trellis/spec/skill-miniapp/frontend/index.md", "reason": "miniapp spec 索引"}
+{"file": ".trellis/spec/skill-miniapp/frontend/type-safety.md", "reason": "TS 协议类型重命名核查"}
+{"file": ".trellis/spec/skill-miniapp/frontend/quality-guidelines.md", "reason": "miniapp 质量门"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层一致性核查"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "重命名残留 grep first"}
+{"file": ".trellis/tasks/05-19-gw-cleanup-legacy-route-rename-questionid/prd.md", "reason": "PRD + Acceptance Criteria 验收基线"}

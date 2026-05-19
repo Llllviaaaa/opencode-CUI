@@ -357,7 +357,7 @@ Plugin:                 ChatAction → SDK prompt()
 | 片段 ID | part.id / partID | — | — | partId | partId |
 | 工具调用 ID | callID / tool.callID | toolCallId | — | toolCallId | toolCallId |
 | 权限 ID | permissionID | permissionId | — | permissionId | permissionId |
-| 问题请求 ID | requestID | requestId | — | — | — |
+| 问题请求 ID | requestID | questionId | — | — | — |
 
 ### 3.3 事件/消息类型
 

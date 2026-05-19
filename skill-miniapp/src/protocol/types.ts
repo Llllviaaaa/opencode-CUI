@@ -81,8 +81,8 @@ export interface StreamMessage {
   header?: string;
   question?: string;
   options?: QuestionOption[];
-  /** opencode question request id（personal scope 快路径）。来源：SS QuestionInfo.requestId @JsonUnwrapped 顶层 */
-  requestId?: string;
+  /** opencode question request id（personal scope 快路径）。来源：SS QuestionInfo.questionId @JsonUnwrapped 顶层 */
+  questionId?: string;
 
   permissionId?: string;
   permType?: string;
@@ -132,7 +132,7 @@ export interface MessagePart {
   options?: QuestionOption[];
   answered?: boolean;
   /** opencode question request id（personal scope 快路径）；只在实时 question event 出现，历史恢复时为 undefined（D9 fallback） */
-  requestId?: string;
+  questionId?: string;
 
   permissionId?: string;
   permType?: string;

@@ -828,7 +828,7 @@ class SkillMessageControllerTest {
     }
 
     @Test
-    @DisplayName("sendMessage question_reply: requestId 非空 → payload 含 requestId（personal scope 快路径）")
+    @DisplayName("sendMessage question_reply: questionId 非空 → payload 含 questionId（personal scope 快路径）")
     void sendMessageQuestionReplyPayloadHasRequestIdWhenProvided() throws Exception {
         com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
         SkillSession session = new SkillSession();
@@ -845,17 +845,17 @@ class SkillMessageControllerTest {
         var request = new SkillMessageController.SendMessageRequest();
         request.setContent("a");
         request.setToolCallId("tc-1");
-        request.setRequestId("req-uuid-1");
+        request.setQuestionId("req-uuid-1");
         controller.sendMessage("u", "1", request);
 
         ArgumentCaptor<InvokeCommand> capt = ArgumentCaptor.forClass(InvokeCommand.class);
         verify(gatewayRelayService).sendInvokeToGateway(capt.capture());
         com.fasterxml.jackson.databind.JsonNode payload = om.readTree(capt.getValue().payload());
-        assertEquals("req-uuid-1", payload.get("requestId").asText());
+        assertEquals("req-uuid-1", payload.get("questionId").asText());
     }
 
     @Test
-    @DisplayName("sendMessage question_reply: requestId 为 null → payload 无 requestId key（D8）")
+    @DisplayName("sendMessage question_reply: questionId 为 null → payload 无 questionId key（D8）")
     void sendMessageQuestionReplyPayloadOmitsRequestIdWhenAbsent() throws Exception {
         com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
         SkillSession session = new SkillSession();
@@ -872,17 +872,17 @@ class SkillMessageControllerTest {
         var request = new SkillMessageController.SendMessageRequest();
         request.setContent("a");
         request.setToolCallId("tc-1");
-        // requestId 不设置（null）
+        // questionId 不设置（null）
         controller.sendMessage("u", "1", request);
 
         ArgumentCaptor<InvokeCommand> capt = ArgumentCaptor.forClass(InvokeCommand.class);
         verify(gatewayRelayService).sendInvokeToGateway(capt.capture());
         com.fasterxml.jackson.databind.JsonNode payload = om.readTree(capt.getValue().payload());
-        org.junit.jupiter.api.Assertions.assertFalse(payload.has("requestId"), "payload 不应含 requestId key");
+        org.junit.jupiter.api.Assertions.assertFalse(payload.has("questionId"), "payload 不应含 questionId key");
     }
 
     @Test
-    @DisplayName("sendMessage question_reply: requestId 为空白 → payload 无 requestId key（D8）")
+    @DisplayName("sendMessage question_reply: questionId 为空白 → payload 无 questionId key（D8）")
     void sendMessageQuestionReplyPayloadOmitsRequestIdWhenBlank() throws Exception {
         com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
         SkillSession session = new SkillSession();
@@ -899,13 +899,13 @@ class SkillMessageControllerTest {
         var request = new SkillMessageController.SendMessageRequest();
         request.setContent("a");
         request.setToolCallId("tc-1");
-        request.setRequestId("   "); // blank
+        request.setQuestionId("   "); // blank
         controller.sendMessage("u", "1", request);
 
         ArgumentCaptor<InvokeCommand> capt = ArgumentCaptor.forClass(InvokeCommand.class);
         verify(gatewayRelayService).sendInvokeToGateway(capt.capture());
         com.fasterxml.jackson.databind.JsonNode payload = om.readTree(capt.getValue().payload());
-        org.junit.jupiter.api.Assertions.assertFalse(payload.has("requestId"), "blank requestId 应被视为缺失");
+        org.junit.jupiter.api.Assertions.assertFalse(payload.has("questionId"), "blank questionId 应被视为缺失");
     }
 
     @Test
