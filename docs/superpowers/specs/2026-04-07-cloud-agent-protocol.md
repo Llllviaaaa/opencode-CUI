@@ -206,6 +206,47 @@ SS 按云端 API 规范构建，GW 不解析，直接作为 HTTP Body 发送。
 | extParameters.businessExtParam | Object | ✅ | 业务方扩展参数（自由 JSON 对象）；由 IM/external/miniapp 入参信封透传，skill-server 不解析；缺省 / 类型异常 / 解析失败时由 skill-server 兜底为 `{}`；业务字段（如 `isHwEmployee` / `actionParam` / `knowledgeId`）由业务方自行定义放入此对象内 |
 | extParameters.platformExtParam | Object | ✅ | 平台扩展参数（skill-server 自填）；首期占位 `{}`，将来用于塞 traceId / 版本号 / 租户标识等平台元数据 |
 
+### platformExtParam（平台扩展参数）
+
+`extParameters.platformExtParam` 由 skill-server 平台层填充，包含三个字段，缺失时
+序列化为 JSON null（保留 key，不省略）：
+
+| 字段 | 类型 | 含义 | 取值示例 |
+|---|---|---|---|
+| `businessSessionDomain` | String / null | 业务域 | `"miniapp"` / `"im"` / `"external"` / null |
+| `businessSessionType` | String / null | 会话类型 | `"group"` / `"direct"` / null |
+| `businessSessionId` | String / null | 业务侧会话 ID | IM 群 ID / 单聊 ID / external 业务 ID / null |
+
+JSON 示例：
+
+```json
+"extParameters": {
+  "businessExtParam": { ... },
+  "platformExtParam": {
+    "businessSessionDomain": "im",
+    "businessSessionType": "group",
+    "businessSessionId": "group-001"
+  }
+}
+```
+
+缺失情况：
+
+```json
+"extParameters": {
+  "businessExtParam": {},
+  "platformExtParam": {
+    "businessSessionDomain": null,
+    "businessSessionType": null,
+    "businessSessionId": null
+  }
+}
+```
+
+下游 agent 据此感知消息所属业务域、会话类型与业务侧会话 ID。
+
+> **新增日期**：2026-05-19 (PR3 / Task 05-19-platform-ext-business-session)
+
 ### 3.3 与个人助手 invoke 的区别
 
 | 维度 | 个人助手（personal） | 业务助手（business） |

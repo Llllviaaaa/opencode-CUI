@@ -17,6 +17,13 @@
 
 ---
 
+> **2026-05-19 (PR3 / Task 05-19-platform-ext-business-session)**：platformExtParam 落地三字段
+> `businessSessionDomain` / `businessSessionType` / `businessSessionId`；personal 路径 wire 形态
+> 升级与 business 对齐（businessExtParam 搬入 extParameters 信封）。详见
+> `.trellis/tasks/05-19-platform-ext-business-session/prd.md`。
+
+---
+
 ## 1. 背景与动机
 
 云端助理（business scope）的 HTTP 协议在 `docs/superpowers/specs/2026-04-07-cloud-agent-protocol.md`（line 147–205）中规约了 `extParameters` 字段，并描述了三个扁平子字段 `isHwEmployee` / `actionParam` / `knowledgeId`。但当前 `BusinessScopeStrategy.buildInvoke` 实现**完全没有填充 `extParameters`**——也就是说：
@@ -54,9 +61,11 @@
 |---|------|------|
 | D1 | 协议形态 | `extParameters: { businessExtParam: <obj or {}>, platformExtParam: <obj or {}> }` —— 嵌套两层，老 protocol doc 的扁平字段说明（`isHwEmployee` / `actionParam` / `knowledgeId`）整体替换 |
 | D2 | `platformExtParam` 来源 | 由 skill-server 自身填，inbound 入参不开放；首期硬编码 `{}` 占位 |
+| | **[2026-05-19 PR3 修正]** | `platformExtParam` 从 `{}` 占位升级为含三字段对象 `businessSessionDomain` / `businessSessionType` / `businessSessionId`（缺失序列化为 JSON null，key 保留）。三字段值取自请求入参或 `SkillSession` getter；通过统一 helper `PlatformExtParamBuilder.build(...)` 构造。 |
 | D3 | `businessExtParam` 类型 | `JsonNode`（端到端，从 DTO 到 cloud body 序列化） |
 | D4 | 入参必填性 | Optional —— 不传 / null / 错型都兜底 `{}` |
 | D5 | 跨 scope 处理 | Approach A：上游入口不感知 scope 一律接受；business scope 唯一消费点 `BusinessScopeStrategy.buildInvoke` 组装 `extParameters`；personal scope 路径不剥离 / 不消费，`businessExtParam` 字段原样随 payload 透到下游 ai-gateway（依赖下游兼容未知字段） |
+| | **[2026-05-19 PR3 修正]** | personal scope 路径也在 skill-server 构造 `extParameters` 信封（由 `GatewayRelayService.buildInvokeMessage` 处理），与 business 形态对齐。`businessExtParam` 从 `payload.businessExtParam` 顶层搬入 `payload.extParameters.businessExtParam`，缺失兜底 `{}`。`platformExtParam` 同时注入三字段。 |
 | D6 | external 字段位置 | 信封顶层（与 `senderUserAccount` 对齐），不放 payload 内 |
 | D7 | 三入口 DTO 一致性 | IM record 顶级 / external 信封顶级 / miniapp `@Data` 顶级 —— 字段名 / 类型 / 必填性 100% 对齐 |
 | D8 | 适用 action | `chat` / `question_reply` / `permission_reply`；`rebuild` 不动 |
@@ -68,9 +77,12 @@
 | D14 | 日志 | INFO `[ENTRY]` 日志直打完整 `businessExtParam` JSON 内容（已与用户确认；业务方需注意不在该字段内放敏感数据） |
 | D15 | 群聊历史消息 | `chatHistory` 内的历史消息**不带** `businessExtParam`（仅当前请求带） |
 | D16 | personal scope **ready 路径**（直接 invoke）契约 | 仅当 session/toolSession 已 ready 且经 `BusinessScopeStrategy` 之外的 `GatewayRelayService.buildInvokeMessage` 直接出站时，`businessExtParam` 字段随 payload 原样透到下游 ai-gateway，**不在 skill-server 内剥离**；下游需兼容未知字段（不报错），skill-server 不做 metric。**注意**：personal scope 的 pending/replay/重发路径不属于该契约，见 D19 |
+| | **[2026-05-19 PR3 修正]** | personal ready 路径下，`payload.businessExtParam`（顶层）改为 `payload.extParameters.businessExtParam`（嵌套）。`payload.imGroupId`（顶层）保留不动作为短期命名冗余（与 `platformExtParam.businessSessionId` 同值）。下游 ai-gateway / plugin / 个人 agent grep 验证零消费 businessExtParam，搬位置安全。 |
 | D17 | business legacy replay（IM/external 自愈后重放历史消息） | legacy 重放路径**不携带** `businessExtParam`（pending 队列只存纯文本，无法还原原消息绑定的 ext）。`dispatchChatToGateway` 在 legacy 重放上下文显式传 `null`，云端报文兜底为 `{}`。**接受丢失旧消息 ext** 的语义换取 pending 存储不需要 schema 升级 |
+| | **[2026-05-19 PR3 修正]** | pending 队列 entry 在 PR2 升级为 `PendingChatRequest` JSON 信封，从 6 字段扩展到 8 字段（新增 `businessSessionDomain` / `businessSessionType`）。replay 时新 entry 含完整三字段；老 entry（PR3 之前缺新两字段）反序列化自动兜底为 null，不抛异常。 |
 | D18 | miniapp rebuild 路径（toolSessionId 未就绪） | `routeToGateway` 在 `toolSessionId == null` 时走 `rebuildToolSession(...)` → 入 pending（仅纯文本）；后续 `retryPendingMessages` 重发时**不携带** `businessExtParam`。**接受首次 ext 丢失**，调用方在 toolSession ready 后重发即可 |
 | D19 ⭐ | 统一的"pending / replay / rebuild / session_created 重发"路径契约 | 任意 scope（business/personal）下，凡走 `SessionRebuildService` pending 队列、`requestToolSession`、`GatewayMessageRouter.retryPendingMessages` / `session_created` 回调重发链路的消息，均**不携带** `businessExtParam`（pending 队列纯文本设计决定）。具体覆盖：①IM/external personal 助手的 `createSessionAsync` personal 分支（走 `requestToolSession`）；②`InboundProcessingService.processChat` 情况 B 的 personal 降级（`requestToolSession`）；③business legacy replay（D17）；④miniapp rebuild（D18）；⑤`GatewayMessageRouter` 在 `session_created` 后用 `{text, toolSessionId}` 重发。**接受设计**：业务方应在 ready 路径调用，replay 路径属于异常恢复，不应依赖 ext 在此生效 |
+| | **[2026-05-19 PR3 修正]** | rebuild / replay / session_created 重发路径的 chatPayload 同样注入 `extParameters.platformExtParam` 三字段，与 ready 路径形态一致。三字段值取自 `PendingChatRequest` 绑定值（PR2 新增字段）；老 entry replay 时三字段为 null。 |
 
 ---
 
@@ -723,3 +735,12 @@ fields.forEach((k, v) -> {
 - [ ] PR3：协议文档 `2026-04-07-cloud-agent-protocol.md` line 147–205 / 270–275 / 1137 替换
 - [ ] 修复 `ImInboundControllerTest` 中 **7 处** `new ImMessageRequest(...)` positional 构造（line 42/66/86/113/126/139/152），末位补 `null`
 - [ ] `mvn -pl skill-server test -DfailIfNoTests=false` 全绿
+
+---
+
+## Known Limitations / Future Work
+
+- **`imGroupId` 与 `businessSessionId` 短期命名冗余**：`payload.imGroupId`（顶层）与
+  `payload.extParameters.platformExtParam.businessSessionId`（嵌套）短期同值并存。
+  原因：`imGroupId` 在 30+ callsite 使用，整体重命名需独立 refactor PR。
+  未来通过单独 PR 把 `imGroupId` 重命名为 `businessSessionId`，本期接受命名冗余。
