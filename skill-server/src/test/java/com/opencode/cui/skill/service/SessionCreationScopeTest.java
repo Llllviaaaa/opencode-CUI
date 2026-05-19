@@ -2,6 +2,7 @@ package com.opencode.cui.skill.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.AssistantInfo;
+import com.opencode.cui.skill.model.PendingChatRequest;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
@@ -97,8 +98,9 @@ class SessionCreationScopeTest {
         assertTrue(toolSessionId.startsWith("cloud-"),
                 "business toolSessionId should start with 'cloud-', got: " + toolSessionId);
 
-        // should NOT request tool session from Gateway
-        verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any());
+        // should NOT request tool session from Gateway (any overload)
+        verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(PendingChatRequest.class));
+        verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(String.class));
     }
 
     @Test
@@ -122,7 +124,17 @@ class SessionCreationScopeTest {
         // assert: toolSessionId NOT updated locally
         verify(sessionService, never()).updateToolSessionId(any(), any());
 
-        // should request tool session from Gateway via rebuildToolSession
-        verify(gatewayRelayService).rebuildToolSession(any(), eq(created), eq("hello"));
+        // PR3: personal 分支调 rebuildToolSession 新签名 PendingChatRequest 重载,
+        // 入队完整 6 字段（含 sender/assistantAccount/imGroupId/businessExtParam）
+        ArgumentCaptor<PendingChatRequest> reqCaptor = ArgumentCaptor.forClass(PendingChatRequest.class);
+        verify(gatewayRelayService).rebuildToolSession(eq("200"), eq(created), reqCaptor.capture());
+        PendingChatRequest captured = reqCaptor.getValue();
+        assertNotNull(captured, "PR3: 应入队完整 PendingChatRequest");
+        org.junit.jupiter.api.Assertions.assertEquals("hello", captured.text());
+        org.junit.jupiter.api.Assertions.assertEquals("assist-002", captured.assistantAccount());
+        // 单聊：sender 退化为 owner
+        org.junit.jupiter.api.Assertions.assertEquals("owner-002", captured.sendUserAccount());
+        assertNull(captured.imGroupId(), "direct session 时 imGroupId 必须为 null");
+        assertNull(captured.businessExtParam());
     }
 }

@@ -7,6 +7,7 @@ import com.opencode.cui.skill.config.DeliveryProperties;
 import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.ImMessageRequest;
 import com.opencode.cui.skill.model.InvokeCommand;
+import com.opencode.cui.skill.model.PendingChatRequest;
 import com.opencode.cui.skill.model.ResolveOutcome;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
@@ -184,6 +185,11 @@ public class InboundProcessingService {
                 if (!tryHealBusinessToolSessionId(session, strategy)) {
                     log.warn("[WARN] business self-heal timeout, falling back to rebuild path: welinkSessionId={}, ak={}",
                             session.getId(), ak);
+                    // TODO follow-up: migrate to PendingChatRequest API (this is the business
+                    // self-heal timeout fallback path that only has prompt text without
+                    // sender/ext context — needs session reverse-lookup similar to
+                    // rebuildFromStoredUserMessage to populate assistantAccount /
+                    // senderUserAccount / imGroupId / businessExtParam).
                     sessionManager.requestToolSession(session, prompt);
                     writeInvokeSource(session, inboundSource);
                     return InboundResult.ok(sessionId, String.valueOf(session.getId()));
@@ -193,19 +199,25 @@ public class InboundProcessingService {
 
                 // 重放 pending list 中的历史消息（可能由 handleSessionNotFound / handleContextOverflow 路径遗留）
                 // business 路径发送不再 appendToPending，避免并发下 peer 把本请求的 prompt 误当 legacy 重放。
-                List<String> legacyPending = rebuildService.consumePendingMessages(String.valueOf(session.getId()));
+                //
+                // PR3 切换：用新 API consumePendingRequests 拿结构化 entry，但 D17 决策保留——
+                // business legacy 场景下仍然只取 text，因为 pending 入队是 personal 链路写的，
+                // 在 business self-heal 重放时复用其 sender/ext 没有业务意义；继续用当前请求的
+                // assistantAccount/senderUserAccount/businessExtParam=null 重放，避免把当前请求的 ext
+                // 错绑到 legacy 消息上（云端 extParameters.businessExtParam 由 BusinessScopeStrategy 兜底为 {}）。
+                List<PendingChatRequest> legacyPending = rebuildService.consumePendingRequests(String.valueOf(session.getId()));
                 if (!legacyPending.isEmpty()) {
                     log.warn("[WARN] business self-heal: replaying pending messages, welinkSessionId={}, count={}",
                             session.getId(), legacyPending.size());
-                    for (String legacyMsg : legacyPending) {
-                        if (legacyMsg == null || legacyMsg.isBlank() || legacyMsg.equals(prompt)) {
+                    for (PendingChatRequest legacy : legacyPending) {
+                        String legacyText = legacy != null ? legacy.text() : null;
+                        if (legacyText == null || legacyText.isBlank() || legacyText.equals(prompt)) {
                             continue;
                         }
-                        // D17: pending 队列仅含纯文本，无原消息绑定的 businessExtParam，
-                        // 显式传 null 避免把当前请求的 ext 错绑到 legacy 消息上；
-                        // 云端报文 extParameters.businessExtParam 由 BusinessScopeStrategy 兜底为 {}
-                        dispatchChatToGateway(session, legacyMsg, ak, ownerWelinkId, assistantAccount,
-                                senderUserAccount, sessionType, sessionId, inboundSource, legacyMsg, false,
+                        // D17 + PR3 决策：保留语义，用当前请求的 assistantAccount / senderUserAccount
+                        // / businessExtParam=null，不复用 legacy.assistantAccount() 等字段。
+                        dispatchChatToGateway(session, legacyText, ak, ownerWelinkId, assistantAccount,
+                                senderUserAccount, sessionType, sessionId, inboundSource, legacyText, false,
                                 null);
                     }
                 }
@@ -216,6 +228,10 @@ public class InboundProcessingService {
             // personal / scope 识别降级：保持现行 rebuild 路径
             log.info("Session exists but toolSessionId not ready, requesting rebuild: skillSessionId={}",
                     session.getId());
+            // TODO follow-up: migrate to PendingChatRequest API (this is the personal-rebuild
+            // fallback path that only has prompt text without sender/ext context — needs
+            // session reverse-lookup similar to rebuildFromStoredUserMessage to populate
+            // assistantAccount / senderUserAccount / imGroupId / businessExtParam).
             sessionManager.requestToolSession(session, prompt);
             writeInvokeSource(session, inboundSource);
             return InboundResult.ok(sessionId, String.valueOf(session.getId()));
@@ -328,21 +344,34 @@ public class InboundProcessingService {
         if (session.isImDirectSession()) {
             messageService.saveUserMessage(session.getId(), content);
         }
+
+        // 群聊：用实际发送者；单聊：用助手创建人（即对话人）。effectiveSender 同时给 pending 入队和 chat payload 用。
+        String effectiveSender = "group".equals(sessionType)
+                && senderUserAccount != null && !senderUserAccount.isBlank()
+                ? senderUserAccount : ownerWelinkId;
+        String messageId = String.valueOf(System.currentTimeMillis());
+
         if (appendToPending) {
-            rebuildService.appendPendingMessage(String.valueOf(session.getId()), prompt);
+            // PR3: 切到新 API，传完整结构化 PendingChatRequest（含 sender / assistantAccount /
+            // imGroupId / businessExtParam）— 这是 personal 助手"情况 C"分支唯一调用点,
+            // business 助手 appendToPending=false 永远不进。
+            PendingChatRequest pendingRequest = new PendingChatRequest(
+                    prompt,
+                    assistantAccount,
+                    effectiveSender,
+                    "group".equals(sessionType) ? sessionId : null,
+                    messageId,
+                    businessExtParam);
+            rebuildService.appendPendingMessage(String.valueOf(session.getId()), pendingRequest);
         }
 
         Map<String, Object> payloadFields = new LinkedHashMap<>();
         payloadFields.put("text", prompt);
         payloadFields.put("toolSessionId", session.getToolSessionId());
         payloadFields.put("assistantAccount", assistantAccount);
-        // 群聊：用实际发送者；单聊：用助手创建人（即对话人）
-        String effectiveSender = "group".equals(sessionType)
-                && senderUserAccount != null && !senderUserAccount.isBlank()
-                ? senderUserAccount : ownerWelinkId;
         payloadFields.put("sendUserAccount", effectiveSender);
         payloadFields.put("imGroupId", "group".equals(sessionType) ? sessionId : null);
-        payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
+        payloadFields.put("messageId", messageId);
         payloadFields.put("businessExtParam", businessExtParam);
 
         // 群聊场景下：解析该 ak 当前 channel（plugin toolType），命中"禁群聊"白名单则置 suppressReply=true。
@@ -568,7 +597,8 @@ public class InboundProcessingService {
                 }
             }
             // personal / scope 识别降级：保持现行 rebuild 路径
-            sessionManager.requestToolSession(session, null);
+            // 显式强转 null 到 PendingChatRequest，避免 String/PendingChatRequest 重载歧义
+            sessionManager.requestToolSession(session, (PendingChatRequest) null);
             return InboundResult.ok(sessionId, String.valueOf(session.getId()));
         } else {
             sessionManager.createSessionAsync(businessDomain, sessionType, sessionId,

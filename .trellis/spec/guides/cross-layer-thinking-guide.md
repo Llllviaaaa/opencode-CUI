@@ -167,6 +167,43 @@ Add a normalizer-level unit test for the new field with three cases: (1) field p
 
 ---
 
+## Multi-Producer Envelope Consistency
+
+A single wire-layer envelope (e.g. a `chat` invoke payload, a `permission.reply` stream message) is often built by **multiple independent producers** in the codebase — fast-path vs slow-path, sync vs retry, online vs offline. Each producer hand-assembles fields. When a new field gets added to one producer but not the others, the envelope **shape drifts**: downstream observers see "same event type, different field set, depending on which code path emitted it." The bug is invisible until someone debugs a log diff between two production sessions.
+
+In this project the canonical example is the `chat` invoke payload, built independently by `InboundProcessingService.dispatchChatToGateway` (sync path) and `GatewayMessageRouter.retryPendingMessages` (async retry path after `session_created` callback). Both must emit the same 6 fields (`text`, `toolSessionId`, `assistantAccount`, `sendUserAccount`, `imGroupId`, `messageId`, `businessExtParam`) — but they don't share construction code.
+
+### Pre-modification check: list all producers of the envelope
+
+Before adding / removing a field on a wire-layer envelope, grep for **all** call sites that construct it:
+
+| Pattern to grep | What you're looking for |
+|---|---|
+| Action / type constant (e.g. `"chat"`, `Types.PERMISSION_REPLY`) | Every place that mentions this envelope type |
+| Builder method (e.g. `objectMapper.createObjectNode()` near the type constant) | Every hand-assembly site |
+| `sendInvokeToGateway` / `emitToClient` / `publishProtocolMessage` calls | Every wire-out call |
+
+If you find **2+ producers**, you must update **all** of them, not just the one that triggered your task.
+
+### Field-parity table
+
+For each envelope with multiple producers, maintain a small table in the PRD or commit message:
+
+| Field | Producer A (`dispatchChatToGateway`) | Producer B (`retryPendingMessages`) |
+|---|---|---|
+| `text` | known from request | from Redis pending |
+| `assistantAccount` | known | from Redis pending (or session fallback) |
+| `sendUserAccount` | known (group: real sender, direct: owner) | from Redis pending (or session.userId fallback) |
+| ... | ... | ... |
+
+A column that has "missing" or "?" is a drift risk and must be resolved (either fill it, or add explicit null with a documented reason).
+
+### Required test: snapshot the envelope from each producer
+
+For each producer, write a unit test that asserts the **exact field set** of the emitted envelope (use `assertEquals` on field names sorted alphabetically). When a new field is added but not propagated to all producers, exactly the producers missing the field will fail their snapshot test.
+
+---
+
 ## Checklist for Cross-Layer Features
 
 Before implementation:

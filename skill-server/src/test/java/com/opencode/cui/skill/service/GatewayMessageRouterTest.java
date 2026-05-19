@@ -23,6 +23,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -446,10 +448,16 @@ class GatewayMessageRouterTest {
         groupSession.setId(1001L);
         groupSession.setBusinessSessionDomain("im");
         groupSession.setBusinessSessionType("group");
+        groupSession.setBusinessSessionId("biz-group-001");
         when(sessionService.findByIdSafe(1001L)).thenReturn(groupSession);
 
-        when(rebuildService.consumePendingMessages(welinkSessionId))
-                .thenReturn(java.util.List.of("hello", "world"));
+        // PR2: retryPendingMessages 现在调 consumePendingRequests 返回 List<PendingChatRequest>
+        com.opencode.cui.skill.model.PendingChatRequest req1 = new com.opencode.cui.skill.model.PendingChatRequest(
+                "hello", "assist-1", "sender-real-1", "biz-group-001", "msg-1", null);
+        com.opencode.cui.skill.model.PendingChatRequest req2 = new com.opencode.cui.skill.model.PendingChatRequest(
+                "world", "assist-1", "sender-real-2", "biz-group-001", "msg-2", null);
+        when(rebuildService.consumePendingRequests(welinkSessionId))
+                .thenReturn(java.util.List.of(req1, req2));
         when(channelLookupService.getToolType(ak)).thenReturn(java.util.Optional.of("plugin-x"));
         when(channelSuppressReplyWhitelistService.shouldSuppress("plugin-x")).thenReturn(true);
 
@@ -491,8 +499,10 @@ class GatewayMessageRouterTest {
         directSession.setBusinessSessionType("direct");
         when(sessionService.findByIdSafe(1002L)).thenReturn(directSession);
 
-        when(rebuildService.consumePendingMessages(welinkSessionId))
-                .thenReturn(java.util.List.of("ping"));
+        com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
+                "ping", "assist-2", "owner-2", null, "msg-d", null);
+        when(rebuildService.consumePendingRequests(welinkSessionId))
+                .thenReturn(java.util.List.of(req));
 
         ObjectNode node = objectMapper.createObjectNode();
         node.put("toolSessionId", toolSessionId);
@@ -508,6 +518,301 @@ class GatewayMessageRouterTest {
         assertEquals(null, captor.getValue().suppressReply());
         verify(channelLookupService, never()).getToolType(anyString());
         verify(channelSuppressReplyWhitelistService, never()).shouldSuppress(anyString());
+    }
+
+    // ==================== PR2 retryPendingMessages 字段填充 ====================
+
+    @Test
+    @DisplayName("PR2: 完整 6 字段 PendingChatRequest -> chat invoke payload 6 字段全填入")
+    void retryPendingMessages_fullPendingChatRequest_payloadContainsAllFields() throws Exception {
+        GatewayMessageRouter r = buildRouter(true);
+        GatewayMessageRouter.DownstreamSender sender =
+                org.mockito.Mockito.mock(GatewayMessageRouter.DownstreamSender.class);
+        r.setDownstreamSender(sender);
+
+        String welinkSessionId = "2001";
+        String toolSessionId = "tool-2001";
+        String ak = "ak-2001";
+        String userId = "user-2001";
+
+        SkillSession groupSession = new SkillSession();
+        groupSession.setId(2001L);
+        groupSession.setBusinessSessionDomain("im");
+        groupSession.setBusinessSessionType("group");
+        groupSession.setBusinessSessionId("biz-group-2001");
+        when(sessionService.findByIdSafe(2001L)).thenReturn(groupSession);
+
+        com.fasterxml.jackson.databind.JsonNode ext = objectMapper.readTree("{\"topicId\":777,\"source\":\"im\"}");
+        com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
+                "你好", "assist-full", "sender-real-77", "biz-group-2001", "1717939200000", ext);
+        when(rebuildService.consumePendingRequests(welinkSessionId)).thenReturn(java.util.List.of(req));
+
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("toolSessionId", toolSessionId);
+        node.put("welinkSessionId", welinkSessionId);
+
+        r.route("session_created", ak, userId, node);
+
+        org.mockito.ArgumentCaptor<com.opencode.cui.skill.model.InvokeCommand> captor =
+                org.mockito.ArgumentCaptor.forClass(com.opencode.cui.skill.model.InvokeCommand.class);
+        verify(sender, times(1)).sendInvokeToGateway(captor.capture());
+        com.opencode.cui.skill.model.InvokeCommand cmd = captor.getValue();
+        com.fasterxml.jackson.databind.JsonNode payload = objectMapper.readTree(cmd.payload());
+
+        assertEquals("你好", payload.path("text").asText());
+        assertEquals(toolSessionId, payload.path("toolSessionId").asText());
+        assertEquals("assist-full", payload.path("assistantAccount").asText());
+        assertEquals("sender-real-77", payload.path("sendUserAccount").asText());
+        assertEquals("biz-group-2001", payload.path("imGroupId").asText());
+        assertEquals("1717939200000", payload.path("messageId").asText());
+        assertTrue(payload.has("businessExtParam"), "businessExtParam must appear in payload");
+        assertEquals(777, payload.path("businessExtParam").path("topicId").asInt());
+        assertEquals("im", payload.path("businessExtParam").path("source").asText());
+    }
+
+    @Test
+    @DisplayName("PR2: businessExtParam = Java null -> payload 不含 businessExtParam 字段")
+    void retryPendingMessages_businessExtParamJavaNull_omitFromPayload() throws Exception {
+        GatewayMessageRouter r = buildRouter(true);
+        GatewayMessageRouter.DownstreamSender sender =
+                org.mockito.Mockito.mock(GatewayMessageRouter.DownstreamSender.class);
+        r.setDownstreamSender(sender);
+
+        String welinkSessionId = "2002";
+        SkillSession s = new SkillSession();
+        s.setId(2002L);
+        s.setBusinessSessionDomain("im");
+        s.setBusinessSessionType("direct");
+        when(sessionService.findByIdSafe(2002L)).thenReturn(s);
+
+        com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
+                "t", "assist-x", "user-x", null, "m-1", null);
+        when(rebuildService.consumePendingRequests(welinkSessionId)).thenReturn(java.util.List.of(req));
+
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("toolSessionId", "tool-x");
+        node.put("welinkSessionId", welinkSessionId);
+        r.route("session_created", "ak-x", "user-x", node);
+
+        org.mockito.ArgumentCaptor<com.opencode.cui.skill.model.InvokeCommand> captor =
+                org.mockito.ArgumentCaptor.forClass(com.opencode.cui.skill.model.InvokeCommand.class);
+        verify(sender, times(1)).sendInvokeToGateway(captor.capture());
+        com.fasterxml.jackson.databind.JsonNode payload = objectMapper.readTree(captor.getValue().payload());
+
+        assertFalse(payload.has("businessExtParam"),
+                "Java null businessExtParam must be omitted (not written as 'businessExtParam':null)");
+    }
+
+    @Test
+    @DisplayName("PR2: businessExtParam = NullNode -> payload 不含 businessExtParam 字段")
+    void retryPendingMessages_businessExtParamNullNode_omitFromPayload() throws Exception {
+        GatewayMessageRouter r = buildRouter(true);
+        GatewayMessageRouter.DownstreamSender sender =
+                org.mockito.Mockito.mock(GatewayMessageRouter.DownstreamSender.class);
+        r.setDownstreamSender(sender);
+
+        String welinkSessionId = "2003";
+        SkillSession s = new SkillSession();
+        s.setId(2003L);
+        s.setBusinessSessionDomain("im");
+        s.setBusinessSessionType("direct");
+        when(sessionService.findByIdSafe(2003L)).thenReturn(s);
+
+        com.fasterxml.jackson.databind.node.NullNode nullNode = com.fasterxml.jackson.databind.node.NullNode.getInstance();
+        com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
+                "t", "assist-x", "user-x", null, "m-1", nullNode);
+        when(rebuildService.consumePendingRequests(welinkSessionId)).thenReturn(java.util.List.of(req));
+
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("toolSessionId", "tool-x");
+        node.put("welinkSessionId", welinkSessionId);
+        r.route("session_created", "ak-x", "user-x", node);
+
+        org.mockito.ArgumentCaptor<com.opencode.cui.skill.model.InvokeCommand> captor =
+                org.mockito.ArgumentCaptor.forClass(com.opencode.cui.skill.model.InvokeCommand.class);
+        verify(sender, times(1)).sendInvokeToGateway(captor.capture());
+        com.fasterxml.jackson.databind.JsonNode payload = objectMapper.readTree(captor.getValue().payload());
+
+        assertFalse(payload.has("businessExtParam"),
+                "NullNode businessExtParam must be omitted (NullNode != Java null but PR2 normalizes both)");
+    }
+
+    @Test
+    @DisplayName("PR2: businessExtParam = ObjectNode -> payload 含 businessExtParam JsonNode")
+    void retryPendingMessages_businessExtParamObject_includedInPayload() throws Exception {
+        GatewayMessageRouter r = buildRouter(true);
+        GatewayMessageRouter.DownstreamSender sender =
+                org.mockito.Mockito.mock(GatewayMessageRouter.DownstreamSender.class);
+        r.setDownstreamSender(sender);
+
+        String welinkSessionId = "2004";
+        SkillSession s = new SkillSession();
+        s.setId(2004L);
+        s.setBusinessSessionDomain("im");
+        s.setBusinessSessionType("direct");
+        when(sessionService.findByIdSafe(2004L)).thenReturn(s);
+
+        com.fasterxml.jackson.databind.JsonNode ext = objectMapper.readTree("{\"k\":\"v\"}");
+        com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
+                "t", "assist-x", "user-x", null, "m-1", ext);
+        when(rebuildService.consumePendingRequests(welinkSessionId)).thenReturn(java.util.List.of(req));
+
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("toolSessionId", "tool-x");
+        node.put("welinkSessionId", welinkSessionId);
+        r.route("session_created", "ak-x", "user-x", node);
+
+        org.mockito.ArgumentCaptor<com.opencode.cui.skill.model.InvokeCommand> captor =
+                org.mockito.ArgumentCaptor.forClass(com.opencode.cui.skill.model.InvokeCommand.class);
+        verify(sender, times(1)).sendInvokeToGateway(captor.capture());
+        com.fasterxml.jackson.databind.JsonNode payload = objectMapper.readTree(captor.getValue().payload());
+
+        assertTrue(payload.has("businessExtParam"));
+        assertEquals("v", payload.path("businessExtParam").path("k").asText());
+    }
+
+    @Test
+    @DisplayName("PR2: 群聊 session -> payload.imGroupId == businessSessionId")
+    void retryPendingMessages_groupSession_imGroupIdFromRequest() throws Exception {
+        GatewayMessageRouter r = buildRouter(true);
+        GatewayMessageRouter.DownstreamSender sender =
+                org.mockito.Mockito.mock(GatewayMessageRouter.DownstreamSender.class);
+        r.setDownstreamSender(sender);
+
+        String welinkSessionId = "2005";
+        SkillSession group = new SkillSession();
+        group.setId(2005L);
+        group.setBusinessSessionDomain("im");
+        group.setBusinessSessionType("group");
+        group.setBusinessSessionId("biz-real-group-id-555");
+        when(sessionService.findByIdSafe(2005L)).thenReturn(group);
+
+        com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
+                "群消息", "assist-G", "sender-G", "biz-real-group-id-555", "m-G", null);
+        when(rebuildService.consumePendingRequests(welinkSessionId)).thenReturn(java.util.List.of(req));
+
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("toolSessionId", "tool-G");
+        node.put("welinkSessionId", welinkSessionId);
+        r.route("session_created", "ak-G", "user-G", node);
+
+        org.mockito.ArgumentCaptor<com.opencode.cui.skill.model.InvokeCommand> captor =
+                org.mockito.ArgumentCaptor.forClass(com.opencode.cui.skill.model.InvokeCommand.class);
+        verify(sender, times(1)).sendInvokeToGateway(captor.capture());
+        com.fasterxml.jackson.databind.JsonNode payload = objectMapper.readTree(captor.getValue().payload());
+
+        assertEquals("biz-real-group-id-555", payload.path("imGroupId").asText());
+    }
+
+    @Test
+    @DisplayName("PR2: 单聊 session -> payload 含 'imGroupId':null（保留与 dispatchChatToGateway 一致的写 null 行为）")
+    void retryPendingMessages_directSession_imGroupIdIsExplicitNull() throws Exception {
+        GatewayMessageRouter r = buildRouter(true);
+        GatewayMessageRouter.DownstreamSender sender =
+                org.mockito.Mockito.mock(GatewayMessageRouter.DownstreamSender.class);
+        r.setDownstreamSender(sender);
+
+        String welinkSessionId = "2006";
+        SkillSession direct = new SkillSession();
+        direct.setId(2006L);
+        direct.setBusinessSessionDomain("im");
+        direct.setBusinessSessionType("direct");
+        when(sessionService.findByIdSafe(2006L)).thenReturn(direct);
+
+        com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
+                "单聊消息", "assist-D", "owner-D", null, "m-D", null);
+        when(rebuildService.consumePendingRequests(welinkSessionId)).thenReturn(java.util.List.of(req));
+
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("toolSessionId", "tool-D");
+        node.put("welinkSessionId", welinkSessionId);
+        r.route("session_created", "ak-D", "user-D", node);
+
+        org.mockito.ArgumentCaptor<com.opencode.cui.skill.model.InvokeCommand> captor =
+                org.mockito.ArgumentCaptor.forClass(com.opencode.cui.skill.model.InvokeCommand.class);
+        verify(sender, times(1)).sendInvokeToGateway(captor.capture());
+        com.fasterxml.jackson.databind.JsonNode payload = objectMapper.readTree(captor.getValue().payload());
+
+        // 与 dispatchChatToGateway 行为一致：单聊 imGroupId 字段存在但 value 为 null
+        assertTrue(payload.has("imGroupId"), "imGroupId field must be present even for direct session");
+        assertTrue(payload.path("imGroupId").isNull(), "imGroupId value should be JSON null for direct session");
+    }
+
+    @Test
+    @DisplayName("PR2: critical field missing (assistantAccount 缺失) -> 仍发送 + ERROR 日志")
+    void retryPendingMessages_missingAssistantAccount_sendsAnyway() throws Exception {
+        GatewayMessageRouter r = buildRouter(true);
+        GatewayMessageRouter.DownstreamSender sender =
+                org.mockito.Mockito.mock(GatewayMessageRouter.DownstreamSender.class);
+        r.setDownstreamSender(sender);
+
+        String welinkSessionId = "2007";
+        SkillSession s = new SkillSession();
+        s.setId(2007L);
+        s.setBusinessSessionDomain("im");
+        s.setBusinessSessionType("direct");
+        when(sessionService.findByIdSafe(2007L)).thenReturn(s);
+
+        // 半填 entry：text 有, assistantAccount 缺 → critical_field_missing
+        com.opencode.cui.skill.model.PendingChatRequest req = new com.opencode.cui.skill.model.PendingChatRequest(
+                "broken", null, "user-x", null, "m-broken", null);
+        when(rebuildService.consumePendingRequests(welinkSessionId)).thenReturn(java.util.List.of(req));
+
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("toolSessionId", "tool-broken");
+        node.put("welinkSessionId", welinkSessionId);
+        r.route("session_created", "ak-broken", "user-x", node);
+
+        // 仍发送（保持当前行为不破坏 — 不静默 drop，让云端 fast-fail 暴露问题）
+        verify(sender, times(1)).sendInvokeToGateway(any());
+    }
+
+    @Test
+    @DisplayName("PR2: 空 PendingChatRequest list -> 不发送 invoke")
+    void retryPendingMessages_emptyPending_noSend() {
+        GatewayMessageRouter r = buildRouter(true);
+        GatewayMessageRouter.DownstreamSender sender =
+                org.mockito.Mockito.mock(GatewayMessageRouter.DownstreamSender.class);
+        r.setDownstreamSender(sender);
+
+        when(rebuildService.consumePendingRequests("2008")).thenReturn(java.util.List.of());
+
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("toolSessionId", "tool-empty");
+        node.put("welinkSessionId", "2008");
+        r.route("session_created", "ak-empty", "user-empty", node);
+
+        verify(sender, never()).sendInvokeToGateway(any());
+    }
+
+    @Test
+    @DisplayName("PR2: text 为 blank 的 entry 被跳过，其他 entry 继续发送")
+    void retryPendingMessages_blankTextEntrySkipped() {
+        GatewayMessageRouter r = buildRouter(true);
+        GatewayMessageRouter.DownstreamSender sender =
+                org.mockito.Mockito.mock(GatewayMessageRouter.DownstreamSender.class);
+        r.setDownstreamSender(sender);
+
+        String welinkSessionId = "2009";
+        SkillSession s = new SkillSession();
+        s.setId(2009L);
+        s.setBusinessSessionDomain("im");
+        s.setBusinessSessionType("direct");
+        when(sessionService.findByIdSafe(2009L)).thenReturn(s);
+
+        com.opencode.cui.skill.model.PendingChatRequest blankText = new com.opencode.cui.skill.model.PendingChatRequest(
+                "", "assist", "user", null, "m-b", null);
+        com.opencode.cui.skill.model.PendingChatRequest goodOne = new com.opencode.cui.skill.model.PendingChatRequest(
+                "real", "assist", "user", null, "m-r", null);
+        when(rebuildService.consumePendingRequests(welinkSessionId))
+                .thenReturn(java.util.List.of(blankText, goodOne));
+
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("toolSessionId", "tool-skip");
+        node.put("welinkSessionId", welinkSessionId);
+        r.route("session_created", "ak", "user", node);
+
+        verify(sender, times(1)).sendInvokeToGateway(any());
     }
 
     /** 测试专用 Caffeine Ticker，可推进虚拟纳秒时间。 */

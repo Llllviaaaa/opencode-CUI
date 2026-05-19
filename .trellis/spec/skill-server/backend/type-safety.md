@@ -420,6 +420,46 @@ Java 侧来源：
 
 ---
 
+## 反序列化对抗性输入：先 readTree 再按 schema 校验
+
+Redis list / MQ payload 这类 "内容可能直接来自用户输入" 的存储位置，**禁止**直接 `mapper.readValue(raw, TargetDto.class)` 来判断 "新格式 vs 老格式"。用户消息正文本身可能是合法 JSON（如 `{"foo":"bar"}`），`readValue` 会成功反序列化得到一个 `text=null` 的对象，把原始文本静默吞掉。
+
+正确做法：**先 `readTree(JsonNode)`，严格按 schema 关键字段判断**，三重校验都通过才走新格式 deserialize，否则当 raw 老格式处理。
+
+```java
+// ❌ 直接 readValue → 对抗性 JSON 文本被误判，丢消息
+try {
+    PendingChatRequest req = mapper.readValue(raw, PendingChatRequest.class);
+    // req.text 可能是 null，原始文本丢了
+} catch (JsonProcessingException e) {
+    return PendingChatRequest.fromSessionFallback(session, raw);
+}
+
+// ✅ readTree + schema 三重校验
+JsonNode node;
+try {
+    node = mapper.readTree(raw);
+} catch (JsonProcessingException e) {
+    return PendingChatRequest.fromSessionFallback(session, raw);
+}
+if (node.isObject()
+        && node.path("text").isTextual()
+        && !node.path("text").asText().isEmpty()) {
+    return mapper.treeToValue(node, PendingChatRequest.class);  // 新格式
+}
+return PendingChatRequest.fromSessionFallback(session, raw);     // 老格式 / 对抗输入
+```
+
+参考实现：`skill-server/src/main/java/com/opencode/cui/skill/service/SessionRebuildService.java::consumePendingMessages`
+
+规则：
+
+- 凡 "存储内容可能是用户原始输入" 的反序列化点（Redis list/hash value、MQ body、文件输入），都走 `readTree` + 字段 schema 校验。
+- schema 判断必须挑**新格式独有**的字段（这里是 `text` 必为非空 textual），不能只判断 `isObject`。
+- fallback 路径必须能拿到原始 raw 字符串，不要在 `readTree` 之前先 trim / decode。
+
+---
+
 ## 常见错误
 
 1. 不要把 `StreamMessage` 重构成 Jackson 多态层级；当前实现不是这个方向。

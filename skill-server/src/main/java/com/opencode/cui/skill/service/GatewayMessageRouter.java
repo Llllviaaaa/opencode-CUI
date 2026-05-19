@@ -8,6 +8,7 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Ticker;
 import com.opencode.cui.skill.model.InvokeCommand;
+import com.opencode.cui.skill.model.PendingChatRequest;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.logging.MdcHelper;
@@ -848,15 +849,31 @@ public class GatewayMessageRouter {
         retryPendingMessages(sessionId, ak, userId, toolSessionId);
     }
 
-    /** 重建完成后按 FIFO 顺序逐条重发所有待处理的用户消息。 */
+    /**
+     * 重建完成后按 FIFO 顺序逐条重发所有待处理的用户消息。
+     *
+     * <p>PR2: 从结构化 {@link PendingChatRequest} 重建完整 chat invoke payload, 含 6 字段
+     * （text / toolSessionId / assistantAccount / sendUserAccount / imGroupId / messageId /
+     * businessExtParam）。{@code toolSessionId} 取方法入参（pending 入队时还没绑定）, 其他
+     * 字段从 PendingChatRequest 取。
+     *
+     * <p>{@code businessExtParam} 三态处理（与 PR1 锁定的边界对齐）：
+     * <ul>
+     *   <li>Java {@code null}（字段缺失反序列化） → 不写入 payload</li>
+     *   <li>{@code NullNode}（JSON {@code null} 反序列化） → 不写入 payload</li>
+     *   <li>JsonNode object → 写入 payload</li>
+     * </ul>
+     * 注意严格不要 {@code chatPayload.set("businessExtParam", null)}, 那会被序列化成
+     * {@code "businessExtParam":null} 误导下游。
+     */
     private void retryPendingMessages(String sessionId, String ak, String userId, String toolSessionId) {
-        java.util.List<String> pendingMessages = rebuildService.consumePendingMessages(sessionId);
+        java.util.List<PendingChatRequest> pendingMessages = rebuildService.consumePendingRequests(sessionId);
         if (pendingMessages.isEmpty()) {
             log.info("[SKIP] retryPendingMessages: reason=no_pending_messages, sessionId={}", sessionId);
             return;
         }
 
-        log.info("[ENTRY] retryPendingMessages: sessionId={}, ak={}, count={}",
+        log.info("[ENTRY] retryPendingMessages: sessionId={}, ak={}, retry_count={}, payload_format=v2",
                 sessionId, ak, pendingMessages.size());
 
         DownstreamSender sender = downstreamSender;
@@ -873,13 +890,34 @@ public class GatewayMessageRouter {
         }
 
         int sent = 0;
-        for (String pendingText : pendingMessages) {
-            if (pendingText == null || pendingText.isBlank()) {
+        for (PendingChatRequest req : pendingMessages) {
+            if (req == null || req.text() == null || req.text().isBlank()) {
                 continue;
             }
+
+            // sanity check（采纳 Codex M5）：缺关键 account 字段不静默 drop, 仍发送让云端 fast-fail 暴露问题
+            boolean hasAssistantAccount = req.assistantAccount() != null && !req.assistantAccount().isBlank();
+            boolean hasSender = req.sendUserAccount() != null && !req.sendUserAccount().isBlank();
+            if (!hasAssistantAccount || !hasSender) {
+                log.error("[ERROR] retryPendingMessages: reason=critical_field_missing, sessionId={}, ak={}, hasAssistantAccount={}, hasSender={}, fields_degraded=true",
+                        sessionId, ak, hasAssistantAccount, hasSender);
+            }
+
             ObjectNode chatPayload = objectMapper.createObjectNode();
-            chatPayload.put("text", pendingText);
+            chatPayload.put("text", req.text());
             chatPayload.put("toolSessionId", toolSessionId);
+            chatPayload.put("assistantAccount", req.assistantAccount());
+            chatPayload.put("sendUserAccount", req.sendUserAccount());
+            // imGroupId: 单聊场景为 null, 与 dispatchChatToGateway 一致写入 "imGroupId":null
+            // （让下游 BusinessScopeStrategy 反向 extract 时能区分"未发"和"主动 null"）
+            chatPayload.put("imGroupId", req.imGroupId());
+            chatPayload.put("messageId", req.messageId());
+            // businessExtParam 三态：null / NullNode 都不写入；object 才写入
+            JsonNode ext = req.businessExtParam();
+            if (ext != null && !ext.isNull()) {
+                chatPayload.set("businessExtParam", ext);
+            }
+
             String payloadStr;
             try {
                 payloadStr = objectMapper.writeValueAsString(chatPayload);
@@ -891,7 +929,7 @@ public class GatewayMessageRouter {
             sent++;
         }
 
-        log.info("[EXIT] retryPendingMessages: sessionId={}, ak={}, sent={}/{}, suppressReply={}",
+        log.info("[EXIT] retryPendingMessages: sessionId={}, ak={}, sent={}/{}, suppressReply={}, payload_format=v2",
                 sessionId, ak, sent, pendingMessages.size(), suppressReply);
         emitter.emitToClient(sessionId, userId, StreamMessage.sessionStatus("busy"));
     }
