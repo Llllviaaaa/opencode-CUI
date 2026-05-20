@@ -10,7 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -34,13 +34,25 @@ public class ImMessageService {
     /**
      * 向 IM 聊天发送文本消息。
      *
-     * @param chatId  IM 会话标识
-     * @param content 文本内容
-     * @return 发送成功返回 true
+     * <p>body 字段：{@code { targetType, targetId, senderAccount, content, msgType: "text" }}。
+     *
+     * @param targetType    目标类型（{@code group} / {@code direct}）
+     * @param targetId      目标会话 ID（群 ID 或私聊对方账号）
+     * @param senderAccount 发送人账号（与 cookie userId 一致）
+     * @param content       文本内容
+     * @return 发送成功返回 true；任一参数为空 / 下游非 2xx / 抛异常返回 false
      */
-    public boolean sendMessage(String chatId, String content) {
-        if (chatId == null || chatId.isBlank()) {
-            log.warn("Cannot send IM message: chatId is empty");
+    public boolean sendMessage(String targetType, String targetId, String senderAccount, String content) {
+        if (targetType == null || targetType.isBlank()) {
+            log.warn("Cannot send IM message: targetType is empty");
+            return false;
+        }
+        if (targetId == null || targetId.isBlank()) {
+            log.warn("Cannot send IM message: targetId is empty");
+            return false;
+        }
+        if (senderAccount == null || senderAccount.isBlank()) {
+            log.warn("Cannot send IM message: senderAccount is empty");
             return false;
         }
         if (content == null || content.isBlank()) {
@@ -50,8 +62,10 @@ public class ImMessageService {
 
         String sendUrl = imApiUrl + "/messages/send";
 
-        Map<String, Object> body = new HashMap<>();
-        body.put("chatId", chatId);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("targetType", targetType);
+        body.put("targetId", targetId);
+        body.put("senderAccount", senderAccount);
         body.put("content", content);
         body.put("msgType", "text");
 
@@ -62,17 +76,21 @@ public class ImMessageService {
 
         try {
             ResponseEntity<String> response = com.opencode.cui.skill.logging.LogTimer.timed(
-                    log, "ImMessage.send(chatId=" + chatId + ")",
+                    log,
+                    "ImMessage.send(targetType=" + targetType + ",targetId=" + targetId + ")",
                     () -> restTemplate.postForEntity(sendUrl, request, String.class));
             if (response.getStatusCode().is2xxSuccessful()) {
-                log.info("IM message sent successfully: chatId={}, contentLength={}", chatId, content.length());
+                log.info("IM message sent successfully: targetType={}, targetId={}, senderAccount={}, contentLength={}",
+                        targetType, targetId, senderAccount, content.length());
                 return true;
             } else {
-                log.error("IM message send failed: chatId={}, status={}", chatId, response.getStatusCode());
+                log.error("IM message send failed: targetType={}, targetId={}, status={}",
+                        targetType, targetId, response.getStatusCode());
                 return false;
             }
         } catch (RestClientException e) {
-            log.error("IM message send error: chatId={}, error={}", chatId, e.getMessage());
+            log.error("IM message send error: targetType={}, targetId={}, error={}",
+                    targetType, targetId, e.getMessage());
             return false;
         }
     }

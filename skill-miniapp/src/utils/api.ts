@@ -339,14 +339,17 @@ export function replyPermission(
 // Send to IM
 // ---------------------------------------------------------------------------
 
-/** POST /api/skill/sessions/{id}/send-to-im */
+/** POST /api/skill/sessions/{id}/send-to-im
+ *
+ * 目标 (targetType/targetId) 与发送人 (senderAccount) 完全由后端从
+ * session.businessSessionId + cookie userId 解析，前端只传 content。
+ */
 export function sendToIm(
   sessionId: string | number,
   content: string,
-  chatId: string,
 ): Promise<void> {
   return request<void>(`/api/skill/sessions/${sessionId}/send-to-im`, {
     method: 'POST',
-    body: JSON.stringify({ content, chatId }),
+    body: JSON.stringify({ content }),
   });
 }
