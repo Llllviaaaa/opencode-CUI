@@ -230,6 +230,50 @@ skill-server/src/main/resources/
 
 ---
 
+## 内部传输 DTO 必须标注作用域
+
+`model/` 同时混放两类对象：① 跨服务 / 跨入口的**外部契约 DTO**（`ExternalInvokeRequest`、`ImMessageRequest`、`StreamMessage`、`ApiResponse`）；② 只在进程内 / Redis / 内部队列周转的**内部传输 DTO**（`InvokeCommand`、`PendingChatRequest`、`SaveMessageCommand`）。两者升级策略完全不同：外部契约动了要全链路追字段，内部 DTO 改了只影响一个进程编译。
+
+**约定**：内部传输 DTO 必须在类 Javadoc 第一行明确说明它**不是**外部 API 契约。这样后续读代码 / review PR 时一眼能看出"这字段加错地方了"。
+
+```java
+/**
+ * 内部传输 DTO：Redis pending list (ss:pending-rebuild:{sessionId}) 缓存
+ * 的 personal scope 首次对话 chat 上下文。
+ *
+ * <p><b>不是外部 API 契约</b> —— 字段集仅服务于 SS 进程内
+ * SessionRebuildService ↔ GatewayMessageRouter 周转，跨实例 Redis
+ * 兼容靠 {@link #fromSessionFallback} 兜底，不走版本协商。
+ */
+public record PendingChatRequest(
+        String text,
+        String assistantAccount,
+        String sendUserAccount,
+        String imGroupId,
+        String messageId,
+        JsonNode businessExtParam,
+        String businessSessionDomain,           // PR2 platformExtParam
+        String businessSessionType,             // PR2 platformExtParam
+        @Nullable List<String> allowedSlashCommands  // v3 allowed-slash-commands
+) {
+    // 8 参 secondary constructor 兼容 v3 前老 entry
+    // (allowedSlashCommands 默认 null，retry 时不下发该 platformExtParam key)
+    ...
+}
+```
+
+> 字段升级是向后兼容的：老 entry（Redis 里旧格式 JSON）反序列化时 `allowedSlashCommands` 自动为 null（Jackson `@JsonCreator` 行为），由 `GatewayMessageRouter.retryPendingMessages` 通过 `PlatformExtParamBuilder` 5 参重载在 list==null 时不下发该 key 实现"frozen 复用"语义。详见 PRD `.trellis/tasks/05-19-allowed-slash-commands/prd.md`。
+
+参考：`PendingChatRequest`、`InvokeCommand`、`SaveMessageCommand`。
+
+规则：
+
+- 新增 `model/*.java` 时先回答"这对象会跨服务 / 跨入口出现吗"。否，则必须在 Javadoc 标"内部传输 DTO"。
+- 内部 DTO **不强制**`@JsonInclude` / `@JsonProperty` 重命名等外部契约修饰；只保证 Jackson 默认序列化能往返。
+- 内部 DTO 字段变更不需要同步 plugin / miniapp `types.ts`，但**必须**评估 Redis / 队列里的老格式 entry 兼容（见 type-safety.md "反序列化对抗性输入" 段）。
+
+---
+
 ## 新增功能时的目录约定
 
 1. **新增 API**：优先扩展现有 Controller；只有语义清晰的新入口才建新 `controller/*.java`。

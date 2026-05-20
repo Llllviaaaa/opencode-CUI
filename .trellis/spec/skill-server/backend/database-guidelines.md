@@ -422,6 +422,31 @@ if (refreshed) {
 
 ---
 
+## sys_config personal scope 允许 slash 命令清单（新 type，任务 05-19-allowed-slash-commands）
+
+| 字段 | 值 |
+|---|---|
+| `config_type` | `"allowed_slash_commands"` |
+| `config_key` | `"{businessSessionDomain}_{businessSessionType}"`（**下划线**拼接，无冒号；与 default_assistant_rule 不同） |
+| `config_value` | JSON 数组字符串，如 `["plan","ask","run"]`（严格 `string[]`，含非文本元素整数组拒绝） |
+| `status` | 1=启用，0=禁用 |
+
+读取入口：`AllowedSlashCommandsResolver.resolve(domain, type)` 复用 `SysConfigService.getValue` Redis 5min 缓存（与 `DefaultAssistantRuleService` 薄壳约定一致，**不再加外层缓存**避免 evict 传播变慢）。运维改规则同样走 `/api/admin/configs/**`；`SysConfigService.update/create` 自动 evict 缓存。**注意 `SysConfigService.delete` 不知 type/key**，删除依赖 5min TTL 自然过期；运维要立即生效请走 `update(status=0)` 路径。
+
+兜底语义：sysconfig null / blank / parse 失败 / 非数组 / **含任一非 textual 元素**（数字 / 布尔 / 对象 / null）/ 空数组 / 全 blank 元素 / domain 或 type 缺失 → 一律返 null（caller 不下发 `platformExtParam.allowedSlashCommands` key）。
+
+调用门控（双重）：
+1. **action guard**：仅 `action == CHAT` 走 resolver；reply / create / close / abort 一律传 null
+2. **personal scope gating**：strategy.generateToolSessionId() == null 判定 personal；business / default_assistant 即使 CHAT 也不调 resolver
+
+调用点 3 处：`SkillMessageController.routeToGateway`（A4 CHAT 分支）/ `InboundProcessingService.dispatchChatToGateway`（A7 + B2，appendToPending 间接判定 personal）/ `SessionRebuildService.rebuildToolSession` legacy String overload（含 IM/External case B + business self-heal fallback）。
+
+frozen 语义：personal first chat 入 pending 时 resolve 一次写入 `PendingChatRequest.allowedSlashCommands`，retry 路径 `GatewayMessageRouter.retryPendingMessages` 复用 frozen list，sysconfig 期间被更新不影响 retry 下发的值。
+
+详见 PRD `.trellis/tasks/05-19-allowed-slash-commands/prd.md`。
+
+---
+
 ## 常见错误
 
 1. 不要在 XML 里用 `${}` 拼接用户输入；统一 `#{}` 绑定。

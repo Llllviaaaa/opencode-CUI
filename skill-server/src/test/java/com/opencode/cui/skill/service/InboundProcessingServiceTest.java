@@ -10,6 +10,7 @@ import com.opencode.cui.skill.model.AvailabilityResult;
 import com.opencode.cui.skill.model.AvailabilitySource;
 import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.InvokeCommand;
+import com.opencode.cui.skill.model.PendingChatRequest;
 import com.opencode.cui.skill.model.ResolveOutcome;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
@@ -75,6 +76,8 @@ class InboundProcessingServiceTest {
     private ChannelLookupService channelLookupService;
     @Mock
     private ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService;
+    @Mock
+    private AllowedSlashCommandsResolver allowedSlashCommandsResolver;
 
     private AssistantIdProperties assistantIdProperties;
     private DeliveryProperties deliveryProperties;
@@ -90,6 +93,9 @@ class InboundProcessingServiceTest {
         assistantIdProperties.setTargetToolType("assistant");
 
         deliveryProperties = new DeliveryProperties();
+
+        // resolver 默认返 null（未配置）
+        lenient().when(allowedSlashCommandsResolver.resolve(anyString(), anyString())).thenReturn(null);
 
         service = new InboundProcessingService(
                 resolverService,
@@ -111,7 +117,8 @@ class InboundProcessingServiceTest {
                 sessionService,
                 redisTemplate,
                 channelLookupService,
-                channelSuppressReplyWhitelistService);
+                channelSuppressReplyWhitelistService,
+                allowedSlashCommandsResolver);
 
         // 默认 scope 策略：personal（requiresOnlineCheck=true）
         AssistantScopeStrategy personalStrategy = mock(AssistantScopeStrategy.class);
@@ -131,7 +138,8 @@ class InboundProcessingServiceTest {
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         lenient().when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class)))
                 .thenReturn(true);
-        lenient().when(rebuildService.consumePendingMessages(anyString()))
+        // PR3: 切到新签名 consumePendingRequests（返回 List<PendingChatRequest>）
+        lenient().when(rebuildService.consumePendingRequests(anyString()))
                 .thenReturn(Collections.emptyList());
 
         // 助理删除文案（用于 NOT_EXISTS 410 分支）
@@ -167,7 +175,15 @@ class InboundProcessingServiceTest {
         assertEquals(GatewayActions.CHAT, captor.getValue().action());
         assertTrue(captor.getValue().payload().contains("tool-001"));
         verify(messageService).saveUserMessage(101L, "hello");
-        verify(rebuildService).appendPendingMessage("101", "hello");
+        // PR3: 情况 C personal appendToPending 走新 API，传完整结构化 PendingChatRequest
+        ArgumentCaptor<PendingChatRequest> reqCap = ArgumentCaptor.forClass(PendingChatRequest.class);
+        verify(rebuildService).appendPendingMessage(eq("101"), reqCap.capture());
+        PendingChatRequest appended = reqCap.getValue();
+        assertEquals("hello", appended.text());
+        assertEquals("assist-001", appended.assistantAccount());
+        assertEquals("owner-001", appended.sendUserAccount(), "direct chat: sender == ownerWelinkId");
+        assertNull(appended.imGroupId(), "direct session: imGroupId 为 null");
+        assertNotNull(appended.messageId());
         JsonNode chatPayload = objectMapper.readTree(captor.getValue().payload());
         assertEquals("owner-001", chatPayload.get("sendUserAccount").asText(),
                 "direct chat should put ownerWelinkId as sendUserAccount");
@@ -256,7 +272,9 @@ class InboundProcessingServiceTest {
         assertEquals("该助理已被删除", result.message());
         assertEquals("dm-001", result.businessSessionId());
         verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any(), any());
-        verify(sessionManager, never()).requestToolSession(any(), any());
+        // PR3: 两个重载都不应被调（String + PendingChatRequest）
+        verify(sessionManager, never()).requestToolSession(any(), any(String.class));
+        verify(sessionManager, never()).requestToolSession(any(), any(PendingChatRequest.class));
     }
 
     @Test
@@ -634,7 +652,8 @@ class InboundProcessingServiceTest {
                 "im", "direct", "dm-001", "assist-001", "user-001");
 
         assertTrue(result.success());
-        verify(sessionManager).requestToolSession(session, null);
+        // PR3: processRebuild personal 分支调新签名 requestToolSession(session, (PendingChatRequest) null)
+        verify(sessionManager).requestToolSession(eq(session), (PendingChatRequest) isNull());
         verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
@@ -653,7 +672,9 @@ class InboundProcessingServiceTest {
         verify(sessionManager).createSessionAsync(
                 "im", "direct", "dm-new", "ak-001",
                 "owner-001", "assist-001", "user-001", null, null);
-        verify(sessionManager, never()).requestToolSession(any(), any());
+        // PR3: 两个重载都不应被调（String + PendingChatRequest）
+        verify(sessionManager, never()).requestToolSession(any(), any(String.class));
+        verify(sessionManager, never()).requestToolSession(any(), any(PendingChatRequest.class));
     }
 
     @Test
@@ -673,7 +694,9 @@ class InboundProcessingServiceTest {
         assertFalse(result.success());
         assertEquals(503, result.code());
         assertEquals(MOCK_OFFLINE_MSG, result.message());
-        verify(sessionManager, never()).requestToolSession(any(), any());
+        // PR3: 两个重载都不应被调（String + PendingChatRequest）
+        verify(sessionManager, never()).requestToolSession(any(), any(String.class));
+        verify(sessionManager, never()).requestToolSession(any(), any(PendingChatRequest.class));
         verify(sessionManager, never()).createSessionAsync(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
@@ -710,7 +733,9 @@ class InboundProcessingServiceTest {
         JsonNode payload = objectMapper.readTree(captor.getValue().payload());
         assertTrue(payload.get("toolSessionId").asText().startsWith("cloud-"));
         // 确认没有走老的 rebuild 路径
-        verify(sessionManager, never()).requestToolSession(any(), any());
+        // PR3: 两个重载都不应被调（String + PendingChatRequest）
+        verify(sessionManager, never()).requestToolSession(any(), any(String.class));
+        verify(sessionManager, never()).requestToolSession(any(), any(PendingChatRequest.class));
     }
 
     @Test
@@ -745,7 +770,9 @@ class InboundProcessingServiceTest {
         verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
         JsonNode payload = objectMapper.readTree(captor.getValue().payload());
         assertEquals("cloud-already-healed", payload.get("toolSessionId").asText());
-        verify(sessionManager, never()).requestToolSession(any(), any());
+        // PR3: 两个重载都不应被调（String + PendingChatRequest）
+        verify(sessionManager, never()).requestToolSession(any(), any(String.class));
+        verify(sessionManager, never()).requestToolSession(any(), any(PendingChatRequest.class));
     }
 
     @Test
@@ -815,7 +842,9 @@ class InboundProcessingServiceTest {
 
         assertTrue(result.success());
         verify(sessionService).updateToolSessionId(eq(101L), argThat((String s) -> s != null && s.startsWith("cloud-")));
-        verify(sessionManager, never()).requestToolSession(any(), any());
+        // PR3: 两个重载都不应被调（String + PendingChatRequest）
+        verify(sessionManager, never()).requestToolSession(any(), any(String.class));
+        verify(sessionManager, never()).requestToolSession(any(), any(PendingChatRequest.class));
         verify(gatewayRelayService, never()).sendInvokeToGateway(any());
     }
 
@@ -840,7 +869,9 @@ class InboundProcessingServiceTest {
 
         assertTrue(result.success());
         verify(sessionService).updateToolSessionId(eq(101L), argThat((String s) -> s != null && s.startsWith("cloud-")));
-        verify(sessionManager, never()).requestToolSession(any(), any());
+        // PR3: 两个重载都不应被调（String + PendingChatRequest）
+        verify(sessionManager, never()).requestToolSession(any(), any(String.class));
+        verify(sessionManager, never()).requestToolSession(any(), any(PendingChatRequest.class));
         verify(gatewayRelayService, never()).sendInvokeToGateway(any());
     }
 
@@ -857,7 +888,8 @@ class InboundProcessingServiceTest {
                 "im", "direct", "dm-001", "assist-001", "user-001");
 
         assertTrue(result.success());
-        verify(sessionManager).requestToolSession(session, null);
+        // PR3: processRebuild personal 分支调新签名 requestToolSession(session, (PendingChatRequest) null)
+        verify(sessionManager).requestToolSession(eq(session), (PendingChatRequest) isNull());
         verify(sessionService, never()).updateToolSessionId(any(), any());
     }
 
@@ -899,7 +931,9 @@ class InboundProcessingServiceTest {
         verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
         JsonNode payload = objectMapper.readTree(captor.getValue().payload());
         assertEquals("cloud-peer-healed", payload.get("toolSessionId").asText());
-        verify(sessionManager, never()).requestToolSession(any(), any());
+        // PR3: 两个重载都不应被调（String + PendingChatRequest）
+        verify(sessionManager, never()).requestToolSession(any(), any(String.class));
+        verify(sessionManager, never()).requestToolSession(any(), any(PendingChatRequest.class));
     }
 
     @Test
@@ -927,7 +961,8 @@ class InboundProcessingServiceTest {
         assertTrue(result.success());
         verify(gatewayRelayService).sendInvokeToGateway(any());
         // 关键：business 不写 pending list
-        verify(rebuildService, never()).appendPendingMessage(anyString(), anyString());
+        // PR3: appendPendingMessage(String, String) 重载已删除，新签名是 (String, PendingChatRequest)
+        verify(rebuildService, never()).appendPendingMessage(anyString(), any(PendingChatRequest.class));
     }
 
     @Test
@@ -955,7 +990,8 @@ class InboundProcessingServiceTest {
         assertTrue(result.success());
         verify(gatewayRelayService).sendInvokeToGateway(any());
         // 关键：self-heal 分支也不 append
-        verify(rebuildService, never()).appendPendingMessage(anyString(), anyString());
+        // PR3: appendPendingMessage(String, String) 重载已删除，新签名是 (String, PendingChatRequest)
+        verify(rebuildService, never()).appendPendingMessage(anyString(), any(PendingChatRequest.class));
     }
 
     @Test
@@ -976,9 +1012,12 @@ class InboundProcessingServiceTest {
         when(sessionService.findByIdSafe(101L)).thenReturn(session);
         when(contextInjectionService.resolvePrompt("direct", "hello", null)).thenReturn("hello");
 
-        // pending list 里有两条 legacy + 一条与当前 prompt 重复（应被 skip）
-        List<String> legacy = Arrays.asList("legacy-1", "legacy-2", "hello");
-        when(rebuildService.consumePendingMessages("101")).thenReturn(legacy);
+        // PR3: pending list 里有两条 legacy + 一条与当前 prompt 重复（应被 skip）— 切到 consumePendingRequests
+        List<PendingChatRequest> legacy = Arrays.asList(
+                new PendingChatRequest("legacy-1", "old-assist", "old-sender", null, "old-id-1", null, null, null),
+                new PendingChatRequest("legacy-2", "old-assist", "old-sender", null, "old-id-2", null, null, null),
+                new PendingChatRequest("hello", "old-assist", "old-sender", null, "old-id-3", null, null, null));
+        when(rebuildService.consumePendingRequests("101")).thenReturn(legacy);
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
@@ -995,9 +1034,14 @@ class InboundProcessingServiceTest {
         assertEquals("legacy-1", p1.get("text").asText());
         assertEquals("legacy-2", p2.get("text").asText());
         assertEquals("hello", p3.get("text").asText());
-        verify(rebuildService).consumePendingMessages("101");
+        // PR3 + D17：重放时用当前请求的 sender/assistantAccount，不复用 legacy 的
+        assertEquals("assist-001", p1.get("assistantAccount").asText(),
+                "PR3+D17: legacy 重放用当前请求的 assistantAccount, 不复用 legacy entry");
+        assertEquals("assist-001", p2.get("assistantAccount").asText());
+        verify(rebuildService).consumePendingRequests("101");
         // 关键：重放过程中每次 dispatch 都不 append，避免 peer 误消费本请求刚写入的 prompt
-        verify(rebuildService, never()).appendPendingMessage(anyString(), anyString());
+        // PR3: appendPendingMessage(String, String) 重载已删除，新签名是 (String, PendingChatRequest)
+        verify(rebuildService, never()).appendPendingMessage(anyString(), any(PendingChatRequest.class));
     }
 
     @Test
@@ -1024,7 +1068,9 @@ class InboundProcessingServiceTest {
 
         assertTrue(result.success());
         verify(sessionService, never()).updateToolSessionId(any(), any());
-        verify(sessionManager, never()).requestToolSession(any(), any());
+        // PR3: 两个重载都不应被调（String + PendingChatRequest）
+        verify(sessionManager, never()).requestToolSession(any(), any(String.class));
+        verify(sessionManager, never()).requestToolSession(any(), any(PendingChatRequest.class));
         verify(gatewayRelayService, never()).sendInvokeToGateway(any());
     }
 

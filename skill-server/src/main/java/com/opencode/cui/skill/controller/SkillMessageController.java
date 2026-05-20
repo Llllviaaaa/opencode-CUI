@@ -15,6 +15,7 @@ import com.opencode.cui.skill.model.AvailabilityResult;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.config.AssistantIdProperties;
+import com.opencode.cui.skill.service.AllowedSlashCommandsResolver;
 import com.opencode.cui.skill.service.AssistantAccountResolverService;
 import com.opencode.cui.skill.service.DefaultAssistantRuleService;
 import com.opencode.cui.skill.service.GatewayApiClient;
@@ -80,6 +81,7 @@ public class SkillMessageController {
     private final AssistantAvailabilityService availabilityService;
     private final AssistantAccountResolverService assistantAccountResolverService;
     private final DefaultAssistantRuleService ruleService;
+    private final AllowedSlashCommandsResolver allowedSlashCommandsResolver;
 
     public SkillMessageController(SkillMessageService messageService,
             SkillSessionService sessionService,
@@ -95,7 +97,8 @@ public class SkillMessageController {
             AssistantOfflineMessageProvider offlineMessageProvider,
             AssistantAvailabilityService availabilityService,
             AssistantAccountResolverService assistantAccountResolverService,
-            DefaultAssistantRuleService ruleService) {
+            DefaultAssistantRuleService ruleService,
+            AllowedSlashCommandsResolver allowedSlashCommandsResolver) {
         this.messageService = messageService;
         this.sessionService = sessionService;
         this.gatewayRelayService = gatewayRelayService;
@@ -111,6 +114,7 @@ public class SkillMessageController {
         this.availabilityService = availabilityService;
         this.assistantAccountResolverService = assistantAccountResolverService;
         this.ruleService = ruleService;
+        this.allowedSlashCommandsResolver = allowedSlashCommandsResolver;
     }
 
     /**
@@ -233,10 +237,10 @@ public class SkillMessageController {
             qr.put("answer", request.getContent());
             qr.put("toolCallId", request.getToolCallId());
             qr.put("toolSessionId", targetToolSessionId);
-            // D8：仅当 requestId 非空白时塞入 payload（避免下游 JSON 含 null/空字符串污染，让 plugin 走 fallback）
-            String requestId = request.getRequestId();
-            if (requestId != null && !requestId.isBlank()) {
-                qr.put("requestId", requestId);
+            // D8：仅当 questionId 非空白时塞入 payload（避免下游 JSON 含 null/空字符串污染，让 plugin 走 fallback）
+            String questionId = request.getQuestionId();
+            if (questionId != null && !questionId.isBlank()) {
+                qr.put("questionId", questionId);
             }
             // D8 修复：补 assistantAccount + sendUserAccount（默认助手 + business 都补，老 chat 已含）
             qr.put("assistantAccount", session.getAssistantAccount());
@@ -258,12 +262,25 @@ public class SkillMessageController {
 
         log.info("SkillMessageController.routeToGateway: sessionId={}, action={}, ak={}",
                 sessionId, action, session.getAk());
+        // A4: allowed-slash-commands action guard + personal scope gating
+        //   - action guard: 仅 CHAT 走 resolver；reply/create/close/abort 一律 null
+        //   - personal scope gating: personal strategy.generateToolSessionId() 返 null
+        //     business / default_assistant 即使 CHAT 也不调 resolver（避免 sysconfig 热路径污染）
+        boolean isChat = GatewayActions.CHAT.equals(action);
+        boolean isPersonalScope = scopeStrategy.generateToolSessionId() == null;
+        List<String> allowedSlashCommands = (isChat && isPersonalScope)
+                ? allowedSlashCommandsResolver.resolve(
+                        session.getBusinessSessionDomain(),
+                        session.getBusinessSessionType())
+                : null;
         // N1 收口：InvokeCommand 塞入 session 的 domain/domainType，让 dispatcher 走新 API
         gatewayRelayService.sendInvokeToGateway(
                 new InvokeCommand(session.getAk(), effectiveUserId, sessionId, action, payload,
                         null,
                         session.getBusinessSessionDomain(),
-                        session.getBusinessSessionType()));
+                        session.getBusinessSessionType(),
+                        session.getBusinessSessionId(),
+                        allowedSlashCommands));
     }
 
     /**
@@ -479,7 +496,8 @@ public class SkillMessageController {
                         payload,
                         null,
                         session.getBusinessSessionDomain(),
-                        session.getBusinessSessionType()));
+                        session.getBusinessSessionType(),
+                        session.getBusinessSessionId()));
 
         StreamMessage replyMessage = StreamMessage.builder()
                 .type(StreamMessage.Types.PERMISSION_REPLY)
@@ -573,7 +591,7 @@ public class SkillMessageController {
          * 非空时 SS 透传给 plugin，新版 plugin 直接 POST /question/{requestID}/reply。
          * 缺失/空白走老路径（plugin GET /question 反查）。
          */
-        private String requestId;
+        private String questionId;
         /** 可选：业务扩展参数，透传到云端 extParameters.businessExtParam */
         private JsonNode businessExtParam;
     }

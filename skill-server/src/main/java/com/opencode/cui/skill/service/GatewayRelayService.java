@@ -203,6 +203,38 @@ public class GatewayRelayService {
             }
         }
 
+        // PR2 platformExtParam：personal scope（buildInvokeMessage 是其唯一出站路径）也补
+        // extParameters 信封，与 business / default_assistant 形态对齐。同时把 payload 顶层的
+        // businessExtParam 搬到 extParameters.businessExtParam，跟 business wire 形态一致（P2a）。
+        //
+        // 幂等保护：如果 payload 已经有 extParameters（例如 retryPendingMessages 提前构造好），
+        // 不要覆盖，避免双注入。
+        JsonNode payloadAfterAssistantId = message.get("payload");
+        if (payloadAfterAssistantId instanceof ObjectNode payloadObj
+                && !payloadObj.has("extParameters")) {
+            // 1) 把 payload 顶层 businessExtParam 摘出来（与 P2a 对齐：搬入 extParameters）
+            JsonNode removedBusinessExt = payloadObj.remove("businessExtParam");
+
+            // 2) 构造 extParameters 信封：businessExtParam（兜底 {}）+ platformExtParam（三字段）
+            ObjectNode extParameters = objectMapper.createObjectNode();
+            if (removedBusinessExt != null && !removedBusinessExt.isNull()) {
+                extParameters.set("businessExtParam", removedBusinessExt);
+            } else {
+                extParameters.set("businessExtParam", objectMapper.createObjectNode());
+            }
+            // C1 (v3 allowed-slash-commands): 升 5 参 builder 传 command.allowedSlashCommands()。
+            //   personal scope CHAT normal 路径在此汇聚（caller A4 + A7 已 gated 仅 personal CHAT 显式传 list）；
+            //   其他 callsite（非 CHAT / business / default_assistant）均通过 secondary constructor 传入 null,
+            //   builder 5 参 list==null 自然不下发该 key —— 双重保险。
+            extParameters.set("platformExtParam",
+                    PlatformExtParamBuilder.build(objectMapper,
+                            command.domain(),
+                            command.domainType(),
+                            command.businessSessionId(),
+                            command.allowedSlashCommands()));
+            payloadObj.set("extParameters", extParameters);
+        }
+
         try {
             return objectMapper.writeValueAsString(message);
         } catch (JsonProcessingException e) {
@@ -344,13 +376,49 @@ public class GatewayRelayService {
     }
 
     /**
-     * 触发 toolSession 重建。
+     * 触发 toolSession 重建（老 String 入参重载，被 {@code SkillMessageController.routeToGateway} 等使用）。
      * 缓存待发消息 → 通知前端重试 → 发送 create_session 到 Gateway。
+     *
+     * <p>PR3 改造：内部委托给
+     * {@code SessionRebuildService.rebuildToolSession(String, SkillSession, String, RebuildCallback)}
+     * 老 String 重载, 该重载在 {@code SessionRebuildService} 内已自动 fallback +
+     * WARN（{@code reason=rebuild_legacy_string_overload}），所以 caller 无感升级。
      */
     public void rebuildToolSession(String sessionId, SkillSession session, String pendingMessage) {
         log.info("Initiating toolSession rebuild: sessionId={}, ak={}, hasPendingMessage={}",
                 sessionId, session != null ? session.getAk() : null, pendingMessage != null);
         rebuildService.rebuildToolSession(sessionId, session, pendingMessage,
+                new SessionRebuildService.RebuildCallback() {
+                    @Override
+                    public void broadcast(String sid, String uid, StreamMessage msg) {
+                        emitter.emitToClient(sid, uid, msg);
+                    }
+
+                    @Override
+                    public void sendInvoke(InvokeCommand command) {
+                        sendInvokeToGateway(command);
+                    }
+                });
+    }
+
+    /**
+     * 触发 toolSession 重建（PR3 新签名，接收完整 {@link com.opencode.cui.skill.model.PendingChatRequest}）。
+     *
+     * <p>用于 {@link ImSessionManager} 个人助手分支 — 首次对话场景需要把 sender / assistantAccount /
+     * imGroupId / businessExtParam 完整入 Redis pending list, 等 Gateway 回 session_created
+     * 触发 retry 时由 {@code GatewayMessageRouter.retryPendingMessages} 重建完整 chat invoke payload。
+     *
+     * <p>内部直接调用 {@code SessionRebuildService.rebuildToolSession} 新签名,
+     * 避开老 String 重载的 fallback + WARN 日志。
+     *
+     * @param pendingRequest 完整 {@link com.opencode.cui.skill.model.PendingChatRequest}（可为 null,
+     *                       表示无 pending 消息只重建 session）
+     */
+    public void rebuildToolSession(String sessionId, SkillSession session,
+            com.opencode.cui.skill.model.PendingChatRequest pendingRequest) {
+        log.info("Initiating toolSession rebuild (PendingChatRequest API): sessionId={}, ak={}, hasPendingRequest={}",
+                sessionId, session != null ? session.getAk() : null, pendingRequest != null);
+        rebuildService.rebuildToolSession(sessionId, session, pendingRequest,
                 new SessionRebuildService.RebuildCallback() {
                     @Override
                     public void broadcast(String sid, String uid, StreamMessage msg) {

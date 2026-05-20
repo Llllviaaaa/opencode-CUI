@@ -544,6 +544,39 @@ try {
 
 Registry 必须 in-memory TTL cache（5min 量级），SysConfig 不要进热路径。跨服务（SS↔GW）只共享 profile name 字符串。参考：`CloudRequestProfileRegistry`、`BusinessScopeStrategy.buildInvoke` 调用点。
 
+## JSON wire format 与 Java 字段名解耦
+
+`StreamMessage` / `SendMessageRequest` / 类似跨服务 DTO 序列化 JSON 时，**wire format（JSON 字段名）是契约，Java 字段名只是内部代号**——两者绝不能耦合。
+
+默认下 Lombok `@Data` + Jackson 用 Java 字段名 == JSON key，意味着**重命名 Java 字段会静默改 JSON 协议**，下游 miniapp / plugin / 上游 SS-Gateway / 历史回放数据都会一起爆。
+
+**规则**：
+
+- 跨进程 DTO 字段，wire name 与 Java 字段名"看起来一致"时，仍**建议**加 `@JsonProperty("wireName")` 锚定 wire name——成本极低、收益是后续 Java 字段重命名零协议风险
+- wire name 与 Java 字段名**必须不同**时（历史包袱 / 多端命名分歧），`@JsonProperty` 是**强制**的
+- 修改任何带 `@JsonProperty` 的字段时，先决定要改的是"Java 内部名"还是"协议 wire name"：
+  - 只改 Java 内部名 → 改字段名，**保持 `@JsonProperty` 的字符串不变**
+  - 改协议 wire name → 改 `@JsonProperty` 的字符串，同步推 miniapp / plugin / 协议文档全链路
+
+```java
+// ✅ 安全：Java 字段叫 questionId，JSON wire key 也叫 questionId，但显式锚定，未来重命名 Java 字段零协议风险
+@Data @Builder
+public static class QuestionInfo {
+    @JsonProperty("questionId")
+    private String questionId;
+}
+
+// ❌ 危险：Lombok @Data + Jackson 默认 → 字段重命名 = wire key 静默改名
+@Data @Builder
+public static class QuestionInfo {
+    private String questionId; // 重命名为 qid 时 JSON 协议立刻变 {"qid": ...}
+}
+```
+
+**遵守这条约定时配套的 grep 习惯**：改动 `StreamMessage.*` 任何字段前先 `grep -rn "<oldFieldName>" skill-miniapp plugins documents/protocol` 看协议文档与下游消费者，决定是只改 Java 还是全链路改名。
+
+> **历史踩坑**：`StreamMessage.QuestionInfo.requestId` 原本无 `@JsonProperty`，依赖 Java 字段名 == wire name。重命名为 `questionId` 时必须同步改 miniapp / plugin contracts / v3 协议文档；任何一处遗漏都会让 question_reply 快路径静默退化为 D8 fallback。
+
 ## 跨 vendor 的 toolSessionId 必须 Long-parseable
 
 `toolSessionId` 是 SS 内部生成、可能被任意云端 vendor 当作业务 ID（如助手广场 `topicId: long`）使用。生成端（`*ScopeStrategy.generateToolSessionId`）**必须用 Snowflake**（`SnowflakeIdGenerator.nextId().toString()`），不要用 `"prefix-" + UUID`。否则下游 `Long.parseLong(toolSessionId)` 在新 vendor 接入时炸裂，且改不动（已下发的 ID 收不回）。

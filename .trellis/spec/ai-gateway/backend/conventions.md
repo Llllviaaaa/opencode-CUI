@@ -32,6 +32,20 @@ public class AgentRegistryService {
 - 结构化配置用 `*Properties` 承载，例如 `SnowflakeProperties`、`CloudTimeoutProperties`。
 - `GatewayApplication` 已开启 `@MapperScan`，不要在每个 Mapper 上重复做手工注册。来源：`ai-gateway/src/main/java/com/opencode/cui/gateway/GatewayApplication.java:10-17`。
 
+### 陷阱：`@Value(":<default>")` 的默认值是 fallback，不是"真实"默认值
+
+`@Value("${gateway.foo:false}")` 的 `:false` 只在 `application.yml` **没写** `gateway.foo` 时才生效。一旦 yml 写了 `gateway.foo: true`，Java 源码里的 `:false` 就是假象。
+
+**症状**：开发同学读 Java 代码以为某 feature flag 默认关，实际线上一直开着。debug 时按"代码里写的默认值"推理就会走偏。
+
+**规则**：
+
+- **声明真实默认值唯一权威是 `application.yml`**。Java 端 `@Value(":<x>")` 的 `<x>` 仅作为"yml 整段缺失"的兜底，不要把它当作 feature flag 的真实默认值。
+- 新增 flag 时，**yml 必须显式写一行**（即使值等于 Java fallback），让 grep `application.yml` 就能看到全部默认值。
+- review 写有 `@Value(":<default>")` 的代码时，第一件事是 `grep "<config-key>" application*.yml` 确认两边一致；不一致时以 yml 为准。
+
+**真实事故**：`SkillRelayService.legacyRelayEnabled` 历史上 Java 写 `@Value(":false")`，但 `application.yml` 写的是 `GATEWAY_LEGACY_RELAY_ENABLED:true`——线上 legacy 兜底实际一直开着，直到 PR1 清理时才暴露。
+
 ## WebSocket 注册模式
 
 WebSocket 端点统一由 `GatewayConfig` 注册，Handler 同时承担 `HandshakeInterceptor`。这样握手鉴权和消息处理能共享一份依赖图，不需要额外的 adapter 层。

@@ -10,6 +10,7 @@ import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.CloudEventTranslator;
 import com.opencode.cui.skill.service.GatewayActions;
+import com.opencode.cui.skill.service.PlatformExtParamBuilder;
 import com.opencode.cui.skill.service.SnowflakeIdGenerator;
 import com.opencode.cui.skill.service.cloud.CloudRequestBuilder;
 import com.opencode.cui.skill.service.cloud.CloudRequestContext;
@@ -93,7 +94,9 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
         Map<String, Object> extParameters = new LinkedHashMap<>();
         extParameters.put("businessExtParam",
                 businessExtParam != null ? businessExtParam : objectMapper.createObjectNode());
-        extParameters.put("platformExtParam", objectMapper.createObjectNode());
+        extParameters.put("platformExtParam",
+                PlatformExtParamBuilder.build(objectMapper,
+                        command.domain(), command.domainType(), command.businessSessionId()));
 
         CloudRequestContext context = CloudRequestContext.builder()
                 .content(content)

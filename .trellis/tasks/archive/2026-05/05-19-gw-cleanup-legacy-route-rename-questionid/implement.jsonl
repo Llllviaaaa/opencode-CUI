@@ -1,0 +1,12 @@
+{"file": ".trellis/spec/ai-gateway/backend/index.md", "reason": "ai-gateway 包的 spec 索引和 Pre-Development Checklist，PR1 主战场"}
+{"file": ".trellis/spec/ai-gateway/backend/conventions.md", "reason": "ai-gateway Java 代码约定"}
+{"file": ".trellis/spec/ai-gateway/backend/logging-guidelines.md", "reason": "动到大量 log 语句，遵循日志规范"}
+{"file": ".trellis/spec/ai-gateway/backend/error-handling.md", "reason": "删 legacy 路径时保持错误处理一致"}
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "PR2 后端字段重命名涉及 skill-server"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "skill-server 字段命名/Jackson 注解约定"}
+{"file": ".trellis/spec/skill-miniapp/frontend/index.md", "reason": "PR2 前端协议字段重命名涉及 miniapp"}
+{"file": ".trellis/spec/skill-miniapp/frontend/type-safety.md", "reason": "TS 协议类型重命名"}
+{"file": ".trellis/spec/skill-miniapp/frontend/component-guidelines.md", "reason": "组件里 question 字段消费点改名"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本次重命名跨 4 层（skill-server / GW 透传 / miniapp / plugin），必读"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "改任何字段/常量前 grep first 的规则"}
+{"file": ".trellis/tasks/05-19-gw-cleanup-legacy-route-rename-questionid/prd.md", "reason": "本任务 PRD，定义 PR1/PR2 范围、锁定决策、列出待删符号清单"}

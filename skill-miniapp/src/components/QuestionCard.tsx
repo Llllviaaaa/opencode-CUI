@@ -3,7 +3,7 @@ import type { MessagePart } from '../protocol/types';
 
 interface QuestionCardProps {
     part: MessagePart;
-    onAnswer?: (answer: string, toolCallId?: string, subagentSessionId?: string, requestId?: string) => void;
+    onAnswer?: (answer: string, toolCallId?: string, subagentSessionId?: string, questionId?: string) => void;
 }
 
 export const QuestionCard: React.FC<QuestionCardProps> = ({ part, onAnswer }) => {
@@ -30,7 +30,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ part, onAnswer }) =>
         if (answered) return;
         setAnswered(true);
         setSelectedAnswer(label);
-        onAnswer?.(label, part.toolCallId, part.subagentSessionId, part.requestId);
+        onAnswer?.(label, part.toolCallId, part.subagentSessionId, part.questionId);
     };
 
     const handleSubmit = () => {
@@ -39,7 +39,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ part, onAnswer }) =>
         setAnswered(true);
         setCustomInput(answer);
         setSelectedAnswer(answer);
-        onAnswer?.(answer, part.toolCallId, part.subagentSessionId, part.requestId);
+        onAnswer?.(answer, part.toolCallId, part.subagentSessionId, part.questionId);
     };
 
     return (

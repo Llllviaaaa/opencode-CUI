@@ -32,7 +32,7 @@
 - `SkillMessage`：`skill-server/src/main/java/com/opencode/cui/skill/model/SkillMessage.java:14-76`
 - `SkillMessagePart`：`skill-server/src/main/java/com/opencode/cui/skill/model/SkillMessagePart.java:19-109`
 - `StreamMessage`：`skill-server/src/main/java/com/opencode/cui/skill/model/StreamMessage.java:23-277`
-- `InvokeCommand`：`skill-server/src/main/java/com/opencode/cui/skill/model/InvokeCommand.java:14-20`
+- `InvokeCommand`：`skill-server/src/main/java/com/opencode/cui/skill/model/InvokeCommand.java:54-102`
 
 ---
 
@@ -94,11 +94,23 @@ public record InvokeCommand(
                 String userId,
                 String sessionId,
                 String action,
-                String payload) {
+                String payload,
+                Boolean suppressReply,
+                String domain,
+                String domainType,
+                String businessSessionId,
+                @Nullable List<String> allowedSlashCommands) {
+    // 5/6/8/9 参 secondary constructor 兼容旧 caller（test + 非升级生产代码）
 }
 ```
 
-来源：`skill-server/src/main/java/com/opencode/cui/skill/model/InvokeCommand.java:14-20`
+字段语义：
+- 前 5 个：核心调用参数（ak / userId / sessionId / action / payload）
+- `suppressReply`：null = 不写入 INVOKE 报文；仅群聊 + plugin channel 命中"禁群聊"白名单时置 true
+- `domain` / `domainType` / `businessSessionId`：`SkillSession.businessSession*` 三字段，用于 `AssistantScopeDispatcher` 反查默认助手规则 + 构造 `platformExtParam`
+- `allowedSlashCommands`（v3 allowed-slash-commands 任务）：personal scope CHAT 允许的 slash 命令清单；从 `sys_config(allowed_slash_commands, ${domain}_${type})` 解析得到；null = 不下发该 platformExtParam key；仅 A 表 3 处（A4 CHAT 分支 / A7 dispatchChatToGateway / A10 retryPendingMessages）显式传 list，其余 9 处生产代码 + 62 处 test callsite 通过 secondary constructor 默认 null
+
+来源：`skill-server/src/main/java/com/opencode/cui/skill/model/InvokeCommand.java:54-102`
 
 ```java
 public record ImMessageRequest(
@@ -445,6 +457,46 @@ Java 侧来源：
 
 - 不要在 XML 里映射 enum ordinal
 - service 层要用 `Status.CLOSED.name()` 这类显式字符串下沉到 SQL
+
+---
+
+## 反序列化对抗性输入：先 readTree 再按 schema 校验
+
+Redis list / MQ payload 这类 "内容可能直接来自用户输入" 的存储位置，**禁止**直接 `mapper.readValue(raw, TargetDto.class)` 来判断 "新格式 vs 老格式"。用户消息正文本身可能是合法 JSON（如 `{"foo":"bar"}`），`readValue` 会成功反序列化得到一个 `text=null` 的对象，把原始文本静默吞掉。
+
+正确做法：**先 `readTree(JsonNode)`，严格按 schema 关键字段判断**，三重校验都通过才走新格式 deserialize，否则当 raw 老格式处理。
+
+```java
+// ❌ 直接 readValue → 对抗性 JSON 文本被误判，丢消息
+try {
+    PendingChatRequest req = mapper.readValue(raw, PendingChatRequest.class);
+    // req.text 可能是 null，原始文本丢了
+} catch (JsonProcessingException e) {
+    return PendingChatRequest.fromSessionFallback(session, raw);
+}
+
+// ✅ readTree + schema 三重校验
+JsonNode node;
+try {
+    node = mapper.readTree(raw);
+} catch (JsonProcessingException e) {
+    return PendingChatRequest.fromSessionFallback(session, raw);
+}
+if (node.isObject()
+        && node.path("text").isTextual()
+        && !node.path("text").asText().isEmpty()) {
+    return mapper.treeToValue(node, PendingChatRequest.class);  // 新格式
+}
+return PendingChatRequest.fromSessionFallback(session, raw);     // 老格式 / 对抗输入
+```
+
+参考实现：`skill-server/src/main/java/com/opencode/cui/skill/service/SessionRebuildService.java::consumePendingMessages`
+
+规则：
+
+- 凡 "存储内容可能是用户原始输入" 的反序列化点（Redis list/hash value、MQ body、文件输入），都走 `readTree` + 字段 schema 校验。
+- schema 判断必须挑**新格式独有**的字段（这里是 `text` 必为非空 textual），不能只判断 `isObject`。
+- fallback 路径必须能拿到原始 raw 字符串，不要在 `readTree` 之前先 trim / decode。
 
 ---
 

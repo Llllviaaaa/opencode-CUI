@@ -13,6 +13,7 @@ import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.CloudEventTranslator;
 import com.opencode.cui.skill.service.DefaultAssistantRuleService;
 import com.opencode.cui.skill.service.GatewayActions;
+import com.opencode.cui.skill.service.PlatformExtParamBuilder;
 import com.opencode.cui.skill.service.SnowflakeIdGenerator;
 import com.opencode.cui.skill.service.cloud.CloudRequestContext;
 import com.opencode.cui.skill.service.cloud.CloudRequestStrategy;
@@ -127,7 +128,9 @@ public class DefaultAssistantScopeStrategy implements AssistantScopeStrategy {
         Map<String, Object> extParameters = new LinkedHashMap<>();
         extParameters.put("businessExtParam",
                 businessExtParam != null ? businessExtParam : objectMapper.createObjectNode());
-        extParameters.put("platformExtParam", objectMapper.createObjectNode());
+        extParameters.put("platformExtParam",
+                PlatformExtParamBuilder.build(objectMapper,
+                        command.domain(), command.domainType(), command.businessSessionId()));
 
         // assistantAccount：优先 payload，缺省时从 rule 注入（与 PRD D8 一致）
         String assistantAccount = extractField(command.payload(), "assistantAccount");

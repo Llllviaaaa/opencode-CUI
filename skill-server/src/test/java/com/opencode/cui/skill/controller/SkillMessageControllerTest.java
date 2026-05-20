@@ -13,6 +13,7 @@ import com.opencode.cui.skill.model.AgentSummary;
 import com.opencode.cui.skill.model.AvailabilityResult;
 import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.StreamMessage;
+import com.opencode.cui.skill.service.AllowedSlashCommandsResolver;
 import com.opencode.cui.skill.service.AssistantAccountResolverService;
 import com.opencode.cui.skill.service.AssistantInfoService;
 import com.opencode.cui.skill.service.AssistantAvailabilityService;
@@ -77,6 +78,8 @@ class SkillMessageControllerTest {
     private AssistantAccountResolverService assistantAccountResolverService;
     @Mock
     private DefaultAssistantRuleService ruleService;
+    @Mock
+    private AllowedSlashCommandsResolver allowedSlashCommandsResolver;
 
     private AssistantIdProperties assistantIdProperties;
     private SkillMessageController controller;
@@ -93,12 +96,15 @@ class SkillMessageControllerTest {
         lenient().when(assistantAccountResolverService.check(any())).thenReturn(ExistenceStatus.EXISTS);
         // 默认 ruleService 未命中规则（PR3 老路径行为不变）
         lenient().when(ruleService.lookup(any(), any())).thenReturn(Optional.empty());
+        // 默认 slash resolver 返 null（未配置）
+        lenient().when(allowedSlashCommandsResolver.resolve(any(), any())).thenReturn(null);
 
         controller = new SkillMessageController(
                 messageService, sessionService, gatewayRelayService,
                 gatewayApiClient, assistantIdProperties, imMessageService, new ObjectMapper(),
                 accessControlService, messageRouter, assistantInfoService, scopeDispatcher,
-                offlineMessageProvider, availabilityService, assistantAccountResolverService, ruleService);
+                offlineMessageProvider, availabilityService, assistantAccountResolverService, ruleService,
+                allowedSlashCommandsResolver);
         // 默认 scopeDispatcher 返回 personal 策略（requiresOnlineCheck=true）
         com.opencode.cui.skill.service.scope.AssistantScopeStrategy personalStrategy =
                 org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
@@ -110,6 +116,8 @@ class SkillMessageControllerTest {
         // 默认 Agent 在线，离线场景在专用测试中覆盖
         lenient().when(availabilityService.resolve(any()))
                 .thenReturn(AvailabilityResult.ofOnline());
+        lenient().when(gatewayApiClient.getAgentByAk(any()))
+                .thenReturn(AgentSummary.builder().ak("99").toolType("assistant").build());
     }
 
     @Test
@@ -834,7 +842,7 @@ class SkillMessageControllerTest {
     }
 
     @Test
-    @DisplayName("sendMessage question_reply: requestId 非空 → payload 含 requestId（personal scope 快路径）")
+    @DisplayName("sendMessage question_reply: questionId 非空 → payload 含 questionId（personal scope 快路径）")
     void sendMessageQuestionReplyPayloadHasRequestIdWhenProvided() throws Exception {
         com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
         SkillSession session = new SkillSession();
@@ -851,17 +859,17 @@ class SkillMessageControllerTest {
         var request = new SkillMessageController.SendMessageRequest();
         request.setContent("a");
         request.setToolCallId("tc-1");
-        request.setRequestId("req-uuid-1");
+        request.setQuestionId("req-uuid-1");
         controller.sendMessage("u", "1", request);
 
         ArgumentCaptor<InvokeCommand> capt = ArgumentCaptor.forClass(InvokeCommand.class);
         verify(gatewayRelayService).sendInvokeToGateway(capt.capture());
         com.fasterxml.jackson.databind.JsonNode payload = om.readTree(capt.getValue().payload());
-        assertEquals("req-uuid-1", payload.get("requestId").asText());
+        assertEquals("req-uuid-1", payload.get("questionId").asText());
     }
 
     @Test
-    @DisplayName("sendMessage question_reply: requestId 为 null → payload 无 requestId key（D8）")
+    @DisplayName("sendMessage question_reply: questionId 为 null → payload 无 questionId key（D8）")
     void sendMessageQuestionReplyPayloadOmitsRequestIdWhenAbsent() throws Exception {
         com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
         SkillSession session = new SkillSession();
@@ -878,17 +886,17 @@ class SkillMessageControllerTest {
         var request = new SkillMessageController.SendMessageRequest();
         request.setContent("a");
         request.setToolCallId("tc-1");
-        // requestId 不设置（null）
+        // questionId 不设置（null）
         controller.sendMessage("u", "1", request);
 
         ArgumentCaptor<InvokeCommand> capt = ArgumentCaptor.forClass(InvokeCommand.class);
         verify(gatewayRelayService).sendInvokeToGateway(capt.capture());
         com.fasterxml.jackson.databind.JsonNode payload = om.readTree(capt.getValue().payload());
-        org.junit.jupiter.api.Assertions.assertFalse(payload.has("requestId"), "payload 不应含 requestId key");
+        org.junit.jupiter.api.Assertions.assertFalse(payload.has("questionId"), "payload 不应含 questionId key");
     }
 
     @Test
-    @DisplayName("sendMessage question_reply: requestId 为空白 → payload 无 requestId key（D8）")
+    @DisplayName("sendMessage question_reply: questionId 为空白 → payload 无 questionId key（D8）")
     void sendMessageQuestionReplyPayloadOmitsRequestIdWhenBlank() throws Exception {
         com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
         SkillSession session = new SkillSession();
@@ -905,13 +913,13 @@ class SkillMessageControllerTest {
         var request = new SkillMessageController.SendMessageRequest();
         request.setContent("a");
         request.setToolCallId("tc-1");
-        request.setRequestId("   "); // blank
+        request.setQuestionId("   "); // blank
         controller.sendMessage("u", "1", request);
 
         ArgumentCaptor<InvokeCommand> capt = ArgumentCaptor.forClass(InvokeCommand.class);
         verify(gatewayRelayService).sendInvokeToGateway(capt.capture());
         com.fasterxml.jackson.databind.JsonNode payload = om.readTree(capt.getValue().payload());
-        org.junit.jupiter.api.Assertions.assertFalse(payload.has("requestId"), "blank requestId 应被视为缺失");
+        org.junit.jupiter.api.Assertions.assertFalse(payload.has("questionId"), "blank questionId 应被视为缺失");
     }
 
     @Test
@@ -1029,5 +1037,140 @@ class SkillMessageControllerTest {
         assertEquals(0, response.getBody().getCode());
         // resolver.check 完全不被调用
         verify(assistantAccountResolverService, never()).check(any());
+    }
+
+    // ==================== v3 allowed-slash-commands: routeToGateway action guard + scope gating ====================
+
+    @Test
+    @DisplayName("v3 AC1: routeToGateway / personal scope CHAT + sysconfig 命中 → InvokeCommand 含 allowedSlashCommands")
+    void routeToGateway_personalScopeChatWithConfig_invokeContainsList() {
+        SkillSession session = new SkillSession();
+        session.setId(9001L);
+        session.setAk("ak-v3-1");
+        session.setUserId("u-v3-1");
+        session.setToolSessionId("tool-v3-1");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        session.setBusinessSessionDomain("im");
+        session.setBusinessSessionType("group");
+        session.setBusinessSessionId("biz-v3-1");
+        when(accessControlService.requireSessionAccess(9001L, "u-v3-1")).thenReturn(session);
+
+        SkillMessage msg = SkillMessage.builder()
+                .id(1L).sessionId(9001L).role(SkillMessage.Role.USER).content("hello").build();
+        when(messageService.saveUserMessage(eq(9001L), eq("hello"))).thenReturn(msg);
+
+        // sysconfig 命中
+        when(allowedSlashCommandsResolver.resolve("im", "group"))
+                .thenReturn(java.util.List.of("plan", "ask"));
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("hello");
+        controller.sendMessage("u-v3-1", "9001", request);
+
+        ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
+        InvokeCommand cmd = captor.getValue();
+        assertEquals("chat", cmd.action());
+        assertNotNull(cmd.allowedSlashCommands());
+        assertEquals(2, cmd.allowedSlashCommands().size());
+        assertEquals("plan", cmd.allowedSlashCommands().get(0));
+    }
+
+    @Test
+    @DisplayName("v3 AC3: routeToGateway / personal scope CHAT + sysconfig 未配置 → InvokeCommand allowedSlashCommands=null")
+    void routeToGateway_personalScopeChatNoConfig_invokeListNull() {
+        SkillSession session = new SkillSession();
+        session.setId(9002L);
+        session.setAk("ak-v3-2");
+        session.setUserId("u-v3-2");
+        session.setToolSessionId("tool-v3-2");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        session.setBusinessSessionDomain("im");
+        session.setBusinessSessionType("direct");
+        session.setBusinessSessionId("biz-v3-2");
+        when(accessControlService.requireSessionAccess(9002L, "u-v3-2")).thenReturn(session);
+
+        SkillMessage msg = SkillMessage.builder()
+                .id(2L).sessionId(9002L).role(SkillMessage.Role.USER).content("hello").build();
+        when(messageService.saveUserMessage(eq(9002L), eq("hello"))).thenReturn(msg);
+
+        // resolver 默认返 null
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("hello");
+        controller.sendMessage("u-v3-2", "9002", request);
+
+        ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
+        assertEquals("chat", captor.getValue().action());
+        assertNull(captor.getValue().allowedSlashCommands());
+    }
+
+    @Test
+    @DisplayName("v3 AC11: routeToGateway / question_reply 分支 → resolver 不被 invoke + allowedSlashCommands=null（action guard）")
+    void routeToGateway_questionReplyAction_skipsResolverAndListNull() {
+        SkillSession session = new SkillSession();
+        session.setId(9003L);
+        session.setAk("ak-v3-3");
+        session.setUserId("u-v3-3");
+        session.setToolSessionId("tool-v3-3");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        session.setBusinessSessionDomain("im");
+        session.setBusinessSessionType("group");
+        session.setBusinessSessionId("biz-v3-3");
+        when(accessControlService.requireSessionAccess(9003L, "u-v3-3")).thenReturn(session);
+
+        SkillMessage msg = SkillMessage.builder()
+                .id(3L).sessionId(9003L).role(SkillMessage.Role.USER).content("yes").build();
+        when(messageService.saveUserMessage(eq(9003L), eq("yes"))).thenReturn(msg);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("yes");
+        request.setToolCallId("tc-v3");
+        controller.sendMessage("u-v3-3", "9003", request);
+
+        ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
+        assertEquals("question_reply", captor.getValue().action());
+        // AC11: action guard 命中——非 CHAT 路径不调 resolver
+        assertNull(captor.getValue().allowedSlashCommands());
+        verify(allowedSlashCommandsResolver, never()).resolve(any(), any());
+    }
+
+    @Test
+    @DisplayName("v3 AC14: routeToGateway / business scope CHAT（strategy.generateToolSessionId 非 null）→ resolver 不被 invoke + list=null")
+    void routeToGateway_businessScopeChat_skipsResolver() {
+        SkillSession session = new SkillSession();
+        session.setId(9004L);
+        session.setAk("ak-v3-4");
+        session.setUserId("u-v3-4");
+        session.setToolSessionId("tool-v3-4");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        session.setBusinessSessionDomain("im");
+        session.setBusinessSessionType("group");
+        session.setBusinessSessionId("biz-v3-4");
+        when(accessControlService.requireSessionAccess(9004L, "u-v3-4")).thenReturn(session);
+
+        SkillMessage msg = SkillMessage.builder()
+                .id(4L).sessionId(9004L).role(SkillMessage.Role.USER).content("hi").build();
+        when(messageService.saveUserMessage(eq(9004L), eq("hi"))).thenReturn(msg);
+
+        // business scope strategy：generateToolSessionId 返非 null
+        com.opencode.cui.skill.service.scope.AssistantScopeStrategy businessStrategy =
+                org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
+        lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
+        lenient().when(businessStrategy.generateToolSessionId()).thenReturn("cloud-pre-gen");
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("hi");
+        controller.sendMessage("u-v3-4", "9004", request);
+
+        ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
+        assertEquals("chat", captor.getValue().action());
+        // business scope: caller null + 下游 BusinessScopeStrategy 4 参 builder 也不写
+        assertNull(captor.getValue().allowedSlashCommands());
+        verify(allowedSlashCommandsResolver, never()).resolve(any(), any());
     }
 }

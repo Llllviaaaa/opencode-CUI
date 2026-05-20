@@ -80,7 +80,6 @@ class EventRelayServiceTest {
 
         verify(redisMessageBroker).removeAgentUser("ak_test_001");
         verify(redisMessageBroker).unsubscribeFromAgent("ak_test_001");
-        // v3: 不再调用 removeAgentSource（已废弃）
         assertFalse(service.hasAgentSession("ak_test_001"));
     }
 
@@ -106,8 +105,6 @@ class EventRelayServiceTest {
                         && "user-1".equals(m.getUserId())
                         && m.getTraceId() != null
                         && "tool_event".equals(m.getType())));
-        // v3: 不再查 getAgentSource
-        verify(redisMessageBroker, never()).getAgentSource(anyString());
     }
 
     @Test

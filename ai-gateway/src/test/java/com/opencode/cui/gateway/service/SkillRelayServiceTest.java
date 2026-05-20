@@ -23,18 +23,14 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
-/** SkillRelayService 单元测试：验证缓存路由、广播回退、路由学习、缓存失效等逻辑。 */
+/** SkillRelayService 单元测试：验证 V2 路由表 + 一致性哈希环路由、广播降级、连接管理。 */
 @ExtendWith(MockitoExtension.class)
 class SkillRelayServiceTest {
 
     @Mock
     private RedisMessageBroker redisMessageBroker;
-    @Mock
-    private LegacySkillRelayStrategy legacyStrategy;
     @Mock
     private WebSocketSession ss1Session;
     @Mock
@@ -53,7 +49,7 @@ class SkillRelayServiceTest {
     @BeforeEach
     void setUp() {
         routingTable = new UpstreamRoutingTable(100000, 30);
-        service = new SkillRelayService(redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, legacyStrategy, List.of());
+        service = new SkillRelayService(redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, List.of());
     }
 
     /** Wait for AsyncSessionSender background thread to flush the send queue. */
@@ -103,7 +99,7 @@ class SkillRelayServiceTest {
             registerSs1();
             registerSs2();
 
-            // V2: teach routing table instead of legacy route cache
+            // V2: teach routing table
             routingTable.learnFromRelay(java.util.List.of("T1"), SOURCE_TYPE_SKILL);
 
             GatewayMessage msg = GatewayMessage.builder()
@@ -254,16 +250,6 @@ class SkillRelayServiceTest {
             awaitSend();
             verify(ss1Session).sendMessage(any(TextMessage.class));
         }
-
-        @Test
-        @DisplayName("learnRoute ignores null/blank params without exception")
-        void learnRoute_ignoresNullParams() {
-            registerSs1();
-
-            // Should not throw
-            service.learnRoute(null, null, ss1Session);
-            service.learnRoute("", "", ss1Session);
-        }
     }
 
     // ==================== 连接断开处理 ====================
@@ -304,7 +290,6 @@ class SkillRelayServiceTest {
             Map<String, Object> oldAttrs = new HashMap<>();
             oldAttrs.put(SkillRelayService.SOURCE_ATTR, SOURCE_TYPE_SKILL);
             oldAttrs.put(SkillRelayService.INSTANCE_ID_ATTR, "skill-server-local");
-            oldAttrs.put(SkillRelayStrategy.STRATEGY_ATTR, SkillRelayStrategy.MESH);
             lenient().when(oldSession.getId()).thenReturn("seed-link");
             lenient().when(oldSession.getAttributes()).thenReturn(oldAttrs);
             lenient().when(oldSession.isOpen()).thenReturn(true);
@@ -312,7 +297,6 @@ class SkillRelayServiceTest {
             Map<String, Object> newAttrs = new HashMap<>();
             newAttrs.put(SkillRelayService.SOURCE_ATTR, SOURCE_TYPE_SKILL);
             newAttrs.put(SkillRelayService.INSTANCE_ID_ATTR, "skill-server-local");
-            newAttrs.put(SkillRelayStrategy.STRATEGY_ATTR, SkillRelayStrategy.MESH);
             lenient().when(newSession.getId()).thenReturn("discovery-link");
             lenient().when(newSession.getAttributes()).thenReturn(newAttrs);
             lenient().when(newSession.isOpen()).thenReturn(true);
@@ -380,123 +364,22 @@ class SkillRelayServiceTest {
     class ConnectionManagementTests {
 
         @Test
-        @DisplayName("Mesh 注册时不调用 Redis 操作（无状态化）")
-        void registerDoesNotTouchRedis() {
+        @DisplayName("Mesh 注册时不调用 Redis publishToAgent（无状态化）")
+        void registerDoesNotPublishToAgent() {
             registerSs1();
 
-            // v3: 注册 Mesh Source 连接不需要任何 Redis 操作
+            // v3: 注册 Mesh Source 连接不需要 publish 到 agent channel
             verify(redisMessageBroker, never()).publishToAgent(anyString(), any());
         }
 
         @Test
-        @DisplayName("getActiveSourceConnectionCount 包含 Mesh + Legacy")
+        @DisplayName("getActiveSourceConnectionCount 统计所有 Mesh 连接")
         void getActiveConnectionCount() {
             registerSs1();
             registerSs2();
             registerBp();
 
             assertTrue(service.getActiveSourceConnectionCount() >= 3);
-        }
-    }
-
-    // ==================== 策略路由 ====================
-
-    @Nested
-    @DisplayName("策略路由")
-    class StrategyRoutingTests {
-
-        @Mock
-        private WebSocketSession legacySession;
-
-        @Test
-        @DisplayName("无 instanceId 的连接走 Legacy 策略注册")
-        void register_noInstanceId_delegatesToLegacy() {
-            Map<String, Object> attrs = new HashMap<>();
-            attrs.put(SkillRelayService.SOURCE_ATTR, SOURCE_TYPE_SKILL);
-            // 不设置 INSTANCE_ID_ATTR → 旧版客户端
-            lenient().when(legacySession.getId()).thenReturn("legacy-link");
-            lenient().when(legacySession.getAttributes()).thenReturn(attrs);
-            lenient().when(legacySession.isOpen()).thenReturn(true);
-
-            service.registerSourceSession(legacySession);
-
-            verify(legacyStrategy).registerSession(legacySession);
-        }
-
-        @Test
-        @DisplayName("有 instanceId 的连接走 Mesh 策略注册（不调 Legacy）")
-        void register_withInstanceId_meshOnly() {
-            registerSs1();
-
-            verify(legacyStrategy, never()).registerSession(any());
-        }
-
-        @Test
-        @DisplayName("Legacy 连接的 invoke 委托到 Legacy 策略")
-        void invoke_legacySession_delegatesToLegacy() {
-            Map<String, Object> attrs = new HashMap<>();
-            attrs.put(SkillRelayService.SOURCE_ATTR, SOURCE_TYPE_SKILL);
-            attrs.put(SkillRelayStrategy.STRATEGY_ATTR, SkillRelayStrategy.LEGACY);
-            lenient().when(legacySession.getId()).thenReturn("legacy-link");
-            lenient().when(legacySession.getAttributes()).thenReturn(attrs);
-
-            GatewayMessage msg = GatewayMessage.builder()
-                    .type(GatewayMessage.Type.INVOKE)
-                    .ak("ak1")
-                    .source(SOURCE_TYPE_SKILL)
-                    .build();
-
-            service.handleInvokeFromSkill(legacySession, msg);
-
-            verify(legacyStrategy).handleInvokeFromSkill(legacySession, msg);
-        }
-
-        @Test
-        @DisplayName("V2 路由失败时仍调用 Legacy（跨 Pod Redis relay 支持）")
-        void relayToSkill_v2Fails_noLegacyWhenDisabled() {
-            // Legacy always called for cross-Pod relay, returns false when no source binding
-            when(legacyStrategy.relayToSkill(any(GatewayMessage.class))).thenReturn(false);
-
-            GatewayMessage msg = GatewayMessage.builder()
-                    .type(GatewayMessage.Type.TOOL_EVENT)
-                    .source(SOURCE_TYPE_SKILL)
-                    .build();
-
-            boolean result = service.relayToSkill(msg);
-
-            assertFalse(result);
-            verify(legacyStrategy).relayToSkill(any(GatewayMessage.class));
-        }
-
-        @Test
-        @DisplayName("V2 路由成功时仍并行调用 Legacy（旧版 SS 并行投递）")
-        void relayToSkill_meshSucceeds_noLegacy() throws Exception {
-            registerSs1();
-            when(legacyStrategy.relayToSkill(any(GatewayMessage.class))).thenReturn(false);
-
-            GatewayMessage msg = GatewayMessage.builder()
-                    .type(GatewayMessage.Type.TOOL_EVENT)
-                    .source(SOURCE_TYPE_SKILL)
-                    .build();
-
-            service.relayToSkill(msg);
-
-            // Legacy is always called in parallel (for old SS cross-Pod relay)
-            verify(legacyStrategy).relayToSkill(any(GatewayMessage.class));
-        }
-
-        @Test
-        @DisplayName("Legacy 连接移除委托到 Legacy 策略")
-        void remove_legacySession_delegatesToLegacy() {
-            Map<String, Object> attrs = new HashMap<>();
-            attrs.put(SkillRelayService.SOURCE_ATTR, SOURCE_TYPE_SKILL);
-            attrs.put(SkillRelayStrategy.STRATEGY_ATTR, SkillRelayStrategy.LEGACY);
-            lenient().when(legacySession.getId()).thenReturn("legacy-link");
-            lenient().when(legacySession.getAttributes()).thenReturn(attrs);
-
-            service.removeSourceSession(legacySession);
-
-            verify(legacyStrategy).removeSession(legacySession);
         }
     }
 }
