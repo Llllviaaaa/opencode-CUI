@@ -1,8 +1,0 @@
-{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "spec compliance 总入口"}
-{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "verify 命名/包结构"}
-{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "verify 业务码 400/403 + ProtocolException 风格"}
-{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "verify WARN 日志字段齐全"}
-{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "verify record / enum / Optional"}
-{"file": ".trellis/spec/skill-miniapp/frontend/hook-guidelines.md", "reason": "verify useSendToIm hook 签名变更后调用方全部对齐"}
-{"file": ".trellis/spec/skill-miniapp/frontend/type-safety.md", "reason": "verify TS 类型 + 编译"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "verify 前后端协议变更一致性"}
