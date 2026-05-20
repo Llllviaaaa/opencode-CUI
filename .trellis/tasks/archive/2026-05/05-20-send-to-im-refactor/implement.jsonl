@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server backend 总览 + Pre-Development Checklist 入口"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "controller / service / model 命名 + 包结构约定"}
+{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "业务码风格（HTTP 200 + ApiResponse.code）+ ProtocolException 用法"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "[ENTRY]/[EXIT]/[WARN] 日志风格 + 敏感字段策略，sender mismatch 日志要对齐"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "record / Optional / enum 风格——新建 BusinessSessionId record 要遵守"}
+{"file": ".trellis/spec/skill-miniapp/frontend/index.md", "reason": "skill-miniapp frontend 总览"}
+{"file": ".trellis/spec/skill-miniapp/frontend/hook-guidelines.md", "reason": "useSendToIm hook 签名变更要遵守 hook 约定"}
+{"file": ".trellis/spec/skill-miniapp/frontend/type-safety.md", "reason": "api.ts 函数签名变更的 TS 类型约束"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨 BE+FE 改造（删 chatId 字段）必读，对齐协议变更影响面"}

@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-0.md`
-- **Total Sessions**: 10
-- **Last Active**: 2026-05-19
+- **Total Sessions**: 12
+- **Last Active**: 2026-05-20
 <!-- @@@/auto:current-status -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-05-20 | 单聊 sender fallback 移除 + 信封必填校验 | `c807f53`, `4af1feb` | `main` |
+| 11 | 2026-05-20 | send-to-im 接口契约化（删 body.chatId + cookie sender 校验） | `d7d6699` | `main` |
 | 10 | 2026-05-19 | allowed-slash-commands: platformExtParam 加 slash 白名单（personal scope, sysconfig 驱动） | `cc5f553`, `0ae1de9`, `7bd6bf0` | `task/05-19-allowed-slash-commands` |
 | 9 | 2026-05-19 | GW 清理 Source 路由 Legacy + question.requestId → questionId 全链路重命名 | `cfdf868`, `41dc7ae` | `refactor/gw-cleanup-legacy-source-route` |
 | 8 | 2026-05-19 | platformExtParam 落地三字段（businessSession{Domain,Type,Id}） | `0b6266a` | `main` |
