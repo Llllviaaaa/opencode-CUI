@@ -139,3 +139,22 @@ logging:
     com.opencode.cui.skill: INFO
     org.springframework.web.socket: INFO
   # pattern 和 rollingpolicy 已迁移到 log4j2-spring.xml
+
+# WeLink 埋码上报（PRD 05-20-chat-telemetry-welink-reporter）
+# 本地/测试默认 enabled=false；生产环境通过 env 覆盖 enabled+url+token+public-key+tenant-id
+telemetry:
+  welink:
+    enabled: ${TELEMETRY_WELINK_ENABLED:false}
+    url: ${TELEMETRY_WELINK_URL:}
+    token: ${TELEMETRY_WELINK_TOKEN:}
+    public-key: ${TELEMETRY_WELINK_PUBLIC_KEY:}
+    policy-name: ${TELEMETRY_WELINK_POLICY_NAME:POLICY_WELINK_SERVER}
+    tenant-id: ${TELEMETRY_WELINK_TENANT_ID:}
+    service-name: ${TELEMETRY_WELINK_SERVICE_NAME:skill-server}
+    app-name: ${TELEMETRY_WELINK_APP_NAME:skill-server}
+    app-package-name: ${TELEMETRY_WELINK_APP_PACKAGE_NAME:com.opencode.cui.skill}
+    executor:
+      core-pool-size: ${TELEMETRY_WELINK_EXECUTOR_CORE:2}
+      max-pool-size: ${TELEMETRY_WELINK_EXECUTOR_MAX:4}
+      queue-capacity: ${TELEMETRY_WELINK_EXECUTOR_QUEUE:1000}
+      reject-policy: discard

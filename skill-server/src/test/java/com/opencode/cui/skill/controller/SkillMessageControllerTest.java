@@ -100,7 +100,8 @@ class SkillMessageControllerTest {
                 gatewayApiClient, assistantIdProperties, imMessageService, new ObjectMapper(),
                 accessControlService, messageRouter, assistantInfoService, scopeDispatcher,
                 offlineMessageProvider, assistantAccountResolverService, ruleService,
-                allowedSlashCommandsResolver);
+                allowedSlashCommandsResolver,
+                org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
         // 默认 scopeDispatcher 返回 personal 策略（requiresOnlineCheck=true）
         com.opencode.cui.skill.service.scope.AssistantScopeStrategy personalStrategy =
                 org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);

@@ -33,8 +33,10 @@ import com.opencode.cui.skill.service.SkillSessionService;
 import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
+import com.opencode.cui.skill.telemetry.chat.ChatRequestTelemetryEvent;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -79,6 +81,7 @@ public class SkillMessageController {
     private final AssistantAccountResolverService assistantAccountResolverService;
     private final DefaultAssistantRuleService ruleService;
     private final AllowedSlashCommandsResolver allowedSlashCommandsResolver;
+    private final ApplicationEventPublisher eventPublisher;
 
     public SkillMessageController(SkillMessageService messageService,
             SkillSessionService sessionService,
@@ -94,7 +97,8 @@ public class SkillMessageController {
             AssistantOfflineMessageProvider offlineMessageProvider,
             AssistantAccountResolverService assistantAccountResolverService,
             DefaultAssistantRuleService ruleService,
-            AllowedSlashCommandsResolver allowedSlashCommandsResolver) {
+            AllowedSlashCommandsResolver allowedSlashCommandsResolver,
+            ApplicationEventPublisher eventPublisher) {
         this.messageService = messageService;
         this.sessionService = sessionService;
         this.gatewayRelayService = gatewayRelayService;
@@ -110,6 +114,7 @@ public class SkillMessageController {
         this.assistantAccountResolverService = assistantAccountResolverService;
         this.ruleService = ruleService;
         this.allowedSlashCommandsResolver = allowedSlashCommandsResolver;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -277,6 +282,17 @@ public class SkillMessageController {
                         session.getBusinessSessionType(),
                         session.getBusinessSessionId(),
                         allowedSlashCommands));
+
+        // Telemetry: 用户发起 chat 对话 (skill_chat_request)。
+        // 仅成功路径（已发送到 gateway）才上报；早 return（no_agent / agent_offline / no_toolSessionId）不上报。
+        // 顶层 try-catch 确保埋码失败绝不影响业务链路（PRD §6 错误处理矩阵）。
+        try {
+            eventPublisher.publishEvent(new ChatRequestTelemetryEvent(
+                    session, effectiveUserId, scopeInfo == null ? null : scopeInfo.getBusinessTag()));
+        } catch (Throwable t) {
+            log.warn("[WelinkTelemetry] publish ChatRequestTelemetryEvent failed: sessionId={}, error={}",
+                    sessionId, t.getMessage());
+        }
     }
 
     /**
