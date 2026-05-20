@@ -125,7 +125,7 @@ class SessionCreationScopeTest {
 
         // act
         sessionManager.createSessionAsync("im", "direct", "dm-002", "ak-personal",
-                "owner-002", "assist-002", null, "hello", null);
+                "owner-002", "assist-002", "user-real-2", "hello", null);
 
         // assert: toolSessionId NOT updated locally
         verify(sessionService, never()).updateToolSessionId(any(), any());
@@ -138,8 +138,8 @@ class SessionCreationScopeTest {
         assertNotNull(captured, "PR3: 应入队完整 PendingChatRequest");
         org.junit.jupiter.api.Assertions.assertEquals("hello", captured.text());
         org.junit.jupiter.api.Assertions.assertEquals("assist-002", captured.assistantAccount());
-        // 单聊：sender 退化为 owner
-        org.junit.jupiter.api.Assertions.assertEquals("owner-002", captured.sendUserAccount());
+        // 单聊：sender 用真实发送者（不再 fallback owner）
+        org.junit.jupiter.api.Assertions.assertEquals("user-real-2", captured.sendUserAccount());
         assertNull(captured.imGroupId(), "direct session 时 imGroupId 必须为 null");
         assertNull(captured.businessExtParam());
     }

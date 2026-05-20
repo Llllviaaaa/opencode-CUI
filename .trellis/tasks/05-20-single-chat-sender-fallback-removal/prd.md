@@ -22,27 +22,30 @@ String effectiveSender = "group".equals(sessionType)
 | 2 | `service/ImSessionManager.java` | 160-162 | `createSessionAsync` 业务助手分支：本地预生成 toolSessionId 后立即下发首条 chat 的 sendUserAccount |
 | 3 | `service/ImSessionManager.java` | 188-190 | `createSessionAsync` 个人助手分支：构造 PendingChatRequest 入 Redis pending list 时的 sendUserAccount |
 
-## Open Questions
+## Resolved Decisions (2026-05-20)
 
-- **[BLOCKING]** ai-gateway 那边收到非 owner 的 `sendUserAccount`（任意 welinkId / 账号）是否会被认证 / scope 策略拒？需要 research 确认。如果会被拒，本任务还得连带改 gateway 端。
-- **[PREFERENCE]** senderUserAccount blank 时（IM 平台没传）的兜底：(a) 仍然回落到 ownerWelinkId（保守，不引入 null payload）；(b) 直接传 null/空，让 gateway 端处理；(c) 拒绝该 inbound（404）。
-- **[PREFERENCE]** PendingChatRequest 入队字段（影响后续 retryPendingMessages 重放）：要不要把真实 senderUserAccount 持久化到 Redis pending list？需要兼容老 entry。
+- **[RESOLVED · BLOCKING]** ai-gateway 不读 `payload.sendUserAccount`，作为 opaque 字段透传。`SkillRelayService.validateInvokeMessage` 只校验顶层 `source / ak / userId`，顶层 `userId` 仍 = `ownerWelinkId`（本任务 Out of Scope 已保留）。证据见 `research/ai-gateway-sender-impact.md`。gateway 端无需联动改造。
+  - 备注：`CloudPushController.imPush` 反向通道（cloud → IM 推送）有 "userAccount == create_by 否则 403" 校验，但用的是 `ImPushRequest.userAccount`，不同字段不同方向，与本任务无关。
+  - 未覆盖：云端 webhook/SSE 后端（不在本仓）是否对非 owner sendUserAccount 有额外限制——超出本仓代码可读边界，需要人工确认。
+- **[RESOLVED · Blank 兜底]** senderUserAccount blank/null 直接拒绝该 inbound（4xx），视为 IM 平台协议违反。**不再保留 ownerWelinkId fallback**。
+- **[RESOLVED · Pending 兼容]** 新 PendingChatRequest entry 写真实 sender；老 entry 重放时 owner 占位仍可解析（序列化版本不 bump），反序列化容错。
 
 ## Requirements (evolving)
 
 ### R1 移除 3 处 fallback
-- 3 处统一替换为：`effectiveSender = (senderUserAccount != null && !senderUserAccount.isBlank()) ? senderUserAccount : ownerWelinkId;`（**去掉 group 前置条件**，单聊也用真实 sender）。
-- 或更激进：完全不再 fallback，blank/null 直接保留 null 透传——视 Open Question #2 决定。
+- 3 处统一替换为：`senderUserAccount` 非空时直接用；blank/null 时抛 4xx 拒绝该 inbound（按 Blank 兜底决策）。
+- **去掉 group 前置条件**，单聊也用真实 sender。
+- 完全不再以 ownerWelinkId 作为兜底。
 
 ### R2 兼容性
-- ai-gateway 侧验证（research 阶段）：单聊 sendUserAccount = 非 owner 的真实账号时，gateway 处理无回归。
-- PendingChatRequest Redis 持久化字段（v2/v3 序列化）保持兼容。
+- ai-gateway 侧已验证（research）：透传字段，无需联动。
+- PendingChatRequest Redis 持久化字段序列化版本不 bump，老 entry（owner 占位）重放兼容。
 
 ## Acceptance Criteria (evolving)
 
 - [ ] inbound chat（direct sessionType）+ senderUserAccount=`userA` + ownerWelinkId=`owner` → 下发 gateway 的 payload `sendUserAccount=userA`，不是 `owner`。
 - [ ] inbound chat（group sessionType）行为不变（已经是真实 sender）。
-- [ ] senderUserAccount blank → 按 Q2 决定的兜底执行。
+- [ ] senderUserAccount blank/null → 直接拒绝 inbound 返回 4xx，不再回落 owner。
 - [ ] business 助手首次建会话路径同步生效。
 - [ ] personal 助手 pending list 入队 + retryPendingMessages 重放路径同步生效。
 - [ ] 4 inbound action（chat / question_reply / permission_reply / rebuild）的单聊 sendUserAccount 都用真实值。
@@ -52,8 +55,8 @@ String effectiveSender = "group".equals(sessionType)
 
 - 单测覆盖以上 AC。
 - mvn test / lint / CI 通过。
-- ai-gateway 端如需联动，独立 PR 标记 blocked-by 本任务。
-- 按用户偏好走 codex 评审 Critical 一轮再开 PR1。
+- ai-gateway 端确认无需联动（research 已验证）。
+- 按用户偏好走 codex (gpt-5.5 + xhigh) 评审 Critical 一轮再开 PR1。
 
 ## Out of Scope
 
@@ -70,3 +73,4 @@ String effectiveSender = "group".equals(sessionType)
 
 ### Review History
 - v1 (2026-05-20): 从 send-to-im-refactor brainstorm 阶段拆分。
+- v2 (2026-05-20): research 收口 BLOCKING（gateway 不读 sendUserAccount）；Blank 兜底定为 4xx 拒绝；Pending 序列化不 bump，老 entry 重放兼容。

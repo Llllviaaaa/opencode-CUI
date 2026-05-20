@@ -114,6 +114,9 @@ public class ImInboundController {
         if (request.assistantAccount() == null || request.assistantAccount().isBlank()) {
             return "assistantAccount is required";
         }
+        if (request.senderUserAccount() == null || request.senderUserAccount().isBlank()) {
+            return "senderUserAccount is required";
+        }
         if (request.content() == null || request.content().isBlank()) {
             return "content is required";
         }

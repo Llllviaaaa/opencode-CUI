@@ -200,6 +200,80 @@ void legacyPayloadSenderUserAccountIsIgnored() throws Exception {
 
 ---
 
+## Inbound chat senderUserAccount 必填且不再 fallback
+
+### 1. Scope / Trigger
+
+- 触发场景：skill-server 入站 `chat` / `question_reply` / `permission_reply` / `rebuild` 四个 action，两个入口（`ImInboundController` + `ExternalInboundController`）。
+- 触发理由：跨层契约变更（controller 校验 + service 行为同步收紧），符合 code-spec 深度强制门槛。
+- 历史背景（why）：曾经的 fallback 把单聊场景 `sendUserAccount` 强制覆盖为 `ownerWelinkId`，等价于"只有助手 owner 才能跟助手做单聊"，吞掉了非 owner 用户的真实身份。research 已确认 ai-gateway 不读 `payload.sendUserAccount`，本仓侧改造对下游安全。
+
+### 2. Signatures
+
+- `ImInboundController#validate(ImMessageRequest)` / `ExternalInboundController#validateEnvelope(ExternalInvokeRequest)`：两入口都对 `senderUserAccount` 做 blank 校验。
+- `InboundProcessingService#dispatchChatToGateway(...)`：内部直接 `String effectiveSender = senderUserAccount;`，不再有任何 `ownerWelinkId` 兜底分支。
+- `ImSessionManager#createSessionAsync(...)`：business 分支与 personal 分支构造 `PendingChatRequest` 入队时均使用真实 `senderUserAccount`。
+
+### 3. Contracts
+
+- 信封字段 `senderUserAccount: String`（非空，trim 后非 blank），所有四个 action 都强制。
+- 下游 payload 字段 `sendUserAccount: String` = 信封层 `senderUserAccount`，**直接透传**，不做覆写。
+- Pending Redis 兼容性：`PendingChatRequest` 序列化版本不 bump；历史 entry（owner 占位 sender）反序列化保持容错，重放仍可用。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+|------|------|
+| `senderUserAccount == null` 或 blank | Controller 返回 HTTP 400 + `errormsg = "senderUserAccount is required"`，不进入 service |
+| `senderUserAccount` 非空 | 透传到 service / payload，无修改 |
+| `payload.senderUserAccount` 出现（legacy） | 直接忽略，仍按信封字段缺失逻辑判定 |
+
+### 5. Good / Base / Bad 案例
+
+- Good：单聊 `direct` 场景，非 owner 用户发起 chat，`senderUserAccount` 真实透传到 ai-gateway，agent 能识别真实身份。
+- Base：群聊 `group` 场景，`senderUserAccount` 透传与单聊路径一致，无分支差异。
+- Bad（已禁止）：`senderUserAccount` 留空、依赖 service 用 `ownerWelinkId` 兜底——现在直接 400 拒绝。
+
+### 6. Tests Required
+
+- Controller 单元测试（两个入口 × 4 个 action）断言：缺 `senderUserAccount` → HTTP 400 + 固定 errormsg。
+- Service 单元测试：传入真实 sender，断言 `payloadFields.get("sendUserAccount")` 等于入参 sender（不是 ownerWelinkId）。
+- Pending Redis 回放测试：注入 legacy entry（sender == ownerWelinkId），断言反序列化不抛、重放仍可执行。
+
+### 7. Wrong vs Correct
+
+#### Wrong（已删除的回归模式）
+
+```java
+// ❌ 单聊把真实发送者覆盖成 owner，吞掉用户身份
+String effectiveSender = "group".equals(sessionType)
+        && senderUserAccount != null && !senderUserAccount.isBlank()
+        ? senderUserAccount : ownerWelinkId;
+payloadFields.put("sendUserAccount", effectiveSender);
+```
+
+#### Correct
+
+```java
+// ✅ controller 已强制非空；service 直接信任
+String effectiveSender = senderUserAccount;
+payloadFields.put("sendUserAccount", effectiveSender);
+```
+
+来源：
+- `skill-server/src/main/java/com/opencode/cui/skill/controller/ImInboundController.java#validate`
+- `skill-server/src/main/java/com/opencode/cui/skill/controller/ExternalInboundController.java#validateEnvelope`
+- `skill-server/src/main/java/com/opencode/cui/skill/service/InboundProcessingService.java#dispatchChatToGateway`
+- `skill-server/src/main/java/com/opencode/cui/skill/service/ImSessionManager.java#createSessionAsync`
+
+### 防回归红线
+
+- 禁止再写形如 `"group".equals(sessionType) && sender != null ? sender : ownerWelinkId` 的兜底分支。
+- 禁止为单聊 `sendUserAccount` 引入任何 `ownerWelinkId` 默认值。
+- 任何"sender 可为空"的新入口都需要先与本契约对齐，要么补 blank 校验，要么显式记录例外。
+
+---
+
 ## InboundResult 与业务失败
 
 IM / external 共用的 `InboundProcessingService` 不直接返回 MVC 异常，而是返回 `InboundResult`。

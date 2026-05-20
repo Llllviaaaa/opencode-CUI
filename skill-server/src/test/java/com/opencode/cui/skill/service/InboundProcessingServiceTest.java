@@ -160,7 +160,7 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                null, "hello", "text", null, null, "IM", null);
+                "user-real-1", "hello", "text", null, null, "IM", null);
 
         assertTrue(result.success());
         ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
@@ -176,12 +176,12 @@ class InboundProcessingServiceTest {
         PendingChatRequest appended = reqCap.getValue();
         assertEquals("hello", appended.text());
         assertEquals("assist-001", appended.assistantAccount());
-        assertEquals("owner-001", appended.sendUserAccount(), "direct chat: sender == ownerWelinkId");
+        assertEquals("user-real-1", appended.sendUserAccount(), "direct chat: sender 使用真实发送者，不再 fallback owner");
         assertNull(appended.imGroupId(), "direct session: imGroupId 为 null");
         assertNotNull(appended.messageId());
         JsonNode chatPayload = objectMapper.readTree(captor.getValue().payload());
-        assertEquals("owner-001", chatPayload.get("sendUserAccount").asText(),
-                "direct chat should put ownerWelinkId as sendUserAccount");
+        assertEquals("user-real-1", chatPayload.get("sendUserAccount").asText(),
+                "direct chat should put real sender as sendUserAccount");
     }
 
     @Test
@@ -343,27 +343,27 @@ class InboundProcessingServiceTest {
     }
 
     @Test
-    @DisplayName("processChat: group + null sender → sendUserAccount falls back to ownerWelinkId")
-    void processChatGroupNullSenderFallsBackToOwner() throws Exception {
+    @DisplayName("processChat: direct + 真实 sender 非 owner → sendUserAccount 透传真实发送者（不再回落 owner）")
+    void processChatDirectNonOwnerSenderUsedAsIs() throws Exception {
         SkillSession session = buildReadySession();
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
-        when(sessionManager.findSession("im", "group", "grp-001", "ak-001"))
+        when(sessionManager.findSession("im", "direct", "dm-001", "ak-001"))
                 .thenReturn(session);
-        when(contextInjectionService.resolvePrompt(eq("group"), eq("hello"), any()))
+        when(contextInjectionService.resolvePrompt(eq("direct"), eq("hello"), any()))
                 .thenReturn("hello");
 
         InboundResult result = service.processChat(
-                "im", "group", "grp-001", "assist-001",
-                null,
+                "im", "direct", "dm-001", "assist-001",
+                "user-non-owner",
                 "hello", "text", null, null, "IM", null);
 
         assertTrue(result.success());
         ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
         verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
         JsonNode payload = objectMapper.readTree(captor.getValue().payload());
-        assertEquals("owner-001", payload.get("sendUserAccount").asText(),
-                "group chat with null sender should fall back to ownerWelinkId");
+        assertEquals("user-non-owner", payload.get("sendUserAccount").asText(),
+                "direct chat: 非 owner 的真实 senderUserAccount 必须直接透传，不能被覆盖为 owner");
     }
 
     // ==================== suppressReply 4-branch matrix（PRD AC） ====================

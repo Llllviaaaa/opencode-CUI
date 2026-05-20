@@ -157,10 +157,8 @@ public class ImSessionManager {
                     payloadFields.put("text", pendingMessage);
                     payloadFields.put("toolSessionId", generatedToolSessionId);
                     payloadFields.put("assistantAccount", assistantAccount);
-                    String effectiveSender = "group".equals(sessionType)
-                            && senderUserAccount != null && !senderUserAccount.isBlank()
-                            ? senderUserAccount : ownerWelinkId;
-                    payloadFields.put("sendUserAccount", effectiveSender);
+                    // 单聊 / 群聊都用真实发送者；blank/null 在控制器层已 4xx 拒绝。
+                    payloadFields.put("sendUserAccount", senderUserAccount);
                     payloadFields.put("imGroupId", "group".equals(sessionType) ? sessionId : null);
                     payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
                     payloadFields.put("businessExtParam", businessExtParam);
@@ -184,10 +182,7 @@ public class ImSessionManager {
                 // chat invoke payload — 首次对话 plugin 端不再丢字段。
                 PendingChatRequest pendingRequest = null;
                 if (pendingMessage != null && !pendingMessage.isBlank()) {
-                    // effectiveSender 语义与 dispatchChatToGateway 一致：群聊用真实发送者,单聊用 owner
-                    String effectiveSender = "group".equals(sessionType)
-                            && senderUserAccount != null && !senderUserAccount.isBlank()
-                            ? senderUserAccount : ownerWelinkId;
+                    // 单聊 / 群聊都用真实发送者；blank/null 在控制器层已 4xx 拒绝（契约保证非空）。
                     // B3 (v3): personal 分支已确认（else 块），直接 resolve 不需再做 scope gating。
                     //   frozen 语义：first 入 pending 时 resolve 一次，retry 复用 frozen 值。
                     List<String> allowedSlashCommands =
@@ -195,7 +190,7 @@ public class ImSessionManager {
                     pendingRequest = new PendingChatRequest(
                             pendingMessage,
                             assistantAccount,
-                            effectiveSender,
+                            senderUserAccount,
                             "group".equals(sessionType) ? sessionId : null,
                             String.valueOf(System.currentTimeMillis()),
                             businessExtParam,
