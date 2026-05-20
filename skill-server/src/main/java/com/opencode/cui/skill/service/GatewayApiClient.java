@@ -142,7 +142,7 @@ public class GatewayApiClient {
 
     /**
      * 查询 Agent 可及性信息（供差异化离线文案使用）。
-     * 调用 GET {gatewayBaseUrl}/internal/agent/availability?ak={ak}。
+     * 调用 GET {gatewayBaseUrl}/api/gateway/internal/agent/availability?ak={ak}。
      *
      * @return GatewayAvailabilityResponse，网络 5xx/超时/解析失败时返回 null
      */
@@ -152,7 +152,7 @@ public class GatewayApiClient {
         }
         long start = System.nanoTime();
         try {
-            String url = gatewayBaseUrl + "/internal/agent/availability?ak=" + ak;
+            String url = gatewayBaseUrl + "/api/gateway/internal/agent/availability?ak=" + ak;
             ResponseEntity<String> response = restTemplate.exchange(
                     url,
                     HttpMethod.GET,

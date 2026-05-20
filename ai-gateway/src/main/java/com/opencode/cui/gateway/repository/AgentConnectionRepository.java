@@ -76,7 +76,13 @@ public interface AgentConnectionRepository {
         /** 判断指定 AK 是否有任何连接记录（不限状态） */
         boolean existsByAkId(@Param("akId") String akId);
 
-        /** 判断指定 AK 是否有在线且活跃的连接 */
+        /**
+         * 判断指定 AK 是否有在线且活跃的连接。
+         *
+         * <p><b>依赖定时任务</b>：本方法仅按 status='ONLINE' 过滤，不检查 {@code last_seen_at} 时间窗。
+         * "活跃"语义依赖 {@code AgentRegistryService.checkTimeouts()} → {@code markStaleAgentsOffline}
+         * 定时任务定期将心跳超时的连接标记为 OFFLINE。若该定时任务卡住或挂掉，"假在线"窗口会扩大。
+         */
         boolean existsOnlineActiveByAkId(@Param("akId") String akId);
 
         /** 查询指定 AK 的最新连接记录（所有状态），按 last_seen_at DESC, id DESC 取第一条 */

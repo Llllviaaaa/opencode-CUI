@@ -13,7 +13,6 @@ import com.opencode.cui.gateway.service.EventRelayService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -21,28 +20,17 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Gateway REST API 控制器。
  *
- * <p>
- * 协议端点：
- * </p>
+ * <p>协议端点：</p>
  * <ul>
  * <li>GET /api/gateway/agents — 查询在线 Agent 列表</li>
  * <li>GET /api/gateway/agents/status?ak= — 查询 Agent 状态</li>
  * <li>POST /api/gateway/invoke — 向 Agent 发送命令</li>
- * </ul>
- *
- * <p>
- * 兼容旧版端点（保留向后兼容）：
- * </p>
- * <ul>
- * <li>GET /api/gateway/agents/{id}/status</li>
- * <li>POST /api/gateway/agents/{id}/invoke</li>
+ * <li>GET /api/gateway/internal/agent/availability?ak= — 查询 Agent 可及性</li>
  * </ul>
  */
 @Slf4j
@@ -148,57 +136,6 @@ public class AgentController {
         return ResponseEntity.ok(ApiResponse.ok(new InvokeResult(true, "Command sent to agent")));
     }
 
-    /** 【旧版】按数据库 ID 查询 Agent 状态。 */
-    @GetMapping("/agents/{id}/status")
-    public ResponseEntity<Map<String, Object>> getAgentStatus(@PathVariable Long id) {
-        AgentConnection agent = agentRegistryService.findById(id);
-        if (agent == null) {
-            return ResponseEntity.notFound().build();
-        }
-
-        Map<String, Object> status = new HashMap<>();
-        status.put("agent", agent);
-        status.put("wsSessionActive", eventRelayService.hasAgentSession(agent.getAkId()));
-        status.put("activeSessionCount", eventRelayService.getActiveSessionCount());
-
-        return ResponseEntity.ok(status);
-    }
-
-    /** 【旧版】按数据库 ID 向 Agent 发送 invoke 命令。 */
-    @PostMapping("/agents/{id}/invoke")
-    public ResponseEntity<Map<String, Object>> invokeAgentLegacy(
-            @PathVariable Long id,
-            @RequestBody GatewayMessage message) {
-
-        AgentConnection agent = agentRegistryService.findById(id);
-        if (agent == null) {
-            return ResponseEntity.notFound().build();
-        }
-
-        if (agent.getStatus() != AgentConnection.AgentStatus.ONLINE) {
-            Map<String, Object> error = new HashMap<>();
-            error.put("success", false);
-            error.put("error", "Agent is offline");
-            error.put("agentId", id);
-            return ResponseEntity.badRequest().body(error);
-        }
-
-        if (!eventRelayService.hasAgentSession(agent.getAkId())) {
-            Map<String, Object> error = new HashMap<>();
-            error.put("success", false);
-            error.put("error", "No active WebSocket session for agent");
-            error.put("agentId", id);
-            return ResponseEntity.badRequest().body(error);
-        }
-
-        eventRelayService.relayToAgent(agent.getAkId(), message.withAk(agent.getAkId()));
-
-        Map<String, Object> result = new HashMap<>();
-        result.put("success", true);
-        result.put("agentId", id);
-        result.put("message", "Command sent to agent");
-        return ResponseEntity.ok(result);
-    }
 
     /** 校验内部 Bearer Token 是否有效。 */
     private boolean isAuthorized(String authorization) {

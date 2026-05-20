@@ -31,7 +31,8 @@ public class AssistantAvailabilityService {
 
     public AvailabilityResult resolve(String ak) {
         if (ak == null || ak.isBlank()) {
-            return AvailabilityResult.ofNotConfigured(lookupMessage("not_configured"));
+            log.error("[BUG] availabilityService.resolve called with blank ak, fallback to FALLBACK_ERROR");
+            return AvailabilityResult.ofFallbackError(DEFAULT_HARDCODED_MESSAGE);
         }
 
         // 1. Try Redis cache (best-effort)
@@ -39,7 +40,11 @@ public class AssistantAvailabilityService {
         try {
             String cached = redisTemplate.opsForValue().get(cacheKey);
             if (cached != null) {
-                return deserialize(cached);
+                AvailabilityResult parsed = deserialize(cached);
+                if (parsed != null) {
+                    return parsed;
+                }
+                try { redisTemplate.delete(cacheKey); } catch (RuntimeException ignored) {}
             }
         } catch (RuntimeException e) {
             log.warn("Redis read failed for availability cache key={}, falling through: {}",
