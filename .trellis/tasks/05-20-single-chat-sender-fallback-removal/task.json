@@ -3,7 +3,7 @@
   "name": "single-chat-sender-fallback-removal",
   "title": "单聊 sender 不再 fallback 为 ownerWelinkId（放开非 owner 单聊）",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
