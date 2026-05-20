@@ -2,7 +2,7 @@ import { useState, useCallback, useRef } from 'react';
 import * as api from '../utils/api';
 
 export interface UseSendToImReturn {
-  sendToIm: (content: string, chatId: string) => Promise<void>;
+  sendToIm: (content: string) => Promise<void>;
   sending: boolean;
   success: boolean;
   error: string | null;
@@ -15,7 +15,7 @@ export function useSendToIm(sessionId: string | null): UseSendToImReturn {
   const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const sendToIm = useCallback(
-    async (content: string, chatId: string) => {
+    async (content: string) => {
       if (!sessionId) return;
 
       // Clear any previous success timer
@@ -29,7 +29,7 @@ export function useSendToIm(sessionId: string | null): UseSendToImReturn {
       setError(null);
 
       try {
-        await api.sendToIm(sessionId, content, chatId);
+        await api.sendToIm(sessionId, content);
         setSuccess(true);
 
         // Auto-clear success after 3 seconds

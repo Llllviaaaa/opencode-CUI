@@ -308,16 +308,53 @@ POST /api/skill/sessions/{sessionId}/send-to-im
 **请求体：**
 ```json
 {
-  "content": "要发送的内容",    // 必需
-  "chatId": "im-chat-123"     // 可选：IM 会话 ID（缺省用 session.businessSessionId）
+  "content": "要发送的内容"     // 必需；长度 ≤ 4000 字符
 }
 ```
 
-**响应：** 200 OK + `ApiResponse<{"success": true}>`
+> 目标（群 / 私聊）与发送人**不再由前端传入**：后端从 `session.businessSessionId` 解析出 `targetType / targetId / senderAccount`，再用 cookie `userId` 做发送人校验。前端只关心 `content`。
+
+**businessSessionId 格式契约：**
+
+```
+group_<groupId>_<senderAccount>     # 群聊：targetType=group, targetId=groupId
+direct_<targetAccount>_<senderAccount>  # 私聊：targetType=direct, targetId=targetAccount
+```
+
+各段不得含下划线；前缀必须是 `group_` 或 `direct_`；split("_") 后必须恰好 3 段。
+
+**校验顺序与错误码（HTTP 始终 200，body.code 区分）：**
+
+| code | errormsg | 触发条件 |
+|------|----------|----------|
+| 400  | Content is required | `content` null/空白 |
+| 400  | Content too long (max 4000 chars) | `content.length() > 4000` |
+| 400  | Invalid session ID | `sessionId` 不是数字 |
+| 400  | userId is required | cookie `userId` 缺失（由 `requireSessionAccess` 抛 ProtocolException） |
+| 403  | Session access denied | cookie `userId` ≠ `session.userId` |
+| 400  | Invalid businessSessionId format | 解析失败（前缀错 / 段数 ≠ 3 / 段空） |
+| 403  | Sender mismatch | cookie `userId` ≠ businessSessionId 末段 senderAccount |
+| 500  | Failed to send message to IM | IM 下游非 2xx / 抛异常 |
+| 0    | (ApiResponse.ok)   | 成功 |
+
+**响应（成功）：** 200 OK + `ApiResponse<{"success": true}>`
+
+**下游 IM API（`POST {skill.im.api-url}/messages/send`）body：**
+
+```json
+{
+  "targetType": "group",      // 或 "direct"
+  "targetId": "<groupId 或 targetAccount>",
+  "senderAccount": "<cookie userId>",
+  "content": "<原文>",
+  "msgType": "text"
+}
+```
 
 > **注意：** 后端返回标准 `ApiResponse` 包装（HTTP 200），不是 204 No Content。前端 `sendToIm()` 返回 `Promise<void>`，成功时忽略响应体。
 
 **Miniapp 侧行为（useSendToIm）：**
+- 签名：`sendToIm(content: string) => Promise<void>`（不再接受 chatId 参数）
 - 发送中状态 → success 状态（3 秒自动清除）→ 或 error 状态
 
 ---
