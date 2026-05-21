@@ -110,6 +110,7 @@ class SkillRelayServiceTest {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
+            awaitSend();
             // At least one should receive (hash-selected)
             int sendCount = 0;
             try { verify(ss1Session).sendMessage(any(TextMessage.class)); sendCount++; } catch (AssertionError ignored) {}
