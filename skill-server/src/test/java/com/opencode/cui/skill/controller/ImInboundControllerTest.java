@@ -42,12 +42,12 @@ class ImInboundControllerTest {
         void validDirectMessageDelegates() {
                 ImMessageRequest request = new ImMessageRequest(
                                 "im", "direct", "dm-001", "assist-001",
-                                null, "hello", "text", null, null,
+                                "user-001", "hello", "text", null, null,
                                 null);
 
                 when(processingService.processChat(
                                 "im", "direct", "dm-001", "assist-001",
-                                null, "hello", "text", null, null, "IM", null))
+                                "user-001", "hello", "text", null, null, "IM", null))
                                 .thenReturn(InboundResult.ok());
 
                 var response = controller.receiveMessage(request);
@@ -57,7 +57,7 @@ class ImInboundControllerTest {
                 assertEquals(0, response.getBody().getCode());
                 verify(processingService).processChat(
                                 "im", "direct", "dm-001", "assist-001",
-                                null, "hello", "text", null, null, "IM", null);
+                                "user-001", "hello", "text", null, null, "IM", null);
         }
 
         @Test
@@ -67,12 +67,12 @@ class ImInboundControllerTest {
                                 new ImMessageRequest.ChatMessage("user-1", "Alice", "history", 1710000000L));
                 ImMessageRequest request = new ImMessageRequest(
                                 "im", "group", "grp-001", "assist-001",
-                                null, "summarize this", "text", null, history,
+                                "user-001", "summarize this", "text", null, history,
                                 null);
 
                 when(processingService.processChat(
                                 eq("im"), eq("group"), eq("grp-001"), eq("assist-001"),
-                                isNull(), eq("summarize this"), eq("text"), eq(null), eq(history), eq("IM"), isNull()))
+                                eq("user-001"), eq("summarize this"), eq("text"), eq(null), eq(history), eq("IM"), isNull()))
                                 .thenReturn(InboundResult.ok());
 
                 var response = controller.receiveMessage(request);
@@ -80,7 +80,7 @@ class ImInboundControllerTest {
                 assertEquals(HttpStatus.OK, response.getStatusCode());
                 verify(processingService).processChat(
                                 eq("im"), eq("group"), eq("grp-001"), eq("assist-001"),
-                                isNull(), eq("summarize this"), eq("text"), eq(null), eq(history), eq("IM"), isNull());
+                                eq("user-001"), eq("summarize this"), eq("text"), eq(null), eq(history), eq("IM"), isNull());
         }
 
         @Test
@@ -88,7 +88,7 @@ class ImInboundControllerTest {
         void processingErrorReturnsErrorBody() {
                 ImMessageRequest request = new ImMessageRequest(
                                 "im", "direct", "dm-001", "assist-001",
-                                null, "hello", "text", null, null,
+                                "user-001", "hello", "text", null, null,
                                 null);
 
                 when(processingService.processChat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
@@ -140,11 +140,42 @@ class ImInboundControllerTest {
         }
 
         @Test
+        @DisplayName("blank senderUserAccount returns 400 (no owner fallback)")
+        void blankSenderUserAccountReturns400() {
+                ImMessageRequest request = new ImMessageRequest(
+                                "im", "direct", "dm-001", "assist-001",
+                                "  ", "hello", "text", null, null,
+                                null);
+
+                var response = controller.receiveMessage(request);
+
+                assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+                assertNotNull(response.getBody());
+                assertEquals(400, response.getBody().getCode());
+                assertEquals("senderUserAccount is required", response.getBody().getErrormsg());
+                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("null senderUserAccount returns 400 (no owner fallback)")
+        void nullSenderUserAccountReturns400() {
+                ImMessageRequest request = new ImMessageRequest(
+                                "im", "direct", "dm-001", "assist-001",
+                                null, "hello", "text", null, null,
+                                null);
+
+                var response = controller.receiveMessage(request);
+
+                assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+                verify(processingService, never()).processChat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
         @DisplayName("missing content returns 400")
         void missingContentReturns400() {
                 ImMessageRequest request = new ImMessageRequest(
                                 "im", "direct", "dm-001", "assist-001",
-                                null, null, "text", null, null,
+                                "user-001", null, "text", null, null,
                                 null);
 
                 var response = controller.receiveMessage(request);
@@ -158,7 +189,7 @@ class ImInboundControllerTest {
         void nonTextMsgTypeReturns400() {
                 ImMessageRequest request = new ImMessageRequest(
                                 "im", "direct", "dm-001", "assist-001",
-                                null, "hello", "image", null, null,
+                                "user-001", "hello", "image", null, null,
                                 null);
 
                 var response = controller.receiveMessage(request);

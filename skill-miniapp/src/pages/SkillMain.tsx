@@ -213,9 +213,9 @@ export const SkillMain: React.FC<SkillMainProps> = ({
 
   const handleSendToIm = useCallback(
     (selectedText: string) => {
-      void sendToIm(selectedText, imChatId);
+      void sendToIm(selectedText);
     },
-    [sendToIm, imChatId],
+    [sendToIm],
   );
 
   const handleQuestionAnswer = useCallback(

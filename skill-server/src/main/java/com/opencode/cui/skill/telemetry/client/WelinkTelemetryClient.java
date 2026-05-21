@@ -1,0 +1,90 @@
+package com.opencode.cui.skill.telemetry.client;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.telemetry.client.dto.EncryptedEnvelope;
+import com.opencode.cui.skill.telemetry.client.dto.TelemetryPayload;
+import com.opencode.cui.skill.telemetry.config.WelinkTelemetryProperties;
+import com.opencode.cui.skill.telemetry.crypto.WelinkCipherUtil;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.RestTemplate;
+
+/**
+ * WeLink 上报 HTTP 客户端：POST {url}，body=加密信封 {@code {key, content}}。
+ *
+ * <p>请求头：
+ * <ul>
+ *   <li>{@code Authorization: Bearer <token>}</li>
+ *   <li>{@code x-wlk-hwa: 1}</li>
+ *   <li>{@code Content-Type: application/json}</li>
+ * </ul>
+ *
+ * <p>所有异常都 catch + WARN，不抛回业务线程。
+ */
+@Slf4j
+public class WelinkTelemetryClient {
+
+    private final RestTemplate restTemplate;
+    private final ObjectMapper objectMapper;
+    private final WelinkTelemetryProperties properties;
+
+    public WelinkTelemetryClient(RestTemplate restTemplate,
+                                 ObjectMapper objectMapper,
+                                 WelinkTelemetryProperties properties) {
+        this.restTemplate = restTemplate;
+        this.objectMapper = objectMapper;
+        this.properties = properties;
+    }
+
+    /**
+     * 发送一条业务 payload；内部完成 RSA+AES 加密 → POST。
+     *
+     * @param eventId   仅用于失败日志关联（不参与发送本身）
+     * @param sessionId 仅用于失败日志关联
+     * @param payload   明文 {@link TelemetryPayload}
+     */
+    public void send(String eventId, String sessionId, TelemetryPayload payload) {
+        long start = System.nanoTime();
+        try {
+            String plaintext = objectMapper.writeValueAsString(payload);
+            WelinkCipherUtil.Envelope envelope = WelinkCipherUtil.encrypt(properties.getPublicKey(), plaintext);
+            EncryptedEnvelope body = new EncryptedEnvelope(envelope.key(), envelope.content());
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.set("Authorization", "Bearer " + properties.getToken());
+            headers.set("x-wlk-hwa", "1");
+
+            HttpEntity<EncryptedEnvelope> entity = new HttpEntity<>(body, headers);
+            ResponseEntity<String> response = restTemplate.exchange(
+                    properties.getUrl(), HttpMethod.POST, entity, String.class);
+
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            int code = response.getStatusCode().value();
+            if (code >= 200 && code < 300) {
+                log.debug("[EXT_CALL] WelinkTelemetry.send completed: eventId={}, sessionId={}, httpCode={}, durationMs={}",
+                        eventId, sessionId, code, elapsedMs);
+            } else {
+                log.warn("[EXT_CALL] WelinkTelemetry.send non-2xx: eventId={}, sessionId={}, httpCode={}, durationMs={}",
+                        eventId, sessionId, code, elapsedMs);
+            }
+        } catch (WelinkCipherUtil.CipherException e) {
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            log.warn("[EXT_CALL] WelinkTelemetry.send cipher_failed: eventId={}, sessionId={}, durationMs={}, error={}",
+                    eventId, sessionId, elapsedMs, e.getMessage());
+        } catch (Exception e) {
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            // 业务核心不变量：上报链路任何异常都不得抛回业务线程
+            Integer httpCode = null;
+            if (e instanceof org.springframework.web.client.HttpStatusCodeException sc) {
+                httpCode = sc.getStatusCode().value();
+            }
+            log.warn("[EXT_CALL] WelinkTelemetry.send http_failed: eventId={}, sessionId={}, httpCode={}, durationMs={}, error={}",
+                    eventId, sessionId, httpCode, elapsedMs, e.getMessage());
+        }
+    }
+}

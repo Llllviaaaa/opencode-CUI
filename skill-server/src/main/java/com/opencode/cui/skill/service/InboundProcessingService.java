@@ -356,10 +356,8 @@ public class InboundProcessingService {
             messageService.saveUserMessage(session.getId(), content);
         }
 
-        // 群聊：用实际发送者；单聊：用助手创建人（即对话人）。effectiveSender 同时给 pending 入队和 chat payload 用。
-        String effectiveSender = "group".equals(sessionType)
-                && senderUserAccount != null && !senderUserAccount.isBlank()
-                ? senderUserAccount : ownerWelinkId;
+        // 单聊 / 群聊都用真实发送者；blank/null 在控制器层已 4xx 拒绝（契约保证非空）。
+        String effectiveSender = senderUserAccount;
         String messageId = String.valueOf(System.currentTimeMillis());
 
         // A7 + B2: allowed-slash-commands personal scope gating

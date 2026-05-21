@@ -103,8 +103,9 @@ class SkillMessageControllerTest {
                 messageService, sessionService, gatewayRelayService,
                 gatewayApiClient, assistantIdProperties, imMessageService, new ObjectMapper(),
                 accessControlService, messageRouter, assistantInfoService, scopeDispatcher,
-                offlineMessageProvider, availabilityService, assistantAccountResolverService, ruleService,
-                allowedSlashCommandsResolver);
+                offlineMessageProvider, assistantAccountResolverService, ruleService,
+                allowedSlashCommandsResolver,
+                org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
         // 默认 scopeDispatcher 返回 personal 策略（requiresOnlineCheck=true）
         com.opencode.cui.skill.service.scope.AssistantScopeStrategy personalStrategy =
                 org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
@@ -388,21 +389,159 @@ class SkillMessageControllerTest {
         verify(gatewayRelayService).sendInvokeToGateway(any());
     }
 
+    // ==================== send-to-im ====================
+
     @Test
-    @DisplayName("sendToIm returns 200 with success")
-    void sendToIm200() {
+    @DisplayName("sendToIm: group_<g>_<u> + cookie=<u> → 200, IM body 含 targetType=group/targetId/senderAccount")
+    void sendToImGroup200() {
         SkillSession session = new SkillSession();
         session.setId(1L);
-        session.setBusinessSessionId("chat-123");
-        when(accessControlService.requireSessionAccess(1L, "1")).thenReturn(session);
-        when(imMessageService.sendMessage("chat-123", "Hello IM")).thenReturn(true);
+        session.setBusinessSessionId("group_g123_u456");
+        when(accessControlService.requireSessionAccess(1L, "u456")).thenReturn(session);
+        when(imMessageService.sendMessage("group", "g123", "u456", "Hello IM")).thenReturn(true);
 
         var request = new SkillMessageController.SendToImRequest();
         request.setContent("Hello IM");
 
-        var response = controller.sendToIm("1", "1", request);
+        var response = controller.sendToIm("u456", "1", request);
         assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(0, response.getBody().getCode());
         assertEquals(true, response.getBody().getData().get("success"));
+        verify(imMessageService).sendMessage("group", "g123", "u456", "Hello IM");
+    }
+
+    @Test
+    @DisplayName("sendToIm: direct_<t>_<u> + cookie=<u> → 200, IM body 含 targetType=direct")
+    void sendToImDirect200() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setBusinessSessionId("direct_t789_u456");
+        when(accessControlService.requireSessionAccess(1L, "u456")).thenReturn(session);
+        when(imMessageService.sendMessage("direct", "t789", "u456", "hi")).thenReturn(true);
+
+        var request = new SkillMessageController.SendToImRequest();
+        request.setContent("hi");
+
+        var response = controller.sendToIm("u456", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(0, response.getBody().getCode());
+        verify(imMessageService).sendMessage("direct", "t789", "u456", "hi");
+    }
+
+    @Test
+    @DisplayName("sendToIm: businessSessionId 前缀非法 → 业务码 400 'Invalid businessSessionId format'")
+    void sendToImInvalidPrefix400() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setBusinessSessionId("chat-123");
+        when(accessControlService.requireSessionAccess(1L, "u456")).thenReturn(session);
+
+        var request = new SkillMessageController.SendToImRequest();
+        request.setContent("hi");
+
+        var response = controller.sendToIm("u456", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(400, response.getBody().getCode());
+        assertEquals("Invalid businessSessionId format", response.getBody().getErrormsg());
+        verify(imMessageService, never()).sendMessage(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("sendToIm: businessSessionId 段数 ≠ 3 → 业务码 400")
+    void sendToImWrongSegmentCount400() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setBusinessSessionId("group_g_1_2");
+        when(accessControlService.requireSessionAccess(1L, "u456")).thenReturn(session);
+
+        var request = new SkillMessageController.SendToImRequest();
+        request.setContent("hi");
+
+        var response = controller.sendToIm("u456", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(400, response.getBody().getCode());
+        assertEquals("Invalid businessSessionId format", response.getBody().getErrormsg());
+    }
+
+    @Test
+    @DisplayName("sendToIm: cookie userId ≠ businessSessionId 末段 senderAccount → 业务码 403 'Sender mismatch'")
+    void sendToImSenderMismatch403() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setUserId("attacker");
+        session.setBusinessSessionId("group_g123_victim");
+        when(accessControlService.requireSessionAccess(1L, "attacker")).thenReturn(session);
+
+        var request = new SkillMessageController.SendToImRequest();
+        request.setContent("hi");
+
+        var response = controller.sendToIm("attacker", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(403, response.getBody().getCode());
+        assertEquals("Sender mismatch", response.getBody().getErrormsg());
+        verify(imMessageService, never()).sendMessage(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("sendToIm: cookie userId 缺失 → ProtocolException 400 'userId is required'（由 requireSessionAccess 抛）")
+    void sendToImMissingCookie400() {
+        when(accessControlService.requireSessionAccess(1L, null))
+                .thenThrow(new com.opencode.cui.skill.service.ProtocolException(400, "userId is required"));
+
+        var request = new SkillMessageController.SendToImRequest();
+        request.setContent("hi");
+
+        com.opencode.cui.skill.service.ProtocolException ex = assertThrows(
+                com.opencode.cui.skill.service.ProtocolException.class,
+                () -> controller.sendToIm(null, "1", request));
+        assertEquals(400, ex.getCode());
+        assertEquals("userId is required", ex.getMessage());
+        verify(imMessageService, never()).sendMessage(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("sendToIm: content blank → 业务码 400 'Content is required'")
+    void sendToImBlankContent400() {
+        var request = new SkillMessageController.SendToImRequest();
+        request.setContent("");
+
+        var response = controller.sendToIm("u456", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(400, response.getBody().getCode());
+        assertEquals("Content is required", response.getBody().getErrormsg());
+        verifyNoInteractions(accessControlService, imMessageService);
+    }
+
+    @Test
+    @DisplayName("sendToIm: content.length > 4000 → 业务码 400 'Content too long'")
+    void sendToImContentTooLong400() {
+        String big = "x".repeat(4001);
+        var request = new SkillMessageController.SendToImRequest();
+        request.setContent(big);
+
+        var response = controller.sendToIm("u456", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(400, response.getBody().getCode());
+        assertTrue(response.getBody().getErrormsg().contains("Content too long"));
+        verifyNoInteractions(accessControlService, imMessageService);
+    }
+
+    @Test
+    @DisplayName("sendToIm: IM 下游返回 false → 业务码 500 'Failed to send message to IM'")
+    void sendToImDownstreamFails500() {
+        SkillSession session = new SkillSession();
+        session.setId(1L);
+        session.setBusinessSessionId("group_g123_u456");
+        when(accessControlService.requireSessionAccess(1L, "u456")).thenReturn(session);
+        when(imMessageService.sendMessage("group", "g123", "u456", "hi")).thenReturn(false);
+
+        var request = new SkillMessageController.SendToImRequest();
+        request.setContent("hi");
+
+        var response = controller.sendToIm("u456", "1", request);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(500, response.getBody().getCode());
+        assertEquals("Failed to send message to IM", response.getBody().getErrormsg());
     }
 
     // ==================== 助理删除校验 ====================

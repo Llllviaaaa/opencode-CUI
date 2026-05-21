@@ -115,6 +115,107 @@ public void scheduleLatestHistoryRefreshAfterCommit(Long sessionId) {
 
 ---
 
+## 外部 fire-and-forget 上报 / 埋码模式
+
+埋码（telemetry）、审计、第三方推送这类**只关心成功率不关心确认**的旁路上报，必须严格隔离业务路径。核心不变量：**上报链路任何异常都不得抛回业务线程，最坏情况只 WARN 一行日志**。
+
+样板：`skill-server/src/main/java/com/opencode/cui/skill/telemetry/`（WeLink chat 埋码 reporter）。
+
+### 1) 独立 `Executor`，禁止复用业务线程池
+
+埋码必须 own 一个 dedicated `ThreadPoolTaskExecutor`（有界队列 + `DiscardPolicy`），**不要**复用 `messageHistoryRefreshExecutor` 之类的业务执行器。原因：上报背压不能反向挤压 chat 主路径；混池就把这个保证打穿了。
+
+```java
+// ✅ telemetry 自己的线程池：bounded queue + DiscardPolicy + 命名前缀
+this.delegate = new ThreadPoolTaskExecutor();
+this.delegate.setCorePoolSize(cfg.getCorePoolSize());
+this.delegate.setMaxPoolSize(cfg.getMaxPoolSize());
+this.delegate.setQueueCapacity(cfg.getQueueCapacity());
+this.delegate.setThreadNamePrefix("welink-telemetry-");
+this.delegate.setRejectedExecutionHandler(new ThreadPoolExecutor.DiscardPolicy());
+this.delegate.initialize();
+```
+
+来源：`skill-server/src/main/java/com/opencode/cui/skill/telemetry/core/TelemetryExecutor.java:24-32`
+
+### 2) `@ConditionalOnProperty` 总开关：disabled 时零 bean、零开销
+
+Reporter / Listener / Aspect / Client **每一个** bean 都用同一个 `havingValue="true"` 守门。配置关闭 → 所有 bean 不装载 → 切面不织入、不查 DB、不建线程池，运行时开销真正为 0。
+
+```java
+// ✅ 同一 flag 守 4 个 bean：disabled 时整条上报链路不存在
+@Configuration
+@ConditionalOnProperty(name = "telemetry.welink.enabled", havingValue = "true")
+public class WelinkTelemetryAutoConfiguration { ... }
+
+@Component
+@ConditionalOnProperty(name = "telemetry.welink.enabled", havingValue = "true")
+public class ChatTelemetryEventListener { ... }
+
+@Aspect @Component
+@ConditionalOnProperty(name = "telemetry.welink.enabled", havingValue = "true")
+public class ChatReplyAspect { ... }
+```
+
+来源：`telemetry/config/WelinkTelemetryAutoConfiguration.java:24`、`telemetry/chat/ChatTelemetryEventListener.java:36`、`telemetry/chat/ChatReplyAspect.java:22`
+
+### 3) 必填配置缺失 → soft-disable，禁止 fail-fast
+
+即使 `enabled=true`，如果 `url` / `token` / `publicKey` / `tenantId` 等必填连接参数为空，autoconfig **必须启动时 WARN 一次然后视同关闭**——而不是 throw 让应用启不来。原因：埋码/可观测性是非关键路径，配置 typo 不应能搞挂 prod chat。
+
+```java
+// ✅ effectiveEnabled=false 时 reporter 还在但 report() 直接 return
+boolean effectiveEnabled = validate(properties);
+if (!effectiveEnabled) {
+    log.warn("[WelinkTelemetry] enabled=true but required config missing "
+            + "(url/token/publicKey/tenantId) - reporter will be silently disabled");
+}
+return new WelinkTelemetryReporter(properties, client, executor, effectiveEnabled);
+
+// ❌ 不要这么写：埋码配置错 = 整个 app 起不来
+if (!validate(properties)) {
+    throw new IllegalStateException("Welink telemetry config incomplete");
+}
+```
+
+来源：`telemetry/config/WelinkTelemetryAutoConfiguration.java:43-59`
+
+### 4) 每个异步边界都顶层 `try-catch`
+
+业务线程 → 事件发布 → listener → executor.submit → HTTP 客户端，每一段都**独立**包顶层 `try-catch (Throwable)`，把异常吞成 WARN 日志。任意一段漏掉，业务线程就有暴露面。
+
+- 切面 advice：catch 后 WARN，绝不让 `publishEvent` 抛回 caller。
+  来源：`telemetry/chat/ChatReplyAspect.java:34-44`
+- Listener `@EventListener` 方法：catch 后 WARN，DB 查询失败 / 字段缺失 / NPE 都走同一兜底。
+  来源：`telemetry/chat/ChatTelemetryEventListener.java:84-86, 122-125`
+- `executor.submit` 内部 Runnable：再包一层，防 reporter 自身 bug 杀线程。
+  来源：`telemetry/core/TelemetryExecutor.java:41-47`
+- HTTP 客户端：catch `Exception`（含 `HttpStatusCodeException`），只 WARN `httpCode` 不抛。
+  来源：`telemetry/client/WelinkTelemetryClient.java:79-88`
+
+### 5) 日志禁止任何 secret / 明文 / 全栈
+
+WARN 行允许的字段：`eventId`、`sessionId`、`httpCode`、`durationMs`、异常**消息**。**禁止**直接 `log.error("...", e)`（栈会带上 request body / inner cause 里的 token）或 `e.toString()`。如果一定要打异常类型，用 `e.getClass().getSimpleName() + ":" + e.getMessage()`。token / publicKey / 明文 payload 任何场景都不出现在日志里。
+
+```java
+// ✅ 只暴露关联键 + httpCode + error message
+log.warn("[EXT_CALL] WelinkTelemetry.send http_failed: eventId={}, sessionId={}, httpCode={}, durationMs={}, error={}",
+        eventId, sessionId, httpCode, elapsedMs, e.getMessage());
+
+// ❌ 把整个栈/cause 链印出来，可能带出 request body 里的 secret
+log.error("send failed", e);
+```
+
+来源：`telemetry/client/WelinkTelemetryClient.java:72-87`
+
+### 规则速查
+
+- 新增旁路上报模块**必须**有独立 executor、独立 `@ConditionalOnProperty` 守门、4 层 try-catch 兜底。
+- 必填配置缺失走 soft-disable + 一次性 WARN，不抛异常。
+- 日志只打关联键 + 状态码 + `e.getMessage()`，不打栈、不打 secret、不打明文 payload。
+
+---
+
 ## 定时任务调度
 
 `@Scheduled` 注解默认 `initialDelay=0`，**应用启动后会立刻首次执行**。如果调度任务依赖其他 bean 的 `@PostConstruct` 副作用（Redis 订阅、外部连接、缓存加载、心跳 listener 注册等），第一次执行时这些副作用可能还没完成，触发"伪故障 → 自愈"路径，重连风暴 / 误判失联 / 全员 takeover。
@@ -487,6 +588,58 @@ void physicalSubscriberCount_returnsValue() throws Exception {
 
 > **历史踩坑**：`physicalSubscriberCount` 长期返回 0L，触发 `Self-check failed: own relay channel has 0 subscribers` + `Force reconnecting` 风暴。表象 1：单元测试三个 case 全绿（mock 直接 return `redisTemplate.execute(callback)` 的结果，callback 根本没运行）。表象 2：PR #20/#21/#22 轮番修了 Lettuce decode bug、`scheduleWithFixedDelay` 立即触发、`@PostConstruct` 阶段 listener race 三个真实存在的次要问题，但风暴依旧。**真根因**直到用 PowerShell + RESP 直连 Redis 6379 验证 `PUBSUB NUMSUB ss:relay:skill-server-local = :1` 才暴露：是下一节"RedisTemplate.execute 包 connection 成 proxy"导致 cast guard 永远 false。修复时一并把测试 mock 重做到 native API 层 + 切到 `connectionFactory.getConnection()` 路径。
 
+### Spring AOP 切面 + Mockito mock target bean = 静默失活
+
+同一类"测试跨过抽象层"的另一种形态：用 `@SpringBootTest` 或 `@EnableAspectJAutoProxy` 装容器、把被切的 target bean 用 `@MockBean` / `mock(...)` 注入，然后 verify 切面是否触发。结果：**测试全绿，advice 一行没跑**。
+
+机制：Mockito mock 出来的 bean 已经是 CGLIB 代理子类；Spring AOP 看到"已经是代理了"就不会再叠一层 advisor 代理。pointcut 对 mock 调用永远拿不到 advice。
+
+正确切分（参考 `ChatReplyAspectIntegrationTest`，名字带 Integration 但实际是定向单元测试）：
+
+- **切面逻辑** → 单元测：`new MyAspect(deps)` 直接调 advice 方法（如 `aspect.afterFinalize(123L)`）。覆盖 happy path + publisher / collaborator 抛异常的兜底分支。
+- **切面装配** → 靠 `@Aspect @Component` 注解 + `pom.xml` 的 `spring-boot-starter-aop` 充当 contract。装配错（注解缺失 / starter 缺失 / pointcut 表达式写炸）会在应用启动时炸，不靠测试 catch。
+- **不要尝试合成**："半真的 Spring context + mock 掉的 target bean" 给假绿色。要么纯单元（不要 Spring），要么纯端到端（全部 real bean + `@SpringBootTest`），中间地带是陷阱。
+
+```java
+// ❌ 走不通：mock 已是 CGLIB 代理，Spring AOP 不会再叠 advisor 代理
+@SpringBootTest
+class BadAspectTest {
+    @MockBean MessagePersistenceService persistence; // 已是 mock proxy
+    @Autowired ApplicationContext ctx;
+
+    @Test
+    void aspectShouldFire() {
+        persistence.finalizeActiveAssistantTurn(1L); // ChatReplyAspect.afterFinalize 永不触发
+        // verify(publisher).publishEvent(any()); // 永远 fail，或者你不验就全绿
+    }
+}
+
+// ✅ 单元直接调 advice，覆盖 advice 本身的逻辑分支
+@Test
+void afterFinalizePublishesEvent() {
+    ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+    ChatReplyAspect aspect = new ChatReplyAspect(publisher);
+    aspect.afterFinalize(123L);
+    verify(publisher).publishEvent(any(ChatReplyTelemetryEvent.class));
+}
+
+// ✅ 兜底分支：collaborator 抛也不能让 advice 抛回业务线程
+@Test
+void publisherFailureSwallowed() {
+    ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+    doThrow(new RuntimeException("boom")).when(publisher).publishEvent(any());
+    new ChatReplyAspect(publisher).afterFinalize(7L); // 不抛
+}
+```
+
+来源：`skill-server/src/test/java/com/opencode/cui/skill/telemetry/chat/ChatReplyAspectIntegrationTest.java`（Javadoc 解释了为何退化为切面单测）
+
+规则：
+
+- AOP 切面测试默认走"advice 方法直调"单元测；不要相信 mock 出来的 target bean 会触发 advice。
+- 切面装配的正确性由 `@Aspect` + `spring-boot-starter-aop` 这条 Spring 标准链兜底，不靠 mock 容器测试。
+- 真要端到端验 AOP 织入，target bean 必须是 real bean（不是 mock）；这种测一般不值得，除非 pointcut 表达式很复杂、容易写错。
+
 ---
 
 ## RedisTemplate.execute 包 connection 成 proxy
@@ -596,3 +749,7 @@ public static class QuestionInfo {
 | 把 personal / business 分支散落到 Controller | scope 规则难以维护 | 使用 `AssistantScopeDispatcher` |
 | business 路径调 `appendPendingMessage` / `requestToolSession` | 云端链路无 `session_created` 回调，消息积压或静默丢失 | 本地 `generateToolSessionId` + `updateToolSessionId`，加 `skill:im-session:heal:*` 锁 |
 | 跨 scope 共用的 helper 不区分 append-pending | business 和 personal 对 pending 列表的消费语义不同，并发下造成消息放大或丢消息 | helper 必须显式接收 `appendToPending` 参数，由调用方按 scope 决策 |
+| 旁路上报（telemetry / audit / 外推）复用业务命名 `Executor` | 上报背压会反向挤压 chat 主路径，破坏隔离不变量 | 模块自带独立 `ThreadPoolTaskExecutor`（bounded queue + `DiscardPolicy` + 命名前缀） |
+| 旁路上报必填配置缺失时 fail-fast（throw / 启动失败） | 可观测性不应能搞挂 prod 业务；config typo 不该让 app 起不来 | `@ConditionalOnProperty` 总开关 + soft-disable + 启动 WARN 一次（参见 `WelinkTelemetryAutoConfiguration`） |
+| 旁路上报日志带栈或 secret（`log.error("...", e)` / `e.toString()` / 打 token / 打明文 payload） | 异常栈和 cause 链可能带出 token / request body | 只 WARN 关联键（eventId / sessionId / httpCode）+ `e.getMessage()`；要带异常类型时用 `e.getClass().getSimpleName() + ":" + e.getMessage()` |
+| `@SpringBootTest` / `@MockBean` mock 掉被切的 target bean，期望切面会触发 | Mockito mock 已是 CGLIB 代理；Spring AOP 不会再叠 advisor，advice 永不触发，测试全绿但实际失活 | 切面方法直接单元测（`new MyAspect(deps).adviceMethod(...)`）；装配靠 `@Aspect @Component` + `spring-boot-starter-aop` 兜底 |

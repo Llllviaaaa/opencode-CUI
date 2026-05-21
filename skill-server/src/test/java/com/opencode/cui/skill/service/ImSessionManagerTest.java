@@ -114,13 +114,13 @@ class ImSessionManagerTest {
     // ==================== personal 首次对话：PendingChatRequest 字段填充 ====================
 
     @Test
-    @DisplayName("PR3: personal direct 首次对话 → requestToolSession 入队 PendingChatRequest, sender=ownerWelinkId, imGroupId=null")
+    @DisplayName("personal direct 首次对话 → requestToolSession 入队 PendingChatRequest, sender 用真实发送者, imGroupId=null")
     void personal_directFirstChat_appendsFullPendingChatRequest() {
         SkillSession created = stubCreate(1001L, "ak-personal");
         stubPersonalScope("ak-personal");
 
         sessionManager.createSessionAsync("im", "direct", "dm-001", "ak-personal",
-                "owner-001", "assist-001", null, "你好", null);
+                "owner-001", "assist-001", "user-real-1", "你好", null);
 
         ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
         verify(gatewayRelayService).rebuildToolSession(eq("1001"), eq(created), captor.capture());
@@ -128,7 +128,7 @@ class ImSessionManagerTest {
         assertNotNull(req);
         assertEquals("你好", req.text());
         assertEquals("assist-001", req.assistantAccount());
-        assertEquals("owner-001", req.sendUserAccount(), "direct: sender 退化为 ownerWelinkId");
+        assertEquals("user-real-1", req.sendUserAccount(), "direct: sender 用真实发送者，不再 fallback owner");
         assertNull(req.imGroupId(), "direct: imGroupId 为 null");
         assertNotNull(req.messageId(), "messageId 应非空（System.currentTimeMillis）");
         assertNull(req.businessExtParam());
@@ -154,19 +154,20 @@ class ImSessionManagerTest {
     }
 
     @Test
-    @DisplayName("PR3: personal group 首次对话 senderUserAccount=null → sender 退化为 ownerWelinkId")
-    void personal_groupFirstChatNullSender_fallsBackToOwner() {
+    @DisplayName("personal direct 首次对话 非 owner 真实 sender → 透传到 PendingChatRequest（不再覆盖为 owner）")
+    void personal_directFirstChat_nonOwnerSenderPassThrough() {
         SkillSession created = stubCreate(1003L, "ak-personal");
         stubPersonalScope("ak-personal");
 
-        sessionManager.createSessionAsync("im", "group", "grp-666", "ak-personal",
-                "owner-003", "assist-003", null, "群匿名消息", null);
+        sessionManager.createSessionAsync("im", "direct", "dm-003", "ak-personal",
+                "owner-003", "assist-003", "user-non-owner", "单聊非 owner", null);
 
         ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
         verify(gatewayRelayService).rebuildToolSession(eq("1003"), eq(created), captor.capture());
         PendingChatRequest req = captor.getValue();
-        assertEquals("owner-003", req.sendUserAccount(), "sender 为空时退化为 ownerWelinkId");
-        assertEquals("grp-666", req.imGroupId(), "imGroupId 仍然是业务 sessionId");
+        assertEquals("user-non-owner", req.sendUserAccount(),
+                "direct: 非 owner 的真实 senderUserAccount 必须直接透传");
+        assertNull(req.imGroupId(), "direct: imGroupId 为 null");
     }
 
     @Test

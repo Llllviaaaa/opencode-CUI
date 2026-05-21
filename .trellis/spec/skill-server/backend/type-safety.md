@@ -407,16 +407,15 @@ public class ExternalInvokeRequest {
 
 来源：`skill-server/src/main/java/com/opencode/cui/skill/model/ExternalInvokeRequest.java:10-49`
 
-下游组包时使用的也是信封层参数，而不是 payload 中的旧字段：
+下游组包时直接透传信封层 `senderUserAccount`，**不再做 group/direct 差异化 ownerWelinkId 兜底**：
 
 ```java
-String effectiveSender = "group".equals(sessionType)
-        && senderUserAccount != null && !senderUserAccount.isBlank()
-        ? senderUserAccount : ownerWelinkId;
+// 2026-05-20 起：sender 在 controller 已强制非空，service 直接信任
+String effectiveSender = senderUserAccount;
 payloadFields.put("sendUserAccount", effectiveSender);
 ```
 
-来源：`skill-server/src/main/java/com/opencode/cui/skill/service/InboundProcessingService.java:159-173`
+来源：`skill-server/src/main/java/com/opencode/cui/skill/service/InboundProcessingService.java#dispatchChatToGateway`
 
 测试明确规定 legacy payload 字段无效：
 
@@ -426,6 +425,7 @@ payloadFields.put("sendUserAccount", effectiveSender);
 
 - 不要再定义 `payload.senderUserAccount`
 - 新入口如果需要发送者身份，字段名和位置必须与现有 envelope 对齐
+- **禁止恢复 ownerWelinkId 兜底**：详细契约见 `error-handling.md` → "Inbound chat senderUserAccount 必填且不再 fallback"
 
 ---
 
@@ -507,3 +507,4 @@ return PendingChatRequest.fromSessionFallback(session, raw);     // 老格式 / 
 3. 不要把 Long ID 原样当 number 输出给前端；`SkillSession.id` 必须保持字符串化。
 4. 不要恢复 `payload.senderUserAccount`；信封层迁移已经完成。
 5. 不要手动拼 `welinkSessionId`；让 `StreamMessageEmitter` 统一覆写。
+6. 不要为单聊 `sendUserAccount` 引入 `ownerWelinkId` 默认值；`senderUserAccount` 在 controller 已经强制非空。

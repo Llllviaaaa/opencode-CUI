@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server 后端规范导航，确认必读清单与近期模式"}
+{"file": ".trellis/spec/skill-server/backend/directory-structure.md", "reason": "新增 telemetry/ 子包要遵循的包结构与命名放置规则"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "构造注入、独立异步执行器、Bean 装配（含 @ConditionalOnProperty 模式）、AOP 切面规范"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "WARN 日志格式、[EXT_CALL] 约定、MDC traceId 提取（埋码 traceId 字段所需）、敏感数据脱敏（不打印密钥/明文）"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "DTO/record 写法（EncryptedEnvelope/TelemetryPayload）、SkillSession 字段、senderUserAccount 信封语义"}
+{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "错误处理边界 — 上报异常不得抛回业务线程，listener 顶层 try-catch 兜底语义"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用既有 RestTemplate/ObjectMapper/Executor 配置，避免重复造轮子"}
