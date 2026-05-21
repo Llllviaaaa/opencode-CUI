@@ -56,7 +56,7 @@ if (!request.getUserAccount().equals(resolved.getCreateBy())) {
 Agent 握手失败不会抛异常，而是直接拒绝升级；注册阶段失败则返回协议消息并关闭连接。
 
 ```java
-// Source: ai-gateway/src/main/java/com/opencode/cui/gateway/ws/AgentWebSocketHandler.java:154-180,337-352
+// Source: ai-gateway/src/main/java/com/opencode/cui/gateway/ws/AgentWebSocketHandler.java
 if (authPayload == null) {
     log.warn("[AUTH] AgentWSHandler.beforeHandshake: reason=no_auth_subprotocol");
     return false;
@@ -68,11 +68,19 @@ if (userId == null) {
     return false;
 }
 
+String remoteOwnerGateway = findRemoteOwnerGateway(akId);
+if (remoteOwnerGateway != null) {
+    sendAndClose(session, GatewayMessage.registerRejected("duplicate_connection"), CLOSE_DUPLICATE);
+    return;
+}
+
 if (eventRelayService.hasAgentSession(akId)) {
     sendAndClose(session, GatewayMessage.registerRejected("duplicate_connection"), CLOSE_DUPLICATE);
     return;
 }
 ```
+
+重复连接现在是两层检查：先看 Redis 中的全局连接位置是否指向其他 Gateway 实例，再看当前实例内是否已有同 AK 的 open session。两种情况都使用 `duplicate_connection` 与 `4409`，保持协议返回稳定。
 
 `SkillWebSocketHandler` 对内部来源也沿用相同风格：子协议校验失败时直接 `return false`，见 `ws/SkillWebSocketHandler.java:47-61,135-175`。
 
