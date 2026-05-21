@@ -103,7 +103,7 @@ class SkillMessageControllerTest {
                 messageService, sessionService, gatewayRelayService,
                 gatewayApiClient, assistantIdProperties, imMessageService, new ObjectMapper(),
                 accessControlService, messageRouter, assistantInfoService, scopeDispatcher,
-                offlineMessageProvider, assistantAccountResolverService, ruleService,
+                offlineMessageProvider, availabilityService, assistantAccountResolverService, ruleService,
                 allowedSlashCommandsResolver,
                 org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
         // 默认 scopeDispatcher 返回 personal 策略（requiresOnlineCheck=true）
