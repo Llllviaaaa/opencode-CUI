@@ -357,7 +357,18 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
                 return;
             }
 
-            // 步骤 2：检查重复活跃连接（保留旧连接，拒绝新连接）
+            // 步骤 2：检查全局重复活跃连接（保留旧连接，拒绝新连接）
+            String remoteOwnerGateway = findRemoteOwnerGateway(akId);
+            if (remoteOwnerGateway != null) {
+                log.warn(
+                        "Register rejected: duplicate connection on another gateway. ak={}, ownerGateway={}, currentGateway={}, toolType={}",
+                        akId, remoteOwnerGateway, gatewayInstanceId, toolType);
+                sendAndClose(session, GatewayMessage.registerRejected("duplicate_connection"),
+                        CLOSE_DUPLICATE);
+                return;
+            }
+
+            // 步骤 3：检查本实例内重复活跃连接
             if (eventRelayService.hasAgentSession(akId)) {
                 log.warn("Register rejected: duplicate connection. ak={}, toolType={}",
                         akId, toolType);
@@ -366,7 +377,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
                 return;
             }
 
-            // 步骤 3：数据库注册（复用已有记录或新建）
+            // 步骤 4：数据库注册（复用已有记录或新建）
             AgentConnection agent = agentRegistryService.register(
                     userId, akId, deviceName, macAddress, os, toolType, toolVersion);
 
@@ -469,6 +480,26 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
     }
 
     // ==================== 辅助方法 ====================
+
+    private String findRemoteOwnerGateway(String akId) {
+        String connOwner = redisMessageBroker.getConnAk(akId);
+        if (isRemoteOwner(connOwner)) {
+            return connOwner;
+        }
+
+        String internalOwner = redisMessageBroker.getInternalAgentInstance(akId);
+        if (isRemoteOwner(internalOwner)) {
+            return internalOwner;
+        }
+
+        return null;
+    }
+
+    private boolean isRemoteOwner(String ownerGatewayInstanceId) {
+        return ownerGatewayInstanceId != null
+                && !ownerGatewayInstanceId.isBlank()
+                && !gatewayInstanceId.equals(ownerGatewayInstanceId);
+    }
 
     /**
      * Drains all pending downlink messages buffered in Redis for the given agent and
