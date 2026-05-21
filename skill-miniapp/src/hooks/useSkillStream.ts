@@ -84,6 +84,38 @@ function normalizeWelinkSessionId(value: unknown): string | undefined {
   return undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeStreamStatus(value: unknown): StreamMessage['status'] | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  switch (value.toLowerCase()) {
+    case 'pending':
+    case 'running':
+    case 'completed':
+    case 'error':
+      return value.toLowerCase() as StreamMessage['status'];
+    case 'resolved':
+    case 'approved':
+    case 'rejected':
+      return 'completed';
+    default:
+      return undefined;
+  }
+}
+
+function isIdleSessionStatus(status: StreamMessage['sessionStatus'] | undefined): boolean {
+  return status === 'idle' || status === 'completed';
+}
+
+function isPermissionResolved(msg: Pick<StreamMessage, 'response' | 'status'>): boolean {
+  return Boolean(msg.response) || msg.status === 'completed';
+}
+
 function contentTypeForRole(role: MessageRole): Message['contentType'] {
   switch (role) {
     case 'assistant':
@@ -160,6 +192,51 @@ function mergeHistoryMessages(messages: Message[], incomingMessages: Message[]):
   return sortMessages(merged);
 }
 
+function isSameMessagePart(left: MessagePart, right: MessagePart): boolean {
+  if (left.partId === right.partId) {
+    return true;
+  }
+
+  if (left.type === 'tool' && right.type === 'tool' && left.toolCallId && right.toolCallId) {
+    return left.toolCallId === right.toolCallId;
+  }
+
+  if (left.type === 'permission' && right.type === 'permission' && left.permissionId && right.permissionId) {
+    return left.permissionId === right.permissionId;
+  }
+
+  return false;
+}
+
+function mergeMessageParts(existingParts: MessagePart[], incomingParts: MessagePart[]): MessagePart[] {
+  const merged = [...existingParts];
+
+  incomingParts.forEach((incoming) => {
+    const index = merged.findIndex((part) => isSameMessagePart(part, incoming));
+    if (index === -1) {
+      merged.push(incoming);
+      return;
+    }
+
+    const existing = merged[index];
+    merged[index] = {
+      ...existing,
+      ...incoming,
+      content: incoming.content || existing.content,
+      subParts: incoming.subParts
+        ? mergeMessageParts(existing.subParts ?? [], incoming.subParts)
+        : existing.subParts,
+    };
+  });
+
+  return merged.sort((left, right) => {
+    if (left.partSeq != null && right.partSeq != null && left.partSeq !== right.partSeq) {
+      return left.partSeq - right.partSeq;
+    }
+    return 0;
+  });
+}
+
 function isKnownStreamType(type: unknown): type is StreamMessageType {
   return typeof type === 'string' && [
     'text.delta',
@@ -211,9 +288,11 @@ function normalizeStreamingPart(raw: Record<string, unknown>): StreamMessage | n
         type: 'tool.update',
         toolName: typeof raw.toolName === 'string' ? raw.toolName : undefined,
         toolCallId: typeof raw.toolCallId === 'string' ? raw.toolCallId : undefined,
-        status: typeof raw.status === 'string' ? raw.status as StreamMessage['status'] : undefined,
+        status: normalizeStreamStatus(raw.status),
+        input: isRecord(raw.input) ? raw.input : undefined,
         title: typeof raw.title === 'string' ? raw.title : undefined,
         output: typeof raw.output === 'string' ? raw.output : undefined,
+        error: typeof raw.error === 'string' ? raw.error : undefined,
       };
     case 'question':
       return {
@@ -221,7 +300,10 @@ function normalizeStreamingPart(raw: Record<string, unknown>): StreamMessage | n
         type: 'question',
         toolName: 'question',
         toolCallId: typeof raw.toolCallId === 'string' ? raw.toolCallId : undefined,
-        status: 'running',
+        status: normalizeStreamStatus(raw.status) ?? (raw.answered === true ? 'completed' : 'running'),
+        input: isRecord(raw.input) ? raw.input : undefined,
+        output: typeof raw.output === 'string' ? raw.output : undefined,
+        content: typeof raw.content === 'string' ? raw.content : undefined,
         header: typeof raw.header === 'string' ? raw.header : undefined,
         question: typeof raw.question === 'string' ? raw.question : undefined,
         options: Array.isArray(raw.options)
@@ -238,14 +320,22 @@ function normalizeStreamingPart(raw: Record<string, unknown>): StreamMessage | n
             .filter((v): v is { label: string; description?: string } => v !== null)
           : undefined,
       };
-    case 'permission':
+    case 'permission': {
+      const status = normalizeStreamStatus(raw.status);
+      const response = typeof raw.response === 'string' ? raw.response : undefined;
+      const resolved = Boolean(response) || status === 'completed';
       return {
         ...base,
-        type: 'permission.ask',
+        type: resolved ? 'permission.reply' : 'permission.ask',
         permissionId: typeof raw.permissionId === 'string' ? raw.permissionId : undefined,
         permType: typeof raw.permType === 'string' ? raw.permType : undefined,
+        status: status ?? (resolved ? 'completed' : 'running'),
         content: typeof raw.content === 'string' ? raw.content : undefined,
+        title: typeof raw.title === 'string' ? raw.title : undefined,
+        metadata: isRecord(raw.metadata) ? raw.metadata : undefined,
+        response,
       };
+    }
     case 'file':
       return {
         ...base,
@@ -291,13 +381,16 @@ function streamMessageToSubPart(msg: StreamMessage): MessagePart | null {
         toolTitle: msg.title,
       };
     case 'permission.ask':
+    case 'permission.reply':
       return {
         partId: msg.partId ?? msg.permissionId ?? `perm-${Date.now()}`,
         type: 'permission',
-        content: msg.title ?? '',
+        content: msg.title ?? msg.content ?? '',
         isStreaming: false,
         permissionId: msg.permissionId,
         permType: msg.permType,
+        permResolved: isPermissionResolved(msg),
+        permissionResponse: msg.response,
         subagentSessionId: msg.subagentSessionId,
         subagentName: msg.subagentName,
       };
@@ -510,8 +603,10 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
       .map((part) => normalizeStreamingPart(part))
       .filter((part): part is StreamMessage => part !== null);
 
+    const isIdle = isIdleSessionStatus(msg.sessionStatus);
+
     if (partMessages.length === 0) {
-      if (msg.sessionStatus === 'idle') {
+      if (isIdle) {
         finalizeAllStreamingMessages();
       }
       return;
@@ -537,32 +632,50 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
         let next = [...prev];
         for (const [sid, entry] of grouped) {
           const vmId = `subtask-${sid}`;
-          if (next.some((m) => m.id === vmId)) continue;
           const subParts = entry.parts
             .map((sp) => streamMessageToSubPart(sp))
             .filter((sp): sp is MessagePart => sp !== null);
-          next = [
-            ...next,
-            {
+          const existingIndex = next.findIndex((m) => m.id === vmId);
+          if (existingIndex >= 0) {
+            const existing = next[existingIndex];
+            const existingSubtask = existing.parts?.find((p) => p.type === 'subtask' && p.subagentSessionId === sid);
+            const mergedSubParts = mergeMessageParts(existingSubtask?.subParts ?? [], subParts);
+            next[existingIndex] = {
+              ...existing,
+              isStreaming: !isIdle,
+              parts: [{
+                partId: vmId,
+                type: 'subtask' as const,
+                content: '',
+                isStreaming: !isIdle,
+                subagentSessionId: sid,
+                subagentName: entry.name,
+                subagentPrompt: existingSubtask?.subagentPrompt ?? '',
+                subagentStatus: isIdle ? 'completed' as const : 'running' as const,
+                subParts: mergedSubParts,
+              }],
+            };
+            continue;
+          }
+          next = [...next, {
               id: vmId,
               role: 'assistant' as const,
               content: '',
               contentType: 'plain' as const,
               timestamp: Date.now(),
-              isStreaming: msg.sessionStatus !== 'idle',
+              isStreaming: !isIdle,
               parts: [{
                 partId: vmId,
                 type: 'subtask' as const,
                 content: '',
-                isStreaming: msg.sessionStatus !== 'idle',
+                isStreaming: !isIdle,
                 subagentSessionId: sid,
                 subagentName: entry.name,
                 subagentPrompt: '',
-                subagentStatus: msg.sessionStatus === 'idle' ? 'completed' as const : 'running' as const,
+                subagentStatus: isIdle ? 'completed' as const : 'running' as const,
                 subParts,
               }],
-            },
-          ];
+            }];
         }
         return next;
       });
@@ -589,7 +702,7 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
       }));
       assemblersRef.current.set(messageId, assembler);
 
-      if (msg.sessionStatus !== 'idle') {
+      if (!isIdle) {
         activeMessageIdsRef.current.add(messageId);
         setIsStreaming(true);
       }
@@ -598,20 +711,26 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
       const parts = assembler.getParts();
       const timestamp = normalizeTimestamp(msg.emittedAt ?? mainParts[0]?.emittedAt);
 
-      setMessages((prev) => upsertMessage(prev, {
-        id: messageId,
-        role,
-        content,
-        contentType: contentTypeForRole(role),
-        timestamp,
-        messageSeq: msg.messageSeq ?? mainParts[0]?.messageSeq,
-        isStreaming: msg.sessionStatus !== 'idle',
-        parts: parts.length > 0 ? [...parts] : undefined,
-      }));
+      setMessages((prev) => {
+        const existing = prev.find((message) => message.id === messageId);
+        return upsertMessage(prev, {
+          id: messageId,
+          role,
+          content: content || existing?.content || '',
+          contentType: existing?.contentType ?? contentTypeForRole(role),
+          timestamp: existing?.timestamp ?? timestamp,
+          messageSeq: msg.messageSeq ?? mainParts[0]?.messageSeq ?? existing?.messageSeq,
+          meta: existing?.meta,
+          isStreaming: !isIdle,
+          parts: parts.length > 0
+            ? mergeMessageParts(existing?.parts ?? [], parts)
+            : existing?.parts,
+        });
+      });
     }
 
     // 如果只有 subagent parts 且 session 仍在流式中
-    if (mainParts.length === 0 && msg.sessionStatus !== 'idle') {
+    if (mainParts.length === 0 && !isIdle) {
       setIsStreaming(true);
     }
   }, [finalizeAllStreamingMessages]);
@@ -913,26 +1032,16 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
 
       case 'snapshot':
         if (Array.isArray(msg.messages)) {
-          resetStreamingState();
-          setMessages(sortMessages(normalizeHistoryMessages(msg.messages)));
+          const normalized = normalizeHistoryMessages(msg.messages);
+          setMessages((prev) => mergeHistoryMessages(prev, normalized));
         }
         break;
 
       case 'streaming': {
-        // Snapshot（先到达）已包含完整的历史状态。
-        // Streaming 只用于标记会话是否仍在流式中，不创建新消息（避免与 snapshot 重复）。
-        if (msg.sessionStatus === 'idle' || msg.sessionStatus === 'completed') {
+        if (isIdleSessionStatus(msg.sessionStatus) && (!Array.isArray(msg.parts) || msg.parts.length === 0)) {
           finalizeAllStreamingMessages();
-        } else if (Array.isArray(msg.parts) && msg.parts.length > 0) {
-          // 会话仍在流式中：标记最后一条 assistant 消息为 streaming
-          setIsStreaming(true);
-          setMessages((prev) => {
-            const lastAssistant = [...prev].reverse().find((m) => m.role === 'assistant');
-            if (!lastAssistant) return prev;
-            return prev.map((m) =>
-              m.id === lastAssistant.id ? { ...m, isStreaming: true } : m,
-            );
-          });
+        } else {
+          restoreStreamingMessage(msg);
         }
         break;
       }
@@ -940,7 +1049,7 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
       default:
         break;
     }
-  }, [applyStreamedMessage, handleSubagentMessage, finalizeAllStreamingMessages, resetStreamingState, restoreStreamingMessage]);
+  }, [applyStreamedMessage, handleSubagentMessage, finalizeAllStreamingMessages, restoreStreamingMessage]);
 
   useEffect(() => {
     if (!sessionId) {

@@ -273,23 +273,14 @@ public class SkillStreamHandler extends TextWebSocketHandler {
         serializeAndBroadcast(msg, recipients, "user:" + userId);
     }
 
-    /** 发送初始流式状态（快照 + 当前状态）给新连接的订阅者。 */
+    /** 发送初始流式状态给新连接的订阅者；历史消息由 HTTP 历史接口负责。 */
     private void sendInitialStreamingState(WebSocketSession session, String userId) {
         List<SkillSession> activeSessions = snapshotService.getActiveSessionsForUser(userId);
         for (SkillSession skillSession : activeSessions) {
             String sessionId = String.valueOf(skillSession.getId());
             sessionOwners.put(sessionId, skillSession.getUserId());
-            sendSnapshot(session, sessionId);
             sendStreamingState(session, sessionId);
         }
-    }
-
-    /** 发送会话快照。 */
-    private void sendSnapshot(WebSocketSession session, String sessionId) {
-        sendToSession(session, sessionId,
-                () -> snapshotService.buildSnapshot(sessionId, nextTransportSeq(sessionId)),
-                msg -> "Snapshot sent: sessionId=" + sessionId + ", messages="
-                        + (msg.getMessages() != null ? msg.getMessages().size() : 0));
     }
 
     /** 发送会话当前流式状态。 */
@@ -350,7 +341,7 @@ public class SkillStreamHandler extends TextWebSocketHandler {
 
     /**
      * 在 synchronized 会话上安全发送单条 StreamMessage。
-     * 统一了 sendSnapshot 和 sendStreamingState 中的重复逻辑。
+     * 统一发送初始化流式状态时的同步发送逻辑。
      */
     private void sendToSession(WebSocketSession session, String sessionId,
             Supplier<StreamMessage> messageSupplier, Function<StreamMessage, String> logFormatter) {
