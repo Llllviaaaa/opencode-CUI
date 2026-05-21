@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-0.md`
-- **Total Sessions**: 12
-- **Last Active**: 2026-05-20
+- **Total Sessions**: 13
+- **Last Active**: 2026-05-21
 <!-- @@@/auto:current-status -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-05-21 | chat 埋码上报（POLICY_WELINK_SERVER fire-and-forget） | `94940bf` | `main` |
 | 12 | 2026-05-20 | 单聊 sender fallback 移除 + 信封必填校验 | `c807f53`, `4af1feb` | `main` |
 | 11 | 2026-05-20 | send-to-im 接口契约化（删 body.chatId + cookie sender 校验） | `d7d6699` | `main` |
 | 10 | 2026-05-19 | allowed-slash-commands: platformExtParam 加 slash 白名单（personal scope, sysconfig 驱动） | `cc5f553`, `0ae1de9`, `7bd6bf0` | `task/05-19-allowed-slash-commands` |
