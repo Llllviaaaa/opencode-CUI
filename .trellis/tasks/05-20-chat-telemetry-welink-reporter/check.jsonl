@@ -1,7 +1,0 @@
-{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "确认规范覆盖面与近期模式校准"}
-{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "校验：构造注入、独立线程池、@ConditionalOnProperty 装配、AOP 切面"}
-{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "校验：WARN 日志含 eventId+sessionId+httpCode；不打印密钥/明文；[EXT_CALL] 标签"}
-{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "校验：DTO/record 写法、SkillSession 字段访问、senderUserAccount 信封不再 fallback owner"}
-{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "校验：上报失败绝不抛回业务线程；listener/切面顶层兜底"}
-{"file": ".trellis/spec/skill-server/backend/directory-structure.md", "reason": "校验：telemetry/ 子包位置与命名"}
-{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "校验：未重复造 RestTemplate/Executor/ObjectMapper；常量是否集中"}
