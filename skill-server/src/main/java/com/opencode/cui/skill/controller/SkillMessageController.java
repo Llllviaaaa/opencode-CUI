@@ -11,6 +11,7 @@ import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.service.GatewayActions;
 import com.opencode.cui.skill.model.SkillMessage;
 import com.opencode.cui.skill.model.AgentSummary;
+import com.opencode.cui.skill.model.AvailabilityResult;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.config.AssistantIdProperties;
@@ -22,6 +23,7 @@ import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.ImMessageService;
 
 import com.opencode.cui.skill.service.AssistantInfoService;
+import com.opencode.cui.skill.service.AssistantAvailabilityService;
 import com.opencode.cui.skill.service.AssistantOfflineMessageProvider;
 import com.opencode.cui.skill.service.ProtocolUtils;
 import com.opencode.cui.skill.service.PayloadBuilder;
@@ -78,6 +80,7 @@ public class SkillMessageController {
     private final AssistantInfoService assistantInfoService;
     private final AssistantScopeDispatcher scopeDispatcher;
     private final AssistantOfflineMessageProvider offlineMessageProvider;
+    private final AssistantAvailabilityService availabilityService;
     private final AssistantAccountResolverService assistantAccountResolverService;
     private final DefaultAssistantRuleService ruleService;
     private final AllowedSlashCommandsResolver allowedSlashCommandsResolver;
@@ -95,6 +98,7 @@ public class SkillMessageController {
             AssistantInfoService assistantInfoService,
             AssistantScopeDispatcher scopeDispatcher,
             AssistantOfflineMessageProvider offlineMessageProvider,
+            AssistantAvailabilityService availabilityService,
             AssistantAccountResolverService assistantAccountResolverService,
             DefaultAssistantRuleService ruleService,
             AllowedSlashCommandsResolver allowedSlashCommandsResolver,
@@ -111,6 +115,7 @@ public class SkillMessageController {
         this.assistantInfoService = assistantInfoService;
         this.scopeDispatcher = scopeDispatcher;
         this.offlineMessageProvider = offlineMessageProvider;
+        this.availabilityService = availabilityService;
         this.assistantAccountResolverService = assistantAccountResolverService;
         this.ruleService = ruleService;
         this.allowedSlashCommandsResolver = allowedSlashCommandsResolver;
@@ -197,19 +202,18 @@ public class SkillMessageController {
         AssistantInfo scopeInfo = assistantInfoService.getAssistantInfo(session.getAk());
         AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(scopeInfo);
         if (assistantIdProperties.isEnabled() && scopeStrategy.requiresOnlineCheck()) {
-            AgentSummary agent = gatewayApiClient.getAgentByAk(session.getAk());
-            if (agent == null) {
-                // Agent 离线：保存系统错误消息 + WebSocket 广播
-                log.warn("[SKIP] SkillMessageController.routeToGateway: reason=agent_offline, sessionId={}, ak={}",
-                        sessionId, session.getAk());
+            AvailabilityResult r = availabilityService.resolve(session.getAk());
+            if (!r.online()) {
+                log.warn("[SKIP] SkillMessageController.routeToGateway: reason=agent_offline, sessionId={}, ak={}, source={}",
+                        sessionId, session.getAk(), r.source());
                 try {
-                    messageService.saveSystemMessage(numericSessionId, offlineMessageProvider.get());
+                    messageService.saveSystemMessage(numericSessionId, r.message());
                 } catch (Exception e) {
                     log.error("Failed to persist agent_offline message for session {}: {}", sessionId, e.getMessage());
                 }
                 gatewayRelayService.publishProtocolMessage(sessionId, StreamMessage.builder()
                         .type(StreamMessage.Types.ERROR)
-                        .error(offlineMessageProvider.get())
+                        .error(r.message())
                         .build());
                 return;
             }
@@ -490,11 +494,11 @@ public class SkillMessageController {
         AssistantInfo replyInfo = assistantInfoService.getAssistantInfo(session.getAk());
         AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(replyInfo);
         if (assistantIdProperties.isEnabled() && scopeStrategy.requiresOnlineCheck()) {
-            AgentSummary agent = gatewayApiClient.getAgentByAk(session.getAk());
-            if (agent == null) {
-                log.warn("[SKIP] replyPermission: reason=agent_offline, sessionId={}, ak={}",
-                        sessionId, session.getAk());
-                return ResponseEntity.ok(ApiResponse.error(503, offlineMessageProvider.get()));
+            AvailabilityResult r = availabilityService.resolve(session.getAk());
+            if (!r.online()) {
+                log.warn("[SKIP] replyPermission: reason=agent_offline, sessionId={}, ak={}, source={}",
+                        sessionId, session.getAk(), r.source());
+                return ResponseEntity.ok(ApiResponse.error(503, r.message()));
             }
         }
 

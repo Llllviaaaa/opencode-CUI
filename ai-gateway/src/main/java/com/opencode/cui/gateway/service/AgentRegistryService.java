@@ -1,5 +1,6 @@
 package com.opencode.cui.gateway.service;
 
+import com.opencode.cui.gateway.model.AgentAvailabilityResponse;
 import com.opencode.cui.gateway.model.AgentConnection;
 import com.opencode.cui.gateway.model.AgentConnection.AgentStatus;
 import com.opencode.cui.gateway.repository.AgentConnectionRepository;
@@ -125,12 +126,28 @@ public class AgentRegistryService {
 
     /** 获取指定 AK 最近的连接记录。 */
     public AgentConnection findLatestByAk(String ak) {
-        return repository.findLatestByAkId(ak);
+        return repository.findLatestByAkIdOrderByLastSeenAtDescIdDesc(ak);
     }
 
     /** 获取指定 AK 的在线连接记录列表（仅 status=ONLINE）。 */
     public List<AgentConnection> findOnlineByAk(String ak) {
         return repository.findOnlineByAkId(ak);
+    }
+
+    /** 查询 Agent 可及性信息（供 skill-server 差异化离线文案使用）。 */
+    public AgentAvailabilityResponse queryAvailability(String ak) {
+        if (ak == null || ak.isBlank()) {
+            return new AgentAvailabilityResponse(false, false, null, null);
+        }
+        boolean exists = repository.existsByAkId(ak);
+        if (!exists) {
+            return new AgentAvailabilityResponse(false, false, null, null);
+        }
+        boolean online = repository.existsOnlineActiveByAkId(ak);
+        AgentConnection latest = repository.findLatestByAkIdOrderByLastSeenAtDescIdDesc(ak);
+        String toolType = latest != null ? latest.getToolType() : null;
+        LocalDateTime lastSeenAt = latest != null ? latest.getLastSeenAt() : null;
+        return new AgentAvailabilityResponse(true, online, toolType, lastSeenAt);
     }
 
     /**

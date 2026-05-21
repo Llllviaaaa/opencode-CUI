@@ -67,4 +67,19 @@ class AgentRegistryServiceTest {
         assertEquals(AgentConnection.AgentStatus.ONLINE, connection.getStatus());
         verify(repository).updateAgentInfo(existing);
     }
+
+    @Test
+    @DisplayName("findLatestByAk delegates to last_seen_at based latest query")
+    void findLatestByAkUsesLastSeenOrdering() {
+        AgentConnection latest = AgentConnection.builder()
+                .id(88L)
+                .akId("ak-1")
+                .build();
+        when(repository.findLatestByAkIdOrderByLastSeenAtDescIdDesc("ak-1")).thenReturn(latest);
+
+        AgentConnection result = service.findLatestByAk("ak-1");
+
+        assertSame(latest, result);
+        verify(repository).findLatestByAkIdOrderByLastSeenAtDescIdDesc("ak-1");
+    }
 }

@@ -402,7 +402,63 @@ end
 
 ---
 
-## 五、Redis Key 与频道总览
+## 五、Agent 可及性查询接口（v3 新增）
+
+### 5.1 目的
+
+Skill Server 通过 Gateway 的内部 REST 接口查询 Agent 的连接状态和配置信息，用于生成差异化离线提示文案。
+
+### 5.2 接口契约
+
+**请求：**
+
+```
+GET /internal/agent/availability?ak={ak}
+Authorization: Bearer <internal-token>
+```
+
+**响应（总是 HTTP 200，业务语义由 body 区分）：**
+
+```json
+{
+  "code": 0,
+  "data": {
+    "exists": true,
+    "online": true,
+    "latestToolType": "opencode",
+    "lastSeenAt": "2026-05-18T10:00:00Z"
+  }
+}
+```
+
+**字段语义：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `exists` | boolean | `agent_connection` 表是否有此 AK 的任何记录（不限状态） |
+| `online` | boolean | 是否存在 `status='ONLINE'` 且活跃的连接 |
+| `latestToolType` | string \| null | 最新记录的 `toolType`（按 `COALESCE(last_seen_at, created_at) DESC, id DESC` 取第一条） |
+| `lastSeenAt` | string \| null | 最新记录的 `lastSeenAt`（ISO-8601） |
+
+**错误语义：**
+
+| 场景 | HTTP | `code` | 说明 |
+|------|------|--------|------|
+| 正常查询（AK无记录） | 200 | 0 | `data.exists=false, online=false` |
+| AK 为空 | 400 | 400 | `ak is required` |
+| 鉴权失败 | 401 | 401 | Token 缺失或无效 |
+
+### 5.3 Skill Server 侧消费
+
+Skill Server 通过 `AssistantAvailabilityService` 消费此接口，Redis 缓存（key `ss:availability:{ak}`，TTL 30s）作为 best-effort 加速层。缓存由 `agent_online`/`agent_offline` 事件主动驱逐，30s TTL 仅作兜底。
+
+### 5.4 认证
+
+接口受 `skill.gateway.internal-token` Bearer Token 保护。两端在启动期强制校验 token ≠ 空且 ≠ `changeme`，否则启动失败。
+
+---
+
+## 六、Redis Key 与频道总览
 
 | Key/Channel | 类型 | 用途 | TTL |
 |-------------|------|------|-----|
@@ -417,10 +473,11 @@ end
 | `gw:register:lock:{ak}` | String | 并发注册分布式锁 | 10s |
 | `gw:source:owner:{source}:{instanceId}` | String | Legacy 策略 owner 心跳 | 30s |
 | `gw:source:owners:{source}` | Set | Legacy 策略 owner 注册表 | 无 |
+| `ss:availability:{ak}` | String | Agent 可及性缓存（Skill Server 侧） | 30s |
 
 ---
 
-## 六、数据库
+## 七、数据库
 
 ### session_route 表（Skill Server 侧）
 
@@ -447,7 +504,7 @@ CREATE TABLE session_route (
 
 ---
 
-## 七、配置参数
+## 八、配置参数
 
 ### Gateway 侧
 

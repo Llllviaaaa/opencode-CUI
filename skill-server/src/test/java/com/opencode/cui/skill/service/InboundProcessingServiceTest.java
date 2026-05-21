@@ -6,6 +6,8 @@ import com.opencode.cui.skill.config.AssistantIdProperties;
 import com.opencode.cui.skill.config.DeliveryProperties;
 import com.opencode.cui.skill.model.AgentSummary;
 import com.opencode.cui.skill.model.AssistantInfo;
+import com.opencode.cui.skill.model.AvailabilityResult;
+import com.opencode.cui.skill.model.AvailabilitySource;
 import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.PendingChatRequest;
@@ -63,6 +65,8 @@ class InboundProcessingServiceTest {
     @Mock
     private AssistantOfflineMessageProvider offlineMessageProvider;
     @Mock
+    private AssistantAvailabilityService availabilityService;
+    @Mock
     private SkillSessionService sessionService;
     @Mock
     private StringRedisTemplate redisTemplate;
@@ -109,6 +113,7 @@ class InboundProcessingServiceTest {
                 deliveryProperties,
                 redisMessageBroker,
                 offlineMessageProvider,
+                availabilityService,
                 sessionService,
                 redisTemplate,
                 channelLookupService,
@@ -125,8 +130,8 @@ class InboundProcessingServiceTest {
         defaultPersonalInfo.setAssistantScope("personal");
         lenient().when(assistantInfoService.getAssistantInfo(any())).thenReturn(defaultPersonalInfo);
         // 默认 Agent 在线
-        lenient().when(gatewayApiClient.getAgentByAk(any()))
-                .thenReturn(AgentSummary.builder().ak("ak-001").toolType("assistant").build());
+        lenient().when(availabilityService.resolve(any()))
+                .thenReturn(AvailabilityResult.ofOnline());
         lenient().when(offlineMessageProvider.get()).thenReturn(MOCK_OFFLINE_MSG);
 
         // 默认 business heal 锁行为：拿到锁成功，pending list 为空
@@ -298,7 +303,7 @@ class InboundProcessingServiceTest {
     void processChatAgentOfflineReturns503() {
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
-        when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线
+        when(availabilityService.resolve("ak-001")).thenReturn(AvailabilityResult.ofOfflineDefault(MOCK_OFFLINE_MSG, null)); // 离线
 
         SkillSession existing = buildReadySession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001"))
@@ -338,7 +343,7 @@ class InboundProcessingServiceTest {
                 "user-001", "hello", "text", null, null, "EXTERNAL", null);
 
         assertTrue(result.success());
-        verify(gatewayApiClient, never()).getAgentByAk(anyString()); // 关键：没查在线状态
+        verify(availabilityService, never()).resolve(anyString()); // 关键：没查在线状态
         verify(gatewayRelayService).sendInvokeToGateway(any(InvokeCommand.class));
     }
 
@@ -512,7 +517,7 @@ class InboundProcessingServiceTest {
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession session = buildReadySession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
-        when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线
+        when(availabilityService.resolve("ak-001")).thenReturn(AvailabilityResult.ofOfflineDefault(MOCK_OFFLINE_MSG, null)); // 离线
 
         InboundResult result = service.processQuestionReply(
                 "im", "direct", "dm-001", "assist-001",
@@ -533,7 +538,7 @@ class InboundProcessingServiceTest {
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         when(sessionManager.findSession(any(), any(), any(), any())).thenReturn(null);
-        lenient().when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线（场景注释，404 优先不会调用）
+        lenient().when(availabilityService.resolve("ak-001")).thenReturn(AvailabilityResult.ofOfflineDefault(MOCK_OFFLINE_MSG, null)); // 离线（场景注释，404 优先不会调用）
 
         InboundResult result = service.processQuestionReply(
                 "im", "direct", "dm-001", "assist-001",
@@ -545,7 +550,7 @@ class InboundProcessingServiceTest {
         assertEquals("Session not found or not ready", result.message());
         assertEquals("dm-001", result.businessSessionId());
         assertNull(result.welinkSessionId());
-        verify(gatewayApiClient, never()).getAgentByAk(anyString()); // 404 优先，未查在线
+        verify(availabilityService, never()).resolve(anyString()); // 404 优先，未查在线
     }
 
     // ==================== processPermissionReply ====================
@@ -596,7 +601,7 @@ class InboundProcessingServiceTest {
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession session = buildReadySession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001")).thenReturn(session);
-        when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线
+        when(availabilityService.resolve("ak-001")).thenReturn(AvailabilityResult.ofOfflineDefault(MOCK_OFFLINE_MSG, null)); // 离线
 
         InboundResult result = service.processPermissionReply(
                 "im", "direct", "dm-001", "assist-001",
@@ -617,7 +622,7 @@ class InboundProcessingServiceTest {
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         when(sessionManager.findSession(any(), any(), any(), any())).thenReturn(null);
-        lenient().when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线（场景注释，404 优先不会调用）
+        lenient().when(availabilityService.resolve("ak-001")).thenReturn(AvailabilityResult.ofOfflineDefault(MOCK_OFFLINE_MSG, null)); // 离线（场景注释，404 优先不会调用）
 
         InboundResult result = service.processPermissionReply(
                 "im", "direct", "dm-001", "assist-001",
@@ -629,7 +634,7 @@ class InboundProcessingServiceTest {
         assertEquals("Session not found or not ready", result.message());
         assertEquals("dm-001", result.businessSessionId());
         assertNull(result.welinkSessionId());
-        verify(gatewayApiClient, never()).getAgentByAk(anyString());
+        verify(availabilityService, never()).resolve(anyString());
     }
 
     // ==================== processRebuild ====================
@@ -677,7 +682,7 @@ class InboundProcessingServiceTest {
     void processRebuildAgentOfflineReturns503() {
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
-        when(gatewayApiClient.getAgentByAk("ak-001")).thenReturn(null); // 离线
+        when(availabilityService.resolve("ak-001")).thenReturn(AvailabilityResult.ofOfflineDefault(MOCK_OFFLINE_MSG, null)); // 离线
 
         SkillSession existing = buildReadySession();
         when(sessionManager.findSession("im", "direct", "dm-001", "ak-001"))
@@ -1084,7 +1089,7 @@ class InboundProcessingServiceTest {
 
         // when
         service.handleAgentOffline(
-                "ext", "single", "101", "ak-x", "assistant-x");
+                "ext", "single", "101", "ak-x", "assistant-x", MOCK_OFFLINE_MSG);
 
         // then: 走 emitter.emitToSession，msg 携带 ERROR 类型 + error 来自 provider
         ArgumentCaptor<StreamMessage> cap = ArgumentCaptor.forClass(StreamMessage.class);

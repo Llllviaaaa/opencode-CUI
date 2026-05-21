@@ -1,5 +1,7 @@
 package com.opencode.cui.gateway.controller;
 
+import com.opencode.cui.gateway.config.InternalAuthProperties;
+import com.opencode.cui.gateway.model.AgentAvailabilityResponse;
 import com.opencode.cui.gateway.model.AgentConnection;
 import com.opencode.cui.gateway.model.AgentStatusResponse;
 import com.opencode.cui.gateway.model.AgentSummaryResponse;
@@ -9,7 +11,6 @@ import com.opencode.cui.gateway.model.InvokeResult;
 import com.opencode.cui.gateway.service.AgentRegistryService;
 import com.opencode.cui.gateway.service.EventRelayService;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -27,18 +28,15 @@ import java.util.Map;
 /**
  * Gateway REST API 控制器。
  *
- * <p>
- * 协议端点：
- * </p>
+ * <p>协议端点：</p>
  * <ul>
  * <li>GET /api/gateway/agents — 查询在线 Agent 列表</li>
  * <li>GET /api/gateway/agents/status?ak= — 查询 Agent 状态</li>
  * <li>POST /api/gateway/invoke — 向 Agent 发送命令</li>
+ * <li>GET /api/gateway/internal/agent/availability?ak= — 查询 Agent 可及性</li>
  * </ul>
  *
- * <p>
- * 兼容旧版端点（保留向后兼容）：
- * </p>
+ * <p>兼容旧版端点（保留向后兼容，需内部 Bearer Token）：</p>
  * <ul>
  * <li>GET /api/gateway/agents/{id}/status</li>
  * <li>POST /api/gateway/agents/{id}/invoke</li>
@@ -55,10 +53,10 @@ public class AgentController {
 
     public AgentController(AgentRegistryService agentRegistryService,
             EventRelayService eventRelayService,
-            @Value("${skill.gateway.internal-token:${gateway.skill-server.internal-token:changeme}}") String internalToken) {
+            InternalAuthProperties internalAuthProperties) {
         this.agentRegistryService = agentRegistryService;
         this.eventRelayService = eventRelayService;
-        this.internalToken = internalToken;
+        this.internalToken = internalAuthProperties.getInternalToken();
     }
 
     /** 查询在线 Agent 列表，支持按 AK 或 userId 过滤。 */
@@ -149,7 +147,13 @@ public class AgentController {
 
     /** 【旧版】按数据库 ID 查询 Agent 状态。 */
     @GetMapping("/agents/{id}/status")
-    public ResponseEntity<Map<String, Object>> getAgentStatus(@PathVariable Long id) {
+    public ResponseEntity<Map<String, Object>> getAgentStatus(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable Long id) {
+        if (!isAuthorized(authorization)) {
+            return legacyError(401, "Invalid or missing internal token");
+        }
+
         AgentConnection agent = agentRegistryService.findById(id);
         if (agent == null) {
             return ResponseEntity.notFound().build();
@@ -165,9 +169,13 @@ public class AgentController {
 
     /** 【旧版】按数据库 ID 向 Agent 发送 invoke 命令。 */
     @PostMapping("/agents/{id}/invoke")
-    public ResponseEntity<Map<String, Object>> invokeAgentLegacy(
+    public ResponseEntity<Map<String, Object>> invokeAgent(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
             @PathVariable Long id,
             @RequestBody GatewayMessage message) {
+        if (!isAuthorized(authorization)) {
+            return legacyError(401, "Invalid or missing internal token");
+        }
 
         AgentConnection agent = agentRegistryService.findById(id);
         if (agent == null) {
@@ -175,32 +183,51 @@ public class AgentController {
         }
 
         if (agent.getStatus() != AgentConnection.AgentStatus.ONLINE) {
-            Map<String, Object> error = new HashMap<>();
-            error.put("success", false);
-            error.put("error", "Agent is offline");
-            error.put("agentId", id);
-            return ResponseEntity.badRequest().body(error);
+            return legacyError(400, "Agent is offline");
         }
 
         if (!eventRelayService.hasAgentSession(agent.getAkId())) {
-            Map<String, Object> error = new HashMap<>();
-            error.put("success", false);
-            error.put("error", "No active WebSocket session for agent");
-            error.put("agentId", id);
-            return ResponseEntity.badRequest().body(error);
+            return legacyError(400, "No active WebSocket session for agent");
         }
 
+        log.info("[ENTRY] REST legacy invoke to agent: id={}, ak={}, action={}",
+                id, agent.getAkId(), message.getAction());
         eventRelayService.relayToAgent(agent.getAkId(), message.withAk(agent.getAkId()));
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
-        result.put("agentId", id);
         result.put("message", "Command sent to agent");
+        log.info("[EXIT] REST legacy invoke to agent: id={}, ak={}, action={}",
+                id, agent.getAkId(), message.getAction());
         return ResponseEntity.ok(result);
     }
 
     /** 校验内部 Bearer Token 是否有效。 */
     private boolean isAuthorized(String authorization) {
         return authorization != null && authorization.equals("Bearer " + internalToken);
+    }
+
+    private ResponseEntity<Map<String, Object>> legacyError(int status, String message) {
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", false);
+        result.put("message", message);
+        return ResponseEntity.status(status).body(result);
+    }
+
+    /** 查询 Agent 可及性信息（供 skill-server 差异化离线文案使用）。 */
+    @GetMapping("/internal/agent/availability")
+    public ResponseEntity<ApiResponse<AgentAvailabilityResponse>> getAgentAvailability(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestParam String ak) {
+        if (!isAuthorized(authorization)) {
+            return ResponseEntity.status(401)
+                    .body(ApiResponse.error(401, "Invalid or missing internal token"));
+        }
+        if (ak.isBlank()) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error(400, "ak is required"));
+        }
+        AgentAvailabilityResponse availability = agentRegistryService.queryAvailability(ak);
+        return ResponseEntity.ok(ApiResponse.ok(availability));
     }
 }

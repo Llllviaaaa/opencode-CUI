@@ -1,14 +1,13 @@
 package com.opencode.cui.skill;
 
+import com.opencode.cui.skill.config.InternalAuthProperties;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 
-/**
- * Skill Server 启动类。
- * 负责会话管理、消息持久化和与 AI Gateway 的流式通信。
- */
 @SpringBootApplication
+@EnableConfigurationProperties(InternalAuthProperties.class)
 @MapperScan("com.opencode.cui.skill.repository")
 public class SkillServerApplication {
 

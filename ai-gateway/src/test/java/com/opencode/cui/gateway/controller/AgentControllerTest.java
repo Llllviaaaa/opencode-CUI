@@ -1,9 +1,12 @@
 package com.opencode.cui.gateway.controller;
 
+import com.opencode.cui.gateway.config.InternalAuthProperties;
 import com.opencode.cui.gateway.model.AgentConnection;
+import com.opencode.cui.gateway.model.AgentAvailabilityResponse;
 import com.opencode.cui.gateway.model.AgentConnection.AgentStatus;
 import com.opencode.cui.gateway.model.AgentSummaryResponse;
 import com.opencode.cui.gateway.model.ApiResponse;
+import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.AgentRegistryService;
 import com.opencode.cui.gateway.service.EventRelayService;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,9 +20,13 @@ import org.springframework.http.ResponseEntity;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -27,7 +34,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class AgentControllerTest {
 
-    private static final String INTERNAL_TOKEN = "test-token";
+    private static final InternalAuthProperties AUTH = new InternalAuthProperties("test-token");
 
     @Mock
     private AgentRegistryService agentRegistryService;
@@ -39,7 +46,7 @@ class AgentControllerTest {
 
     @BeforeEach
     void setUp() {
-        controller = new AgentController(agentRegistryService, eventRelayService, INTERNAL_TOKEN);
+        controller = new AgentController(agentRegistryService, eventRelayService, AUTH);
     }
 
     @Test
@@ -59,7 +66,7 @@ class AgentControllerTest {
         when(agentRegistryService.findOnlineByUserId("user-001")).thenReturn(List.of(agent));
 
         ResponseEntity<ApiResponse<List<AgentSummaryResponse>>> response = controller.listOnlineAgents(
-                "Bearer " + INTERNAL_TOKEN,
+                "Bearer test-token",
                 null,
                 "user-001");
 
@@ -69,5 +76,132 @@ class AgentControllerTest {
         assertEquals(1, response.getBody().getData().size());
         assertEquals("ak_test_001", response.getBody().getData().get(0).ak());
         verify(agentRegistryService).findOnlineByUserId("user-001");
+    }
+
+    // ------------------------------------------------------------------ /internal/agent/availability
+
+    @Test
+    @DisplayName("availability: 401 when token missing")
+    void availabilityUnauthorizedNoToken() {
+        ResponseEntity<ApiResponse<AgentAvailabilityResponse>> response =
+                controller.getAgentAvailability(null, "ak-1");
+
+        assertEquals(HttpStatus.UNAUTHORIZED, response.getStatusCode());
+        assertEquals(401, response.getBody().getCode());
+    }
+
+    @Test
+    @DisplayName("availability: 400 when ak blank")
+    void availabilityBadRequestBlankAk() {
+        ResponseEntity<ApiResponse<AgentAvailabilityResponse>> response =
+                controller.getAgentAvailability("Bearer test-token", "   ");
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("availability: exists=false → 200 ok with exists=false, online=false")
+    void availabilityNotExists() {
+        when(agentRegistryService.queryAvailability("ak-new"))
+                .thenReturn(new AgentAvailabilityResponse(false, false, null, null));
+
+        ResponseEntity<ApiResponse<AgentAvailabilityResponse>> response =
+                controller.getAgentAvailability("Bearer test-token", "ak-new");
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(0, response.getBody().getCode());
+        assertFalse(response.getBody().getData().exists());
+        assertFalse(response.getBody().getData().online());
+        assertNull(response.getBody().getData().latestToolType());
+    }
+
+    @Test
+    @DisplayName("availability: online → 200 ok with online=true")
+    void availabilityOnline() {
+        when(agentRegistryService.queryAvailability("ak-1"))
+                .thenReturn(new AgentAvailabilityResponse(true, true, "opencode", null));
+
+        ResponseEntity<ApiResponse<AgentAvailabilityResponse>> response =
+                controller.getAgentAvailability("Bearer test-token", "ak-1");
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertTrue(response.getBody().getData().exists());
+        assertTrue(response.getBody().getData().online());
+        assertEquals("opencode", response.getBody().getData().latestToolType());
+    }
+
+    @Test
+    @DisplayName("availability: offline + toolType=opencode")
+    void availabilityOfflineWithToolType() {
+        when(agentRegistryService.queryAvailability("ak-off"))
+                .thenReturn(new AgentAvailabilityResponse(true, false, "opencode",
+                        LocalDateTime.of(2026, 5, 18, 10, 0)));
+
+        ResponseEntity<ApiResponse<AgentAvailabilityResponse>> response =
+                controller.getAgentAvailability("Bearer test-token", "ak-off");
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertTrue(response.getBody().getData().exists());
+        assertFalse(response.getBody().getData().online());
+        assertEquals("opencode", response.getBody().getData().latestToolType());
+        assertNotNull(response.getBody().getData().lastSeenAt());
+    }
+
+    // ------------------------------------------------------------------ legacy /agents/{id}/status and /invoke
+
+    @Test
+    @DisplayName("legacy status: 401 when token missing")
+    void legacyStatusUnauthorizedNoToken() {
+        ResponseEntity<Map<String, Object>> response = controller.getAgentStatus(null, 1L);
+
+        assertEquals(HttpStatus.UNAUTHORIZED, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(false, response.getBody().get("success"));
+    }
+
+    @Test
+    @DisplayName("legacy status: returns agent and WebSocket state when authorized")
+    void legacyStatusReturnsAgentAndWsState() {
+        AgentConnection agent = AgentConnection.builder()
+                .id(9L)
+                .akId("ak-legacy")
+                .status(AgentStatus.ONLINE)
+                .build();
+        when(agentRegistryService.findById(9L)).thenReturn(agent);
+        when(eventRelayService.hasAgentSession("ak-legacy")).thenReturn(true);
+        when(eventRelayService.getActiveSessionCount()).thenReturn(2);
+
+        ResponseEntity<Map<String, Object>> response = controller.getAgentStatus("Bearer test-token", 9L);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(agent, response.getBody().get("agent"));
+        assertEquals(true, response.getBody().get("wsSessionActive"));
+        assertEquals(2, response.getBody().get("activeSessionCount"));
+    }
+
+    @Test
+    @DisplayName("legacy invoke: relays command with resolved ak when authorized")
+    void legacyInvokeRelaysWithResolvedAk() {
+        AgentConnection agent = AgentConnection.builder()
+                .id(9L)
+                .akId("ak-legacy")
+                .status(AgentStatus.ONLINE)
+                .build();
+        GatewayMessage message = GatewayMessage.builder()
+                .action("chat")
+                .build();
+        when(agentRegistryService.findById(9L)).thenReturn(agent);
+        when(eventRelayService.hasAgentSession("ak-legacy")).thenReturn(true);
+
+        ResponseEntity<Map<String, Object>> response = controller.invokeAgent(
+                "Bearer test-token",
+                9L,
+                message);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(true, response.getBody().get("success"));
+        verify(eventRelayService).relayToAgent("ak-legacy", message.withAk("ak-legacy"));
     }
 }

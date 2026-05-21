@@ -75,6 +75,7 @@ public class GatewayMessageRouter {
     private final OutboundDeliveryDispatcher outboundDeliveryDispatcher;
     private final com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter;
     private final AssistantInfoService assistantInfoService;
+    private final AssistantAvailabilityService availabilityService;
     private final AssistantScopeDispatcher scopeDispatcher;
     private final ChannelLookupService channelLookupService;
     private final ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService;
@@ -196,6 +197,7 @@ public class GatewayMessageRouter {
             AssistantScopeDispatcher scopeDispatcher,
             OutboundDeliveryDispatcher outboundDeliveryDispatcher,
             com.opencode.cui.skill.service.delivery.StreamMessageEmitter emitter,
+            AssistantAvailabilityService availabilityService,
             @Value("${skill.relay.owner-dead-threshold-seconds:120}") int ownerDeadThresholdSeconds,
             @Value("${skill.relay.confirm-dedup.enabled:true}") boolean confirmDedupEnabled,
             @Value("${skill.relay.confirm-dedup.cache-expire-minutes:25}") int confirmCacheExpireMinutes,
@@ -219,6 +221,7 @@ public class GatewayMessageRouter {
         this.channelLookupService = channelLookupService;
         this.channelSuppressReplyWhitelistService = channelSuppressReplyWhitelistService;
         this.scopeDispatcher = scopeDispatcher;
+        this.availabilityService = availabilityService;
         this.instanceId = skillInstanceRegistry.getInstanceId();
         this.ownerDeadThresholdSeconds = ownerDeadThresholdSeconds;
         this.confirmDedupEnabled = confirmDedupEnabled;
@@ -258,6 +261,7 @@ public class GatewayMessageRouter {
                 imOutboundService, sessionRouteService, skillInstanceRegistry,
                 assistantInfoService, channelLookupService, channelSuppressReplyWhitelistService,
                 scopeDispatcher, outboundDeliveryDispatcher, emitter,
+                null, // availabilityService — tests inject via mock where needed
                 ownerDeadThresholdSeconds, true, 25, Clock.systemUTC(), Ticker.systemTicker());
         // 主动初始化 cache，避免测试场景下 @PostConstruct 未触发导致 NPE
         initConfirmDedupCache();
@@ -793,6 +797,11 @@ public class GatewayMessageRouter {
             return;
         }
 
+        // Evict availability cache before broadcasting (avoid 30s stale window)
+        if (availabilityService != null) {
+            availabilityService.evict(ak);
+        }
+
         // Ownership takeover is now message-driven (lazy) — no eager takeoverActiveRoutes needed.
 
         StreamMessage msg = StreamMessage.agentOnline();
@@ -812,6 +821,12 @@ public class GatewayMessageRouter {
         if (ak == null) {
             return;
         }
+
+        // Evict availability cache before broadcasting (avoid 30s stale window)
+        if (availabilityService != null) {
+            availabilityService.evict(ak);
+        }
+
         StreamMessage msg = StreamMessage.agentOffline();
         sessionService.findActiveByAk(ak).forEach(session -> emitter.emitToClient(
                 session.getId().toString(),
