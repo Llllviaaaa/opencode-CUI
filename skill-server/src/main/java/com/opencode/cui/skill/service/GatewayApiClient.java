@@ -12,6 +12,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.Collections;
 import java.util.List;
@@ -48,7 +49,7 @@ public class GatewayApiClient {
     public List<AgentSummary> getOnlineAgentsByUserId(String userId) {
         long start = System.nanoTime();
         try {
-            String url = gatewayBaseUrl + "/api/gateway/agents?userId=" + userId;
+            String url = buildGatewayUrl("/api/gateway/agents", "userId", userId);
             ResponseEntity<String> response = restTemplate.exchange(
                     url,
                     HttpMethod.GET,
@@ -107,7 +108,7 @@ public class GatewayApiClient {
 
         long start = System.nanoTime();
         try {
-            String url = gatewayBaseUrl + "/api/gateway/agents?ak=" + ak;
+            String url = buildGatewayUrl("/api/gateway/agents", "ak", ak);
             ResponseEntity<String> response = restTemplate.exchange(
                     url,
                     HttpMethod.GET,
@@ -152,7 +153,7 @@ public class GatewayApiClient {
         }
         long start = System.nanoTime();
         try {
-            String url = gatewayBaseUrl + "/api/gateway/internal/agent/availability?ak=" + ak;
+            String url = buildGatewayUrl("/api/gateway/internal/agent/availability", "ak", ak);
             ResponseEntity<String> response = restTemplate.exchange(
                     url,
                     HttpMethod.GET,
@@ -190,5 +191,21 @@ public class GatewayApiClient {
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(internalToken);
         return headers;
+    }
+
+    private String buildGatewayUrl(String path, String paramName, String paramValue) {
+        return UriComponentsBuilder.fromUriString(normalizeBaseUrl())
+                .path(path)
+                .queryParam(paramName, "{value}")
+                .encode()
+                .buildAndExpand(paramValue)
+                .toUriString();
+    }
+
+    private String normalizeBaseUrl() {
+        if (gatewayBaseUrl.endsWith("/")) {
+            return gatewayBaseUrl.substring(0, gatewayBaseUrl.length() - 1);
+        }
+        return gatewayBaseUrl;
     }
 }

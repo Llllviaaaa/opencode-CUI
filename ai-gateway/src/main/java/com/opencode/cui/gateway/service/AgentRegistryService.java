@@ -126,7 +126,7 @@ public class AgentRegistryService {
 
     /** 获取指定 AK 最近的连接记录。 */
     public AgentConnection findLatestByAk(String ak) {
-        return repository.findLatestByAkId(ak);
+        return repository.findLatestByAkIdOrderByLastSeenAtDescIdDesc(ak);
     }
 
     /** 获取指定 AK 的在线连接记录列表（仅 status=ONLINE）。 */

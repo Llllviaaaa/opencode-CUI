@@ -6,6 +6,7 @@ import com.opencode.cui.gateway.model.AgentAvailabilityResponse;
 import com.opencode.cui.gateway.model.AgentConnection.AgentStatus;
 import com.opencode.cui.gateway.model.AgentSummaryResponse;
 import com.opencode.cui.gateway.model.ApiResponse;
+import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.AgentRegistryService;
 import com.opencode.cui.gateway.service.EventRelayService;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +20,7 @@ import org.springframework.http.ResponseEntity;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -143,5 +145,63 @@ class AgentControllerTest {
         assertFalse(response.getBody().getData().online());
         assertEquals("opencode", response.getBody().getData().latestToolType());
         assertNotNull(response.getBody().getData().lastSeenAt());
+    }
+
+    // ------------------------------------------------------------------ legacy /agents/{id}/status and /invoke
+
+    @Test
+    @DisplayName("legacy status: 401 when token missing")
+    void legacyStatusUnauthorizedNoToken() {
+        ResponseEntity<Map<String, Object>> response = controller.getAgentStatus(null, 1L);
+
+        assertEquals(HttpStatus.UNAUTHORIZED, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(false, response.getBody().get("success"));
+    }
+
+    @Test
+    @DisplayName("legacy status: returns agent and WebSocket state when authorized")
+    void legacyStatusReturnsAgentAndWsState() {
+        AgentConnection agent = AgentConnection.builder()
+                .id(9L)
+                .akId("ak-legacy")
+                .status(AgentStatus.ONLINE)
+                .build();
+        when(agentRegistryService.findById(9L)).thenReturn(agent);
+        when(eventRelayService.hasAgentSession("ak-legacy")).thenReturn(true);
+        when(eventRelayService.getActiveSessionCount()).thenReturn(2);
+
+        ResponseEntity<Map<String, Object>> response = controller.getAgentStatus("Bearer test-token", 9L);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(agent, response.getBody().get("agent"));
+        assertEquals(true, response.getBody().get("wsSessionActive"));
+        assertEquals(2, response.getBody().get("activeSessionCount"));
+    }
+
+    @Test
+    @DisplayName("legacy invoke: relays command with resolved ak when authorized")
+    void legacyInvokeRelaysWithResolvedAk() {
+        AgentConnection agent = AgentConnection.builder()
+                .id(9L)
+                .akId("ak-legacy")
+                .status(AgentStatus.ONLINE)
+                .build();
+        GatewayMessage message = GatewayMessage.builder()
+                .action("chat")
+                .build();
+        when(agentRegistryService.findById(9L)).thenReturn(agent);
+        when(eventRelayService.hasAgentSession("ak-legacy")).thenReturn(true);
+
+        ResponseEntity<Map<String, Object>> response = controller.invokeAgent(
+                "Bearer test-token",
+                9L,
+                message);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(true, response.getBody().get("success"));
+        verify(eventRelayService).relayToAgent("ak-legacy", message.withAk("ak-legacy"));
     }
 }

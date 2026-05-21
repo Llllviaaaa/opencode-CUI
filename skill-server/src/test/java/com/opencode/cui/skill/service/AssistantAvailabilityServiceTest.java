@@ -185,12 +185,12 @@ class AssistantAvailabilityServiceTest {
     void resolveGatewayNull() {
         when(gatewayApiClient.getAvailability("ak-x")).thenReturn(null);
         when(valueOps.get("ss:availability:ak-x")).thenReturn(null);
-        doNothing().when(valueOps).set(anyString(), anyString(), any(Duration.class));
 
         AvailabilityResult r = service.resolve("ak-x");
 
         assertEquals(AvailabilitySource.FALLBACK_ERROR, r.source());
         assertEquals("任务下发失败，请检查助理是否离线，确保助理在线后重试", r.message());
+        verify(valueOps, never()).set(eq("ss:availability:ak-x"), anyString(), any(Duration.class));
     }
 
     @Test
@@ -199,11 +199,11 @@ class AssistantAvailabilityServiceTest {
         when(gatewayApiClient.getAvailability("ak-x"))
                 .thenThrow(new RuntimeException("Connection refused"));
         when(valueOps.get("ss:availability:ak-x")).thenReturn(null);
-        doNothing().when(valueOps).set(anyString(), anyString(), any(Duration.class));
 
         AvailabilityResult r = service.resolve("ak-x");
 
         assertEquals(AvailabilitySource.FALLBACK_ERROR, r.source());
+        verify(valueOps, never()).set(eq("ss:availability:ak-x"), anyString(), any(Duration.class));
     }
 
     // ------------------------------------------------------------------ Redis cache / degradation
