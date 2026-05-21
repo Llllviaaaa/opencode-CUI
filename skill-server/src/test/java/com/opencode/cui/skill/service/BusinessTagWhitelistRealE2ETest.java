@@ -81,6 +81,21 @@ class BusinessTagWhitelistRealE2ETest {
     }
 
     private void insertTag(String tag, int status) {
+        List<SysConfig> existing = sysConfigMapper.findByType(WHITELIST_TYPE).stream()
+                .filter(c -> tag.equals(c.getConfigKey()))
+                .toList();
+        if (!existing.isEmpty()) {
+            for (SysConfig c : existing) {
+                c.setConfigValue("1");
+                c.setDescription("RealE2E test tag");
+                c.setStatus(status);
+                c.setSortOrder(0);
+                sysConfigMapper.update(c);
+            }
+            redisTemplate.delete(CACHE_KEY_SET);
+            return;
+        }
+
         SysConfig c = new SysConfig();
         c.setConfigType(WHITELIST_TYPE);
         c.setConfigKey(tag);
@@ -163,6 +178,7 @@ class BusinessTagWhitelistRealE2ETest {
     @DisplayName("L3.7 switch=1 + tag with status=0 → personal (status filter works)")
     void l3_7_switchOn_tagDisabled_personal() {
         setSwitch("1");
+        insertTag(TAG_HIT, 1);
         insertTag(TAG_DISABLED, 0);
         AssistantScopeStrategy s = dispatcher.getStrategy(businessInfo(TAG_DISABLED));
         assertEquals("personal", s.getScope());
