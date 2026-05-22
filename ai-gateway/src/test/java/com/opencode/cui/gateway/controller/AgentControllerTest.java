@@ -2,6 +2,8 @@ package com.opencode.cui.gateway.controller;
 
 import com.opencode.cui.gateway.config.InternalAuthProperties;
 import com.opencode.cui.gateway.model.AgentConnection;
+import com.opencode.cui.gateway.model.AgentAvailabilityRequest;
+import com.opencode.cui.gateway.model.AgentAvailabilityResponse;
 import com.opencode.cui.gateway.model.AgentAvailabilityResponse;
 import com.opencode.cui.gateway.model.AgentConnection.AgentStatus;
 import com.opencode.cui.gateway.model.AgentSummaryResponse;
@@ -84,7 +86,7 @@ class AgentControllerTest {
     @DisplayName("availability: 401 when token missing")
     void availabilityUnauthorizedNoToken() {
         ResponseEntity<ApiResponse<AgentAvailabilityResponse>> response =
-                controller.getAgentAvailability(null, "ak-1");
+                controller.getAgentAvailability(null, new AgentAvailabilityRequest("ak-1"));
 
         assertEquals(HttpStatus.UNAUTHORIZED, response.getStatusCode());
         assertEquals(401, response.getBody().getCode());
@@ -94,7 +96,7 @@ class AgentControllerTest {
     @DisplayName("availability: 400 when ak blank")
     void availabilityBadRequestBlankAk() {
         ResponseEntity<ApiResponse<AgentAvailabilityResponse>> response =
-                controller.getAgentAvailability("Bearer test-token", "   ");
+                controller.getAgentAvailability("Bearer test-token", new AgentAvailabilityRequest("   "));
 
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
     }
@@ -106,7 +108,7 @@ class AgentControllerTest {
                 .thenReturn(new AgentAvailabilityResponse(false, false, null, null));
 
         ResponseEntity<ApiResponse<AgentAvailabilityResponse>> response =
-                controller.getAgentAvailability("Bearer test-token", "ak-new");
+                controller.getAgentAvailability("Bearer test-token", new AgentAvailabilityRequest("ak-new"));
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(0, response.getBody().getCode());
@@ -122,7 +124,7 @@ class AgentControllerTest {
                 .thenReturn(new AgentAvailabilityResponse(true, true, "opencode", null));
 
         ResponseEntity<ApiResponse<AgentAvailabilityResponse>> response =
-                controller.getAgentAvailability("Bearer test-token", "ak-1");
+                controller.getAgentAvailability("Bearer test-token", new AgentAvailabilityRequest("ak-1"));
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertTrue(response.getBody().getData().exists());
@@ -138,7 +140,7 @@ class AgentControllerTest {
                         LocalDateTime.of(2026, 5, 18, 10, 0)));
 
         ResponseEntity<ApiResponse<AgentAvailabilityResponse>> response =
-                controller.getAgentAvailability("Bearer test-token", "ak-off");
+                controller.getAgentAvailability("Bearer test-token", new AgentAvailabilityRequest("ak-off"));
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertTrue(response.getBody().getData().exists());

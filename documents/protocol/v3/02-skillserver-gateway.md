@@ -413,8 +413,11 @@ Skill Server 通过 Gateway 的内部 REST 接口查询 Agent 的连接状态和
 **请求：**
 
 ```
-GET /internal/agent/availability?ak={ak}
+POST /internal/agent/availability
+Content-Type: application/json
 Authorization: Bearer <internal-token>
+
+{"ak": "..."}
 ```
 
 **响应（总是 HTTP 200，业务语义由 body 区分）：**
@@ -445,7 +448,7 @@ Authorization: Bearer <internal-token>
 | 场景 | HTTP | `code` | 说明 |
 |------|------|--------|------|
 | 正常查询（AK无记录） | 200 | 0 | `data.exists=false, online=false` |
-| AK 为空 | 400 | 400 | `ak is required` |
+| AK 缺失/为空 | 400 | 400 | `ak is required` |
 | 鉴权失败 | 401 | 401 | Token 缺失或无效 |
 
 ### 5.3 Skill Server 侧消费
