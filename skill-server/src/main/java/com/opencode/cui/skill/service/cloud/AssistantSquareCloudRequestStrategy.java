@@ -82,6 +82,22 @@ public class AssistantSquareCloudRequestStrategy implements CloudRequestStrategy
             node.set("extParameters", objectMapper.valueToTree(ext));
         }
 
+        boolean isQuestionReply = context.getReplyToolCallId() != null;
+        boolean isPermissionReply = context.getReplyPermissionId() != null;
+        if (isQuestionReply || isPermissionReply) {
+            ObjectNode replyContext = objectMapper.createObjectNode();
+            if (isQuestionReply) {
+                replyContext.put("type", "question_reply");
+                replyContext.put("toolCallId", context.getReplyToolCallId());
+                replyContext.set("answers", objectMapper.valueToTree(context.getReplyAnswers()));
+            } else {
+                replyContext.put("type", "permission_reply");
+                replyContext.put("permissionId", context.getReplyPermissionId());
+                replyContext.put("response", context.getReplyResponse());
+            }
+            node.set("replyContext", replyContext);
+        }
+
         return node;
     }
 

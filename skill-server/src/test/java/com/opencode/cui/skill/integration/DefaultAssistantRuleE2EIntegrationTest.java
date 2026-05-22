@@ -12,6 +12,7 @@ import com.opencode.cui.skill.model.PageResult;
 import com.opencode.cui.skill.model.ProtocolMessageView;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.SysConfig;
+import com.opencode.cui.skill.model.GatewayAvailabilityResponse;
 import com.opencode.cui.skill.repository.SkillSessionRepository;
 import com.opencode.cui.skill.repository.SysConfigMapper;
 import com.opencode.cui.skill.model.AgentSummary;
@@ -95,7 +96,8 @@ class DefaultAssistantRuleE2EIntegrationTest {
     private static final String CACHE_KEY_RULE = "ss:config:" + RULE_TYPE + ":" + RULE_KEY;
     private static final String CACHE_KEY_PROFILE = "ss:config:" + PROFILE_TYPE + ":" + BUSINESS_TAG;
 
-    private static final String TEST_USER_ID = "e2e-user-1";
+    // 兼容未执行 V4 的本地集成测试库（user_id 仍为 BIGINT）和新 VARCHAR schema。
+    private static final String TEST_USER_ID = "1000001";
     private static final String BIZ_SESSION_ID_PREFIX = "e2e-biz-";
 
     @Autowired SkillSessionController sessionController;
@@ -138,6 +140,8 @@ class DefaultAssistantRuleE2EIntegrationTest {
         AgentSummary fakeAgent = new AgentSummary();
         fakeAgent.setAk(VIRTUAL_AK);
         lenient().when(gatewayApiClient.getAgentByAk(anyString())).thenReturn(fakeAgent);
+        lenient().when(gatewayApiClient.getAvailability(anyString()))
+                .thenReturn(new GatewayAvailabilityResponse(true, true, "opencode", null));
 
         // 清缓存（@Transactional 不管 Redis）
         redisTemplate.delete(CACHE_KEY_RULE);
@@ -225,6 +229,16 @@ class DefaultAssistantRuleE2EIntegrationTest {
         r.setBusinessSessionId(BIZ_SESSION_ID_PREFIX + biz);
         r.setTitle("e2e test");
         return r;
+    }
+
+    private void assertWireSenderAccount(JsonNode wireNode, String message) {
+        JsonNode senderNode = wireNode.findValue("sendUserAccount");
+        if (senderNode == null || senderNode.isNull()) {
+            // assistant_square profile maps the canonical sender to vendor field sendW3Account.
+            senderNode = wireNode.findValue("sendW3Account");
+        }
+        assertNotNull(senderNode, message);
+        assertEquals(TEST_USER_ID, senderNode.asText());
     }
 
     // ===================================================================
@@ -385,14 +399,12 @@ class DefaultAssistantRuleE2EIntegrationTest {
         assertEquals(BUSINESS_TAG, cloudProfileNode.asText(),
                 "wire cloudProfile should equal businessTag (assistant_square)");
 
-        // chat 分支 payload 已含 assistantAccount + sendUserAccount（老 chat 已有 D8 支持）
+        // chat 分支 payload 已含 assistantAccount + sender account（老 chat 已有 D8 支持）
         JsonNode assistantAccountNode = wireNode.findValue("assistantAccount");
         assertNotNull(assistantAccountNode, "wire payload should carry assistantAccount");
         assertEquals(VIRTUAL_ASSISTANT_ACCOUNT, assistantAccountNode.asText());
 
-        JsonNode sendUserAccountNode = wireNode.findValue("sendUserAccount");
-        assertNotNull(sendUserAccountNode, "wire payload should carry sendUserAccount");
-        assertEquals(TEST_USER_ID, sendUserAccountNode.asText());
+        assertWireSenderAccount(wireNode, "wire payload should carry sender account");
     }
 
     // ===================================================================
@@ -426,9 +438,7 @@ class DefaultAssistantRuleE2EIntegrationTest {
         assertNotNull(assistantAccountNode, "D8 fix: question_reply payload must carry assistantAccount");
         assertEquals(VIRTUAL_ASSISTANT_ACCOUNT, assistantAccountNode.asText());
 
-        JsonNode sendUserAccountNode = wireNode.findValue("sendUserAccount");
-        assertNotNull(sendUserAccountNode, "D8 fix: question_reply payload must carry sendUserAccount");
-        assertEquals(TEST_USER_ID, sendUserAccountNode.asText());
+        assertWireSenderAccount(wireNode, "D8 fix: question_reply payload must carry sender account");
 
         // toolCallId 透传
         JsonNode toolCallIdNode = wireNode.findValue("toolCallId");
@@ -467,9 +477,7 @@ class DefaultAssistantRuleE2EIntegrationTest {
         assertNotNull(assistantAccountNode, "D8 fix: permission_reply payload must carry assistantAccount");
         assertEquals(VIRTUAL_ASSISTANT_ACCOUNT, assistantAccountNode.asText());
 
-        JsonNode sendUserAccountNode = wireNode.findValue("sendUserAccount");
-        assertNotNull(sendUserAccountNode, "D8 fix: permission_reply payload must carry sendUserAccount");
-        assertEquals(TEST_USER_ID, sendUserAccountNode.asText());
+        assertWireSenderAccount(wireNode, "D8 fix: permission_reply payload must carry sender account");
     }
 
     // ===================================================================

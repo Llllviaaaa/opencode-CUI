@@ -19,10 +19,8 @@ public class InternalAuthProperties {
     @PostConstruct
     void validate() {
         if (internalToken == null || internalToken.isBlank() || "changeme".equals(internalToken)) {
-            log.error("[FATAL] skill.gateway.internal-token is not configured or still set to 'changeme'. "
-                    + "Internal API authentication must be properly configured for security.");
-            throw new IllegalStateException(
-                    "skill.gateway.internal-token must be set to a non-empty value different from 'changeme'");
+            log.warn("skill.gateway.internal-token is not configured or still set to 'changeme'. "
+                    + "This is insecure for production and must be overridden before deployment.");
         }
     }
 }

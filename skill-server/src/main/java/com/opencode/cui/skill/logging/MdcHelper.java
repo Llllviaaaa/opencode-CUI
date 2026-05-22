@@ -137,7 +137,9 @@ public final class MdcHelper {
     private static void safePut(String key, String value) {
         if (value != null && !value.isBlank()) {
             MDC.put(key, value);
+            return;
         }
+        MDC.remove(key);
     }
 
     private static String textOrNull(JsonNode node, String field) {

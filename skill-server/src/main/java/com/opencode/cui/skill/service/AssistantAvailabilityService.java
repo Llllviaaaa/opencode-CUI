@@ -54,9 +54,12 @@ public class AssistantAvailabilityService {
         // 2. Query gateway
         AvailabilityResult result = queryAndCompute(ak);
 
-        // 3. Write cache (best-effort)
-        String serialized = serialize(result);
-        if (serialized != null) {
+        // 3. Write cache (best-effort). Do not cache transient gateway failures.
+        if (shouldCache(result)) {
+            String serialized = serialize(result);
+            if (serialized == null) {
+                return result;
+            }
             try {
                 redisTemplate.opsForValue().set(cacheKey, serialized, CACHE_TTL);
             } catch (RuntimeException e) {
@@ -150,6 +153,10 @@ public class AssistantAvailabilityService {
 
     private String availabilityKey(String ak) {
         return AVAILABILITY_PREFIX + ak;
+    }
+
+    private boolean shouldCache(AvailabilityResult result) {
+        return result != null && result.source() != AvailabilitySource.FALLBACK_ERROR;
     }
 
     private String serialize(AvailabilityResult r) {
