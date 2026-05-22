@@ -16,6 +16,7 @@ import com.opencode.cui.skill.service.delivery.OutboundDeliveryDispatcher;
 import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
+import com.opencode.cui.skill.service.scope.DefaultAssistantScopeStrategy;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -549,18 +550,38 @@ public class GatewayMessageRouter {
             return;
         }
 
+        SkillSession session = resolveToolEventSession(sessionId, node);
+        if (session != null && session.getId() != null) {
+            sessionId = session.getId().toString();
+        }
+
         log.info("handleToolEvent: sessionId={}", sessionId);
         activateIdleSession(sessionId, userId);
-        SkillSession session = resolveSession(sessionId);
 
         // 根据助手类型（scope）选择事件翻译策略
         String resolvedAk = ak != null ? ak : node.path("ak").asText(node.path("agentId").asText(null));
-        AssistantInfo routerInfo = assistantInfoService.getAssistantInfo(resolvedAk);
-        AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(routerInfo);
+        AssistantInfo routerInfo = null;
+        AssistantScopeStrategy strategy;
+        if (session != null) {
+            strategy = scopeDispatcher.getStrategy(
+                    session.getBusinessSessionDomain(),
+                    session.getBusinessSessionType(),
+                    null);
+            if (!DefaultAssistantScopeStrategy.SCOPE.equals(strategy.getScope())) {
+                routerInfo = resolveAssistantInfoForEvent(resolvedAk, session);
+                strategy = scopeDispatcher.getStrategy(
+                        session.getBusinessSessionDomain(),
+                        session.getBusinessSessionType(),
+                        routerInfo);
+            }
+        } else {
+            routerInfo = assistantInfoService.getAssistantInfo(resolvedAk);
+            strategy = scopeDispatcher.getStrategy(routerInfo);
+        }
         StreamMessage msg = strategy.translateEvent(node.get("event"), sessionId);
         if (msg == null) {
             log.debug("Event ignored by strategy translator for session {}, scope={}", sessionId,
-                    routerInfo != null ? routerInfo.getAssistantScope() : null);
+                    strategy.getScope());
             return;
         }
 
@@ -593,6 +614,58 @@ public class GatewayMessageRouter {
             return;
         }
         handleAssistantToolEvent(sessionId, userId, msg, session);
+    }
+
+    private SkillSession resolveToolEventSession(String sessionId, JsonNode node) {
+        SkillSession session = resolveSession(sessionId);
+        if (session != null) {
+            return session;
+        }
+
+        String nodeSessionId = node.path("welinkSessionId").asText(null);
+        if (nodeSessionId != null && !nodeSessionId.isBlank()
+                && !java.util.Objects.equals(nodeSessionId, sessionId)) {
+            session = resolveSession(nodeSessionId);
+            if (session != null) {
+                log.info("Recovered tool_event session by welinkSessionId: inputSessionId={}, recoveredSessionId={}",
+                        sessionId, session.getId());
+                return session;
+            }
+        }
+
+        String toolSessionId = node.path("toolSessionId").asText(null);
+        if (toolSessionId == null || toolSessionId.isBlank()) {
+            return null;
+        }
+
+        try {
+            session = sessionService.findByToolSessionId(toolSessionId);
+            if (session == null) {
+                log.warn("[SKIP] resolveToolEventSession: reason=session_not_found, sessionId={}, toolSessionId={}",
+                        sessionId, toolSessionId);
+                return null;
+            }
+            if (session.getId() != null) {
+                redisMessageBroker.setToolSessionMapping(toolSessionId, session.getId().toString());
+            }
+            log.info("Recovered tool_event session by toolSessionId: inputSessionId={}, recoveredSessionId={}, toolSessionId={}",
+                    sessionId, session.getId(), toolSessionId);
+            return session;
+        } catch (Exception e) {
+            log.warn("[SKIP] resolveToolEventSession: reason=tool_session_lookup_failed, sessionId={}, toolSessionId={}, error={}",
+                    sessionId, toolSessionId, e.getMessage());
+            return null;
+        }
+    }
+
+    private AssistantInfo resolveAssistantInfoForEvent(String resolvedAk, SkillSession session) {
+        if (session != null && session.getAssistantAccount() != null
+                && !session.getAssistantAccount().isBlank()) {
+            return assistantInfoService.getAssistantInfo(session.getAk(), session.getAssistantAccount());
+        }
+        String sessionAk = session != null ? session.getAk() : null;
+        String effectiveAk = sessionAk != null && !sessionAk.isBlank() ? sessionAk : resolvedAk;
+        return assistantInfoService.getAssistantInfo(effectiveAk);
     }
 
     /** 尝试激活 IDLE 会话，激活后广播 busy 状态。 */

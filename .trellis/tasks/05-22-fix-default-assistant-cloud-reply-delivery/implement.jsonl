@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "Skill Server backend spec index and pre-development checklist"}
+{"file": ".trellis/spec/skill-server/backend/directory-structure.md", "reason": "Service/scope/delivery placement and responsibility boundaries"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "Constructor injection, service conventions, Redis/WebSocket lifecycle patterns"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "Gateway/WebSocket logging and skip/fallback observability conventions"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "SkillSession, StreamMessage, InvokeCommand DTO conventions"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Search-first and reuse guidance for shared routing/scope logic"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer gateway to skill-server to miniapp stream flow guidance"}
