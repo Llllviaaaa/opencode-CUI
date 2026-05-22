@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -71,6 +72,10 @@ class ImSessionManagerTest {
         lenient().when(sessionService.findByBusinessSession(any(), any(), any(), any())).thenReturn(null);
         // resolver 默认返 null（未配置，与生产兜底语义一致）
         lenient().when(allowedSlashCommandsResolver.resolve(anyString(), anyString())).thenReturn(null);
+        lenient().when(scopeDispatcher.getStrategy(
+                nullable(String.class), nullable(String.class), nullable(AssistantInfo.class)))
+                .thenAnswer(invocation -> scopeDispatcher.getStrategy(
+                        (AssistantInfo) invocation.getArgument(2)));
 
         sessionManager = new ImSessionManager(
                 sessionService,
@@ -254,5 +259,32 @@ class ImSessionManagerTest {
                 "owner-biz", "assist-biz", null, "你好", null);
 
         verify(rebuildService, never()).appendPendingMessage(anyString(), any(PendingChatRequest.class));
+    }
+
+    @Test
+    @DisplayName("默认助手首次对话 → domain/type 命中策略，虚拟 AK 不依赖 AssistantInfo")
+    void defaultAssistant_firstChat_usesDomainAwareScope() {
+        SkillSession created = stubCreate(3001L, "AK_V");
+        when(assistantInfoService.getAssistantInfo("AK_V")).thenReturn(null);
+        when(scopeDispatcher.getStrategy(eq("helpdesk"), eq("direct"), nullable(AssistantInfo.class)))
+                .thenReturn(businessStrategy);
+        when(businessStrategy.generateToolSessionId()).thenReturn("cloud-default");
+
+        sessionManager.createSessionAsync("helpdesk", "direct", "dm-default", "AK_V",
+                "sender-real", "ACC_V", "sender-real", "你好", null);
+
+        verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(String.class));
+        verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(PendingChatRequest.class));
+        verify(sessionService).updateToolSessionId(eq(3001L), eq("cloud-default"));
+
+        ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
+        InvokeCommand cmd = cmdCaptor.getValue();
+        assertEquals("AK_V", cmd.ak());
+        assertEquals("sender-real", cmd.userId());
+        assertEquals("helpdesk", cmd.domain());
+        assertEquals("direct", cmd.domainType());
+        assertTrue(cmd.payload().contains("\"assistantAccount\":\"ACC_V\""));
+        assertTrue(cmd.payload().contains("\"sendUserAccount\":\"sender-real\""));
     }
 }

@@ -71,6 +71,7 @@ public class InboundProcessingService {
     private final StringRedisTemplate redisTemplate;
     private final ChannelLookupService channelLookupService;
     private final ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService;
+    private final DefaultAssistantRuleService ruleService;
     private final AllowedSlashCommandsResolver allowedSlashCommandsResolver;
 
     public InboundProcessingService(
@@ -94,6 +95,7 @@ public class InboundProcessingService {
             StringRedisTemplate redisTemplate,
             ChannelLookupService channelLookupService,
             ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService,
+            DefaultAssistantRuleService ruleService,
             AllowedSlashCommandsResolver allowedSlashCommandsResolver) {
         this.resolverService = resolverService;
         this.assistantIdProperties = assistantIdProperties;
@@ -115,6 +117,7 @@ public class InboundProcessingService {
         this.redisTemplate = redisTemplate;
         this.channelLookupService = channelLookupService;
         this.channelSuppressReplyWhitelistService = channelSuppressReplyWhitelistService;
+        this.ruleService = ruleService;
         this.allowedSlashCommandsResolver = allowedSlashCommandsResolver;
     }
 
@@ -138,23 +141,29 @@ public class InboundProcessingService {
                                       String imageUrl, List<ImMessageRequest.ChatMessage> chatHistory,
                                       String inboundSource,
                                       JsonNode businessExtParam) {
-        // 第 1 步：解析助手账号 → 三态 existence 判定
-        ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
-        if (outcome.status() == ExistenceStatus.NOT_EXISTS) {
-            // NOT_EXISTS：保留 businessSessionId 信封（ak 未知，findSession 无法定位 skillSession）
-            log.info("[SKIP] processChat: reason=assistant_not_exists, decision=block, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
-                    assistantAccount, businessDomain, sessionType, sessionId);
-            return InboundResult.error(410, resolverService.getDeletionMessage(), sessionId, null);
+        // 第 1 步：解析助手账号 → 三态 existence 判定；默认助手命中时直接使用规则中的虚拟身份
+        AssistantIdentity identity = resolveDefaultAssistantIdentity(
+                "processChat", businessDomain, sessionType, sessionId, senderUserAccount);
+        if (identity == null) {
+            ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
+            if (outcome.status() == ExistenceStatus.NOT_EXISTS) {
+                // NOT_EXISTS：保留 businessSessionId 信封（ak 未知，findSession 无法定位 skillSession）
+                log.info("[SKIP] processChat: reason=assistant_not_exists, decision=block, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                        assistantAccount, businessDomain, sessionType, sessionId);
+                return InboundResult.error(410, resolverService.getDeletionMessage(), sessionId, null);
+            }
+            if (outcome.status() == ExistenceStatus.UNKNOWN) {
+                log.warn("[SKIP] processChat: reason=assistant_check_unknown, decision=block-unknown, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                        assistantAccount, businessDomain, sessionType, sessionId);
+                return InboundResult.error(404, "Invalid assistant account");
+            }
+            identity = new AssistantIdentity(outcome.ak(), outcome.ownerWelinkId(), assistantAccount, false);
+            log.info("processChat: resolved assistant={}, ak={}, ownerWelinkId={}",
+                    assistantAccount, identity.ak(), identity.gatewayUserId());
         }
-        if (outcome.status() == ExistenceStatus.UNKNOWN) {
-            log.warn("[SKIP] processChat: reason=assistant_check_unknown, decision=block-unknown, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
-                    assistantAccount, businessDomain, sessionType, sessionId);
-            return InboundResult.error(404, "Invalid assistant account");
-        }
-        String ak = outcome.ak();
-        String ownerWelinkId = outcome.ownerWelinkId();
-        log.info("processChat: resolved assistant={}, ak={}, ownerWelinkId={}",
-                assistantAccount, ak, ownerWelinkId);
+        String ak = identity.ak();
+        String ownerWelinkId = identity.gatewayUserId();
+        assistantAccount = identity.assistantAccount();
 
         // 第 2 步：Agent 在线检查（开关控制，业务助手跳过）
         InboundResult offline = checkAgentOnline(businessDomain, sessionType, sessionId, ak, assistantAccount);
@@ -184,8 +193,8 @@ public class InboundProcessingService {
 
         // 情况 B：session 存在但 toolSessionId 尚未就绪
         if (session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
-            AssistantInfo info = assistantInfoService.getAssistantInfo(ak);
-            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(info);
+            AssistantInfo info = identity.defaultAssistant() ? null : assistantInfoService.getAssistantInfo(ak);
+            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(businessDomain, sessionType, info);
             String generated = strategy.generateToolSessionId();
             if (generated != null) {
                 // business 自愈：加锁 + 二次检查，失败则降级到 rebuild 路径避免丢消息
@@ -248,8 +257,8 @@ public class InboundProcessingService {
 
         // 情况 C：session 就绪，转发消息到 AI Gateway
         // append pending 仅对 personal 有意义（rebuild 链路消费者），business 不写避免并发重放放大
-        AssistantInfo caseCInfo = assistantInfoService.getAssistantInfo(ak);
-        AssistantScopeStrategy caseCStrategy = scopeDispatcher.getStrategy(caseCInfo);
+        AssistantInfo caseCInfo = identity.defaultAssistant() ? null : assistantInfoService.getAssistantInfo(ak);
+        AssistantScopeStrategy caseCStrategy = scopeDispatcher.getStrategy(businessDomain, sessionType, caseCInfo);
         boolean appendToPending = caseCStrategy.generateToolSessionId() == null;
         return dispatchChatToGateway(session, prompt, ak, ownerWelinkId, assistantAccount,
                 senderUserAccount, businessDomain, sessionType, sessionId,
@@ -445,19 +454,25 @@ public class InboundProcessingService {
                                                String content, String toolCallId,
                                                String subagentSessionId, String inboundSource,
                                                JsonNode businessExtParam) {
-        ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
-        if (outcome.status() == ExistenceStatus.NOT_EXISTS) {
-            log.info("[SKIP] processQuestionReply: reason=assistant_not_exists, decision=block, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
-                    assistantAccount, businessDomain, sessionType, sessionId);
-            return InboundResult.error(410, resolverService.getDeletionMessage(), sessionId, null);
+        AssistantIdentity identity = resolveDefaultAssistantIdentity(
+                "processQuestionReply", businessDomain, sessionType, sessionId, senderUserAccount);
+        if (identity == null) {
+            ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
+            if (outcome.status() == ExistenceStatus.NOT_EXISTS) {
+                log.info("[SKIP] processQuestionReply: reason=assistant_not_exists, decision=block, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                        assistantAccount, businessDomain, sessionType, sessionId);
+                return InboundResult.error(410, resolverService.getDeletionMessage(), sessionId, null);
+            }
+            if (outcome.status() == ExistenceStatus.UNKNOWN) {
+                log.warn("[SKIP] processQuestionReply: reason=assistant_check_unknown, decision=block-unknown, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                        assistantAccount, businessDomain, sessionType, sessionId);
+                return InboundResult.error(404, "Invalid assistant account");
+            }
+            identity = new AssistantIdentity(outcome.ak(), outcome.ownerWelinkId(), assistantAccount, false);
         }
-        if (outcome.status() == ExistenceStatus.UNKNOWN) {
-            log.warn("[SKIP] processQuestionReply: reason=assistant_check_unknown, decision=block-unknown, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
-                    assistantAccount, businessDomain, sessionType, sessionId);
-            return InboundResult.error(404, "Invalid assistant account");
-        }
-        String ak = outcome.ak();
-        String ownerWelinkId = outcome.ownerWelinkId();
+        String ak = identity.ak();
+        String ownerWelinkId = identity.gatewayUserId();
+        assistantAccount = identity.assistantAccount();
 
         SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
         if (session == null || session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
@@ -513,19 +528,25 @@ public class InboundProcessingService {
                                                  String permissionId, String response,
                                                  String subagentSessionId, String inboundSource,
                                                  JsonNode businessExtParam) {
-        ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
-        if (outcome.status() == ExistenceStatus.NOT_EXISTS) {
-            log.info("[SKIP] processPermissionReply: reason=assistant_not_exists, decision=block, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
-                    assistantAccount, businessDomain, sessionType, sessionId);
-            return InboundResult.error(410, resolverService.getDeletionMessage(), sessionId, null);
+        AssistantIdentity identity = resolveDefaultAssistantIdentity(
+                "processPermissionReply", businessDomain, sessionType, sessionId, senderUserAccount);
+        if (identity == null) {
+            ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
+            if (outcome.status() == ExistenceStatus.NOT_EXISTS) {
+                log.info("[SKIP] processPermissionReply: reason=assistant_not_exists, decision=block, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                        assistantAccount, businessDomain, sessionType, sessionId);
+                return InboundResult.error(410, resolverService.getDeletionMessage(), sessionId, null);
+            }
+            if (outcome.status() == ExistenceStatus.UNKNOWN) {
+                log.warn("[SKIP] processPermissionReply: reason=assistant_check_unknown, decision=block-unknown, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                        assistantAccount, businessDomain, sessionType, sessionId);
+                return InboundResult.error(404, "Invalid assistant account");
+            }
+            identity = new AssistantIdentity(outcome.ak(), outcome.ownerWelinkId(), assistantAccount, false);
         }
-        if (outcome.status() == ExistenceStatus.UNKNOWN) {
-            log.warn("[SKIP] processPermissionReply: reason=assistant_check_unknown, decision=block-unknown, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
-                    assistantAccount, businessDomain, sessionType, sessionId);
-            return InboundResult.error(404, "Invalid assistant account");
-        }
-        String ak = outcome.ak();
-        String ownerWelinkId = outcome.ownerWelinkId();
+        String ak = identity.ak();
+        String ownerWelinkId = identity.gatewayUserId();
+        assistantAccount = identity.assistantAccount();
 
         SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
         if (session == null || session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
@@ -588,27 +609,33 @@ public class InboundProcessingService {
     public InboundResult processRebuild(String businessDomain, String sessionType,
                                          String sessionId, String assistantAccount,
                                          String senderUserAccount) {
-        ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
-        if (outcome.status() == ExistenceStatus.NOT_EXISTS) {
-            log.info("[SKIP] processRebuild: reason=assistant_not_exists, decision=block, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
-                    assistantAccount, businessDomain, sessionType, sessionId);
-            return InboundResult.error(410, resolverService.getDeletionMessage(), sessionId, null);
+        AssistantIdentity identity = resolveDefaultAssistantIdentity(
+                "processRebuild", businessDomain, sessionType, sessionId, senderUserAccount);
+        if (identity == null) {
+            ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
+            if (outcome.status() == ExistenceStatus.NOT_EXISTS) {
+                log.info("[SKIP] processRebuild: reason=assistant_not_exists, decision=block, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                        assistantAccount, businessDomain, sessionType, sessionId);
+                return InboundResult.error(410, resolverService.getDeletionMessage(), sessionId, null);
+            }
+            if (outcome.status() == ExistenceStatus.UNKNOWN) {
+                log.warn("[SKIP] processRebuild: reason=assistant_check_unknown, decision=block-unknown, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
+                        assistantAccount, businessDomain, sessionType, sessionId);
+                return InboundResult.error(404, "Invalid assistant account");
+            }
+            identity = new AssistantIdentity(outcome.ak(), outcome.ownerWelinkId(), assistantAccount, false);
         }
-        if (outcome.status() == ExistenceStatus.UNKNOWN) {
-            log.warn("[SKIP] processRebuild: reason=assistant_check_unknown, decision=block-unknown, assistantAccount={}, domain={}, sessionType={}, sessionId={}",
-                    assistantAccount, businessDomain, sessionType, sessionId);
-            return InboundResult.error(404, "Invalid assistant account");
-        }
-        String ak = outcome.ak();
-        String ownerWelinkId = outcome.ownerWelinkId();
+        String ak = identity.ak();
+        String ownerWelinkId = identity.gatewayUserId();
+        assistantAccount = identity.assistantAccount();
 
         InboundResult offline = checkAgentOnline(businessDomain, sessionType, sessionId, ak, assistantAccount);
         if (offline != null) return offline;
 
         SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
         if (session != null) {
-            AssistantInfo info = assistantInfoService.getAssistantInfo(ak);
-            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(info);
+            AssistantInfo info = identity.defaultAssistant() ? null : assistantInfoService.getAssistantInfo(ak);
+            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(businessDomain, sessionType, info);
             String generated = strategy.generateToolSessionId();
             if (generated != null) {
                 // business rebuild：加锁防止并发覆盖 Redis mapping；锁未拿到视为"合并重复请求"直接返回 ok
@@ -654,6 +681,19 @@ public class InboundProcessingService {
         }
     }
 
+    private AssistantIdentity resolveDefaultAssistantIdentity(String action, String businessDomain,
+                                                              String sessionType, String sessionId,
+                                                              String senderUserAccount) {
+        return ruleService.lookup(businessDomain, sessionType)
+                .map(rule -> {
+                    log.info("[SKIP] {}.assistantResolve: reason=default_assistant_rule_matched, domain={}, type={}, sessionId={}, ak={}",
+                            action, businessDomain, sessionType, sessionId, rule.ak());
+                    // 默认助手的虚拟 AK/account 不存在上游 owner；InvokeCommand.userId 使用信封真实 sender。
+                    return new AssistantIdentity(rule.ak(), senderUserAccount, rule.assistantAccount(), true);
+                })
+                .orElse(null);
+    }
+
     /**
      * 返回 null 表示在线（或跳过检查），调用方继续主流程。
      * 返回非 null 表示离线，调用方直接 return 该结果
@@ -663,8 +703,13 @@ public class InboundProcessingService {
                                            String sessionId, String ak,
                                            String assistantAccount) {
         if (!assistantIdProperties.isEnabled()) return null;
+        if (ruleService.lookup(businessDomain, sessionType).isPresent()) {
+            log.info("[SKIP] checkAgentOnline: reason=default_assistant_rule_matched, ak={}, domain={}, sessionType={}, sessionId={}",
+                    ak, businessDomain, sessionType, sessionId);
+            return null;
+        }
         AssistantInfo checkInfo = assistantInfoService.getAssistantInfo(ak);
-        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(checkInfo);
+        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(businessDomain, sessionType, checkInfo);
         if (!scopeStrategy.requiresOnlineCheck()) return null;
 
         AvailabilityResult r = availabilityService.resolve(ak);
@@ -704,6 +749,10 @@ public class InboundProcessingService {
                 }
             }
         }
+    }
+
+    private record AssistantIdentity(String ak, String gatewayUserId,
+                                     String assistantAccount, boolean defaultAssistant) {
     }
 
     /**
