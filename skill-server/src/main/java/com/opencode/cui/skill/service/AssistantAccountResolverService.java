@@ -4,22 +4,17 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.opencode.cui.skill.model.AssistantInstanceInfo;
 import com.opencode.cui.skill.model.AssistantResolveResult;
 import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.ResolveOutcome;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
-import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.Duration;
-import java.util.List;
 
 /**
  * 助手账号解析服务。
@@ -35,9 +30,9 @@ import java.util.List;
  *
  * <p>响应判定：
  * <ul>
- *   <li>HTTP 200 + body.code=200 + data.appKey 和 data.ownerWelinkId 都有 → EXISTS</li>
- *   <li>HTTP 200 + body.code=200 + data 为空 / data.appKey 缺 → NOT_EXISTS</li>
- *   <li>HTTP 200 + body.code=200 + appKey 有但 ownerWelinkId 缺 → UNKNOWN（上游数据残缺）</li>
+ *   <li>HTTP 200 + body.code=200 + data 为空 → NOT_EXISTS</li>
+ *   <li>HTTP 200 + body.code=200 + data 为远端助手（isRemote=true 或 remoteProperty 非空）→ EXISTS，允许 appKey 为空</li>
+ *   <li>HTTP 200 + body.code=200 + data 为本地助手且 appKey / ownerWelinkId 缺失 → UNKNOWN（上游数据残缺）</li>
  *   <li>body.code != 200 / HTTP 非 200 / 超时 / 异常 → UNKNOWN</li>
  * </ul>
  */
@@ -48,14 +43,28 @@ public class AssistantAccountResolverService {
     private static final String STATUS_CACHE_KEY_PREFIX = "assistantAccount:status:"; // Redis 缓存 key 前缀：status（统一）
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private final RestTemplate restTemplate; // HTTP 客户端
+    private final AssistantInstanceInfoService assistantInstanceInfoService;
     private final StringRedisTemplate redisTemplate; // Redis 操作模板
-    private final String resolveUrl; // 远程解析接口地址
-    private final String resolveToken; // Bearer Token 认证
     private final boolean skipOnNullAssistantAccount; // miniapp 入口 null 时开关：true=跳过放行；false=严格校验
     private final int statusCacheTtlExistsSeconds; // EXISTS 缓存 TTL（秒）
     private final int statusCacheTtlNotExistsSeconds; // NOT_EXISTS 缓存 TTL（秒）
     private final String deletionMessage; // 助理删除后对外文案
+
+    @Autowired
+    public AssistantAccountResolverService(
+            AssistantInstanceInfoService assistantInstanceInfoService,
+            StringRedisTemplate redisTemplate,
+            @org.springframework.beans.factory.annotation.Value("${skill.assistant.existence-check.skip-on-null-assistant-account:true}") boolean skipOnNullAssistantAccount,
+            @org.springframework.beans.factory.annotation.Value("${skill.assistant.status-cache-ttl-exists-seconds:300}") int statusCacheTtlExistsSeconds,
+            @org.springframework.beans.factory.annotation.Value("${skill.assistant.status-cache-ttl-not-exists-seconds:60}") int statusCacheTtlNotExistsSeconds,
+            @org.springframework.beans.factory.annotation.Value("${skill.assistant.deletion-message:该助理已被删除}") String deletionMessage) {
+        this.assistantInstanceInfoService = assistantInstanceInfoService;
+        this.redisTemplate = redisTemplate;
+        this.skipOnNullAssistantAccount = skipOnNullAssistantAccount;
+        this.statusCacheTtlExistsSeconds = statusCacheTtlExistsSeconds;
+        this.statusCacheTtlNotExistsSeconds = statusCacheTtlNotExistsSeconds;
+        this.deletionMessage = deletionMessage;
+    }
 
     public AssistantAccountResolverService(
             RestTemplate restTemplate,
@@ -66,14 +75,13 @@ public class AssistantAccountResolverService {
             @org.springframework.beans.factory.annotation.Value("${skill.assistant.status-cache-ttl-exists-seconds:300}") int statusCacheTtlExistsSeconds,
             @org.springframework.beans.factory.annotation.Value("${skill.assistant.status-cache-ttl-not-exists-seconds:60}") int statusCacheTtlNotExistsSeconds,
             @org.springframework.beans.factory.annotation.Value("${skill.assistant.deletion-message:该助理已被删除}") String deletionMessage) {
-        this.restTemplate = restTemplate;
-        this.redisTemplate = redisTemplate;
-        this.resolveUrl = resolveUrl;
-        this.resolveToken = resolveToken;
-        this.skipOnNullAssistantAccount = skipOnNullAssistantAccount;
-        this.statusCacheTtlExistsSeconds = statusCacheTtlExistsSeconds;
-        this.statusCacheTtlNotExistsSeconds = statusCacheTtlNotExistsSeconds;
-        this.deletionMessage = deletionMessage;
+        this(new AssistantInstanceInfoService(restTemplate, redisTemplate, MAPPER,
+                        resolveUrl, resolveToken, statusCacheTtlExistsSeconds),
+                redisTemplate,
+                skipOnNullAssistantAccount,
+                statusCacheTtlExistsSeconds,
+                statusCacheTtlNotExistsSeconds,
+                deletionMessage);
     }
 
     /**
@@ -125,7 +133,7 @@ public class AssistantAccountResolverService {
      * 内部核心方法：优先读 status 缓存，未命中走远端，按判定规则写缓存（UNKNOWN 不写）。
      */
     private ResolveOutcome lookup(String assistantAccount) {
-        if (assistantAccount == null || assistantAccount.isBlank() || resolveUrl == null || resolveUrl.isBlank()) {
+        if (assistantAccount == null || assistantAccount.isBlank()) {
             return new ResolveOutcome(ExistenceStatus.UNKNOWN, null, null);
         }
 
@@ -141,91 +149,55 @@ public class AssistantAccountResolverService {
             return cached;
         }
 
-        // 远端解析
-        long start = System.nanoTime();
-        try {
-            String requestUrl = UriComponentsBuilder.fromUriString(resolveUrl)
-                    .queryParam("partnerAccount", assistantAccount)
-                    .build(true)
-                    .toUriString();
-            HttpHeaders headers = new HttpHeaders();
-            headers.setAccept(List.of(MediaType.APPLICATION_JSON));
-            if (resolveToken != null && !resolveToken.isBlank()) {
-                headers.setBearerAuth(resolveToken);
-            }
-            HttpEntity<Void> request = new HttpEntity<>(headers);
-            ResponseEntity<JsonNode> response = restTemplate.exchange(
-                    requestUrl, HttpMethod.GET, request, JsonNode.class);
-            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
-
-            ResolveOutcome outcome = judge(response, maskedAccount, elapsedMs);
-            writeCache(cacheKey, outcome);
-            return outcome;
-        } catch (Exception e) {
-            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
-            log.warn("[EXT_CALL] AssistantResolve error: decision=unknown, source=remote, assistantAccount={}, cacheHit=false, durationMs={}, error={}",
-                    maskedAccount, elapsedMs, e.getMessage());
-            return new ResolveOutcome(ExistenceStatus.UNKNOWN, null, null);
-        }
+        AssistantInstanceInfoService.LookupResult result = assistantInstanceInfoService.lookup(assistantAccount);
+        ResolveOutcome outcome = judge(result, assistantAccount, maskedAccount);
+        writeCache(cacheKey, outcome);
+        return outcome;
     }
 
     /**
      * 按 PRD Technical Notes 规则判定三态。
-     * HTTP 非 200 / body.code != 200 / data.appKey 有但 owner 缺 / data.appKey 缺（data 空/无该字段）
+     * HTTP 非 200 / body.code != 200 / data 为空 / 本地助手数据残缺
      * 等各种情况分别映射到 EXISTS / NOT_EXISTS / UNKNOWN。
      */
-    private ResolveOutcome judge(ResponseEntity<JsonNode> response, String maskedAccount, long elapsedMs) {
-        if (response == null || !response.getStatusCode().is2xxSuccessful()) {
-            log.warn("[EXT_CALL] AssistantResolve non-2xx: decision=unknown, source=remote, assistantAccount={}, cacheHit=false, durationMs={}, httpStatus={}",
-                    maskedAccount, elapsedMs, response != null ? response.getStatusCode() : null);
+    private ResolveOutcome judge(AssistantInstanceInfoService.LookupResult result,
+                                 String fallbackAssistantAccount,
+                                 String maskedAccount) {
+        if (result == null || result.status() == ExistenceStatus.UNKNOWN) {
             return new ResolveOutcome(ExistenceStatus.UNKNOWN, null, null);
         }
-
-        JsonNode body = response.getBody();
-        if (body == null || body.isNull()) {
-            log.warn("[EXT_CALL] AssistantResolve empty body: decision=unknown, source=remote, assistantAccount={}, cacheHit=false, durationMs={}",
-                    maskedAccount, elapsedMs);
-            return new ResolveOutcome(ExistenceStatus.UNKNOWN, null, null);
-        }
-
-        // body.code 必须 == 200 才算业务成功；包括 code 字段缺失 / 非 200 都归 UNKNOWN
-        JsonNode codeNode = body.get("code");
-        if (codeNode == null || !codeNode.canConvertToInt() || codeNode.asInt() != 200) {
-            log.warn("[EXT_CALL] AssistantResolve business failure: decision=unknown, source=remote, assistantAccount={}, cacheHit=false, durationMs={}, bodyCode={}",
-                    maskedAccount, elapsedMs, codeNode);
-            return new ResolveOutcome(ExistenceStatus.UNKNOWN, null, null);
-        }
-
-        // data 为空 / null → NOT_EXISTS
-        JsonNode data = body.get("data");
-        if (data == null || data.isNull() || data.isMissingNode()
-                || (data.isObject() && data.size() == 0)) {
-            log.info("[EXT_CALL] AssistantResolve not_exists: decision=block, source=remote, assistantAccount={}, cacheHit=false, durationMs={}, reason=data_empty",
-                    maskedAccount, elapsedMs);
+        if (result.status() == ExistenceStatus.NOT_EXISTS) {
             return new ResolveOutcome(ExistenceStatus.NOT_EXISTS, null, null);
         }
 
-        String ak = firstNonBlank(data.path("appKey").asText(null), data.path("ak").asText(null));
-        if (ak == null || ak.isBlank()) {
-            // data 有但关键字段 appKey 缺 → NOT_EXISTS
-            log.info("[EXT_CALL] AssistantResolve not_exists: decision=block, source=remote, assistantAccount={}, cacheHit=false, durationMs={}, reason=appKey_missing",
-                    maskedAccount, elapsedMs);
-            return new ResolveOutcome(ExistenceStatus.NOT_EXISTS, null, null);
-        }
-
-        String ownerWelinkId = firstNonBlank(data.path("ownerWelinkId").asText(null), data.path("welinkId").asText(null));
-        if (ownerWelinkId == null || ownerWelinkId.isBlank()) {
-            // appKey 有但 owner 缺 → UNKNOWN（上游数据残缺，别写死 NOT_EXISTS）
-            log.warn("[EXT_CALL] AssistantResolve owner_missing: decision=unknown, source=remote, assistantAccount={}, cacheHit=false, durationMs={}, ak={}",
-                    maskedAccount, elapsedMs, com.opencode.cui.skill.logging.SensitiveDataMasker.maskToken(ak));
+        AssistantInstanceInfo info = result.info();
+        if (info == null) {
             return new ResolveOutcome(ExistenceStatus.UNKNOWN, null, null);
         }
 
-        log.info("[EXT_CALL] AssistantResolve success: decision=allow, source=remote, assistantAccount={}, cacheHit=false, ak={}, durationMs={}",
+        String ak = info.effectiveAk();
+        String resolvedAccount = info.effectivePartnerAccount(fallbackAssistantAccount);
+        String ownerWelinkId = firstNonBlank(info.getOwnerWelinkId(), resolvedAccount);
+        boolean remote = info.businessRoutableAssistant();
+
+        if (!remote && (ak == null || ak.isBlank())) {
+            log.warn("[EXT_CALL] AssistantResolve local_missing_ak: decision=unknown, source=instance, assistantAccount={}",
+                    maskedAccount);
+            return new ResolveOutcome(ExistenceStatus.UNKNOWN, null, null);
+        }
+        if (!remote && (ownerWelinkId == null || ownerWelinkId.isBlank())) {
+            log.warn("[EXT_CALL] AssistantResolve local_owner_missing: decision=unknown, source=instance, assistantAccount={}, ak={}",
+                    maskedAccount, com.opencode.cui.skill.logging.SensitiveDataMasker.maskToken(ak));
+            return new ResolveOutcome(ExistenceStatus.UNKNOWN, null, null);
+        }
+
+        log.info("[EXT_CALL] AssistantResolve success: decision=allow, source=instance, assistantAccount={}, ak={}, remote={}, businessTag={}",
                 maskedAccount,
                 com.opencode.cui.skill.logging.SensitiveDataMasker.maskToken(ak),
-                elapsedMs);
-        return new ResolveOutcome(ExistenceStatus.EXISTS, ak, ownerWelinkId);
+                remote,
+                info.getBizRobotTag());
+        return new ResolveOutcome(ExistenceStatus.EXISTS, ak, ownerWelinkId,
+                resolvedAccount, remote, info.getBizRobotTag());
     }
 
     /** 拼 status 缓存 key。 */
@@ -252,10 +224,14 @@ public class AssistantAccountResolverService {
             if ("EXISTS".equals(statusStr)) {
                 String ak = node.path("ak").asText(null);
                 String owner = node.path("ownerWelinkId").asText(null);
-                if (ak == null || ak.isBlank() || owner == null || owner.isBlank()) {
+                String assistantAccount = node.path("assistantAccount").asText(null);
+                boolean remote = node.path("remote").asBoolean(false);
+                String businessTag = node.path("businessTag").asText(null);
+                if (!remote && (ak == null || ak.isBlank() || owner == null || owner.isBlank())) {
                     return null; // 脏缓存，当未命中
                 }
-                return new ResolveOutcome(ExistenceStatus.EXISTS, ak, owner);
+                return new ResolveOutcome(ExistenceStatus.EXISTS, ak, owner,
+                        assistantAccount, remote, businessTag);
             }
             if ("NOT_EXISTS".equals(statusStr)) {
                 return new ResolveOutcome(ExistenceStatus.NOT_EXISTS, null, null);
@@ -277,8 +253,11 @@ public class AssistantAccountResolverService {
             payload.put("status", outcome.status().name());
             Duration ttl;
             if (outcome.status() == ExistenceStatus.EXISTS) {
-                payload.put("ak", outcome.ak());
-                payload.put("ownerWelinkId", outcome.ownerWelinkId());
+                putIfNotBlank(payload, "ak", outcome.ak());
+                putIfNotBlank(payload, "ownerWelinkId", outcome.ownerWelinkId());
+                putIfNotBlank(payload, "assistantAccount", outcome.assistantAccount());
+                payload.put("remote", outcome.remote());
+                putIfNotBlank(payload, "businessTag", outcome.businessTag());
                 ttl = Duration.ofSeconds(statusCacheTtlExistsSeconds);
             } else {
                 ttl = Duration.ofSeconds(statusCacheTtlNotExistsSeconds);
@@ -287,6 +266,12 @@ public class AssistantAccountResolverService {
         } catch (Exception e) {
             log.warn("AssistantResolve cache write error: key={}, status={}, error={}",
                     cacheKey, outcome.status(), e.getMessage());
+        }
+    }
+
+    private static void putIfNotBlank(ObjectNode payload, String field, String value) {
+        if (value != null && !value.isBlank()) {
+            payload.put(field, value);
         }
     }
 

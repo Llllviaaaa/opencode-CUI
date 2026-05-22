@@ -110,7 +110,7 @@ class SkillMessageControllerTest {
         com.opencode.cui.skill.service.scope.AssistantScopeStrategy personalStrategy =
                 org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
         lenient().when(personalStrategy.requiresOnlineCheck()).thenReturn(true);
-        lenient().when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(personalStrategy);
+        lenient().when(scopeDispatcher.getStrategy(nullable(AssistantInfo.class))).thenReturn(personalStrategy);
         lenient().when(scopeDispatcher.getStrategy(
                 nullable(String.class), nullable(String.class), nullable(AssistantInfo.class)))
                 .thenAnswer(invocation -> scopeDispatcher.getStrategy(
@@ -155,6 +155,44 @@ class SkillMessageControllerTest {
         assertEquals("1", cmdCaptor.getValue().userId());
         assertEquals("1", cmdCaptor.getValue().sessionId());
         assertEquals("chat", cmdCaptor.getValue().action());
+    }
+
+    @Test
+    @DisplayName("sendMessage supports remote assistant session without AK")
+    void sendMessageRemoteAssistantWithoutAkRoutesByAssistantAccount() {
+        SkillSession session = new SkillSession();
+        session.setId(10L);
+        session.setAk(null);
+        session.setAssistantAccount("bot-001");
+        session.setUserId("1");
+        session.setToolSessionId("tool-remote");
+        session.setBusinessSessionDomain("im");
+        session.setBusinessSessionType("dm");
+        session.setBusinessSessionId("dm-001");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(10L, "1")).thenReturn(session);
+
+        AssistantInfo info = new AssistantInfo();
+        info.setAssistantScope("business");
+        info.setBusinessTag("remote-tag");
+        when(assistantInfoService.getAssistantInfo(null, "bot-001")).thenReturn(info);
+
+        SkillMessage msg = SkillMessage.builder()
+                .id(10L).sessionId(10L).role(SkillMessage.Role.USER).content("Hello").build();
+        when(messageService.saveUserMessage(eq(10L), eq("Hello"))).thenReturn(msg);
+
+        var request = new SkillMessageController.SendMessageRequest();
+        request.setContent("Hello");
+
+        ResponseEntity<?> response = controller.sendMessage("1", "10", request);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
+        assertNull(cmdCaptor.getValue().ak());
+        assertEquals("bot-001", cmdCaptor.getValue().assistantAccount());
+        assertEquals("bot-001", cmdCaptor.getValue().partnerAccount());
+        verify(availabilityService, never()).resolve(any());
     }
 
     @Test

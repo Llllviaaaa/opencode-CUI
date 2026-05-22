@@ -133,3 +133,68 @@ public String verify(String ak, String timestamp, String nonce, String signature
 | 在握手层抛未捕获异常 | WebSocket 握手失败语义不清 | 返回 `false` 或发送拒绝消息后关闭连接 |
 | 为 Agent 状态接口返回裸 `Map` | 丢失类型约束 | 新接口使用 `AgentSummaryResponse`、`AgentStatusResponse`、`InvokeResult` |
 | 在多个地方复制 HMAC / nonce 逻辑 | 易出现协议偏差 | 只在 `AkSkAuthService` 实现验签 |
+## Assistant instance remote routing
+
+### 1. Scope / Trigger
+
+This applies when `CloudAgentService` receives an invoke payload with `assistantAccount` or `partnerAccount`.
+Remote cloud routing must prefer the assistant instance API over legacy callback/profile fallback because remote assistants may not have an AK.
+
+### 2. Signatures
+
+- Instance lookup: `AssistantInstanceInfoService.getInstanceInfo(String partnerAccount)`.
+- Route resolution: `CloudAgentService.resolveRemoteRoute(JsonNode payload, String action)`.
+- Auth/header application: `CloudAuthService.applyAuth(..., List<AssistantInstanceInfo.RemoteHeader> remoteHeaders)`.
+- Connection context: `CloudConnectionContext.remoteHeaders()`.
+
+### 3. Contracts
+
+`assistantAccount` / `partnerAccount` is the primary identity for remote assistant routing.
+`AssistantInstanceInfo.remoteProperty[]` is selected by action (`chat`, `question_reply`, `permission_reply`, etc.) and supplies protocol, endpoint, auth type, and remote headers.
+Headers from `remoteProperty` are applied by protocol executors (`WebHookExecutor`, `SseProtocolStrategy`, `WebSocketProtocolStrategy`) after validation and without logging secret values.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+| --- | --- |
+| Instance API returns a matching `remoteProperty` for action | Use endpoint/protocol/auth/headers from instance data. |
+| Instance API succeeds but action property is missing | Emit remote-property-missing failure; do not invent a legacy endpoint. |
+| Instance API fails or no partner account is present | Preserve legacy fallback path when configured. |
+| Remote header type is unsupported | Fail fast in `CloudAuthService` test path; do not silently drop unknown auth material. |
+
+### 5. Good / Base / Bad Cases
+
+Good:
+
+```java
+AssistantInstanceInfo info = assistantInstanceInfoService.getInstanceInfo(partnerAccount);
+RemoteRoute route = resolveRemoteRouteFromInstance(info, action);
+cloudAuthService.applyAuth(builder, route.authType(), route.authConfig(), route.remoteHeaders());
+```
+
+Base:
+
+```java
+RemoteRoute route = resolveRemoteRouteFromLegacyConfig(businessTag, action);
+```
+
+Bad:
+
+```java
+String ak = payload.path("ak").asText();
+RemoteRoute route = resolveOnlyByAk(ak);
+```
+
+The bad case cannot route no-AK remote assistants and causes skill-server to block or degrade before the gateway can call the cloud endpoint.
+
+### 6. Tests Required
+
+- `AssistantInstanceInfoServiceTest`: success, not-exists/empty data, upstream failure, and cache behavior.
+- `CloudAgentServiceTest`: action-specific `remoteProperty` selection, no-AK remote invocation, missing remote property failure, and legacy fallback.
+- `CloudAuthServiceTest`: custom/cookie remote headers are applied and unknown header/auth types fail predictably.
+
+### 7. Wrong vs Correct
+
+Wrong: use AK as the only route key for cloud assistants.
+
+Correct: use `assistantAccount` / `partnerAccount` to load instance metadata, select `remoteProperty` by action, and treat AK as optional context.

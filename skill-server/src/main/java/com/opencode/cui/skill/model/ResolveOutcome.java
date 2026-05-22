@@ -5,8 +5,16 @@ package com.opencode.cui.skill.model;
  * 单次调用返回三态 + 成功时附带 ak/ownerWelinkId，避免入站路径为了"先 check 再 resolve"打两次远端。
  *
  * @param status         三态 existence 状态
- * @param ak             助手绑定的应用密钥（仅 EXISTS 时非空）
+ * @param ak             助手绑定的应用密钥；远端助手可能为空
  * @param ownerWelinkId  助手所有者的 WeLink ID（仅 EXISTS 时非空）
+ * @param assistantAccount 分身账号
+ * @param remote         是否远端助手
+ * @param businessTag    业务助手渠道标签
  */
-public record ResolveOutcome(ExistenceStatus status, String ak, String ownerWelinkId) {
+public record ResolveOutcome(ExistenceStatus status, String ak, String ownerWelinkId,
+                             String assistantAccount, boolean remote, String businessTag) {
+
+    public ResolveOutcome(ExistenceStatus status, String ak, String ownerWelinkId) {
+        this(status, ak, ownerWelinkId, null, false, null);
+    }
 }

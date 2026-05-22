@@ -3,6 +3,7 @@ package com.opencode.cui.gateway.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.gateway.config.CloudTimeoutProperties;
+import com.opencode.cui.gateway.model.AssistantInstanceInfo;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionContext;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionLifecycle;
@@ -48,6 +49,8 @@ class CloudAgentServiceTest {
     @Mock
     private CallbackConfigService callbackConfigService;
     @Mock
+    private AssistantInstanceInfoService assistantInstanceInfoService;
+    @Mock
     private CloudProtocolClient cloudProtocolClient;
     @Mock
     private WebHookExecutor webHookExecutor;
@@ -75,7 +78,8 @@ class CloudAgentServiceTest {
         lenient().when(cloudTimeoutProperties.getMaxDurationSeconds()).thenReturn(600);
 
         cloudAgentService = new CloudAgentService(
-                callbackConfigService, cloudProtocolClient, webHookExecutor, cloudTimeoutProperties);
+                callbackConfigService, assistantInstanceInfoService,
+                cloudProtocolClient, webHookExecutor, cloudTimeoutProperties);
     }
 
     // ---------------------------------------------------------------------
@@ -109,6 +113,32 @@ class CloudAgentServiceTest {
         return c;
     }
 
+    private GatewayMessage buildRemoteInvoke(String action) {
+        GatewayMessage invoke = buildInvoke(action, null);
+        ((ObjectNode) invoke.getPayload()).put("assistantAccount", "bot-001");
+        return invoke;
+    }
+
+    private AssistantInstanceInfo buildInstance(String type, String protocol, String url) {
+        AssistantInstanceInfo.RemoteProperty property = new AssistantInstanceInfo.RemoteProperty();
+        property.setType(type);
+        property.setCommProtocol(protocol);
+        property.setUrl(url);
+        property.setDataProtocol("assistant_square");
+
+        AssistantInstanceInfo.RemoteHeader header = new AssistantInstanceInfo.RemoteHeader();
+        header.setType("custom");
+        header.setCustomKey("X-Bot-Token");
+        header.setCustomValue("secret-token");
+        property.setHeaders(java.util.List.of(header));
+
+        AssistantInstanceInfo info = new AssistantInstanceInfo();
+        info.setPartnerAccount("bot-001");
+        info.setIsRemote(true);
+        info.setRemoteProperty(java.util.List.of(property));
+        return info;
+    }
+
     // ---------------------------------------------------------------------
     // action → scope 路由
     // ---------------------------------------------------------------------
@@ -116,6 +146,79 @@ class CloudAgentServiceTest {
     @Nested
     @DisplayName("Action 路由分叉")
     class ActionRoutingTests {
+
+        @Test
+        @DisplayName("chat action + assistantAccount → 优先使用 instance remoteProperty，不触发 AK callback fallback")
+        void handleInvoke_chatAction_usesInstanceRemoteProperty() {
+            when(assistantInstanceInfoService.getInstanceInfo("bot-001"))
+                    .thenReturn(buildInstance("chat", "sse", "https://remote.example.com/chat"));
+
+            cloudAgentService.handleInvoke(buildRemoteInvoke("chat"), onRelay);
+
+            verify(cloudProtocolClient).connect(eq("sse"), contextCaptor.capture(), any(), any(), any());
+            CloudConnectionContext ctx = contextCaptor.getValue();
+            assertEquals("https://remote.example.com/chat", ctx.getChannelAddress());
+            assertEquals("assistant_square", ctx.getCloudProfile());
+            assertEquals("none", ctx.getAuthType());
+            assertEquals("X-Bot-Token", ctx.getRemoteHeaders().get(0).getCustomKey());
+            verifyNoInteractions(callbackConfigService, webHookExecutor);
+        }
+
+        @Test
+        @DisplayName("remoteProperty 首个同 type 配置无效时继续选择后续有效配置")
+        void handleInvoke_remotePropertySkipsInvalidMatchingProperty() {
+            AssistantInstanceInfo.RemoteProperty invalid = new AssistantInstanceInfo.RemoteProperty();
+            invalid.setType("chat");
+            invalid.setCommProtocol("sse");
+
+            AssistantInstanceInfo.RemoteProperty valid = new AssistantInstanceInfo.RemoteProperty();
+            valid.setType("chat");
+            valid.setCommProtocol("sse");
+            valid.setUrl("https://remote.example.com/chat-valid");
+
+            AssistantInstanceInfo info = new AssistantInstanceInfo();
+            info.setPartnerAccount("bot-001");
+            info.setIsRemote(true);
+            info.setRemoteProperty(java.util.List.of(invalid, valid));
+            when(assistantInstanceInfoService.getInstanceInfo("bot-001")).thenReturn(info);
+
+            cloudAgentService.handleInvoke(buildRemoteInvoke("chat"), onRelay);
+
+            verify(cloudProtocolClient).connect(eq("sse"), contextCaptor.capture(), any(), any(), any());
+            assertEquals("https://remote.example.com/chat-valid", contextCaptor.getValue().getChannelAddress());
+            verifyNoInteractions(callbackConfigService, webHookExecutor);
+        }
+
+        @Test
+        @DisplayName("question_reply action → 选择 type=question 的 remoteProperty 并走 WebHook")
+        void handleInvoke_questionReplyAction_usesQuestionRemoteProperty() {
+            when(assistantInstanceInfoService.getInstanceInfo("bot-001"))
+                    .thenReturn(buildInstance("question", "http", "https://remote.example.com/question"));
+
+            GatewayMessage invoke = buildRemoteInvoke("question_reply");
+            cloudAgentService.handleInvoke(invoke, onRelay);
+
+            verify(webHookExecutor).execute(contextCaptor.capture(), eq(onRelay), eq(invoke), eq("tool-session-001"));
+            assertEquals("webhook", contextCaptor.getValue().getChannelType());
+            assertEquals("https://remote.example.com/question", contextCaptor.getValue().getChannelAddress());
+            verifyNoInteractions(callbackConfigService, cloudProtocolClient);
+        }
+
+        @Test
+        @DisplayName("远端无 AK 且缺少对应 remoteProperty → 返回明确 remote_property_missing，不误报 callback_config_missing")
+        void handleInvoke_remoteAssistantWithoutAkAndMissingRemoteProperty_emitsRemotePropertyMissing() {
+            when(assistantInstanceInfoService.getInstanceInfo("bot-001"))
+                    .thenReturn(buildInstance("question", "http", "https://remote.example.com/question"));
+
+            cloudAgentService.handleInvoke(buildRemoteInvoke("chat"), onRelay);
+
+            verify(onRelay).accept(messageCaptor.capture());
+            GatewayMessage err = messageCaptor.getValue();
+            assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
+            assertEquals("remote_property_missing", err.getReason());
+            assertTrue(err.getError().contains("Remote assistant route config missing"));
+            verifyNoInteractions(callbackConfigService, cloudProtocolClient, webHookExecutor);
+        }
 
         @Test
         @DisplayName("chat action → 走 CloudProtocolClient (SSE)")

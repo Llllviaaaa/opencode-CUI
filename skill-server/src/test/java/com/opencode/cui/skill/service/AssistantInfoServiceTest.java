@@ -1,6 +1,7 @@
 package com.opencode.cui.skill.service;
 
 import com.opencode.cui.skill.config.AssistantInfoProperties;
+import com.opencode.cui.skill.model.AssistantInstanceInfo;
 import com.opencode.cui.skill.model.AssistantInfo;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -31,6 +32,9 @@ class AssistantInfoServiceTest {
 
     @Mock
     private ValueOperations<String, String> valueOperations;
+
+    @Mock
+    private AssistantInstanceInfoService assistantInstanceInfoService;
 
     private AssistantInfoProperties properties;
 
@@ -273,5 +277,44 @@ class AssistantInfoServiceTest {
 
         assertNotNull(info);
         assertNull(info.getBusinessTag());
+    }
+
+    @Test
+    @DisplayName("getAssistantInfo(ak, account): no-AK remote instance routes as business")
+    void getAssistantInfo_noAkRemoteInstance_returnsBusiness() {
+        AssistantInstanceInfo instance = new AssistantInstanceInfo();
+        instance.setPartnerAccount("assist-001");
+        instance.setOwnerWelinkId("owner-001");
+        instance.setIsRemote(true);
+        instance.setBizRobotTag("tag-001");
+        when(assistantInstanceInfoService.getInstanceInfo("assist-001")).thenReturn(instance);
+
+        AssistantInfoService instanceAwareService = new AssistantInfoService(
+                properties, redisTemplate, assistantInstanceInfoService);
+
+        AssistantInfo info = instanceAwareService.getAssistantInfo(null, "assist-001");
+
+        assertNotNull(info);
+        assertEquals("business", info.getAssistantScope());
+        assertEquals("tag-001", info.getBusinessTag());
+        verify(redisTemplate, never()).opsForValue();
+    }
+
+    @Test
+    @DisplayName("getAssistantInfo(ak, account): no-AK local instance is not business")
+    void getAssistantInfo_noAkLocalInstance_returnsNull() {
+        AssistantInstanceInfo instance = new AssistantInstanceInfo();
+        instance.setPartnerAccount("assist-001");
+        instance.setOwnerWelinkId("owner-001");
+        instance.setIsRemote(false);
+        when(assistantInstanceInfoService.getInstanceInfo("assist-001")).thenReturn(instance);
+
+        AssistantInfoService instanceAwareService = new AssistantInfoService(
+                properties, redisTemplate, assistantInstanceInfoService);
+
+        AssistantInfo info = instanceAwareService.getAssistantInfo(null, "assist-001");
+
+        assertNull(info);
+        verify(redisTemplate, never()).opsForValue();
     }
 }

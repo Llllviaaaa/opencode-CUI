@@ -47,6 +47,7 @@ __pycache__/
 *.rar
 logs/
 .codex/
+.cursor/
 documents/ss-gw-architecture/
 
 # Trellis per-user workspace scratch

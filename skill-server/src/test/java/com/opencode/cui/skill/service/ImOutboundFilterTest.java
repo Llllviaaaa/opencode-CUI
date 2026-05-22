@@ -18,6 +18,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -134,12 +135,14 @@ class ImOutboundFilterTest {
     private void setupBusinessScope(String eventType, StreamMessage translatedMsg) {
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
-        when(assistantInfoService.getAssistantInfo(AK)).thenReturn(bizInfo);
+        lenient().when(assistantInfoService.getAssistantInfo(AK)).thenReturn(bizInfo);
+        when(assistantInfoService.getAssistantInfo(AK, ASSISTANT_ACCOUNT)).thenReturn(bizInfo);
         // getCachedScope 仍被 routeAssistantMessage IM 过滤路径使用
-        when(assistantInfoService.getCachedScope(AK)).thenReturn("business");
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessScopeStrategy);
+        lenient().when(assistantInfoService.getCachedScope(AK)).thenReturn("business");
+        lenient().when(scopeDispatcher.getStrategy(nullable(AssistantInfo.class))).thenReturn(businessScopeStrategy);
+        when(scopeDispatcher.getStrategy(any(), any(), nullable(AssistantInfo.class))).thenReturn(businessScopeStrategy);
         lenient().when(businessScopeStrategy.translateEvent(any(), eq(SESSION_ID))).thenReturn(translatedMsg);
-        when(sessionService.findByIdSafe(100L)).thenReturn(buildImSession());
+        lenient().when(sessionService.findByIdSafe(100L)).thenReturn(buildImSession());
     }
 
     /**
@@ -148,11 +151,13 @@ class ImOutboundFilterTest {
     private void setupPersonalScope(String eventType, StreamMessage translatedMsg) {
         AssistantInfo personalInfo = new AssistantInfo();
         personalInfo.setAssistantScope("personal");
-        when(assistantInfoService.getAssistantInfo(AK)).thenReturn(personalInfo);
-        when(assistantInfoService.getCachedScope(AK)).thenReturn("personal");
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(personalScopeStrategy);
+        lenient().when(assistantInfoService.getAssistantInfo(AK)).thenReturn(personalInfo);
+        when(assistantInfoService.getAssistantInfo(AK, ASSISTANT_ACCOUNT)).thenReturn(personalInfo);
+        lenient().when(assistantInfoService.getCachedScope(AK)).thenReturn("personal");
+        lenient().when(scopeDispatcher.getStrategy(nullable(AssistantInfo.class))).thenReturn(personalScopeStrategy);
+        when(scopeDispatcher.getStrategy(any(), any(), nullable(AssistantInfo.class))).thenReturn(personalScopeStrategy);
         lenient().when(personalScopeStrategy.translateEvent(any(), eq(SESSION_ID))).thenReturn(translatedMsg);
-        when(sessionService.findByIdSafe(100L)).thenReturn(buildImSession());
+        lenient().when(sessionService.findByIdSafe(100L)).thenReturn(buildImSession());
     }
 
     // ==================== S64: business IM + text.done -> not filtered ====================

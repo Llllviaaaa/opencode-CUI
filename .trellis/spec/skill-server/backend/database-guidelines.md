@@ -9,7 +9,7 @@
 - **关系库**：MySQL，业务实体主要是 `skill_session`、`skill_message`、`skill_message_part`
 - **ORM**：MyBatis XML Mapper
 - **缓存 / 协调**：Redis，用于 ownership、pub/sub、toolSession mapping、stream seq、buffer
-- **迁移**：顺序 SQL 脚本，当前已经到 `V10`
+- **迁移**：顺序 SQL 脚本，当前已经到 `V11`
 
 配置证据：`skill-server/src/main/resources/application.yml:11-124`
 
@@ -132,6 +132,7 @@ V7__skill_message_session_seq_unique.sql
 V8__subagent_message_part.sql
 V9__tool_session_id_index.sql
 V10__create_sys_config.sql
+V11__assistant_account_session_lookup.sql
 ```
 
 资源路径：`skill-server/src/main/resources/db/migration/`
@@ -208,7 +209,7 @@ private static final String SS_RELAY_CHANNEL_PREFIX = "ss:relay:";
 | `conn:ak:{ak}` | AK 所在 gateway instance | `RedisMessageBroker.java:223-235` |
 | `ss:tool-session:{toolSessionId}` | toolSessionId -> sessionId 映射 | `RedisMessageBroker.java:239-251` |
 | `ss:stream-seq:{sessionId}` | 跨实例传输序号 | `RedisMessageBroker.java:255-260` |
-| `assistantAccount:status:{account}` | 助手 existence 三态缓存；value 为 JSON `{status, ak?, ownerWelinkId?}`；双 TTL：EXISTS 300s / NOT_EXISTS 60s / UNKNOWN 不写 | `AssistantAccountResolverService.java` |
+| `assistantAccount:status:{account}` | 助手 existence 三态缓存；value 为 JSON `{status, ak?, ownerWelinkId?, assistantAccount?, remote?, businessTag?}`；远端助手允许 `ak` 为空；双 TTL：EXISTS 300s / NOT_EXISTS 60s / UNKNOWN 不写 | `AssistantAccountResolverService.java` |
 | ~~`assistantAccount:ak:{account}`~~ | **DEPRECATED**：已合并到 `assistantAccount:status:*`，旧 key 自然过期失效，不再读写 | — |
 | ~~`assistantAccount:owner:{account}`~~ | **DEPRECATED**：已合并到 `assistantAccount:status:*`，旧 key 自然过期失效，不再读写 | — |
 

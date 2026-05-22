@@ -3,14 +3,17 @@ package com.opencode.cui.gateway.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.gateway.config.CloudTimeoutProperties;
+import com.opencode.cui.gateway.model.AssistantInstanceInfo;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionContext;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionLifecycle;
 import com.opencode.cui.gateway.service.cloud.CloudProtocolClient;
 import com.opencode.cui.gateway.service.cloud.WebHookExecutor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -47,20 +50,32 @@ public class CloudAgentService {
 
     /** tool_error reason 枚举：让 SS 能精确区分失败类型，不再依赖 error 文案启发式。 */
     static final String REASON_CALLBACK_CONFIG_MISSING = "callback_config_missing";
+    static final String REASON_REMOTE_PROPERTY_MISSING = "remote_property_missing";
 
     private final CallbackConfigService callbackConfigService;
+    private final AssistantInstanceInfoService assistantInstanceInfoService;
     private final CloudProtocolClient cloudProtocolClient;
     private final WebHookExecutor webHookExecutor;
     private final CloudTimeoutProperties timeoutProperties;
+
+    @Autowired
+    public CloudAgentService(CallbackConfigService callbackConfigService,
+                             AssistantInstanceInfoService assistantInstanceInfoService,
+                             CloudProtocolClient cloudProtocolClient,
+                             WebHookExecutor webHookExecutor,
+                             CloudTimeoutProperties timeoutProperties) {
+        this.callbackConfigService = callbackConfigService;
+        this.assistantInstanceInfoService = assistantInstanceInfoService;
+        this.cloudProtocolClient = cloudProtocolClient;
+        this.webHookExecutor = webHookExecutor;
+        this.timeoutProperties = timeoutProperties;
+    }
 
     public CloudAgentService(CallbackConfigService callbackConfigService,
                              CloudProtocolClient cloudProtocolClient,
                              WebHookExecutor webHookExecutor,
                              CloudTimeoutProperties timeoutProperties) {
-        this.callbackConfigService = callbackConfigService;
-        this.cloudProtocolClient = cloudProtocolClient;
-        this.webHookExecutor = webHookExecutor;
-        this.timeoutProperties = timeoutProperties;
+        this(callbackConfigService, null, cloudProtocolClient, webHookExecutor, timeoutProperties);
     }
 
     /**
@@ -74,6 +89,9 @@ public class CloudAgentService {
         String action = invokeMessage.getAction();
         JsonNode cloudRequest = invokeMessage.getPayload().path("cloudRequest");
         String toolSessionId = invokeMessage.getPayload().path("toolSessionId").asText(null);
+        String partnerAccount = firstNonBlank(
+                invokeMessage.getPayload().path("assistantAccount").asText(null),
+                invokeMessage.getPayload().path("partnerAccount").asText(null));
         // cloudProfile 字段缺失时默认 "default"（向后兼容老 SS）
         String cloudProfile = invokeMessage.getPayload().path("cloudProfile").asText("default");
         if (cloudProfile == null || cloudProfile.isBlank()) {
@@ -92,7 +110,23 @@ public class CloudAgentService {
             return;
         }
 
-        // 2. 拉取 (ak, scope, cloudProfile) 对应的回调配置
+        // 2. 优先按 assistantAccount/partnerAccount 查询 instance/query 的 remoteProperty。
+        RemoteRoute remoteRoute = resolveRemoteRoute(partnerAccount, action, cloudProfile);
+        if (remoteRoute != null) {
+            invokeRemoteRoute(invokeMessage, onRelay, cloudRequest, toolSessionId, scope, remoteRoute);
+            return;
+        }
+
+        if ((ak == null || ak.isBlank()) && partnerAccount != null && !partnerAccount.isBlank()) {
+            log.warn("[CLOUD_AGENT] remote property missing and ak absent: partnerAccount={}, action={}",
+                    mask(partnerAccount), action);
+            onRelay.accept(buildCloudError(invokeMessage, toolSessionId,
+                    new RuntimeException("Remote assistant route config missing for action: " + action),
+                    REASON_REMOTE_PROPERTY_MISSING));
+            return;
+        }
+
+        // 3. 兼容回退：拉取 (ak, scope, cloudProfile) 对应的旧回调配置
         //    cloudProfile == null/blank/"default" → V1 路径（老 cache key + 老 provider，零 cold miss）
         //    cloudProfile 具体值（如 "assistant_square"） → V2 路径（独立 cache key + 新 provider）
         CallbackConfig cfg = callbackConfigService.getConfig(ak, scope, cloudProfile);
@@ -106,7 +140,7 @@ public class CloudAgentService {
             return;
         }
 
-        // 3. channelType vs action 校验：
+        // 4. channelType vs action 校验：
         //    - chat 必须 sse/websocket
         //    - question_reply / permission_reply 必须 webhook
         boolean expectsWebhook = !"chat".equals(action);
@@ -121,7 +155,7 @@ public class CloudAgentService {
             return;
         }
 
-        // 4. 构建连接上下文
+        // 5. 构建连接上下文
         CloudConnectionContext context = CloudConnectionContext.builder()
                 .channelAddress(cfg.getChannelAddress())
                 .channelType(cfg.getChannelType())
@@ -133,14 +167,90 @@ public class CloudAgentService {
                 .cloudProfile(cloudProfile)
                 .build();
 
-        // 5. 分叉
+        // 6. 分叉
         if (isWebhook) {
             webHookExecutor.execute(context, onRelay, invokeMessage, toolSessionId);
             return;
         }
 
-        // 6. chat：SSE / WebSocket 走原 CloudProtocolClient 逻辑（保留 lifecycle / fallback messageId / fallback partId）
+        // 7. chat：SSE / WebSocket 走原 CloudProtocolClient 逻辑（保留 lifecycle / fallback messageId / fallback partId）
         invokeStreaming(invokeMessage, onRelay, context, cfg.getChannelType(), ak, toolSessionId);
+    }
+
+    private void invokeRemoteRoute(GatewayMessage invokeMessage,
+                                   Consumer<GatewayMessage> onRelay,
+                                   JsonNode cloudRequest,
+                                   String toolSessionId,
+                                   String scope,
+                                   RemoteRoute remoteRoute) {
+        boolean expectsWebhook = !"chat".equals(invokeMessage.getAction());
+        boolean isWebhook = "webhook".equals(remoteRoute.channelType());
+        if (expectsWebhook != isWebhook) {
+            String msg = "chat".equals(invokeMessage.getAction())
+                    ? "Invalid channel type for chat: " + remoteRoute.channelType()
+                    : "Invalid channel type for reply: " + remoteRoute.channelType();
+            onRelay.accept(buildCloudError(invokeMessage, toolSessionId, new RuntimeException(msg), null));
+            return;
+        }
+
+        CloudConnectionContext context = CloudConnectionContext.builder()
+                .channelAddress(remoteRoute.channelAddress())
+                .channelType(remoteRoute.channelType())
+                .scope(scope)
+                .appId(remoteRoute.appId())
+                .authType("none")
+                .remoteHeaders(remoteRoute.headers())
+                .cloudRequest(cloudRequest)
+                .traceId(invokeMessage.getTraceId())
+                .cloudProfile(remoteRoute.cloudProfile())
+                .build();
+
+        if (isWebhook) {
+            webHookExecutor.execute(context, onRelay, invokeMessage, toolSessionId);
+            return;
+        }
+        invokeStreaming(invokeMessage, onRelay, context, remoteRoute.channelType(),
+                invokeMessage.getAk(), toolSessionId);
+    }
+
+    private RemoteRoute resolveRemoteRoute(String partnerAccount, String action, String fallbackCloudProfile) {
+        if (assistantInstanceInfoService == null
+                || partnerAccount == null || partnerAccount.isBlank()) {
+            return null;
+        }
+        AssistantInstanceInfo info = assistantInstanceInfoService.getInstanceInfo(partnerAccount);
+        if (info == null || info.getRemoteProperty() == null || info.getRemoteProperty().isEmpty()) {
+            return null;
+        }
+        String abilityType = abilityType(action);
+        for (AssistantInstanceInfo.RemoteProperty property : info.getRemoteProperty()) {
+            if (property == null || !abilityType.equalsIgnoreCase(blankToEmpty(property.getType()))) {
+                continue;
+            }
+            String channelAddress = firstNonBlank(property.getUrl());
+            String channelType = mapChannelType(property.getCommProtocol());
+            if (channelAddress == null || channelType == null) {
+                continue;
+            }
+            return new RemoteRoute(channelAddress, channelType, null,
+                    firstNonBlank(property.getDataProtocol(), fallbackCloudProfile),
+                    property.getHeaders());
+        }
+        return null;
+    }
+
+    private static String abilityType(String action) {
+        return "chat".equals(action) ? "chat" : "question";
+    }
+
+    private static String mapChannelType(String commProtocol) {
+        String value = blankToEmpty(commProtocol).toLowerCase();
+        return switch (value) {
+            case "sse" -> "sse";
+            case "ws", "websocket" -> "websocket";
+            case "http", "webhook" -> "webhook";
+            default -> null;
+        };
     }
 
     /**
@@ -270,5 +380,32 @@ public class CloudAgentService {
                 .error("Cloud agent error: " + error.getMessage())
                 .reason(reason)
                 .build();
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static String blankToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static String mask(String value) {
+        if (value == null || value.length() <= 4) {
+            return "****";
+        }
+        return value.substring(0, 2) + "****" + value.substring(value.length() - 2);
+    }
+
+    private record RemoteRoute(String channelAddress,
+                               String channelType,
+                               String appId,
+                               String cloudProfile,
+                               List<AssistantInstanceInfo.RemoteHeader> headers) {
     }
 }

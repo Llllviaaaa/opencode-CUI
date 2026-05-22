@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -63,6 +64,7 @@ class SessionCreationScopeTest {
         lenient().when(valueOps.setIfAbsent(any(), any(), any())).thenReturn(true);
         // 模拟 findByBusinessSession 返回 null（确保走创建路径）
         lenient().when(sessionService.findByBusinessSession(any(), any(), any(), any())).thenReturn(null);
+        lenient().when(sessionService.findByBusinessSession(any(), any(), any(), any(), nullable(String.class))).thenReturn(null);
         // resolver 默认返 null
         lenient().when(allowedSlashCommandsResolver.resolve(anyString(), anyString())).thenReturn(null);
 
@@ -88,8 +90,8 @@ class SessionCreationScopeTest {
         when(sessionService.createSession(any(), any(), any(), any(), any(), any(), any())).thenReturn(created);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
-        when(assistantInfoService.getAssistantInfo("ak-biz")).thenReturn(bizInfo);
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        when(assistantInfoService.getAssistantInfo(eq("ak-biz"), eq("assist-001"))).thenReturn(bizInfo);
+        when(scopeDispatcher.getStrategy(eq("im"), eq("direct"), any(AssistantInfo.class))).thenReturn(businessStrategy);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-abc123def456");
 
         // act
@@ -119,8 +121,8 @@ class SessionCreationScopeTest {
         when(sessionService.createSession(any(), any(), any(), any(), any(), any(), any())).thenReturn(created);
         AssistantInfo personalInfo = new AssistantInfo();
         personalInfo.setAssistantScope("personal");
-        when(assistantInfoService.getAssistantInfo("ak-personal")).thenReturn(personalInfo);
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(personalStrategy);
+        when(assistantInfoService.getAssistantInfo(eq("ak-personal"), eq("assist-002"))).thenReturn(personalInfo);
+        when(scopeDispatcher.getStrategy(eq("im"), eq("direct"), any(AssistantInfo.class))).thenReturn(personalStrategy);
         when(personalStrategy.generateToolSessionId()).thenReturn(null);
 
         // act

@@ -138,6 +138,7 @@ class InboundProcessingServiceTest {
         AssistantInfo defaultPersonalInfo = new AssistantInfo();
         defaultPersonalInfo.setAssistantScope("personal");
         lenient().when(assistantInfoService.getAssistantInfo(any())).thenReturn(defaultPersonalInfo);
+        lenient().when(assistantInfoService.getAssistantInfo(any(), any())).thenReturn(defaultPersonalInfo);
         // 默认 Agent 在线
         lenient().when(availabilityService.resolve(any()))
                 .thenReturn(AvailabilityResult.ofOnline());
@@ -401,7 +402,37 @@ class InboundProcessingServiceTest {
     }
 
     @Test
-    @DisplayName("processChat: agent 离线时返回 error(503, offline_msg, sid, wsid) 且调用 handleAgentOffline 副作用")
+    @DisplayName("processChat: no-AK remote assistant -> business route, no UNKNOWN block")
+    void processChatNoAkRemoteAssistantCreatesBusinessSession() {
+        AssistantInfo bizInfo = new AssistantInfo();
+        bizInfo.setAssistantScope("business");
+        bizInfo.setBusinessTag("tag-001");
+        AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
+        when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
+
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, null, "owner-001",
+                        "assist-001", true, "tag-001"));
+        when(assistantInfoService.getAssistantInfo(null, "assist-001")).thenReturn(bizInfo);
+        when(scopeDispatcher.getStrategy("im", "group", bizInfo)).thenReturn(businessStrategy);
+        when(sessionManager.findSession("im", "group", "group-001", null)).thenReturn(null);
+        when(contextInjectionService.resolvePrompt("group", "first msg", null))
+                .thenReturn("first msg");
+
+        InboundResult result = service.processChat(
+                "im", "group", "group-001", "assist-001",
+                "sender-001", "first msg", "text", null, null, "IM", null);
+
+        assertTrue(result.success());
+        verify(availabilityService, never()).resolve(any());
+        verify(sessionManager).createSessionAsync(
+                "im", "group", "group-001", null,
+                "owner-001", "assist-001", "sender-001", "first msg", null);
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+    }
+
+    @Test
+    @DisplayName("processChat: agent offline returns 503")
     void processChatAgentOfflineReturns503() {
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
@@ -432,7 +463,7 @@ class InboundProcessingServiceTest {
         stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
-        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
+        when(assistantInfoService.getAssistantInfo("ak-001", "assist-001")).thenReturn(bizInfo);
 
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
@@ -813,7 +844,7 @@ class InboundProcessingServiceTest {
         stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
-        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
+        when(assistantInfoService.getAssistantInfo("ak-001", "assist-001")).thenReturn(bizInfo);
 
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
@@ -849,7 +880,7 @@ class InboundProcessingServiceTest {
         stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
-        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
+        when(assistantInfoService.getAssistantInfo("ak-001", "assist-001")).thenReturn(bizInfo);
 
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
@@ -902,7 +933,7 @@ class InboundProcessingServiceTest {
     void processChatScopeDegradedToPersonal_keepsRequestToolSession() {
         // 降级语义：上游故障，getAssistantInfo 返回 null（personal 降级）
         // dispatcher.getStrategy(null) 永远返回 personal strategy（generateToolSessionId=null）
-        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(null);
+        when(assistantInfoService.getAssistantInfo("ak-001", "assist-001")).thenReturn(null);
         // setUp 中的默认 personalStrategy 已经 generateToolSessionId() == null (未 stub)
 
         when(resolverService.resolveWithStatus("assist-001"))
@@ -932,7 +963,7 @@ class InboundProcessingServiceTest {
         stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
-        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
+        when(assistantInfoService.getAssistantInfo("ak-001", "assist-001")).thenReturn(bizInfo);
 
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
@@ -959,7 +990,7 @@ class InboundProcessingServiceTest {
         stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
-        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
+        when(assistantInfoService.getAssistantInfo("ak-001", "assist-001")).thenReturn(bizInfo);
 
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
@@ -1006,7 +1037,7 @@ class InboundProcessingServiceTest {
         stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
-        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
+        when(assistantInfoService.getAssistantInfo("ak-001", "assist-001")).thenReturn(bizInfo);
 
         // 锁被别人持有
         when(valueOperations.setIfAbsent(startsWith("skill:im-session:heal:"), anyString(), any(Duration.class)))
@@ -1047,7 +1078,7 @@ class InboundProcessingServiceTest {
         stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
-        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
+        when(assistantInfoService.getAssistantInfo("ak-001", "assist-001")).thenReturn(bizInfo);
 
         // session 已就绪 → 进 case C
         SkillSession session = buildReadySession();
@@ -1076,7 +1107,7 @@ class InboundProcessingServiceTest {
         stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
-        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
+        when(assistantInfoService.getAssistantInfo("ak-001", "assist-001")).thenReturn(bizInfo);
 
         SkillSession session = buildSessionWithoutToolSession();
         when(resolverService.resolveWithStatus("assist-001"))
@@ -1105,7 +1136,7 @@ class InboundProcessingServiceTest {
         stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
-        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
+        when(assistantInfoService.getAssistantInfo("ak-001", "assist-001")).thenReturn(bizInfo);
 
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
@@ -1155,7 +1186,7 @@ class InboundProcessingServiceTest {
         stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
-        when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
+        when(assistantInfoService.getAssistantInfo("ak-001", "assist-001")).thenReturn(bizInfo);
 
         when(valueOperations.setIfAbsent(startsWith("skill:im-session:heal:"), anyString(), any(Duration.class)))
                 .thenReturn(false);

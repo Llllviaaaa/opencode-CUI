@@ -3,17 +3,10 @@ package com.opencode.cui.skill.controller;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.ApiResponse;
-import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.MessageHistoryResult;
 import com.opencode.cui.skill.model.PageResult;
 import com.opencode.cui.skill.model.ProtocolMessageView;
-import com.opencode.cui.skill.model.InvokeCommand;
-import com.opencode.cui.skill.service.GatewayActions;
-import com.opencode.cui.skill.model.SkillMessage;
-import com.opencode.cui.skill.model.AgentSummary;
-import com.opencode.cui.skill.model.AvailabilityResult;
 import com.opencode.cui.skill.model.SkillSession;
-import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.config.AssistantIdProperties;
 import com.opencode.cui.skill.service.AllowedSlashCommandsResolver;
 import com.opencode.cui.skill.service.AssistantAccountResolverService;
@@ -26,19 +19,16 @@ import com.opencode.cui.skill.service.AssistantInfoService;
 import com.opencode.cui.skill.service.AssistantAvailabilityService;
 import com.opencode.cui.skill.service.AssistantOfflineMessageProvider;
 import com.opencode.cui.skill.service.ProtocolUtils;
-import com.opencode.cui.skill.service.PayloadBuilder;
-import com.opencode.cui.skill.service.ProtocolMessageMapper;
 import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillMessageService;
 import com.opencode.cui.skill.service.GatewayMessageRouter;
+import com.opencode.cui.skill.service.SkillMessageFlowService;
 import com.opencode.cui.skill.service.SkillSessionService;
-import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
-import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
-import com.opencode.cui.skill.telemetry.chat.ChatRequestTelemetryEvent;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -49,8 +39,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -69,22 +57,23 @@ public class SkillMessageController {
     private static final int MAX_HISTORY_PAGE_SIZE = 200;
 
     private final SkillMessageService messageService;
-    private final SkillSessionService sessionService;
-    private final GatewayRelayService gatewayRelayService;
-    private final GatewayApiClient gatewayApiClient;
-    private final AssistantIdProperties assistantIdProperties;
     private final ImMessageService imMessageService;
     private final ObjectMapper objectMapper;
     private final SessionAccessControlService accessControlService;
-    private final GatewayMessageRouter messageRouter;
-    private final AssistantInfoService assistantInfoService;
-    private final AssistantScopeDispatcher scopeDispatcher;
-    private final AssistantOfflineMessageProvider offlineMessageProvider;
-    private final AssistantAvailabilityService availabilityService;
-    private final AssistantAccountResolverService assistantAccountResolverService;
-    private final DefaultAssistantRuleService ruleService;
-    private final AllowedSlashCommandsResolver allowedSlashCommandsResolver;
-    private final ApplicationEventPublisher eventPublisher;
+    private final SkillMessageFlowService flowService;
+
+    @Autowired
+    public SkillMessageController(SkillMessageService messageService,
+                                  ImMessageService imMessageService,
+                                  ObjectMapper objectMapper,
+                                  SessionAccessControlService accessControlService,
+                                  SkillMessageFlowService flowService) {
+        this.messageService = messageService;
+        this.imMessageService = imMessageService;
+        this.objectMapper = objectMapper;
+        this.accessControlService = accessControlService;
+        this.flowService = flowService;
+    }
 
     public SkillMessageController(SkillMessageService messageService,
             SkillSessionService sessionService,
@@ -103,23 +92,11 @@ public class SkillMessageController {
             DefaultAssistantRuleService ruleService,
             AllowedSlashCommandsResolver allowedSlashCommandsResolver,
             ApplicationEventPublisher eventPublisher) {
-        this.messageService = messageService;
-        this.sessionService = sessionService;
-        this.gatewayRelayService = gatewayRelayService;
-        this.gatewayApiClient = gatewayApiClient;
-        this.assistantIdProperties = assistantIdProperties;
-        this.imMessageService = imMessageService;
-        this.objectMapper = objectMapper;
-        this.accessControlService = accessControlService;
-        this.messageRouter = messageRouter;
-        this.assistantInfoService = assistantInfoService;
-        this.scopeDispatcher = scopeDispatcher;
-        this.offlineMessageProvider = offlineMessageProvider;
-        this.availabilityService = availabilityService;
-        this.assistantAccountResolverService = assistantAccountResolverService;
-        this.ruleService = ruleService;
-        this.allowedSlashCommandsResolver = allowedSlashCommandsResolver;
-        this.eventPublisher = eventPublisher;
+        this(messageService, imMessageService, objectMapper, accessControlService,
+                new SkillMessageFlowService(
+                        messageService, gatewayRelayService, objectMapper, messageRouter, assistantIdProperties,
+                        assistantInfoService, scopeDispatcher, availabilityService, assistantAccountResolverService,
+                        ruleService, allowedSlashCommandsResolver, eventPublisher));
     }
 
     /**
@@ -153,153 +130,20 @@ public class SkillMessageController {
             return ResponseEntity.ok(ApiResponse.error(409, "Session is closed"));
         }
 
-        // 助理删除校验（在 saveUserMessage 之前；不写用户消息 / 不广播 / 不 routeToGateway）
-        // Req 12 短路：命中默认助手规则 → 跳过 deletion check（virtual assistantAccount 上游本就不存在）
-        if (!ruleService.lookup(session.getBusinessSessionDomain(), session.getBusinessSessionType()).isPresent()) {
-            ApiResponse<ProtocolMessageView> deletionBlock = checkAssistantDeletion(
-                    session.getAssistantAccount(), sessionId, "sendMessage");
-            if (deletionBlock != null) {
-                return ResponseEntity.ok(deletionBlock);
-            }
-        } else {
-            log.info("[SKIP] sendMessage.deletionCheck: reason=default_assistant_rule_matched, sessionId={}, domain={}, type={}",
-                    sessionId, session.getBusinessSessionDomain(), session.getBusinessSessionType());
-        }
-
-        // 持久化用户消息
-        SkillMessage message = messageService.saveUserMessage(numericSessionId, request.getContent());
-
-        // 广播用户消息到同会话所有 WebSocket 连接（纯广播，不持久化——消息已由 saveUserMessage 入库）
-        messageRouter.broadcastStreamMessage(
-                sessionId, session.getUserId(),
-                StreamMessage.userMessage(
-                        message.getMessageId(),
-                        message.getSeq(),
-                        message.getContent(),
-                        sessionId));
-
-        // 路由到 AI-Gateway
-        routeToGateway(session, sessionId, numericSessionId, request, userIdCookie);
+        ApiResponse<ProtocolMessageView> response = flowService.sendMessage(
+                session, sessionId, numericSessionId,
+                new SkillMessageFlowService.SendMessageCommand(
+                        request.getContent(),
+                        request.getToolCallId(),
+                        request.getSubagentSessionId(),
+                        request.getQuestionId(),
+                        request.getBusinessExtParam()),
+                userIdCookie);
 
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
         log.info("[EXIT] SkillMessageController.sendMessage: sessionId={}, ak={}, durationMs={}", sessionId,
                 session.getAk(), elapsedMs);
-        return ResponseEntity.ok(ApiResponse.ok(ProtocolMessageMapper.toProtocolMessage(
-                message, List.of(), objectMapper)));
-    }
-
-    /**
-     * 根据会话状态和请求类型将用户消息路由到 AI-Gateway。
-     */
-    private void routeToGateway(SkillSession session, String sessionId,
-            Long numericSessionId, SendMessageRequest request, String userIdCookie) {
-        if (session.getAk() == null) {
-            log.warn("[SKIP] SkillMessageController.routeToGateway: reason=no_agent, sessionId={}", sessionId);
-            return;
-        }
-
-        // Agent 在线检查：开关开启时，业务/默认助手跳过检查
-        boolean defaultAssistant = ruleService.lookup(
-                session.getBusinessSessionDomain(), session.getBusinessSessionType()).isPresent();
-        AssistantInfo scopeInfo = defaultAssistant ? null : assistantInfoService.getAssistantInfo(session.getAk());
-        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
-                session.getBusinessSessionDomain(), session.getBusinessSessionType(), scopeInfo);
-        if (assistantIdProperties.isEnabled() && scopeStrategy.requiresOnlineCheck()) {
-            AvailabilityResult r = availabilityService.resolve(session.getAk());
-            if (!r.online()) {
-                log.warn("[SKIP] SkillMessageController.routeToGateway: reason=agent_offline, sessionId={}, ak={}, source={}",
-                        sessionId, session.getAk(), r.source());
-                try {
-                    messageService.saveSystemMessage(numericSessionId, r.message());
-                } catch (Exception e) {
-                    log.error("Failed to persist agent_offline message for session {}: {}", sessionId, e.getMessage());
-                }
-                gatewayRelayService.publishProtocolMessage(sessionId, StreamMessage.builder()
-                        .type(StreamMessage.Types.ERROR)
-                        .error(r.message())
-                        .build());
-                return;
-            }
-            // Agent 在线但 toolType 不匹配目标值：跳过 assistantId 相关逻辑，正常发送
-        }
-
-        if (session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
-            log.info(
-                    "[SKIP] SkillMessageController.routeToGateway: reason=no_toolSessionId, sessionId={}, triggering rebuild",
-                    sessionId);
-            gatewayRelayService.rebuildToolSession(sessionId, session, request.getContent());
-            return;
-        }
-
-        String action;
-        String payload;
-        String effectiveUserId = userIdCookie != null && !userIdCookie.isBlank()
-                ? userIdCookie : session.getUserId();
-        if (request.getToolCallId() != null && !request.getToolCallId().isBlank()) {
-            action = GatewayActions.QUESTION_REPLY;
-            // 使用子 session 真实 ID（如果是 subagent 的 question reply）
-            String targetToolSessionId = request.getSubagentSessionId() != null
-                    ? request.getSubagentSessionId()
-                    : session.getToolSessionId();
-            Map<String, Object> qr = new LinkedHashMap<>();
-            qr.put("answer", request.getContent());
-            qr.put("toolCallId", request.getToolCallId());
-            qr.put("toolSessionId", targetToolSessionId);
-            // D8：仅当 questionId 非空白时塞入 payload（避免下游 JSON 含 null/空字符串污染，让 plugin 走 fallback）
-            String questionId = request.getQuestionId();
-            if (questionId != null && !questionId.isBlank()) {
-                qr.put("questionId", questionId);
-            }
-            // D8 修复：补 assistantAccount + sendUserAccount（默认助手 + business 都补，老 chat 已含）
-            qr.put("assistantAccount", session.getAssistantAccount());
-            qr.put("sendUserAccount", effectiveUserId);
-            qr.put("businessExtParam", request.getBusinessExtParam());
-            payload = PayloadBuilder.buildPayloadWithObjects(objectMapper, qr);
-        } else {
-            action = GatewayActions.CHAT;
-            Map<String, Object> payloadFields = new LinkedHashMap<>();
-            payloadFields.put("text", request.getContent());
-            payloadFields.put("toolSessionId", session.getToolSessionId());
-            // 优先使用实际操作用户（cookie），兜底用 session 创建人
-            payloadFields.put("sendUserAccount", effectiveUserId);
-            payloadFields.put("assistantAccount", session.getAssistantAccount());
-            payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
-            payloadFields.put("businessExtParam", request.getBusinessExtParam());
-            payload = PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields);
-        }
-
-        log.info("SkillMessageController.routeToGateway: sessionId={}, action={}, ak={}",
-                sessionId, action, session.getAk());
-        // A4: allowed-slash-commands action guard + personal scope gating
-        //   - action guard: 仅 CHAT 走 resolver；reply/create/close/abort 一律 null
-        //   - personal scope gating: personal strategy.generateToolSessionId() 返 null
-        //     business / default_assistant 即使 CHAT 也不调 resolver（避免 sysconfig 热路径污染）
-        boolean isChat = GatewayActions.CHAT.equals(action);
-        boolean isPersonalScope = scopeStrategy.generateToolSessionId() == null;
-        List<String> allowedSlashCommands = (isChat && isPersonalScope)
-                ? allowedSlashCommandsResolver.resolve(
-                        session.getBusinessSessionDomain(),
-                        session.getBusinessSessionType())
-                : null;
-        // N1 收口：InvokeCommand 塞入 session 的 domain/domainType，让 dispatcher 走新 API
-        gatewayRelayService.sendInvokeToGateway(
-                new InvokeCommand(session.getAk(), effectiveUserId, sessionId, action, payload,
-                        null,
-                        session.getBusinessSessionDomain(),
-                        session.getBusinessSessionType(),
-                        session.getBusinessSessionId(),
-                        allowedSlashCommands));
-
-        // Telemetry: 用户发起 chat 对话 (skill_chat_request)。
-        // 仅成功路径（已发送到 gateway）才上报；早 return（no_agent / agent_offline / no_toolSessionId）不上报。
-        // 顶层 try-catch 确保埋码失败绝不影响业务链路（PRD §6 错误处理矩阵）。
-        try {
-            eventPublisher.publishEvent(new ChatRequestTelemetryEvent(
-                    session, effectiveUserId, scopeInfo == null ? null : scopeInfo.getBusinessTag()));
-        } catch (Throwable t) {
-            log.warn("[WelinkTelemetry] publish ChatRequestTelemetryEvent failed: sessionId={}, error={}",
-                    sessionId, t.getMessage());
-        }
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -476,149 +320,19 @@ public class SkillMessageController {
             return ResponseEntity.ok(ApiResponse.error(409, "Session is closed"));
         }
 
-        if (session.getAk() == null) {
-            return ResponseEntity.ok(ApiResponse.error(400, "No agent associated with this session"));
-        }
-
-        // 助理删除校验（必须在 online check 之前，否则 agent 离线 503 会掩盖删除态 410）
-        // Req 12 短路：命中默认助手规则 → 跳过 deletion check（virtual assistantAccount 上游本就不存在）
-        if (!ruleService.lookup(session.getBusinessSessionDomain(), session.getBusinessSessionType()).isPresent()) {
-            ApiResponse<Map<String, Object>> deletionBlock = checkAssistantDeletionForMap(
-                    session.getAssistantAccount(), sessionId, "replyPermission");
-            if (deletionBlock != null) {
-                return ResponseEntity.ok(deletionBlock);
-            }
-        } else {
-            log.info("[SKIP] replyPermission.deletionCheck: reason=default_assistant_rule_matched, sessionId={}, domain={}, type={}",
-                    sessionId, session.getBusinessSessionDomain(), session.getBusinessSessionType());
-        }
-
-        // Agent 在线检查：云端/默认助手永远在线（跳过），个人助手需要检查
-        boolean defaultAssistant = ruleService.lookup(
-                session.getBusinessSessionDomain(), session.getBusinessSessionType()).isPresent();
-        AssistantInfo replyInfo = defaultAssistant ? null : assistantInfoService.getAssistantInfo(session.getAk());
-        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
-                session.getBusinessSessionDomain(), session.getBusinessSessionType(), replyInfo);
-        if (assistantIdProperties.isEnabled() && scopeStrategy.requiresOnlineCheck()) {
-            AvailabilityResult r = availabilityService.resolve(session.getAk());
-            if (!r.online()) {
-                log.warn("[SKIP] replyPermission: reason=agent_offline, sessionId={}, ak={}, source={}",
-                        sessionId, session.getAk(), r.source());
-                return ResponseEntity.ok(ApiResponse.error(503, r.message()));
-            }
-        }
-
-        if (session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
-            return ResponseEntity.ok(ApiResponse.error(500, "No toolSessionId available"));
-        }
-
-        // 使用子 session 真实 ID（如果是 subagent 的 permission）
-        String targetToolSessionId = request.getSubagentSessionId() != null
-                ? request.getSubagentSessionId()
-                : session.getToolSessionId();
-
-        String effectiveUserId = userIdCookie != null && !userIdCookie.isBlank()
-                ? userIdCookie : session.getUserId();
-        Map<String, Object> pr = new LinkedHashMap<>();
-        pr.put("permissionId", permId);
-        pr.put("response", request.getResponse());
-        pr.put("toolSessionId", targetToolSessionId);
-        // D8 修复：补 assistantAccount + sendUserAccount（默认助手 + business 都补，老 chat 已含）
-        pr.put("assistantAccount", session.getAssistantAccount());
-        pr.put("sendUserAccount", effectiveUserId);
-        pr.put("businessExtParam", request.getBusinessExtParam());
-        String payload = PayloadBuilder.buildPayloadWithObjects(objectMapper, pr);
-
-        // 向 AI-Gateway 发送 permission_reply invoke 命令
-        // N1 收口：InvokeCommand 塞入 session 的 domain/domainType，让 dispatcher 走新 API
-        gatewayRelayService.sendInvokeToGateway(
-                new InvokeCommand(session.getAk(),
-                        effectiveUserId,
-                        sessionId,
-                        GatewayActions.PERMISSION_REPLY,
-                        payload,
-                        null,
-                        session.getBusinessSessionDomain(),
-                        session.getBusinessSessionType(),
-                        session.getBusinessSessionId()));
-
-        StreamMessage replyMessage = StreamMessage.builder()
-                .type(StreamMessage.Types.PERMISSION_REPLY)
-                .role("assistant")
-                .permission(StreamMessage.PermissionInfo.builder()
-                        .permissionId(permId)
-                        .response(request.getResponse())
-                        .build())
-                .subagentSessionId(request.getSubagentSessionId())
-                .build();
-        gatewayRelayService.publishProtocolMessage(sessionId, replyMessage);
+        ApiResponse<Map<String, Object>> response = flowService.replyPermission(
+                session, sessionId, permId,
+                new SkillMessageFlowService.PermissionReplyCommand(
+                        request.getResponse(),
+                        request.getSubagentSessionId(),
+                        request.getBusinessExtParam()),
+                userIdCookie);
 
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
         log.info("[EXIT] SkillMessageController.replyPermission: sessionId={}, permId={}, response={}, durationMs={}",
                 sessionId, permId, request.getResponse(), elapsedMs);
 
-        return ResponseEntity.ok(ApiResponse.ok(Map.of(
-                "welinkSessionId", sessionId,
-                "permissionId", permId,
-                "response", request.getResponse())));
-    }
-
-    /**
-     * 助理删除校验（ProtocolMessageView 返回类型）。
-     * null/blank → 按 skip 开关决定：ON 放行；OFF 返 400
-     * EXISTS / UNKNOWN → 放行（UNKNOWN 打 WARN 日志）
-     * NOT_EXISTS → 返 410（不 saveUserMessage / 不广播 / 不 routeToGateway）
-     *
-     * @return null 表示放行；非 null 表示调用方应立刻短路 return
-     */
-    private ApiResponse<ProtocolMessageView> checkAssistantDeletion(
-            String assistantAccount, String sessionId, String action) {
-        if (assistantAccount == null || assistantAccount.isBlank()) {
-            if (!assistantAccountResolverService.isSkipOnNullAssistantAccount()) {
-                log.warn("[BLOCK] {}: reason=no_assistant_account, decision=block, sessionId={}", action, sessionId);
-                return ApiResponse.error(400, "assistantAccount is required");
-            }
-            log.info("[SKIP] {}: reason=no_assistant_account, decision=allow, sessionId={}", action, sessionId);
-            return null;
-        }
-        ExistenceStatus status = assistantAccountResolverService.check(assistantAccount);
-        if (status == ExistenceStatus.NOT_EXISTS) {
-            log.info("[SKIP] {}: reason=assistant_not_exists, decision=block, sessionId={}, assistantAccount={}",
-                    action, sessionId, assistantAccount);
-            return ApiResponse.error(410, assistantAccountResolverService.getDeletionMessage());
-        }
-        if (status == ExistenceStatus.UNKNOWN) {
-            log.warn("[WARN] {}: reason=assistant_check_unknown, decision=allow-unknown, sessionId={}, assistantAccount={}",
-                    action, sessionId, assistantAccount);
-        }
-        return null;
-    }
-
-    /**
-     * 助理删除校验（Map 返回类型，供 replyPermission 使用）。
-     * 语义同 {@link #checkAssistantDeletion}。
-     */
-    private ApiResponse<Map<String, Object>> checkAssistantDeletionForMap(
-            String assistantAccount, String sessionId, String action) {
-        if (assistantAccount == null || assistantAccount.isBlank()) {
-            if (!assistantAccountResolverService.isSkipOnNullAssistantAccount()) {
-                log.warn("[BLOCK] {}: reason=no_assistant_account, decision=block, sessionId={}", action, sessionId);
-                return ApiResponse.error(400, "assistantAccount is required");
-            }
-            log.info("[SKIP] {}: reason=no_assistant_account, decision=allow, sessionId={}", action, sessionId);
-            return null;
-        }
-        ExistenceStatus status = assistantAccountResolverService.check(assistantAccount);
-        if (status == ExistenceStatus.NOT_EXISTS) {
-            log.info("[SKIP] {}: reason=assistant_not_exists, decision=block, sessionId={}, assistantAccount={}",
-                    action, sessionId, assistantAccount);
-            return ApiResponse.error(410, assistantAccountResolverService.getDeletionMessage());
-        }
-        if (status == ExistenceStatus.UNKNOWN) {
-            log.warn("[WARN] {}: reason=assistant_check_unknown, decision=allow-unknown, sessionId={}, assistantAccount={}",
-                    action, sessionId, assistantAccount);
-        }
-        return null;
+        return ResponseEntity.ok(response);
     }
 
     /** 发送消息请求体。 */

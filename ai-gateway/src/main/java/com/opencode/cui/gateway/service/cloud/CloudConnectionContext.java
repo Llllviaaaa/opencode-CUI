@@ -1,8 +1,11 @@
 package com.opencode.cui.gateway.service.cloud;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.opencode.cui.gateway.model.AssistantInstanceInfo;
 import lombok.Builder;
 import lombok.Data;
+
+import java.util.List;
 
 /**
  * 云端连接上下文，封装建立云端连接所需的全部参数。
@@ -28,6 +31,9 @@ public class CloudConnectionContext {
 
     /** 鉴权类型："none" / "soa" / "apig" / "integration_token" */
     private String authType;
+
+    /** instance/query remoteProperty.headers 原样映射后的远端请求头配置。 */
+    private List<AssistantInstanceInfo.RemoteHeader> remoteHeaders;
 
     /** 跨服务追踪 ID */
     private String traceId;

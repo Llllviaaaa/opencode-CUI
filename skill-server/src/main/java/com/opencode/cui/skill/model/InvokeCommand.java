@@ -61,14 +61,16 @@ public record InvokeCommand(
                 String domain,
                 String domainType,
                 String businessSessionId,
-                @Nullable List<String> allowedSlashCommands) {
+                @Nullable List<String> allowedSlashCommands,
+                String assistantAccount,
+                String partnerAccount) {
 
     /**
      * 兼容性构造：保留原 5 参数签名，{@code suppressReply} / {@code domain} / {@code domainType}
      * / {@code businessSessionId} / {@code allowedSlashCommands} 默认 null。
      */
     public InvokeCommand(String ak, String userId, String sessionId, String action, String payload) {
-        this(ak, userId, sessionId, action, payload, null, null, null, null, null);
+        this(ak, userId, sessionId, action, payload, null, null, null, null, null, null, null);
     }
 
     /**
@@ -77,7 +79,7 @@ public record InvokeCommand(
      */
     public InvokeCommand(String ak, String userId, String sessionId, String action, String payload,
             Boolean suppressReply) {
-        this(ak, userId, sessionId, action, payload, suppressReply, null, null, null, null);
+        this(ak, userId, sessionId, action, payload, suppressReply, null, null, null, null, null, null);
     }
 
     /**
@@ -86,7 +88,7 @@ public record InvokeCommand(
      */
     public InvokeCommand(String ak, String userId, String sessionId, String action, String payload,
             Boolean suppressReply, String domain, String domainType) {
-        this(ak, userId, sessionId, action, payload, suppressReply, domain, domainType, null, null);
+        this(ak, userId, sessionId, action, payload, suppressReply, domain, domainType, null, null, null, null);
     }
 
     /**
@@ -97,6 +99,16 @@ public record InvokeCommand(
      */
     public InvokeCommand(String ak, String userId, String sessionId, String action, String payload,
             Boolean suppressReply, String domain, String domainType, String businessSessionId) {
-        this(ak, userId, sessionId, action, payload, suppressReply, domain, domainType, businessSessionId, null);
+        this(ak, userId, sessionId, action, payload, suppressReply, domain, domainType, businessSessionId, null, null, null);
+    }
+
+    /**
+     * 兼容 10 参数签名：新增身份字段统一追加在 canonical 末尾，老调用方默认不携带。
+     */
+    public InvokeCommand(String ak, String userId, String sessionId, String action, String payload,
+            Boolean suppressReply, String domain, String domainType, String businessSessionId,
+            @Nullable List<String> allowedSlashCommands) {
+        this(ak, userId, sessionId, action, payload, suppressReply, domain, domainType, businessSessionId,
+                allowedSlashCommands, null, null);
     }
 }

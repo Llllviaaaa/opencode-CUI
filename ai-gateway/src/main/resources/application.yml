@@ -92,6 +92,12 @@ gateway:
     bearer-token: ${ASSISTANT_RESOLVE_TOKEN:}
     cache-ttl-seconds: ${ASSISTANT_RESOLVE_CACHE_TTL:300}
 
+  # 数字分身实例信息查询（远端助手 remoteProperty 路由配置）
+  assistant:
+    instance-query-url: ${ASSISTANT_INSTANCE_QUERY_URL:${gateway.assistant-resolve.api-url}}
+    instance-query-token: ${ASSISTANT_INSTANCE_QUERY_TOKEN:${gateway.assistant-resolve.bearer-token}}
+    instance-cache-ttl-seconds: ${ASSISTANT_INSTANCE_CACHE_TTL:${gateway.assistant-resolve.cache-ttl-seconds}}
+
   # 云端协议套餐缓存（CloudResponseProfileRegistry 内存 TTL）
   cloud-protocol-profile:
     cache-ttl-ms: ${GW_CLOUD_PROTOCOL_PROFILE_CACHE_TTL_MS:300000}

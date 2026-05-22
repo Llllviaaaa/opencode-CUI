@@ -98,11 +98,16 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
                 PlatformExtParamBuilder.build(objectMapper,
                         command.domain(), command.domainType(), command.businessSessionId()));
 
+        String assistantAccount = firstNonBlank(
+                extractField(command.payload(), "assistantAccount"),
+                command.assistantAccount(),
+                command.partnerAccount());
+
         CloudRequestContext context = CloudRequestContext.builder()
                 .content(content)
                 .contentType("text")
                 .topicId(toolSessionId)
-                .assistantAccount(extractField(command.payload(), "assistantAccount"))
+                .assistantAccount(assistantAccount)
                 .sendUserAccount(extractField(command.payload(), "sendUserAccount"))
                 .imGroupId(extractField(command.payload(), "imGroupId"))
                 .messageId(extractField(command.payload(), "messageId"))
@@ -270,5 +275,14 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
             log.debug("Failed to parse payload for content extraction, using raw: {}", e.getMessage());
             return payload;
         }
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 }

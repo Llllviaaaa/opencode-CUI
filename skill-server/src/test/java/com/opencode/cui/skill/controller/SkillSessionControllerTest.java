@@ -62,7 +62,10 @@ class SkillSessionControllerTest {
                 org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
         org.mockito.Mockito.lenient().when(personalStrategy.generateToolSessionId()).thenReturn(null);
         org.mockito.Mockito.lenient().when(personalStrategy.requiresOnlineCheck()).thenReturn(true);
-        org.mockito.Mockito.lenient().when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(personalStrategy);
+        org.mockito.Mockito.lenient().when(scopeDispatcher.getStrategy(nullable(AssistantInfo.class))).thenReturn(personalStrategy);
+        org.mockito.Mockito.lenient().when(scopeDispatcher.getStrategy(
+                nullable(String.class), nullable(String.class), nullable(AssistantInfo.class)))
+                .thenReturn(personalStrategy);
         AssistantInfo defaultPersonalInfo = new AssistantInfo();
         defaultPersonalInfo.setAssistantScope("personal");
         org.mockito.Mockito.lenient().when(assistantInfoService.getAssistantInfo(any())).thenReturn(defaultPersonalInfo);
@@ -101,6 +104,44 @@ class SkillSessionControllerTest {
         assertEquals("3", cmdCaptor.getValue().ak());
         assertEquals("create_session", cmdCaptor.getValue().action());
         assertTrue(cmdCaptor.getValue().payload().contains("Test"));
+    }
+
+    @Test
+    @DisplayName("createSession supports remote assistant without AK by assistantAccount")
+    void createSessionRemoteAssistantWithoutAkGeneratesToolSession() {
+        SkillSession session = new SkillSession();
+        session.setId(10L);
+        session.setAk(null);
+        session.setAssistantAccount("bot-001");
+        session.setBusinessSessionDomain("im");
+        session.setBusinessSessionType("dm");
+        session.setBusinessSessionId("dm-001");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireUserId("1")).thenReturn("1");
+        when(sessionService.createSession(eq("1"), isNull(), eq("Remote"), eq("im"), eq("dm"), eq("dm-001"), eq("bot-001")))
+                .thenReturn(session);
+
+        AssistantInfo info = new AssistantInfo();
+        info.setAssistantScope("business");
+        info.setBusinessTag("remote-tag");
+        when(assistantInfoService.getAssistantInfo(null, "bot-001")).thenReturn(info);
+        com.opencode.cui.skill.service.scope.AssistantScopeStrategy businessStrategy =
+                mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
+        when(businessStrategy.generateToolSessionId()).thenReturn("tool-remote");
+        when(scopeDispatcher.getStrategy(eq("im"), eq("dm"), eq(info))).thenReturn(businessStrategy);
+
+        var request = new SkillSessionController.CreateSessionRequest();
+        request.setTitle("Remote");
+        request.setAssistantAccount("bot-001");
+        request.setBusinessSessionDomain("im");
+        request.setBusinessSessionType("dm");
+        request.setBusinessSessionId("dm-001");
+
+        var response = controller.createSession("1", request);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        verify(sessionService).updateToolSessionId(10L, "tool-remote");
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
     }
 
     @Test

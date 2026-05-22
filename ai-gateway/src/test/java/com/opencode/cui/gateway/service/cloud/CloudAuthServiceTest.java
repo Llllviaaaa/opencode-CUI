@@ -1,5 +1,6 @@
 package com.opencode.cui.gateway.service.cloud;
 
+import com.opencode.cui.gateway.model.AssistantInstanceInfo;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -112,6 +113,27 @@ class CloudAuthServiceTest {
             assertEquals("apig", request.headers().firstValue("X-Auth-Type").orElse(null));
             assertTrue(request.headers().allValues("X-App-Id").isEmpty());
         }
+
+        @Test
+        @DisplayName("remoteProperty headers: custom/cookie 多 header 逐项写入，跳过单 authType")
+        void remotePropertyHeaders_customAndCookie_areApplied() {
+            AssistantInstanceInfo.RemoteHeader custom = new AssistantInstanceInfo.RemoteHeader();
+            custom.setType("custom");
+            custom.setCustomKey("X-Custom-Token");
+            custom.setCustomValue("secret-1");
+            AssistantInstanceInfo.RemoteHeader cookie = new AssistantInstanceInfo.RemoteHeader();
+            cookie.setType("cookie");
+            cookie.setCustomValue("sid=secret-2");
+            HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://x.example"));
+
+            cloudAuthService.applyAuth(builder, "ignored-app", "soa", List.of(custom, cookie));
+
+            HttpRequest request = builder.GET().build();
+            assertEquals("secret-1", request.headers().firstValue("X-Custom-Token").orElse(null));
+            assertEquals("sid=secret-2", request.headers().firstValue("Cookie").orElse(null));
+            assertTrue(request.headers().allValues("X-Auth-Type").isEmpty());
+            assertTrue(request.headers().allValues("X-App-Id").isEmpty());
+        }
     }
 
     @Nested
@@ -139,6 +161,18 @@ class CloudAuthServiceTest {
                     IllegalArgumentException.class,
                     () -> cloudAuthService.applyAuth(builder, "app_789", null)
             );
+        }
+
+        @Test
+        @DisplayName("remoteProperty headers: 未知 header type 抛明确异常")
+        void remotePropertyHeaders_unknownTypeThrows() {
+            AssistantInstanceInfo.RemoteHeader header = new AssistantInstanceInfo.RemoteHeader();
+            header.setType("mystery");
+            HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://example.com"));
+
+            IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                    () -> cloudAuthService.applyAuth(builder, null, "none", List.of(header)));
+            assertTrue(ex.getMessage().contains("Unknown remote header type"));
         }
     }
 }

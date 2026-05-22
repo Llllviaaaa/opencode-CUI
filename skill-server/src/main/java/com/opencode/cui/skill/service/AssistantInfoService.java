@@ -3,15 +3,12 @@ package com.opencode.cui.skill.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.config.AssistantInfoProperties;
+import com.opencode.cui.skill.model.AssistantInstanceInfo;
 import com.opencode.cui.skill.model.AssistantInfo;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
 
 import java.time.Duration;
 
@@ -42,12 +39,24 @@ public class AssistantInfoService {
     private final AssistantInfoProperties properties;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
+    private final AssistantInstanceInfoService assistantInstanceInfoService;
+
+    @Autowired
+    public AssistantInfoService(AssistantInfoProperties properties,
+                                StringRedisTemplate redisTemplate,
+                                AssistantInstanceInfoService assistantInstanceInfoService) {
+        this.properties = properties;
+        this.redisTemplate = redisTemplate;
+        this.objectMapper = new ObjectMapper();
+        this.assistantInstanceInfoService = assistantInstanceInfoService;
+    }
 
     public AssistantInfoService(AssistantInfoProperties properties,
                                 StringRedisTemplate redisTemplate) {
         this.properties = properties;
         this.redisTemplate = redisTemplate;
         this.objectMapper = new ObjectMapper();
+        this.assistantInstanceInfoService = null;
     }
 
     /**
@@ -57,6 +66,9 @@ public class AssistantInfoService {
      * @return AssistantInfo，上游不可用时返回 null
      */
     public AssistantInfo getAssistantInfo(String ak) {
+        if (ak == null || ak.isBlank()) {
+            return null;
+        }
         String cacheKey = buildCacheKey(ak);
 
         // 1. 查询 Redis 缓存
@@ -96,6 +108,39 @@ public class AssistantInfoService {
         }
 
         return info;
+    }
+
+    public AssistantInfo getAssistantInfo(String ak, String assistantAccount) {
+        AssistantInfo instanceInfo = getAssistantInfoFromInstance(assistantAccount);
+        if (instanceInfo != null) {
+            return instanceInfo;
+        }
+        if (ak != null && !ak.isBlank()) {
+            return getAssistantInfo(ak);
+        }
+        return null;
+    }
+
+    private AssistantInfo getAssistantInfoFromInstance(String assistantAccount) {
+        if (assistantInstanceInfoService == null
+                || assistantAccount == null || assistantAccount.isBlank()) {
+            return null;
+        }
+        AssistantInstanceInfo instance = assistantInstanceInfoService.getInstanceInfo(assistantAccount);
+        if (instance == null) {
+            return null;
+        }
+        if (instance.businessRoutableAssistant()) {
+            AssistantInfo info = new AssistantInfo();
+            info.setAssistantScope("business");
+            info.setBusinessTag(instance.getBizRobotTag());
+            return info;
+        }
+        String effectiveAk = instance.effectiveAk();
+        if (effectiveAk != null) {
+            return getAssistantInfo(effectiveAk);
+        }
+        return null;
     }
 
     /**

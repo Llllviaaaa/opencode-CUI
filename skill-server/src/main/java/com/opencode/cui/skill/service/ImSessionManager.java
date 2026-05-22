@@ -74,16 +74,22 @@ public class ImSessionManager {
      */
     public SkillSession findSession(String businessDomain, String sessionType,
             String sessionId, String ak) {
-        log.info("Looking up session: domain={}, sessionType={}, sessionId={}, ak={}",
-                businessDomain, sessionType, sessionId, ak);
-        SkillSession existing = sessionService.findByBusinessSession(businessDomain, sessionType, sessionId, ak);
+        return findSession(businessDomain, sessionType, sessionId, ak, null);
+    }
+
+    public SkillSession findSession(String businessDomain, String sessionType,
+            String sessionId, String ak, String assistantAccount) {
+        log.info("Looking up session: domain={}, sessionType={}, sessionId={}, ak={}, assistantAccount={}",
+                businessDomain, sessionType, sessionId, ak, assistantAccount);
+        SkillSession existing = sessionService.findByBusinessSession(
+                businessDomain, sessionType, sessionId, ak, assistantAccount);
         if (existing != null) {
             log.info("Session found: skillSessionId={}, toolSessionId={}",
                     existing.getId(), existing.getToolSessionId());
             sessionService.touchSession(existing.getId());
         } else {
-            log.info("No session found: domain={}, sessionType={}, sessionId={}, ak={}",
-                    businessDomain, sessionType, sessionId, ak);
+            log.info("No session found: domain={}, sessionType={}, sessionId={}, ak={}, assistantAccount={}",
+                    businessDomain, sessionType, sessionId, ak, assistantAccount);
         }
         return existing;
     }
@@ -105,7 +111,7 @@ public class ImSessionManager {
             String pendingMessage,
             JsonNode businessExtParam) {
         // 构建分布式锁 key
-        String lockKey = buildCreateLockKey(businessDomain, sessionType, sessionId, ak);
+        String lockKey = buildCreateLockKey(businessDomain, sessionType, sessionId, ak, assistantAccount);
         String lockValue = UUID.randomUUID().toString();
         boolean locked = false;
 
@@ -121,7 +127,7 @@ public class ImSessionManager {
 
             // 二次检查：在获取锁后再查一次，避免重复创建
             SkillSession existing = sessionService.findByBusinessSession(
-                    businessDomain, sessionType, sessionId, ak);
+                    businessDomain, sessionType, sessionId, ak, assistantAccount);
             if (existing != null) {
                 log.info("Session already exists during async creation: skillSessionId={}, requesting toolSession",
                         existing.getId());
@@ -143,7 +149,7 @@ public class ImSessionManager {
                     created.getId(), ownerWelinkId, ak, sessionId);
 
             // 根据助手类型决定 toolSession 创建方式
-            AssistantInfo info = assistantInfoService.getAssistantInfo(ak);
+            AssistantInfo info = assistantInfoService.getAssistantInfo(ak, assistantAccount);
             AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(businessDomain, sessionType, info);
             String generatedToolSessionId = strategy.generateToolSessionId();
             if (generatedToolSessionId != null) {
@@ -171,7 +177,10 @@ public class ImSessionManager {
                             null,
                             businessDomain,
                             sessionType,
-                            sessionId));
+                            sessionId,
+                            null,
+                            assistantAccount,
+                            assistantAccount));
                     log.info("Business assistant: chat invoke sent immediately, skillSessionId={}, ak={}",
                             created.getId(), ak);
                 }
@@ -251,13 +260,14 @@ public class ImSessionManager {
      */
     public SkillSession findOrCreateSession(String businessDomain, String sessionType,
             String sessionId, String ak, String ownerWelinkId, String assistantAccount) {
-        SkillSession existing = sessionService.findByBusinessSession(businessDomain, sessionType, sessionId, ak);
+        SkillSession existing = sessionService.findByBusinessSession(
+                businessDomain, sessionType, sessionId, ak, assistantAccount);
         if (existing != null) {
             sessionService.touchSession(existing.getId());
             return ensureToolSession(existing, false);
         }
 
-        String lockKey = buildCreateLockKey(businessDomain, sessionType, sessionId, ak);
+        String lockKey = buildCreateLockKey(businessDomain, sessionType, sessionId, ak, assistantAccount);
         String lockValue = UUID.randomUUID().toString();
         long deadline = System.currentTimeMillis() + autoCreateTimeoutSeconds * 1000L;
         boolean locked = false;
@@ -268,7 +278,7 @@ public class ImSessionManager {
                         redisTemplate.opsForValue().setIfAbsent(lockKey, lockValue, CREATE_LOCK_TTL));
                 if (locked) {
                     SkillSession latest = sessionService.findByBusinessSession(
-                            businessDomain, sessionType, sessionId, ak);
+                            businessDomain, sessionType, sessionId, ak, assistantAccount);
                     if (latest != null) {
                         sessionService.touchSession(latest.getId());
                         return ensureToolSession(latest, false);
@@ -286,7 +296,7 @@ public class ImSessionManager {
                 }
 
                 SkillSession concurrent = sessionService.findByBusinessSession(
-                        businessDomain, sessionType, sessionId, ak);
+                        businessDomain, sessionType, sessionId, ak, assistantAccount);
                 if (concurrent != null) {
                     sessionService.touchSession(concurrent.getId());
                     return ensureToolSession(concurrent, false);
@@ -315,6 +325,17 @@ public class ImSessionManager {
             return sessionService.getSession(session.getId());
         }
 
+        AssistantInfo info = assistantInfoService.getAssistantInfo(session.getAk(), session.getAssistantAccount());
+        AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(
+                session.getBusinessSessionDomain(), session.getBusinessSessionType(), info);
+        String generatedToolSessionId = strategy.generateToolSessionId();
+        if (generatedToolSessionId != null) {
+            sessionService.updateToolSessionId(session.getId(), generatedToolSessionId);
+            log.info("Cloud assistant: toolSessionId generated locally, skillSessionId={}, toolSessionId={}, ak={}, assistantAccount={}",
+                    session.getId(), generatedToolSessionId, session.getAk(), session.getAssistantAccount());
+            return sessionService.getSession(session.getId());
+        }
+
         if (newlyCreated) {
             // 新创建的 session：发送 create_session 指令到 Gateway
             log.info("Sending create_session to gateway: skillSessionId={}, ak={}",
@@ -328,7 +349,10 @@ public class ImSessionManager {
                     null,
                     session.getBusinessSessionDomain(),
                     session.getBusinessSessionType(),
-                    session.getBusinessSessionId()));
+                    session.getBusinessSessionId(),
+                    null,
+                    session.getAssistantAccount(),
+                    session.getAssistantAccount()));
         } else {
             // 已存在但无 toolSession：触发重建
             log.info("Rebuilding tool session: skillSessionId={}, ak={}",
@@ -377,11 +401,18 @@ public class ImSessionManager {
 
     /** 构建分布式锁的 Redis key */
     private String buildCreateLockKey(String businessDomain, String sessionType, String sessionId, String ak) {
+        return buildCreateLockKey(businessDomain, sessionType, sessionId, ak, null);
+    }
+
+    private String buildCreateLockKey(String businessDomain, String sessionType,
+                                      String sessionId, String ak, String assistantAccount) {
+        String identity = ak != null && !ak.isBlank() ? ak
+                : (assistantAccount != null && !assistantAccount.isBlank() ? assistantAccount : "unknown");
         return "skill:im-session:create:%s:%s:%s:%s".formatted(
                 businessDomain != null ? businessDomain : "im",
                 sessionType != null ? sessionType : "session",
                 sessionId != null ? sessionId : "unknown",
-                ak != null ? ak : "unknown");
+                identity);
     }
 
     /** 安全释放 Redis 分布式锁（仅释放自己持有的锁） */
