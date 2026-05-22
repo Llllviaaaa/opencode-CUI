@@ -116,6 +116,9 @@ class GatewayMessageRouterTest {
         lenient().when(sessionRouteService.getOwnerInstance(any())).thenReturn(LOCAL_INSTANCE);
         // scope 默认放行（nullable 覆盖 getAssistantInfo 返回 null 的情况）
         lenient().when(scopeDispatcher.getStrategy(nullable(AssistantInfo.class))).thenReturn(scopeStrategy);
+        lenient().when(scopeDispatcher.getStrategy(
+                        nullable(String.class), nullable(String.class), nullable(AssistantInfo.class)))
+                .thenReturn(scopeStrategy);
         lenient().when(scopeStrategy.translateEvent(any(), any()))
                 .thenAnswer(inv -> translator.translate(inv.getArgument(0)));
         lenient().when(translator.translate(any())).thenReturn(StreamMessage.builder()
@@ -168,6 +171,97 @@ class GatewayMessageRouterTest {
         event.put("data", "x");
         node.set("event", event);
         return node;
+    }
+
+    @Test
+    @DisplayName("default assistant tool_event uses session domain/type to translate cloud text")
+    void toolEvent_defaultAssistantSession_usesSessionAwareScope() {
+        router = buildRouter(true);
+        SkillSession session = SkillSession.builder()
+                .id(Long.parseLong(WELINK_SESSION_ID))
+                .userId("user-1")
+                .ak("AK_V")
+                .assistantAccount("ACC_V")
+                .toolSessionId(TOOL_SESSION_ID)
+                .businessSessionDomain(SkillSession.DOMAIN_MINIAPP)
+                .businessSessionType("default")
+                .build();
+        when(sessionService.findByIdSafe(Long.parseLong(WELINK_SESSION_ID))).thenReturn(session);
+        when(scopeStrategy.getScope()).thenReturn("default_assistant");
+
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("type", "tool_event");
+        node.put("welinkSessionId", WELINK_SESSION_ID);
+        node.put("ak", "AK_V");
+        ObjectNode event = objectMapper.createObjectNode();
+        event.put("type", "text.delta");
+        ObjectNode properties = objectMapper.createObjectNode();
+        properties.put("content", "1");
+        properties.put("role", "assistant");
+        event.set("properties", properties);
+        node.set("event", event);
+
+        StreamMessage translated = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA)
+                .content("1")
+                .role("assistant")
+                .build();
+        when(scopeStrategy.translateEvent(event, WELINK_SESSION_ID)).thenReturn(translated);
+
+        router.route("tool_event", "AK_V", "user-1", node);
+
+        verify(scopeDispatcher).getStrategy(
+                eq(SkillSession.DOMAIN_MINIAPP), eq("default"), nullable(AssistantInfo.class));
+        verify(scopeStrategy).translateEvent(event, WELINK_SESSION_ID);
+        verify(assistantInfoService, never()).getAssistantInfo("AK_V");
+        verify(emitter).emitToSession(session, WELINK_SESSION_ID, "user-1", translated);
+    }
+
+    @Test
+    @DisplayName("default assistant tool_event recovers session by toolSessionId when welink lookup misses")
+    void toolEvent_defaultAssistantSession_recoversSessionByToolSessionId() {
+        router = buildRouter(true);
+        SkillSession session = SkillSession.builder()
+                .id(Long.parseLong(WELINK_SESSION_ID))
+                .userId("user-1")
+                .ak("AK_V")
+                .assistantAccount("ACC_V")
+                .toolSessionId(TOOL_SESSION_ID)
+                .businessSessionDomain(SkillSession.DOMAIN_MINIAPP)
+                .businessSessionType("default")
+                .build();
+        when(sessionService.findByToolSessionId(TOOL_SESSION_ID)).thenReturn(session);
+        when(scopeStrategy.getScope()).thenReturn("default_assistant");
+
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("type", "tool_event");
+        node.put("welinkSessionId", "bad-session-id");
+        node.put("toolSessionId", TOOL_SESSION_ID);
+        node.put("ak", "AK_V");
+        ObjectNode event = objectMapper.createObjectNode();
+        event.put("type", "text.delta");
+        ObjectNode properties = objectMapper.createObjectNode();
+        properties.put("content", "1");
+        properties.put("role", "assistant");
+        event.set("properties", properties);
+        node.set("event", event);
+
+        StreamMessage translated = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA)
+                .content("1")
+                .role("assistant")
+                .build();
+        when(scopeStrategy.translateEvent(event, WELINK_SESSION_ID)).thenReturn(translated);
+
+        router.route("tool_event", "AK_V", "user-1", node);
+
+        verify(sessionService).findByToolSessionId(TOOL_SESSION_ID);
+        verify(redisMessageBroker).setToolSessionMapping(TOOL_SESSION_ID, WELINK_SESSION_ID);
+        verify(scopeDispatcher).getStrategy(
+                eq(SkillSession.DOMAIN_MINIAPP), eq("default"), nullable(AssistantInfo.class));
+        verify(scopeStrategy).translateEvent(event, WELINK_SESSION_ID);
+        verify(assistantInfoService, never()).getAssistantInfo("AK_V");
+        verify(emitter).emitToSession(session, WELINK_SESSION_ID, "user-1", translated);
     }
 
     // ============= 用例 1：100 条上行 5min 内仅 1 次 confirm =============

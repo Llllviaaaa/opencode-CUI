@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "Backend package checklist and relevant spec entry points for skill-server service changes."}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "Gateway tool_event scope selection and service coding conventions."}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "Session recovery uses MyBatis-backed persisted session lookups and should follow DB access conventions."}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "Fallback path should log cache/DB misses consistently without noisy or sensitive output."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Gateway to skill-server to miniapp event flow crosses transport and service boundaries."}

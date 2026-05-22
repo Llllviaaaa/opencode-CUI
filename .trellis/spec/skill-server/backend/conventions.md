@@ -753,3 +753,77 @@ public static class QuestionInfo {
 | 旁路上报必填配置缺失时 fail-fast（throw / 启动失败） | 可观测性不应能搞挂 prod 业务；config typo 不该让 app 起不来 | `@ConditionalOnProperty` 总开关 + soft-disable + 启动 WARN 一次（参见 `WelinkTelemetryAutoConfiguration`） |
 | 旁路上报日志带栈或 secret（`log.error("...", e)` / `e.toString()` / 打 token / 打明文 payload） | 异常栈和 cause 链可能带出 token / request body | 只 WARN 关联键（eventId / sessionId / httpCode）+ `e.getMessage()`；要带异常类型时用 `e.getClass().getSimpleName() + ":" + e.getMessage()` |
 | `@SpringBootTest` / `@MockBean` mock 掉被切的 target bean，期望切面会触发 | Mockito mock 已是 CGLIB 代理；Spring AOP 不会再叠 advisor，advice 永不触发，测试全绿但实际失活 | 切面方法直接单元测（`new MyAspect(deps).adviceMethod(...)`）；装配靠 `@Aspect @Component` + `spring-boot-starter-aop` 兜底 |
+
+## Gateway tool_event scope selection
+
+### 1. Scope / Trigger
+
+This applies to `GatewayMessageRouter.handleToolEvent(String sessionId, String ak, String userId, JsonNode node)`.
+Gateway upstream events cross the ai-gateway -> skill-server -> miniapp boundary, so the translator strategy must be selected from the persisted `SkillSession` context when a session is available.
+
+### 2. Signatures
+
+- Session lookup: `SkillSession session = resolveToolEventSession(sessionId, node)`.
+- DB recovery order: persisted `welinkSessionId` lookup first, then persisted `toolSessionId` lookup when the session is still missing.
+- Default-assistant aware strategy lookup: `scopeDispatcher.getStrategy(session.getBusinessSessionDomain(), session.getBusinessSessionType(), info)`.
+- Fallback legacy lookup: `scopeDispatcher.getStrategy(info)` when no session is available.
+- Assistant info lookup with account context: `assistantInfoService.getAssistantInfo(session.getAk(), session.getAssistantAccount())`.
+
+### 3. Contracts
+
+Inbound gateway `tool_event` may carry only `ak`, `toolSessionId`, `welinkSessionId`, and `event`.
+Do not assume `ak` alone identifies the assistant scope. Default assistants use virtual AK values that the upstream assistant-info API may not know.
+When `SkillSession` exists or can be recovered from DB, its `businessSessionDomain`, `businessSessionType`, `ak`, and `assistantAccount` are the authoritative routing context.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+| --- | --- |
+| Session exists and `(domain,type)` matches `default_assistant_rule` | Use `DefaultAssistantScopeStrategy`; translate cloud events via `CloudEventTranslator`; do not require virtual AK assistant-info lookup. |
+| Session exists and no default rule matches | Resolve assistant info from `(ak, assistantAccount)` when possible, then dispatch through `scopeDispatcher.getStrategy(domain,type,info)`. |
+| `resolveSession(sessionId)` misses but `toolSessionId` exists | Recover `SkillSession` through `SkillSessionService.findByToolSessionId`, refresh the Redis tool-session mapping, and use the recovered session id for translation/delivery. |
+| Session is still missing after DB recovery | Preserve legacy behavior: resolve by `ak` and dispatch through `scopeDispatcher.getStrategy(info)`. |
+| Translator returns `null` | Log ignored event with the selected strategy scope; do not persist or deliver a partial message. |
+
+### 5. Good / Base / Bad Cases
+
+Good:
+
+```java
+SkillSession session = resolveToolEventSession(sessionId, node);
+if (session != null && session.getId() != null) {
+    sessionId = session.getId().toString();
+}
+AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(
+        session.getBusinessSessionDomain(),
+        session.getBusinessSessionType(),
+        info);
+```
+
+Base:
+
+```java
+AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(info);
+```
+
+Bad:
+
+```java
+AssistantInfo info = assistantInfoService.getAssistantInfo(ak);
+AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(info);
+```
+
+The bad case drops default-assistant cloud replies because a virtual AK can resolve to `null`, which falls back to personal/OpenCode translation and ignores cloud `text.delta` / `text.done`.
+
+### 6. Tests Required
+
+- Add or keep a router-level regression test where a default-assistant session has a virtual AK, `assistantInfoService.getAssistantInfo(ak)` would be `null`, and an inbound `tool_event` with `event.type=text.delta` still reaches `StreamMessageEmitter.emitToSession`.
+- Add a regression test where primary `welinkSessionId` lookup misses or is non-numeric, `toolSessionId` DB lookup recovers the session, and translation/delivery use the recovered session id.
+- Keep personal cloud protocol tests (`event.protocol=cloud`) green to ensure the session-aware path does not break personal-scope cloud translation.
+- Keep relay/takeover tests green because `handleToolEvent` is reached through `dispatchLocally` and SS relay paths.
+
+### 7. Wrong vs Correct
+
+Wrong: choosing the translator from the top-level gateway AK for every upstream event.
+
+Correct: recover session context from `welinkSessionId` / `toolSessionId` before choosing a translator; when a session exists, first use the session `(domain,type)` to preserve default-assistant routing, then resolve assistant info only for non-default assistant paths.
