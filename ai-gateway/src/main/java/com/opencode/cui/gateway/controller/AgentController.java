@@ -1,6 +1,7 @@
 package com.opencode.cui.gateway.controller;
 
 import com.opencode.cui.gateway.config.InternalAuthProperties;
+import com.opencode.cui.gateway.model.AgentAvailabilityRequest;
 import com.opencode.cui.gateway.model.AgentAvailabilityResponse;
 import com.opencode.cui.gateway.model.AgentConnection;
 import com.opencode.cui.gateway.model.AgentStatusResponse;
@@ -30,7 +31,7 @@ import java.util.List;
  * <li>GET /api/gateway/agents — 查询在线 Agent 列表</li>
  * <li>GET /api/gateway/agents/status?ak= — 查询 Agent 状态</li>
  * <li>POST /api/gateway/invoke — 向 Agent 发送命令</li>
- * <li>GET /api/gateway/internal/agent/availability?ak= — 查询 Agent 可及性</li>
+ * <li>POST /api/gateway/internal/agent/availability — 查询 Agent 可及性</li>
  * </ul>
  */
 @Slf4j
@@ -143,15 +144,16 @@ public class AgentController {
     }
 
     /** 查询 Agent 可及性信息（供 skill-server 差异化离线文案使用）。 */
-    @GetMapping("/internal/agent/availability")
+    @PostMapping("/internal/agent/availability")
     public ResponseEntity<ApiResponse<AgentAvailabilityResponse>> getAgentAvailability(
             @RequestHeader(value = "Authorization", required = false) String authorization,
-            @RequestParam String ak) {
+            @RequestBody AgentAvailabilityRequest request) {
         if (!isAuthorized(authorization)) {
             return ResponseEntity.status(401)
                     .body(ApiResponse.error(401, "Invalid or missing internal token"));
         }
-        if (ak.isBlank()) {
+        String ak = request.ak();
+        if (ak == null || ak.isBlank()) {
             return ResponseEntity.badRequest()
                     .body(ApiResponse.error(400, "ak is required"));
         }
