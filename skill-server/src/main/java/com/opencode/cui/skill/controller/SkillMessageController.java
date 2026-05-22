@@ -198,9 +198,12 @@ public class SkillMessageController {
             return;
         }
 
-        // Agent 在线检查：开关开启时，业务助手跳过检查
-        AssistantInfo scopeInfo = assistantInfoService.getAssistantInfo(session.getAk());
-        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(scopeInfo);
+        // Agent 在线检查：开关开启时，业务/默认助手跳过检查
+        boolean defaultAssistant = ruleService.lookup(
+                session.getBusinessSessionDomain(), session.getBusinessSessionType()).isPresent();
+        AssistantInfo scopeInfo = defaultAssistant ? null : assistantInfoService.getAssistantInfo(session.getAk());
+        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
+                session.getBusinessSessionDomain(), session.getBusinessSessionType(), scopeInfo);
         if (assistantIdProperties.isEnabled() && scopeStrategy.requiresOnlineCheck()) {
             AvailabilityResult r = availabilityService.resolve(session.getAk());
             if (!r.online()) {
@@ -490,9 +493,12 @@ public class SkillMessageController {
                     sessionId, session.getBusinessSessionDomain(), session.getBusinessSessionType());
         }
 
-        // Agent 在线检查：云端助手永远在线（跳过），个人助手需要检查
-        AssistantInfo replyInfo = assistantInfoService.getAssistantInfo(session.getAk());
-        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(replyInfo);
+        // Agent 在线检查：云端/默认助手永远在线（跳过），个人助手需要检查
+        boolean defaultAssistant = ruleService.lookup(
+                session.getBusinessSessionDomain(), session.getBusinessSessionType()).isPresent();
+        AssistantInfo replyInfo = defaultAssistant ? null : assistantInfoService.getAssistantInfo(session.getAk());
+        AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(
+                session.getBusinessSessionDomain(), session.getBusinessSessionType(), replyInfo);
         if (assistantIdProperties.isEnabled() && scopeStrategy.requiresOnlineCheck()) {
             AvailabilityResult r = availabilityService.resolve(session.getAk());
             if (!r.online()) {

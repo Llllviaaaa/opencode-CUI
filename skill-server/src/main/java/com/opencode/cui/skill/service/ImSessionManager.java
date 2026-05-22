@@ -144,7 +144,7 @@ public class ImSessionManager {
 
             // 根据助手类型决定 toolSession 创建方式
             AssistantInfo info = assistantInfoService.getAssistantInfo(ak);
-            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(info);
+            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(businessDomain, sessionType, info);
             String generatedToolSessionId = strategy.generateToolSessionId();
             if (generatedToolSessionId != null) {
                 // 业务助手：本地预生成 toolSessionId，跳过 Gateway create_session

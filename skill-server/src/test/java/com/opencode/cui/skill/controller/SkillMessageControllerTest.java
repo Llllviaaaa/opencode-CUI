@@ -111,6 +111,10 @@ class SkillMessageControllerTest {
                 org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
         lenient().when(personalStrategy.requiresOnlineCheck()).thenReturn(true);
         lenient().when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(personalStrategy);
+        lenient().when(scopeDispatcher.getStrategy(
+                nullable(String.class), nullable(String.class), nullable(AssistantInfo.class)))
+                .thenAnswer(invocation -> scopeDispatcher.getStrategy(
+                        (AssistantInfo) invocation.getArgument(2)));
         AssistantInfo defaultPersonalInfo = new AssistantInfo();
         defaultPersonalInfo.setAssistantScope("personal");
         lenient().when(assistantInfoService.getAssistantInfo(any())).thenReturn(defaultPersonalInfo);
@@ -1110,6 +1114,12 @@ class SkillMessageControllerTest {
         // 命中规则
         when(ruleService.lookup("helpdesk", "direct"))
                 .thenReturn(Optional.of(new DefaultAssistantRule("AK_V", "ACC_V", "assistant_square")));
+        com.opencode.cui.skill.service.scope.AssistantScopeStrategy defaultStrategy =
+                org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
+        when(defaultStrategy.requiresOnlineCheck()).thenReturn(false);
+        when(defaultStrategy.generateToolSessionId()).thenReturn("cloud-pre-gen");
+        when(scopeDispatcher.getStrategy(eq("helpdesk"), eq("direct"), isNull()))
+                .thenReturn(defaultStrategy);
 
         SkillMessage msg = SkillMessage.builder()
                 .id(1L).sessionId(1L).role(SkillMessage.Role.USER).content("hi").build();
@@ -1122,6 +1132,8 @@ class SkillMessageControllerTest {
         // resolver.check 完全不被调用
         verify(assistantAccountResolverService, never()).check(any());
         verify(assistantAccountResolverService, never()).isSkipOnNullAssistantAccount();
+        verify(assistantInfoService, never()).getAssistantInfo("AK_V");
+        verify(availabilityService, never()).resolve("AK_V");
         // 消息仍被保存
         verify(messageService).saveUserMessage(eq(1L), eq("hi"));
     }
@@ -1167,6 +1179,11 @@ class SkillMessageControllerTest {
         when(accessControlService.requireSessionAccess(1L, "u-1")).thenReturn(session);
         when(ruleService.lookup("helpdesk", "direct"))
                 .thenReturn(Optional.of(new DefaultAssistantRule("AK_V", "ACC_V", "assistant_square")));
+        com.opencode.cui.skill.service.scope.AssistantScopeStrategy defaultStrategy =
+                org.mockito.Mockito.mock(com.opencode.cui.skill.service.scope.AssistantScopeStrategy.class);
+        when(defaultStrategy.requiresOnlineCheck()).thenReturn(false);
+        when(scopeDispatcher.getStrategy(eq("helpdesk"), eq("direct"), isNull()))
+                .thenReturn(defaultStrategy);
 
         var request = new SkillMessageController.PermissionReplyRequest();
         request.setResponse("once");
@@ -1176,6 +1193,8 @@ class SkillMessageControllerTest {
         assertEquals(0, response.getBody().getCode());
         // resolver.check 完全不被调用
         verify(assistantAccountResolverService, never()).check(any());
+        verify(assistantInfoService, never()).getAssistantInfo("AK_V");
+        verify(availabilityService, never()).resolve("AK_V");
     }
 
     // ==================== v3 allowed-slash-commands: routeToGateway action guard + scope gating ====================

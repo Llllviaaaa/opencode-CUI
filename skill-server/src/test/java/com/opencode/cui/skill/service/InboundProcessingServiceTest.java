@@ -8,6 +8,7 @@ import com.opencode.cui.skill.model.AgentSummary;
 import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.model.AvailabilityResult;
 import com.opencode.cui.skill.model.AvailabilitySource;
+import com.opencode.cui.skill.model.DefaultAssistantRule;
 import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.PendingChatRequest;
@@ -32,6 +33,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -77,6 +79,8 @@ class InboundProcessingServiceTest {
     @Mock
     private ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService;
     @Mock
+    private DefaultAssistantRuleService ruleService;
+    @Mock
     private AllowedSlashCommandsResolver allowedSlashCommandsResolver;
 
     private AssistantIdProperties assistantIdProperties;
@@ -118,6 +122,7 @@ class InboundProcessingServiceTest {
                 redisTemplate,
                 channelLookupService,
                 channelSuppressReplyWhitelistService,
+                ruleService,
                 allowedSlashCommandsResolver);
 
         // 默认 scope 策略：personal（requiresOnlineCheck=true）
@@ -125,6 +130,10 @@ class InboundProcessingServiceTest {
         lenient().when(personalStrategy.requiresOnlineCheck()).thenReturn(true);
         // nullable 覆盖 getAssistantInfo 返回 null 的情况（降级场景）
         lenient().when(scopeDispatcher.getStrategy(nullable(AssistantInfo.class))).thenReturn(personalStrategy);
+        lenient().when(scopeDispatcher.getStrategy(
+                nullable(String.class), nullable(String.class), nullable(AssistantInfo.class)))
+                .thenReturn(personalStrategy);
+        lenient().when(ruleService.lookup(any(), any())).thenReturn(Optional.empty());
         // 默认 getAssistantInfo 返回 personal info（personal 策略不含 business tag）
         AssistantInfo defaultPersonalInfo = new AssistantInfo();
         defaultPersonalInfo.setAssistantScope("personal");
@@ -278,6 +287,99 @@ class InboundProcessingServiceTest {
     }
 
     @Test
+    @DisplayName("processChat: 默认助手规则命中 → 跳过账号解析和在线检查，使用虚拟 AK/account")
+    void processChatDefaultAssistantUsesRuleIdentity() throws Exception {
+        stubDefaultAssistantRoute();
+        SkillSession session = buildDefaultAssistantSession();
+        when(sessionManager.findSession("helpdesk", "direct", "dm-default", "AK_V"))
+                .thenReturn(session);
+        when(contextInjectionService.resolvePrompt("direct", "hello", null))
+                .thenReturn("hello");
+
+        InboundResult result = service.processChat(
+                "helpdesk", "direct", "dm-default", "request-acc",
+                "sender-real", "hello", "text", null, null, "EXTERNAL", null);
+
+        assertTrue(result.success());
+        ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
+        InvokeCommand command = captor.getValue();
+        assertEquals("AK_V", command.ak());
+        assertEquals("sender-real", command.userId());
+        JsonNode payload = objectMapper.readTree(command.payload());
+        assertEquals("ACC_V", payload.get("assistantAccount").asText());
+        assertEquals("sender-real", payload.get("sendUserAccount").asText());
+        verify(resolverService, never()).resolveWithStatus(anyString());
+        verify(availabilityService, never()).resolve(anyString());
+        verify(assistantInfoService, never()).getAssistantInfo("AK_V");
+        verify(rebuildService, never()).appendPendingMessage(anyString(), any(PendingChatRequest.class));
+    }
+
+    @Test
+    @DisplayName("processQuestionReply: 默认助手规则命中 → 不按 assistantAccount 反查 AK")
+    void processQuestionReplyDefaultAssistantSkipsResolver() throws Exception {
+        stubDefaultAssistantRoute();
+        SkillSession session = buildDefaultAssistantSession();
+        when(sessionManager.findSession("helpdesk", "direct", "dm-default", "AK_V"))
+                .thenReturn(session);
+
+        InboundResult result = service.processQuestionReply(
+                "helpdesk", "direct", "dm-default", "request-acc",
+                "sender-real", "yes", "tc-001", null, "EXTERNAL", null);
+
+        assertTrue(result.success());
+        ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
+        JsonNode payload = objectMapper.readTree(captor.getValue().payload());
+        assertEquals("AK_V", captor.getValue().ak());
+        assertEquals("ACC_V", payload.get("assistantAccount").asText());
+        assertEquals("sender-real", payload.get("sendUserAccount").asText());
+        verify(resolverService, never()).resolveWithStatus(anyString());
+        verify(availabilityService, never()).resolve(anyString());
+    }
+
+    @Test
+    @DisplayName("processPermissionReply: 默认助手规则命中 → 不按 assistantAccount 反查 AK")
+    void processPermissionReplyDefaultAssistantSkipsResolver() throws Exception {
+        stubDefaultAssistantRoute();
+        SkillSession session = buildDefaultAssistantSession();
+        when(sessionManager.findSession("helpdesk", "direct", "dm-default", "AK_V"))
+                .thenReturn(session);
+
+        InboundResult result = service.processPermissionReply(
+                "helpdesk", "direct", "dm-default", "request-acc",
+                "sender-real", "perm-1", "once", null, "EXTERNAL", null);
+
+        assertTrue(result.success());
+        ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
+        JsonNode payload = objectMapper.readTree(captor.getValue().payload());
+        assertEquals("AK_V", captor.getValue().ak());
+        assertEquals("ACC_V", payload.get("assistantAccount").asText());
+        assertEquals("sender-real", payload.get("sendUserAccount").asText());
+        verify(resolverService, never()).resolveWithStatus(anyString());
+        verify(availabilityService, never()).resolve(anyString());
+    }
+
+    @Test
+    @DisplayName("processRebuild: 默认助手规则命中 → createSessionAsync 使用虚拟 AK/account")
+    void processRebuildDefaultAssistantCreatesWithRuleIdentity() {
+        stubDefaultAssistantRoute();
+        when(sessionManager.findSession("helpdesk", "direct", "dm-default", "AK_V"))
+                .thenReturn(null);
+
+        InboundResult result = service.processRebuild(
+                "helpdesk", "direct", "dm-default", "request-acc", "sender-real");
+
+        assertTrue(result.success());
+        verify(sessionManager).createSessionAsync(
+                "helpdesk", "direct", "dm-default", "AK_V",
+                "sender-real", "ACC_V", "sender-real", null, null);
+        verify(resolverService, never()).resolveWithStatus(anyString());
+        verify(availabilityService, never()).resolve(anyString());
+    }
+
+    @Test
     @DisplayName("processChat: session not found → calls createSessionAsync")
     void processChatNoSession() {
         when(resolverService.resolveWithStatus("assist-001"))
@@ -327,7 +429,7 @@ class InboundProcessingServiceTest {
     void processChatBusinessScopeSkipsOnlineCheck() {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
         when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
@@ -708,7 +810,7 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-healed");
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
         when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
@@ -744,7 +846,7 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-will-not-be-used");
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
         when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
@@ -827,7 +929,7 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-new-one");
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
         when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
@@ -854,7 +956,7 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-from-null");
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
         when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
@@ -901,7 +1003,7 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-would-have-generated");
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
         when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
@@ -942,7 +1044,7 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-new");
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
         when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
@@ -971,7 +1073,7 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-healed");
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
         when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
@@ -1000,7 +1102,7 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-fresh");
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
         when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
@@ -1050,7 +1152,7 @@ class InboundProcessingServiceTest {
         AssistantScopeStrategy businessStrategy = mock(AssistantScopeStrategy.class);
         lenient().when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-would-have-been");
-        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        stubScopeStrategy(businessStrategy);
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
         when(assistantInfoService.getAssistantInfo("ak-001")).thenReturn(bizInfo);
@@ -1100,6 +1202,22 @@ class InboundProcessingServiceTest {
 
     // ==================== helper ====================
 
+    private void stubScopeStrategy(AssistantScopeStrategy strategy) {
+        lenient().when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(strategy);
+        when(scopeDispatcher.getStrategy(nullable(String.class), nullable(String.class), any(AssistantInfo.class)))
+                .thenReturn(strategy);
+    }
+
+    private void stubDefaultAssistantRoute() {
+        when(ruleService.lookup("helpdesk", "direct"))
+                .thenReturn(Optional.of(new DefaultAssistantRule("AK_V", "ACC_V", "assistant_square")));
+        AssistantScopeStrategy defaultStrategy = mock(AssistantScopeStrategy.class);
+        lenient().when(defaultStrategy.requiresOnlineCheck()).thenReturn(false);
+        lenient().when(defaultStrategy.generateToolSessionId()).thenReturn("cloud-default");
+        lenient().when(scopeDispatcher.getStrategy(eq("helpdesk"), eq("direct"), isNull()))
+                .thenReturn(defaultStrategy);
+    }
+
     private SkillSession buildReadySession() {
         SkillSession session = new SkillSession();
         session.setId(101L);
@@ -1108,6 +1226,18 @@ class InboundProcessingServiceTest {
         session.setBusinessSessionDomain("im");
         session.setBusinessSessionType("direct");
         session.setToolSessionId("tool-001");
+        return session;
+    }
+
+    private SkillSession buildDefaultAssistantSession() {
+        SkillSession session = new SkillSession();
+        session.setId(201L);
+        session.setAk("AK_V");
+        session.setUserId("sender-real");
+        session.setAssistantAccount("ACC_V");
+        session.setBusinessSessionDomain("helpdesk");
+        session.setBusinessSessionType("direct");
+        session.setToolSessionId("cloud-default");
         return session;
     }
 
