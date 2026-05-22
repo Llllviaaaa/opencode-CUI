@@ -110,7 +110,7 @@ public class GatewayApiClient {
 
         long start = System.nanoTime();
         try {
-            String url = gatewayBaseUrl + "/api/gateway/agents?ak=" + ak;
+            String url = buildGatewayUrl("/api/gateway/agents", "ak", ak);
             ResponseEntity<String> response = restTemplate.exchange(
                     url,
                     HttpMethod.GET,

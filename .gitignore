@@ -46,6 +46,7 @@ __pycache__/
 .codex-runs/
 *.rar
 logs/
+.codex/
 documents/ss-gw-architecture/
 
 # Trellis per-user workspace scratch
