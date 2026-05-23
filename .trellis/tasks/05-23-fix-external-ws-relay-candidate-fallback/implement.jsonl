@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server backend checklist for Redis pub/sub and delivery work"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "Redis subscription and external WS cross-instance delivery conventions"}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "Redis topic/key and owner-only held-by registry guidance"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "delivery failure and fallback logging conventions"}
+{"file": "skill-server/src/main/java/com/opencode/cui/skill/service/ExternalWsRegistry.java", "reason": "added ordered multi-candidate lookup for external WS domain holders"}
+{"file": "skill-server/src/main/java/com/opencode/cui/skill/service/RedisMessageBroker.java", "reason": "added external relay publish/subscribe APIs with subscriber count"}
+{"file": "skill-server/src/main/java/com/opencode/cui/skill/service/delivery/ExternalWsDeliveryStrategy.java", "reason": "changed L2 relay to try all candidates and fallback only when all publish attempts have zero subscribers"}
+{"file": "skill-server/src/main/java/com/opencode/cui/skill/ws/ExternalStreamHandler.java", "reason": "switched external relay subscription to broker helper"}

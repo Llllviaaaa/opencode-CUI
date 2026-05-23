@@ -364,6 +364,7 @@ public class RedisMessageBroker {
     // ==================== SS relay pub/sub (Task 2.6) ====================
 
     private static final String SS_RELAY_CHANNEL_PREFIX = "ss:relay:";
+    private static final String SS_EXTERNAL_RELAY_CHANNEL_PREFIX = "ss:external-relay:";
 
     /**
      * Subscribe to this instance's SS relay channel.
@@ -408,6 +409,39 @@ public class RedisMessageBroker {
     public void unsubscribeFromSsRelay(String instanceId) {
         String channel = SS_RELAY_CHANNEL_PREFIX + instanceId;
         unsubscribe(channel);
+    }
+
+    /**
+     * Subscribe to this instance's external WS relay channel.
+     *
+     * @param instanceId the local SS instance ID
+     * @param handler    callback to handle received relay messages (JSON string)
+     */
+    public void subscribeToExternalRelay(String instanceId, Consumer<String> handler) {
+        String channel = SS_EXTERNAL_RELAY_CHANNEL_PREFIX + instanceId;
+        subscribe(channel, handler);
+    }
+
+    /**
+     * Publish an external WS relay message to the target SS instance.
+     *
+     * @param targetInstanceId the target SS instance ID
+     * @param message          serialized relay envelope
+     * @return number of Redis subscribers that received the message; 0 means the
+     *         target relay channel is not currently subscribed
+     */
+    public long publishToExternalRelay(String targetInstanceId, String message) {
+        String channel = SS_EXTERNAL_RELAY_CHANNEL_PREFIX + targetInstanceId;
+        try {
+            Long receivers = redisTemplate.convertAndSend(channel, message);
+            log.info("Published to external relay channel: target={}, receivers={}",
+                    targetInstanceId, receivers);
+            return receivers != null ? receivers : 0L;
+        } catch (Exception e) {
+            log.error("Failed to publish to external relay channel: target={}, error={}",
+                    targetInstanceId, e.getMessage(), e);
+            return 0L;
+        }
     }
 
     // ==================== conn:ak 查询（v3 新增） ====================

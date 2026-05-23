@@ -152,6 +152,17 @@ class RedisMessageBrokerDeliveryTest {
         verifyNoInteractions(redisTemplate);
     }
 
+    @Test
+    @DisplayName("publishToExternalRelay: PUBLISH 到目标 external relay 并返回订阅者数")
+    void publishToExternalRelay_returnsSubscriberCount() {
+        when(redisTemplate.convertAndSend("ss:external-relay:ss-pod-2", "{}")).thenReturn(2L);
+
+        long receivers = broker.publishToExternalRelay("ss-pod-2", "{}");
+
+        assertEquals(2L, receivers);
+        verify(redisTemplate).convertAndSend("ss:external-relay:ss-pod-2", "{}");
+    }
+
     // ==================== instance:roster ZSET ====================
 
     @Test

@@ -21,7 +21,7 @@ import static org.mockito.Mockito.*;
  * <ul>
  *   <li>register/unregister 落到本实例自管 held-by hash</li>
  *   <li>heartbeatBatch: snapshot 非空走 putAll；空走 DEL</li>
- *   <li>findInstanceWithConnection: 活实例花名册过滤 + pipelined HGET + count>0 选第一个</li>
+ *   <li>findInstancesWithConnection: 活实例花名册过滤 + pipelined HGET + count>0 返回候选列表</li>
  *   <li>关键 fix：roster 不含的死实例自动被跳过（不会再被选中投递）</li>
  * </ul>
  */
@@ -92,6 +92,34 @@ class ExternalWsRegistryTest {
         when(instanceRegistry.getInstanceId()).thenReturn("ss-pod-1");
         registry.clearOnShutdown();
         verify(redisMessageBroker).heldByDeleteKey("ss-pod-1");
+    }
+
+    // ==================== findInstancesWithConnection ====================
+
+    @Test
+    @DisplayName("findInstancesWithConnection: 活实例 + 持有该 domain → 按 roster 顺序返回所有 count>0")
+    void findInstances_aliveWithDomain_returnsAllCandidates() {
+        when(instanceRegistry.getInstanceId()).thenReturn("ss-pod-1");
+        when(instanceRegistry.listAliveInstances())
+                .thenReturn(List.of("ss-pod-1", "ss-pod-2", "ss-pod-3", "ss-pod-4"));
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        counts.put("ss-pod-2", 0);
+        counts.put("ss-pod-3", 2);
+        counts.put("ss-pod-4", 1);
+        when(redisMessageBroker.heldByGetBatch(List.of("ss-pod-2", "ss-pod-3", "ss-pod-4"), "im"))
+                .thenReturn(counts);
+
+        List<String> targets = registry.findInstancesWithConnection("im");
+
+        assertEquals(List.of("ss-pod-3", "ss-pod-4"), targets);
+    }
+
+    @Test
+    @DisplayName("findInstancesWithConnection: blank domain → empty")
+    void findInstances_blankDomain() {
+        assertTrue(registry.findInstancesWithConnection("").isEmpty());
+        assertTrue(registry.findInstancesWithConnection(null).isEmpty());
+        verifyNoInteractions(redisMessageBroker, instanceRegistry);
     }
 
     // ==================== findInstanceWithConnection ====================

@@ -56,7 +56,7 @@ class ExternalStreamHandlerTest {
     }
 
     @Test
-    @DisplayName("subscribeRelayChannel 仅在 ApplicationReadyEvent 触发后才调 broker.subscribeToChannel")
+    @DisplayName("subscribeRelayChannel 仅在 ApplicationReadyEvent 触发后才调 broker.subscribeToExternalRelay")
     void subscribeRelayChannel_onlyRegistersAfterApplicationReadyEvent() {
         // setUp 复用 broker mock；此用例独立构造一份新 handler，避免 setUp 已触发的订阅干扰断言
         RedisMessageBroker freshBroker = mock(RedisMessageBroker.class);
@@ -69,11 +69,9 @@ class ExternalStreamHandlerTest {
         // 事件触发前：broker 没收到任何 subscribe 调用
         verifyNoInteractions(freshBroker);
 
-        // 事件触发后：恰好对正确的 channel 调一次 subscribeToChannel
+        // 事件触发后：恰好对本实例 external relay 调一次 subscribeToExternalRelay
         freshHandler.subscribeRelayChannel(mock(ApplicationReadyEvent.class));
-        verify(freshBroker, times(1)).subscribeToChannel(
-                eq("ss:external-relay:fresh-instance"),
-                any());
+        verify(freshBroker, times(1)).subscribeToExternalRelay(eq("fresh-instance"), any());
     }
 
     private String buildAuthProtocol(String token, String source, String instanceId) {

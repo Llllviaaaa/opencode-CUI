@@ -198,8 +198,7 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
     @EventListener(ApplicationReadyEvent.class)
     public void subscribeRelayChannel(ApplicationReadyEvent event) {
         String instanceId = instanceRegistry.getInstanceId();
-        redisMessageBroker.subscribeToChannel("ss:external-relay:" + instanceId,
-                this::handleExternalRelayMessage);
+        redisMessageBroker.subscribeToExternalRelay(instanceId, this::handleExternalRelayMessage);
         log.info("Subscribed to external relay channel: ss:external-relay:{}", instanceId);
     }
 

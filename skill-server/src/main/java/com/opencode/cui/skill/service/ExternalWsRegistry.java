@@ -75,28 +75,28 @@ public class ExternalWsRegistry {
     }
 
     /**
-     * 查找一台持有指定 domain WS 连接的远程 SS 实例。
+     * 查找持有指定 domain WS 连接的远程 SS 实例候选列表。
      *
      * <p>步骤：
      * <ol>
      *   <li>{@code instanceRegistry.listAliveInstances()} 拿活实例花名册（ZRANGEBYSCORE）</li>
      *   <li>排除 selfId</li>
      *   <li>pipeline HGET 每个候选的 {@code external-ws:held-by:{id}} 的 {domain} 字段</li>
-     *   <li>返回第一个 count > 0 的远程实例 ID</li>
+     *   <li>按活实例顺序返回所有 count > 0 的远程实例 ID</li>
      * </ol>
      *
      * <p>死实例不在花名册中 → 直接被跳过，不会再被选中投递（fix 本任务核心 bug）。</p>
      *
-     * @return 命中的远程实例 ID；无候选返回 null
+     * @return 命中的远程实例 ID 列表；无候选返回 empty list
      */
-    public String findInstanceWithConnection(String domain) {
+    public List<String> findInstancesWithConnection(String domain) {
         if (domain == null || domain.isBlank()) {
-            return null;
+            return Collections.emptyList();
         }
         String selfId = instanceRegistry.getInstanceId();
         List<String> alive = instanceRegistry.listAliveInstances();
         if (alive == null || alive.isEmpty()) {
-            return null;
+            return Collections.emptyList();
         }
         List<String> candidates = new ArrayList<>(alive.size());
         for (String id : alive) {
@@ -105,20 +105,33 @@ public class ExternalWsRegistry {
             }
         }
         if (candidates.isEmpty()) {
-            return null;
+            return Collections.emptyList();
         }
         Map<String, Integer> counts = redisMessageBroker.heldByGetBatch(candidates, domain);
         if (counts == null || counts.isEmpty()) {
-            return null;
+            return Collections.emptyList();
         }
-        // 按 alive 列表的顺序选第一个 count > 0 的（与旧实现"任选一推"语义一致）
+        List<String> targets = new ArrayList<>();
         for (String id : candidates) {
             Integer count = counts.get(id);
             if (count != null && count > 0) {
-                return id;
+                targets.add(id);
             }
         }
-        return null;
+        return targets;
+    }
+
+    /**
+     * 查找一台持有指定 domain WS 连接的远程 SS 实例。
+     *
+     * <p>兼容旧调用点；新投递逻辑应使用 {@link #findInstancesWithConnection(String)}，
+     * 以便 publish 返回 0 subscribers 时可以尝试下一个候选。</p>
+     *
+     * @return 第一个命中的远程实例 ID；无候选返回 null
+     */
+    public String findInstanceWithConnection(String domain) {
+        List<String> targets = findInstancesWithConnection(domain);
+        return targets.isEmpty() ? null : targets.get(0);
     }
 
     /** 暴露给外部的"是否可获取活实例列表"探测（用于诊断日志）。 */

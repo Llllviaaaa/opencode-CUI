@@ -10,6 +10,7 @@ import com.opencode.cui.skill.ws.ExternalStreamHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Map;
 
 @Slf4j
@@ -60,15 +61,24 @@ public class ExternalWsDeliveryStrategy implements OutboundDeliveryStrategy {
             }
 
             // L2: 跨 SS relay
-            String targetInstance = wsRegistry.findInstanceWithConnection(domain);
-            if (targetInstance != null) {
+            List<String> targetInstances = wsRegistry.findInstancesWithConnection(domain);
+            if (!targetInstances.isEmpty()) {
                 String relayPayload = objectMapper.writeValueAsString(
                         Map.of("domain", domain, "payload", json));
-                redisMessageBroker.publishToChannel(
-                        "ss:external-relay:" + targetInstance, relayPayload);
-                log.info("[DELIVERY] ExternalWs-L2: sessionId={}, type={}, domain={}, target={}",
-                        sessionId, msg.getType(), domain, targetInstance);
-                return;
+                for (String targetInstance : targetInstances) {
+                    long receivers = redisMessageBroker.publishToExternalRelay(targetInstance, relayPayload);
+                    if (receivers > 0) {
+                        log.info("[DELIVERY] ExternalWs-L2: sessionId={}, type={}, domain={}, target={}, receivers={}",
+                                sessionId, msg.getType(), domain, targetInstance, receivers);
+                        return;
+                    }
+                    log.warn("[DELIVERY] ExternalWs-L2: relay target has 0 subscribers, trying next: " +
+                            "sessionId={}, type={}, domain={}, target={}",
+                            sessionId, msg.getType(), domain, targetInstance);
+                }
+                log.warn("[DELIVERY] ExternalWs-L2: all relay candidates failed: " +
+                        "sessionId={}, type={}, domain={}, candidates={}",
+                        sessionId, msg.getType(), domain, targetInstances.size());
             }
 
             // L3: 降级

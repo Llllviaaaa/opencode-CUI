@@ -445,6 +445,32 @@ private void subscribeToUserStream(String userId) {
 
 ---
 
+## External WS 跨实例投递
+
+External WS 出站由 `ExternalWsDeliveryStrategy` 分三层处理：
+
+1. L1：`ExternalStreamHandler.pushToOne(domain, payload)` 本机投递。
+2. L2：`ExternalWsRegistry.findInstancesWithConnection(domain)` 找远程候选 SS 实例，
+   逐个调用 `RedisMessageBroker.publishToExternalRelay(targetInstance, payload)`。
+3. L3：没有候选或所有候选 publish 返回 0 subscribers 后，才进入 IM fallback / discard。
+
+候选查询沿用 owner-only registry：
+
+- 每个实例只写自己的 `external-ws:held-by:{instanceId}`，字段为 `{domain -> connectionCount}`。
+- 查询时先用 `SkillInstanceRegistry.listAliveInstances()` 拿活实例花名册，排除 self。
+- 对候选实例 pipeline HGET 对应 `external-ws:held-by:{id}` 的 `{domain}` 字段。
+- 只返回 `count > 0` 的实例，且保留 alive roster 顺序。
+
+规则：
+
+- 不要再用“找到一个 target 就算 L2 成功”的逻辑；Redis `PUBLISH` 返回的 subscribers 必须大于 0 才算成功。
+- `publishToExternalRelay(...)=0` 表示目标实例 external relay channel 当前没有订阅者，应尝试下一个候选。
+- 不要在 delivery strategy 里手写 `ss:external-relay:`；统一通过 `RedisMessageBroker.publishToExternalRelay` /
+  `subscribeToExternalRelay`。
+- 回归测试必须覆盖：多候选列表、首个候选 0 subscribers 后尝试下一个、所有候选 0 后 L3。
+
+---
+
 ## MyBatis 调用风格
 
 service 层直接调用 `Repository` 接口；参数命名与 XML 保持一致，不做“二次包装 Mapper”。
