@@ -138,6 +138,12 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
         message.put("source", "skill-server");
         message.put("action", command.action());
         message.put("assistantScope", "business");
+        if (assistantAccount != null && !assistantAccount.isBlank()) {
+            message.put("assistantAccount", assistantAccount);
+        }
+        if (businessTag != null && !businessTag.isBlank()) {
+            message.put("businessTag", businessTag);
+        }
         if (command.userId() != null && !command.userId().isBlank()) {
             message.put("userId", command.userId());
         }

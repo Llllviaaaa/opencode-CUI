@@ -82,7 +82,12 @@ class GatewayMessageTest {
     @Test
     void testInvokeSerialization() throws Exception {
         JsonNode payload = objectMapper.readTree("{\"toolSessionId\":\"sess_abc\",\"text\":\"hello\"}");
-        GatewayMessage msg = GatewayMessage.invoke("ak_test_001", "42", "chat", payload).withUserId("user-1");
+        GatewayMessage msg = GatewayMessage.invoke("ak_test_001", "42", "chat", payload)
+                .toBuilder()
+                .userId("user-1")
+                .assistantAccount("bot-001")
+                .businessTag("biz-tag")
+                .build();
 
         String json = objectMapper.writeValueAsString(msg);
         GatewayMessage deserialized = objectMapper.readValue(json, GatewayMessage.class);
@@ -92,6 +97,8 @@ class GatewayMessageTest {
         assertEquals("42", deserialized.getWelinkSessionId());
         assertEquals("user-1", deserialized.getUserId());
         assertEquals("chat", deserialized.getAction());
+        assertEquals("bot-001", deserialized.getAssistantAccount());
+        assertEquals("biz-tag", deserialized.getBusinessTag());
         assertEquals("hello", deserialized.getPayload().get("text").asText());
     }
 
@@ -207,6 +214,10 @@ class GatewayMessageTest {
         GatewayMessage original = GatewayMessage.toolEvent("sess-42", null)
                 .withUserId("user-1")
                 .withSource("skill-server")
+                .toBuilder()
+                .assistantAccount("bot-001")
+                .businessTag("biz-tag")
+                .build()
                 .withGatewayInstanceId("gw-az1-1");
 
         GatewayMessage stripped = original.withoutRoutingContext();
@@ -214,6 +225,8 @@ class GatewayMessageTest {
         assertNull(stripped.getUserId());
         assertNull(stripped.getSource());
         assertNull(stripped.getGatewayInstanceId());
+        assertEquals("bot-001", stripped.getAssistantAccount());
+        assertEquals("biz-tag", stripped.getBusinessTag());
         assertEquals("sess-42", stripped.getToolSessionId());
     }
 

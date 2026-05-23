@@ -177,6 +177,12 @@ public class DefaultAssistantScopeStrategy implements AssistantScopeStrategy {
         message.put("action", action);
         // wire 上 assistantScope="business" 让 GW 按业务路径处理（PRD D4）
         message.put("assistantScope", "business");
+        if (assistantAccount != null && !assistantAccount.isBlank()) {
+            message.put("assistantAccount", assistantAccount);
+        }
+        if (businessTag != null && !businessTag.isBlank()) {
+            message.put("businessTag", businessTag);
+        }
         if (command.userId() != null && !command.userId().isBlank()) {
             message.put("userId", command.userId());
         }

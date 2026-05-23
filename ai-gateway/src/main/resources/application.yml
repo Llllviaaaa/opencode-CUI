@@ -120,21 +120,13 @@ gateway:
       idle-timeout-seconds: ${CLOUD_WS_IDLE_TIMEOUT:60}
       ping-interval-seconds: ${CLOUD_WS_PING_INTERVAL:30}
 
-  # 云端路由信息查询
-  # v1/v2 切换由 SS SysConfig 控制（cloud_route.v2_enabled），GW 通过 skill-server 接口查询
+  # 云端路由配置：GW 从 skill-server SysConfig 读取 cloud_route.remote_property_enabled
+  # 控制是否优先按 assistantAccount 查询 remoteProperty；关闭后直接走 cloud_route_fallback_v2
   cloud-route:
-    # v1 旧接口（按 ak 单维度）
-    api-url: ${CLOUD_ROUTE_API_URL:http://localhost:9999/appstore/wecodeapi/open/ak/info}
-    bearer-token: ${CLOUD_ROUTE_BEARER_TOKEN:}
-    cache-ttl-seconds: ${CLOUD_ROUTE_CACHE_TTL_SECONDS:300}
-    # GW 端 in-memory 缓存 SS SysConfig（v1/v2 开关、fallback 总开关、SysConfig 兜底模板）的 TTL
-    # CallbackConfigService 与 SysConfigFallbackProvider 共用此值，保持 in-memory 失效语义对齐
+    # GW 端 in-memory 缓存 SS SysConfig 兜底模板的 TTL
     sysconfig-cache-ttl-ms: ${GW_SYSCONFIG_CACHE_TTL_MS:300000}
-    # v2 新接口（POST /gateway/callbacks/config，按 (ak, scope) 双维度）
-    v2-api-url: ${GW_CLOUD_CALLBACK_CONFIG_URL:http://localhost:9999/gateway/callbacks/config}
-    v2-bearer-token: ${GW_CLOUD_CALLBACK_BEARER:}
 
-  # skill-server SysConfig 客户端（用于跨服务读取 cloud_route.v2_enabled 等开关）
+  # skill-server SysConfig 客户端
   skill-server:
     api-base: ${SKILL_SERVER_API_BASE:http://localhost:8082}
     api-token: ${SKILL_SERVER_API_TOKEN:e2e-test-token}

@@ -140,12 +140,13 @@ class BusinessScopeStrategyTest {
         verify(profileRegistry).resolve(eq("app-123"));
         verify(defaultStrategy).build(any(CloudRequestContext.class));
         JsonNode root = objectMapper.readTree(result);
+        assertThat(root.path("businessTag").asText()).isEqualTo("app-123");
         assertThat(root.path("payload").path("cloudProfile").asText()).isEqualTo("assistant_square");
     }
 
     @Test
     @DisplayName("buildInvoke(chat) extracts sendUserAccount from command.payload to CloudRequestContext")
-    void buildInvoke_chat_extractsSendUserAccount() {
+    void buildInvoke_chat_extractsSendUserAccount() throws Exception {
         String payload = "{\"content\":\"hello\",\"sendUserAccount\":\"user-001\","
                 + "\"assistantAccount\":\"asst-1\",\"toolSessionId\":\"tool-1\"}";
         InvokeCommand command = new InvokeCommand("ak-1", "owner-1", "session-1", "chat", payload);
@@ -153,11 +154,13 @@ class BusinessScopeStrategyTest {
         info.setAssistantScope("business");
         info.setBusinessTag("app-123");
 
-        strategy.buildInvoke(command, info);
+        String result = strategy.buildInvoke(command, info);
 
         CloudRequestContext ctx = capturedContext();
         assertEquals("user-001", ctx.getSendUserAccount());
         assertEquals("asst-1", ctx.getAssistantAccount());
+        assertEquals("asst-1", objectMapper.readTree(result).path("assistantAccount").asText());
+        assertEquals("app-123", objectMapper.readTree(result).path("businessTag").asText());
     }
 
     @Test

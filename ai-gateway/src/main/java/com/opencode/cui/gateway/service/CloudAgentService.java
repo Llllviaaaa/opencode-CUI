@@ -27,7 +27,7 @@ import java.util.function.Consumer;
  * <p>负责编排云端 AI 调用的完整流程：
  * <ol>
  *   <li>按 {@code action} 映射到 callback {@code scope}</li>
- *   <li>从 {@link CallbackConfigService} 获取回调订阅配置</li>
+ *   <li>按 assistantAccount 查询远端 remoteProperty，未命中则直接读取 SS SysConfig</li>
  *   <li>校验 {@code channelType} 与 {@code action} 匹配关系</li>
  *   <li>构建 {@link CloudConnectionContext}</li>
  *   <li>分叉到 {@link WebHookExecutor}（webhook）或 {@link CloudProtocolClient}（sse/websocket）</li>
@@ -50,32 +50,42 @@ public class CloudAgentService {
 
     /** tool_error reason 枚举：让 SS 能精确区分失败类型，不再依赖 error 文案启发式。 */
     static final String REASON_CALLBACK_CONFIG_MISSING = "callback_config_missing";
-    static final String REASON_REMOTE_PROPERTY_MISSING = "remote_property_missing";
 
-    private final CallbackConfigService callbackConfigService;
+    private final SysConfigFallbackProviderV2 sysConfigRouteProvider;
+    private final CloudRouteSwitchService cloudRouteSwitchService;
     private final AssistantInstanceInfoService assistantInstanceInfoService;
     private final CloudProtocolClient cloudProtocolClient;
     private final WebHookExecutor webHookExecutor;
     private final CloudTimeoutProperties timeoutProperties;
 
     @Autowired
-    public CloudAgentService(CallbackConfigService callbackConfigService,
+    public CloudAgentService(SysConfigFallbackProviderV2 sysConfigRouteProvider,
+                             CloudRouteSwitchService cloudRouteSwitchService,
                              AssistantInstanceInfoService assistantInstanceInfoService,
                              CloudProtocolClient cloudProtocolClient,
                              WebHookExecutor webHookExecutor,
                              CloudTimeoutProperties timeoutProperties) {
-        this.callbackConfigService = callbackConfigService;
+        this.sysConfigRouteProvider = sysConfigRouteProvider;
+        this.cloudRouteSwitchService = cloudRouteSwitchService;
         this.assistantInstanceInfoService = assistantInstanceInfoService;
         this.cloudProtocolClient = cloudProtocolClient;
         this.webHookExecutor = webHookExecutor;
         this.timeoutProperties = timeoutProperties;
     }
 
-    public CloudAgentService(CallbackConfigService callbackConfigService,
+    public CloudAgentService(SysConfigFallbackProviderV2 sysConfigRouteProvider,
+                             CloudRouteSwitchService cloudRouteSwitchService,
                              CloudProtocolClient cloudProtocolClient,
                              WebHookExecutor webHookExecutor,
                              CloudTimeoutProperties timeoutProperties) {
-        this(callbackConfigService, null, cloudProtocolClient, webHookExecutor, timeoutProperties);
+        this(sysConfigRouteProvider, cloudRouteSwitchService, null, cloudProtocolClient, webHookExecutor, timeoutProperties);
+    }
+
+    public CloudAgentService(SysConfigFallbackProviderV2 sysConfigRouteProvider,
+                             CloudProtocolClient cloudProtocolClient,
+                             WebHookExecutor webHookExecutor,
+                             CloudTimeoutProperties timeoutProperties) {
+        this(sysConfigRouteProvider, null, null, cloudProtocolClient, webHookExecutor, timeoutProperties);
     }
 
     /**
@@ -87,19 +97,20 @@ public class CloudAgentService {
     public void handleInvoke(GatewayMessage invokeMessage, Consumer<GatewayMessage> onRelay) {
         String ak = invokeMessage.getAk();
         String action = invokeMessage.getAction();
-        JsonNode cloudRequest = invokeMessage.getPayload().path("cloudRequest");
-        String toolSessionId = invokeMessage.getPayload().path("toolSessionId").asText(null);
-        String partnerAccount = firstNonBlank(
-                invokeMessage.getPayload().path("assistantAccount").asText(null),
-                invokeMessage.getPayload().path("partnerAccount").asText(null));
-        // cloudProfile 字段缺失时默认 "default"（向后兼容老 SS）
-        String cloudProfile = invokeMessage.getPayload().path("cloudProfile").asText("default");
-        if (cloudProfile == null || cloudProfile.isBlank()) {
-            cloudProfile = "default";
-        }
+        JsonNode payload = invokeMessage.getPayload();
+        JsonNode cloudRequest = payload == null ? null : payload.path("cloudRequest");
+        String toolSessionId = payload == null ? null : payload.path("toolSessionId").asText(null);
+        String assistantAccount = firstNonBlank(
+                invokeMessage.getAssistantAccount(),
+                textAt(payload, "assistantAccount"),
+                textAt(payload, "partnerAccount"));
+        String businessTag = firstNonBlank(
+                invokeMessage.getBusinessTag(),
+                textAt(payload, "businessTag"),
+                textAt(payload, "cloudProfile"));
 
-        log.info("[CLOUD_AGENT] handleInvoke: ak={}, action={}, toolSessionId={}, traceId={}",
-                ak, action, toolSessionId, invokeMessage.getTraceId());
+        log.info("[CLOUD_AGENT] handleInvoke: ak={}, action={}, assistantAccount={}, businessTag={}, toolSessionId={}, traceId={}",
+                ak, action, mask(assistantAccount), businessTag, toolSessionId, invokeMessage.getTraceId());
 
         // 1. action → scope 映射
         String scope = ACTION_TO_SCOPE.get(action);
@@ -110,31 +121,26 @@ public class CloudAgentService {
             return;
         }
 
-        // 2. 优先按 assistantAccount/partnerAccount 查询 instance/query 的 remoteProperty。
-        RemoteRoute remoteRoute = resolveRemoteRoute(partnerAccount, action, cloudProfile);
+        RemoteRoute remoteRoute = null;
+        if (assistantAccount != null && !assistantAccount.isBlank()) {
+            if (remotePropertyEnabled()) {
+                remoteRoute = resolveRemoteRoute(assistantAccount, action, businessTag);
+            } else {
+                log.info("[CLOUD_AGENT] remoteProperty lookup disabled by SysConfig: assistantAccount={}, businessTag={}, action={}",
+                        mask(assistantAccount), businessTag, action);
+            }
+        }
         if (remoteRoute != null) {
             invokeRemoteRoute(invokeMessage, onRelay, cloudRequest, toolSessionId, scope, remoteRoute);
             return;
         }
 
-        if ((ak == null || ak.isBlank()) && partnerAccount != null && !partnerAccount.isBlank()) {
-            log.warn("[CLOUD_AGENT] remote property missing and ak absent: partnerAccount={}, action={}",
-                    mask(partnerAccount), action);
-            onRelay.accept(buildCloudError(invokeMessage, toolSessionId,
-                    new RuntimeException("Remote assistant route config missing for action: " + action),
-                    REASON_REMOTE_PROPERTY_MISSING));
-            return;
-        }
-
-        // 3. 兼容回退：拉取 (ak, scope, cloudProfile) 对应的旧回调配置
-        //    cloudProfile == null/blank/"default" → V1 路径（老 cache key + 老 provider，零 cold miss）
-        //    cloudProfile 具体值（如 "assistant_square"） → V2 路径（独立 cache key + 新 provider）
-        CallbackConfig cfg = callbackConfigService.getConfig(ak, scope, cloudProfile);
+        CallbackConfig cfg = sysConfigRouteProvider.load(ak, scope, businessTag);
         if (cfg == null) {
-            String reason = "chat".equals(action)
-                    ? "Cloud route info not found for ak: " + ak
-                    : action + " not enabled (v1 mode or AK not subscribed)";
-            log.warn("[CLOUD_AGENT] callback config missing: ak={}, scope={}, action={}", ak, scope, action);
+            String reason = "Cloud route SysConfig not found for businessTag: " + businessTag
+                    + ", action: " + action;
+            log.warn("[CLOUD_AGENT] sysconfig route missing: ak={}, scope={}, action={}, assistantAccount={}, businessTag={}",
+                    ak, scope, action, mask(assistantAccount), businessTag);
             onRelay.accept(buildCloudError(invokeMessage, toolSessionId,
                     new RuntimeException(reason), REASON_CALLBACK_CONFIG_MISSING));
             return;
@@ -164,7 +170,7 @@ public class CloudAgentService {
                 .authType(cfg.getAuthType())
                 .cloudRequest(cloudRequest)
                 .traceId(invokeMessage.getTraceId())
-                .cloudProfile(cloudProfile)
+                .cloudProfile(businessTag)
                 .build();
 
         // 6. 分叉
@@ -213,12 +219,12 @@ public class CloudAgentService {
                 invokeMessage.getAk(), toolSessionId);
     }
 
-    private RemoteRoute resolveRemoteRoute(String partnerAccount, String action, String fallbackCloudProfile) {
+    private RemoteRoute resolveRemoteRoute(String assistantAccount, String action, String fallbackBusinessTag) {
         if (assistantInstanceInfoService == null
-                || partnerAccount == null || partnerAccount.isBlank()) {
+                || assistantAccount == null || assistantAccount.isBlank()) {
             return null;
         }
-        AssistantInstanceInfo info = assistantInstanceInfoService.getInstanceInfo(partnerAccount);
+        AssistantInstanceInfo info = assistantInstanceInfoService.getInstanceInfo(assistantAccount);
         if (info == null || info.getRemoteProperty() == null || info.getRemoteProperty().isEmpty()) {
             return null;
         }
@@ -233,10 +239,14 @@ public class CloudAgentService {
                 continue;
             }
             return new RemoteRoute(channelAddress, channelType, null,
-                    firstNonBlank(property.getDataProtocol(), fallbackCloudProfile),
+                    firstNonBlank(property.getDataProtocol(), fallbackBusinessTag),
                     property.getHeaders());
         }
         return null;
+    }
+
+    private boolean remotePropertyEnabled() {
+        return cloudRouteSwitchService == null || cloudRouteSwitchService.remotePropertyEnabled();
     }
 
     private static String abilityType(String action) {
@@ -380,6 +390,18 @@ public class CloudAgentService {
                 .error("Cloud agent error: " + error.getMessage())
                 .reason(reason)
                 .build();
+    }
+
+    private static String textAt(JsonNode node, String fieldName) {
+        if (node == null || !node.isObject()) {
+            return null;
+        }
+        JsonNode value = node.path(fieldName);
+        if (value.isMissingNode() || value.isNull()) {
+            return null;
+        }
+        String text = value.asText(null);
+        return (text == null || text.isBlank()) ? null : text;
     }
 
     private static String firstNonBlank(String... values) {

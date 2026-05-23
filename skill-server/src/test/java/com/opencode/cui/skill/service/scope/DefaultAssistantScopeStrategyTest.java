@@ -144,6 +144,8 @@ class DefaultAssistantScopeStrategyTest {
         assertEquals("invoke", root.path("type").asText());
         // wire 上 assistantScope="business" 让 GW 按业务路径处理
         assertEquals("business", root.path("assistantScope").asText());
+        assertEquals("ACC_V", root.path("assistantAccount").asText());
+        assertEquals("assistant_square", root.path("businessTag").asText());
         assertEquals(GatewayActions.CHAT, root.path("action").asText());
         assertEquals("AK_V", root.path("ak").asText());
         // payload.cloudProfile == profile.name()

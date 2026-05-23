@@ -27,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class CloudResponseProfileRegistry {
 
     private static final String CONFIG_TYPE_PROFILE_DEF = "cloud_protocol_profile_def";
+    private static final String CONFIG_TYPE_PROFILE = "cloud_protocol_profile";
     private static final String DEFAULT_PROFILE = "default";
 
     private final SkillServerConfigClient skillServerConfigClient;
@@ -59,7 +60,8 @@ public class CloudResponseProfileRegistry {
         return profile;
     }
 
-    private CloudResponseProfile loadFromSysConfig(String profileName) {
+    private CloudResponseProfile loadFromSysConfig(String businessTag) {
+        String profileName = resolveProfileName(businessTag);
         String defJson = null;
         try {
             defJson = skillServerConfigClient.getConfigValue(CONFIG_TYPE_PROFILE_DEF, profileName);
@@ -81,6 +83,25 @@ public class CloudResponseProfileRegistry {
             decoderName = profileName;
         }
         return new CloudResponseProfile(profileName, decoderName);
+    }
+
+    private String resolveProfileName(String businessTag) {
+        if (businessTag == null || businessTag.isBlank()) {
+            return DEFAULT_PROFILE;
+        }
+        if (DEFAULT_PROFILE.equals(businessTag)) {
+            return DEFAULT_PROFILE;
+        }
+        try {
+            String configured = skillServerConfigClient.getConfigValue(CONFIG_TYPE_PROFILE, businessTag);
+            if (configured != null && !configured.isBlank()) {
+                return configured;
+            }
+        } catch (Exception e) {
+            log.warn("[PROFILE_REG] fetch profile mapping failed: businessTag={}, error={}",
+                    businessTag, e.getMessage());
+        }
+        return businessTag;
     }
 
     private record CacheEntry(CloudResponseProfile profile, long timestampMs) {
