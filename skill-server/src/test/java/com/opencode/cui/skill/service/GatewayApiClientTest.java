@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpEntity;
@@ -23,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -137,12 +139,12 @@ class GatewayApiClientTest {
     }
 
     @Test
-    @DisplayName("getAvailability URL-encodes ak query parameter")
-    void getAvailabilityEncodesAkQueryParam() {
+    @DisplayName("getAvailability sends ak in JSON body")
+    void getAvailabilitySendsAkInJsonBody() {
         String responseBody = "{\"code\":200,\"data\":{\"exists\":true,\"online\":false,\"latestToolType\":\"opencode\"}}";
         when(restTemplate.exchange(
-                eq("http://localhost:8081/api/gateway/internal/agent/availability?ak=ak%20value%2Fwith%3Fx%3D1%26y%3D2%2Bplus"),
-                eq(HttpMethod.GET),
+                eq("http://localhost:8081/api/gateway/internal/agent/availability"),
+                eq(HttpMethod.POST),
                 any(HttpEntity.class),
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok(responseBody));
@@ -151,5 +153,13 @@ class GatewayApiClientTest {
 
         assertNotNull(result);
         assertEquals("opencode", result.latestToolType());
+
+        ArgumentCaptor<HttpEntity<String>> entityCaptor = ArgumentCaptor.captor();
+        verify(restTemplate).exchange(
+                eq("http://localhost:8081/api/gateway/internal/agent/availability"),
+                eq(HttpMethod.POST),
+                entityCaptor.capture(),
+                eq(String.class));
+        assertEquals("{\"ak\":\"ak value/with?x=1&y=2+plus\"}", entityCaptor.getValue().getBody());
     }
 }

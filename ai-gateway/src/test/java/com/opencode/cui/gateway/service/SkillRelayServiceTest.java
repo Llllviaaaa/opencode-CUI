@@ -23,6 +23,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 
 /** SkillRelayService 单元测试：验证 V2 路由表 + 一致性哈希环路由、广播降级、连接管理。 */
@@ -110,11 +111,10 @@ class SkillRelayServiceTest {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
-            awaitSend();
             // At least one should receive (hash-selected)
             int sendCount = 0;
-            try { verify(ss1Session).sendMessage(any(TextMessage.class)); sendCount++; } catch (AssertionError ignored) {}
-            try { verify(ss2Session).sendMessage(any(TextMessage.class)); sendCount++; } catch (AssertionError ignored) {}
+            try { verify(ss1Session, timeout(1000)).sendMessage(any(TextMessage.class)); sendCount++; } catch (AssertionError ignored) {}
+            try { verify(ss2Session, timeout(1000)).sendMessage(any(TextMessage.class)); sendCount++; } catch (AssertionError ignored) {}
             assertTrue(sendCount >= 1);
         }
 
@@ -344,8 +344,7 @@ class SkillRelayServiceTest {
                     .toolSessionId("T1")
                     .build();
             service.relayToSkill(msg1);
-            awaitSend();
-            verify(ss1Session).sendMessage(any(TextMessage.class));
+            verify(ss1Session, timeout(1000)).sendMessage(any(TextMessage.class));
             verify(bpSession, never()).sendMessage(any(TextMessage.class));
 
             GatewayMessage msg2 = GatewayMessage.builder()
@@ -353,8 +352,7 @@ class SkillRelayServiceTest {
                     .toolSessionId("T3")
                     .build();
             service.relayToSkill(msg2);
-            awaitSend();
-            verify(bpSession).sendMessage(any(TextMessage.class));
+            verify(bpSession, timeout(1000)).sendMessage(any(TextMessage.class));
         }
     }
 

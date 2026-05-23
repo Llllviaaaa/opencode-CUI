@@ -235,9 +235,14 @@ export class StreamAssembler {
         const id = this.findPermissionPartId(msg.permissionId) || msg.partId || msg.permissionId || this.genPartId('perm');
         const part = this.getOrCreatePart(id, 'permission', msg.partSeq);
         part.permissionId = msg.permissionId;
+        part.permType = msg.permType ?? part.permType;
+        part.toolName = msg.toolName ?? part.toolName;
+        part.content = msg.title ?? msg.content ?? part.content;
         part.permResolved = true;
         part.permissionResponse = msg.response;
         part.isStreaming = false;
+        part.subagentSessionId = msg.subagentSessionId ?? part.subagentSessionId;
+        part.subagentName = msg.subagentName ?? part.subagentName;
         break;
       }
 

@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -16,6 +17,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * REST client for querying AI-Gateway APIs.
@@ -143,7 +145,7 @@ public class GatewayApiClient {
 
     /**
      * 查询 Agent 可及性信息（供差异化离线文案使用）。
-     * 调用 GET {gatewayBaseUrl}/api/gateway/internal/agent/availability?ak={ak}。
+     * 调用 POST {gatewayBaseUrl}/api/gateway/internal/agent/availability。
      *
      * @return GatewayAvailabilityResponse，网络 5xx/超时/解析失败时返回 null
      */
@@ -153,11 +155,14 @@ public class GatewayApiClient {
         }
         long start = System.nanoTime();
         try {
-            String url = buildGatewayUrl("/api/gateway/internal/agent/availability", "ak", ak);
+            String url = gatewayBaseUrl + "/api/gateway/internal/agent/availability";
+            HttpHeaders headers = buildHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            String body = objectMapper.writeValueAsString(Map.of("ak", ak));
             ResponseEntity<String> response = restTemplate.exchange(
                     url,
-                    HttpMethod.GET,
-                    new HttpEntity<>(buildHeaders()),
+                    HttpMethod.POST,
+                    new HttpEntity<>(body, headers),
                     String.class);
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
