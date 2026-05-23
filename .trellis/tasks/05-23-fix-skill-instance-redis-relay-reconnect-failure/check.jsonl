@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "verify skill-server backend checklist compliance"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "verify Redis listener lifecycle and scheduling conventions"}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "verify Redis pub/sub behavior remains aligned"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "verify recovery-path logging remains appropriate"}
+{"command": "mvn test \"-Dtest=RedisMessageBrokerTest,SkillInstanceRegistryTest\"", "reason": "targeted regression suite for Redis relay reconnect and heartbeat takeover behavior", "result": "pass"}
+{"tool": "gitnexus_detect_changes", "scope": "all", "reason": "pre-commit affected-symbol and flow check", "result": "pass: low risk, expected RedisMessageBroker, RedisMessageBrokerTest, and spec doc scope"}
+{"command": "mvn test", "reason": "full skill-server regression suite", "result": "pass"}

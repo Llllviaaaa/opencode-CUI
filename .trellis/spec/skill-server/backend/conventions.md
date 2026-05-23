@@ -416,6 +416,35 @@ private void subscribeToUserStream(String userId) {
 
 ---
 
+## Redis pub/sub 自愈
+
+`SkillInstanceRegistry.refreshHeartbeat` 的订阅自检只负责判断本实例
+`ss:relay:{instanceId}` 在 Redis 端 `PUBSUB NUMSUB` 是否大于 0。恢复动作必须留在
+`RedisMessageBroker.forceReconnectListenerContainer(String verifyChannel, long timeoutMs)`。
+
+恢复顺序：
+
+1. 用 `activeListeners.get(verifyChannel)` 找到现有 `MessageListener`。
+2. 调 `listenerContainer.addMessageListener(listener, new ChannelTopic(verifyChannel))`
+   重新提交该单个 relay channel 的订阅。
+3. 用 `physicalSubscriberCount(verifyChannel)` 等待 `PUBSUB NUMSUB > 0`。
+4. 只有单通道重订阅失败或超时，才退回 `listenerContainer.stop()` +
+   `listenerContainer.start()`，并在 `start()` 异常后再次 `stop()` 复位 container。
+
+来源：`skill-server/src/main/java/com/opencode/cui/skill/service/RedisMessageBroker.java::forceReconnectListenerContainer`
+
+规则：
+
+- `NUMSUB=0` 不要一上来重启整个 `RedisMessageListenerContainer`；这会影响
+  `agent:*`、`user-stream:*`、`ss:relay:*` 下所有订阅，并可能触发 Spring Data Redis
+  `SubscriptionTask aborted` 路径。
+- 强制恢复必须是 single-flight；多个调度线程/调用方不能并发 `stop/start` 同一个共享 container。
+- 恢复失败仍然返回 `false`，让 `SkillInstanceRegistry` 跳过本轮 heartbeat 并保留 takeover 兜底。
+- 回归测试必须覆盖：单通道重订阅成功不重启 container、重订阅失败后 fallback、
+  `start()` 异常复位、重入时不重复 `stop/start`。
+
+---
+
 ## MyBatis 调用风格
 
 service 层直接调用 `Repository` 接口；参数命名与 XML 保持一致，不做“二次包装 Mapper”。

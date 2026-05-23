@@ -13,6 +13,7 @@ import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.lettuce.LettuceConnection;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 
 import java.util.LinkedHashMap;
@@ -26,6 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -95,9 +97,28 @@ class RedisMessageBrokerTest {
     // ==================== forceReconnectListenerContainer ====================
 
     @Test
-    @DisplayName("forceReconnectListenerContainer 调用 stop() + start()，重连后 NUMSUB>0 返回 true")
-    void forceReconnectListenerContainer_success_shouldStopThenStartAndReturnTrue() throws Exception {
-        // Mock PUBSUB NUMSUB → 1 subscriber，深 mock Lettuce native async API 路径
+    @DisplayName("forceReconnectListenerContainer 优先重新订阅单个 channel，成功时不重启 container")
+    void forceReconnectListenerContainer_success_shouldResubscribeChannelWithoutRestart() throws Exception {
+        seedActiveRelayListener();
+        Map<byte[], Long> numsubResult = new LinkedHashMap<>();
+        numsubResult.put(VERIFY_CHANNEL.getBytes(), 1L);
+        stubPubsubNumsub(numsubResult);
+        stubConnectionFactoryToReturnLettuceConnection();
+
+        boolean ok = broker.forceReconnectListenerContainer(VERIFY_CHANNEL, 1000L);
+
+        assertTrue(ok);
+        verify(listenerContainer).addMessageListener(any(), any(ChannelTopic.class));
+        verify(listenerContainer, never()).stop();
+        verify(listenerContainer, never()).start();
+    }
+
+    @Test
+    @DisplayName("forceReconnectListenerContainer 单通道重订阅失败后才退回 stop() + start()")
+    void forceReconnectListenerContainer_resubscribeFails_shouldFallbackToRestart() throws Exception {
+        seedActiveRelayListener();
+        org.mockito.Mockito.doThrow(new RuntimeException("resubscribe failed"))
+                .when(listenerContainer).addMessageListener(any(), any(ChannelTopic.class));
         Map<byte[], Long> numsubResult = new LinkedHashMap<>();
         numsubResult.put(VERIFY_CHANNEL.getBytes(), 1L);
         stubPubsubNumsub(numsubResult);
@@ -107,6 +128,7 @@ class RedisMessageBrokerTest {
 
         assertTrue(ok);
         InOrder order = inOrder(listenerContainer);
+        order.verify(listenerContainer).addMessageListener(any(), any(ChannelTopic.class));
         order.verify(listenerContainer).stop();
         order.verify(listenerContainer).start();
     }
@@ -114,12 +136,56 @@ class RedisMessageBrokerTest {
     @Test
     @DisplayName("forceReconnectListenerContainer 重启异常 → 返回 false")
     void forceReconnectListenerContainer_stopThrows_shouldReturnFalse() {
+        seedActiveRelayListener();
+        org.mockito.Mockito.doThrow(new RuntimeException("resubscribe failed"))
+                .when(listenerContainer).addMessageListener(any(), any(ChannelTopic.class));
         org.mockito.Mockito.doThrow(new RuntimeException("redis down"))
                 .when(listenerContainer).stop();
 
         boolean ok = broker.forceReconnectListenerContainer(VERIFY_CHANNEL, 100L);
 
         assertFalse(ok);
+    }
+
+    @Test
+    @DisplayName("forceReconnectListenerContainer start 异常后会再次 stop 复位 container")
+    void forceReconnectListenerContainer_startThrows_shouldResetContainerAndReturnFalse() {
+        seedActiveRelayListener();
+        org.mockito.Mockito.doThrow(new RuntimeException("resubscribe failed"))
+                .when(listenerContainer).addMessageListener(any(), any(ChannelTopic.class));
+        org.mockito.Mockito.doThrow(new RuntimeException("subscribe failed"))
+                .when(listenerContainer).start();
+
+        boolean ok = broker.forceReconnectListenerContainer(VERIFY_CHANNEL, 100L);
+
+        assertFalse(ok);
+        InOrder order = inOrder(listenerContainer);
+        order.verify(listenerContainer).stop();
+        order.verify(listenerContainer).start();
+        order.verify(listenerContainer).stop();
+    }
+
+    @Test
+    @DisplayName("forceReconnectListenerContainer 重连中重入时不重复 stop/start")
+    void forceReconnectListenerContainer_reentrant_shouldNotStartSecondCycle() throws Exception {
+        seedActiveRelayListener();
+        org.mockito.Mockito.doThrow(new RuntimeException("resubscribe failed"))
+                .when(listenerContainer).addMessageListener(any(), any(ChannelTopic.class));
+        Map<byte[], Long> numsubResult = new LinkedHashMap<>();
+        numsubResult.put(VERIFY_CHANNEL.getBytes(), 0L);
+        stubPubsubNumsub(numsubResult);
+        stubConnectionFactoryToReturnLettuceConnection();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            boolean nested = broker.forceReconnectListenerContainer(VERIFY_CHANNEL, 0L);
+            assertFalse(nested);
+            return null;
+        }).when(listenerContainer).start();
+
+        boolean ok = broker.forceReconnectListenerContainer(VERIFY_CHANNEL, 0L);
+
+        assertFalse(ok);
+        verify(listenerContainer, times(1)).stop();
+        verify(listenerContainer, times(1)).start();
     }
 
     @Test
@@ -216,6 +282,12 @@ class RedisMessageBrokerTest {
     }
 
     // ==================== 测试辅助方法 ====================
+
+    private void seedActiveRelayListener() {
+        broker.subscribeToChannel(VERIFY_CHANNEL, ignored -> {
+        });
+        org.mockito.Mockito.clearInvocations(listenerContainer);
+    }
 
     /**
      * 让 {@code redisTemplate.getRequiredConnectionFactory().getConnection()} 返回 mock 的
