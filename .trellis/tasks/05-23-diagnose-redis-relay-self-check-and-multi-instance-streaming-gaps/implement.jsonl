@@ -1,0 +1,16 @@
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server backend checklist for Redis pub/sub and websocket delivery diagnosis"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "Redis listener lifecycle, ApplicationReadyEvent, RedisMessageBroker, and StreamMessageEmitter conventions"}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "Redis pub/sub, ownership, and Lettuce native API guidance"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "recovery-path log severity and observability rules"}
+{"file": ".trellis/spec/guides/index.md", "reason": "shared thinking guide routing"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "miniapp websocket stream crosses gateway, skill-server, Redis, and UI delivery boundaries"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "reuse existing RedisMessageBroker recovery and delivery abstractions"}
+{"file": "skill-server/src/main/java/com/opencode/cui/skill/service/RedisMessageBroker.java", "reason": "narrow fix point for shared Redis listener recovery"}
+{"file": "skill-server/src/main/java/com/opencode/cui/skill/service/SkillInstanceRegistry.java", "reason": "caller of Redis relay self-check and heartbeat skip behavior"}
+{"file": "skill-server/src/main/java/com/opencode/cui/skill/ws/SkillStreamHandler.java", "reason": "miniapp user-stream subscription and websocket delivery evidence"}
+{"file": "skill-server/src/main/java/com/opencode/cui/skill/service/delivery/MiniappDeliveryStrategy.java", "reason": "miniapp outbound delivery publishes to user-stream channel"}
+{"file": "skill-server/src/test/java/com/opencode/cui/skill/service/RedisMessageBrokerTest.java", "reason": "regression tests for Redis listener recovery"}
+{"file": "skill-server/src/main/java/com/opencode/cui/skill/service/RedisMessageBroker.java", "reason": "added verifySubscriptionDelivery loopback probe so self-check validates real pub/sub delivery instead of Redis Cluster node-local NUMSUB"}
+{"file": "skill-server/src/main/java/com/opencode/cui/skill/service/SkillInstanceRegistry.java", "reason": "switched relay self-check to loopback probe and updated failure log wording"}
+{"file": "skill-server/src/test/java/com/opencode/cui/skill/service/RedisMessageBrokerTest.java", "reason": "added loopback probe success/timeout tests and kept channel recovery free of shared container stop/start"}
+{"file": "skill-server/src/test/java/com/opencode/cui/skill/service/SkillInstanceRegistryTest.java", "reason": "updated heartbeat self-check tests from NUMSUB to probe delivery semantics"}
