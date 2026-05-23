@@ -194,6 +194,7 @@ public void publishToUser(String userId, String message) {
 }
 
 private static final String SS_RELAY_CHANNEL_PREFIX = "ss:relay:";
+private static final String SS_EXTERNAL_RELAY_CHANNEL_PREFIX = "ss:external-relay:";
 ```
 
 来源：`skill-server/src/main/java/com/opencode/cui/skill/service/RedisMessageBroker.java:47-71,174-221`
@@ -206,6 +207,8 @@ private static final String SS_RELAY_CHANNEL_PREFIX = "ss:relay:";
 | `user-stream:{userId}` | miniapp user-stream 频道 | `RedisMessageBroker.java:52-70` |
 | `agent:{agentId}` | agent 频道 | `RedisMessageBroker.java:47-65` |
 | `ss:relay:{instanceId}` | SS 间 relay 频道 | `RedisMessageBroker.java:176-221` |
+| `ss:external-relay:{instanceId}` | SS 间 external WS relay 频道 | `RedisMessageBroker.java::publishToExternalRelay` |
+| `external-ws:held-by:{instanceId}` | 本 SS 持有的 external WS domain -> connectionCount 快照 | `RedisMessageBroker.java::heldByPutAll` |
 | `conn:ak:{ak}` | AK 所在 gateway instance | `RedisMessageBroker.java:223-235` |
 | `ss:tool-session:{toolSessionId}` | toolSessionId -> sessionId 映射 | `RedisMessageBroker.java:239-251` |
 | `ss:stream-seq:{sessionId}` | 跨实例传输序号 | `RedisMessageBroker.java:255-260` |

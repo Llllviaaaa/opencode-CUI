@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server backend checklist for Redis pub/sub self-healing work"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "RedisMessageBroker ownership, ApplicationReadyEvent scheduling, listener lifecycle conventions"}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "Redis pub/sub and Lettuce native API guidance"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "log severity and recovery-path observability conventions"}
+{"file": ".trellis/spec/guides/index.md", "reason": "shared thinking guide index for scope and reuse checks"}
+{"file": "skill-server/src/main/java/com/opencode/cui/skill/service/RedisMessageBroker.java", "reason": "implemented relay recovery with single-flight channel re-subscribe before shared container restart fallback"}
+{"file": "skill-server/src/test/java/com/opencode/cui/skill/service/RedisMessageBrokerTest.java", "reason": "added regression coverage for channel re-subscribe success, restart fallback, failed start reset, and re-entrant reconnect guard"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "documented Redis pub/sub self-heal recovery order and regression requirements"}

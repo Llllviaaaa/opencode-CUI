@@ -1,0 +1,8 @@
+{"tool": "gitnexus_impact", "target": "findInstanceWithConnection", "result": "HIGH: direct callers in delivery and tests; mitigated by keeping compatible wrapper and adding new list API"}
+{"tool": "gitnexus_impact", "target": "ExternalWsDeliveryStrategy", "result": "LOW"}
+{"tool": "gitnexus_impact", "target": "subscribeRelayChannel", "result": "LOW"}
+{"command": "mvn test \"-Dtest=ExternalWsRegistryTest,ExternalWsDeliveryStrategyTest,ExternalStreamHandlerTest,RedisMessageBrokerDeliveryTest\"", "result": "pass"}
+{"command": "git diff --check -- <target files>", "result": "pass"}
+{"command": "mvn test", "result": "pass"}
+{"tool": "gitnexus_detect_changes", "scope": "all", "result": "MEDIUM: expected external WS relay and RedisMessageBroker additive changes; RedisMessageBroker maps to existing relay flow for affected-process reporting"}
+{"tool": "gitnexus_detect_changes", "scope": "staged", "result": "MEDIUM: staged scope contains only external WS relay/spec/test/task changes; affected process reports existing RedisMessageBroker session flow"}

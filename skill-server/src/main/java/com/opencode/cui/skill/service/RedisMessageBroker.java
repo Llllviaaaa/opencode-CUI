@@ -24,6 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 
@@ -44,6 +45,7 @@ public class RedisMessageBroker {
 
     /** Track active subscriptions for cleanup */
     private final Map<String, MessageListener> activeListeners = new ConcurrentHashMap<>();
+    private final AtomicBoolean reconnectInProgress = new AtomicBoolean(false);
 
     public RedisMessageBroker(StringRedisTemplate redisTemplate,
             RedisMessageListenerContainer listenerContainer) {
@@ -247,36 +249,87 @@ public class RedisMessageBroker {
     }
 
     /**
-     * 强制重启 {@link RedisMessageListenerContainer}，让 Spring 重建底层 subscription
-     * 长连接，并重新注册 {@code activeListeners} 中所有 listener。
+     * 自愈 Redis pub/sub silent failure。
      *
-     * <p>用于 pub/sub 长连接 silent failure 自愈：当 {@link #physicalSubscriberCount}
-     * 检测到本实例 channel 的 Redis 端订阅数为 0（长连接已断、listener 对象仍在内存
-     * map 中）时调用。{@code addMessageListener} 把 listener 挂在 container 当前的
-     * subscription connection 上，简单 unsubscribe + subscribe 仍会挂到死连接上，
-     * 必须 stop + start 重建底层连接。</p>
+     * <p>当 {@link #physicalSubscriberCount} 检测到本实例 relay channel 在 Redis 端订阅数为 0，
+     * 但 listener 仍在 {@code activeListeners} 中时，优先重新提交该单个 channel 的订阅并确认
+     * {@code PUBSUB NUMSUB} 恢复。这样可以避开整容器 {@code stop/start} 导致的 Spring
+     * {@code SubscriptionTask aborted} 路径。</p>
      *
-     * <p>副作用：影响该 container 下所有订阅（agent:*、user-stream:*、ss:relay:*）
-     * 短暂中断（毫秒级）。仅在自检失败路径触发，可接受。</p>
+     * <p>如果单通道重订阅失败或超时，再退回到重启 {@link RedisMessageListenerContainer}。
+     * 退回路径会短暂影响该 container 下所有订阅（agent:*、user-stream:*、ss:relay:*）。</p>
      *
-     * @param verifyChannel 重连后用于校验订阅恢复的 channel；通常是调用方自己的
-     *                      {@code ss:relay:{instanceId}}
+     * @param verifyChannel 用于校验订阅恢复的 channel；通常是调用方自己的 {@code ss:relay:{instanceId}}
      * @param timeoutMs     等待物理订阅恢复的最大时间（毫秒），超时返回 false
-     * @return true 表示重连后 {@code verifyChannel} 在 Redis 端订阅数 >0；
-     *         false 表示重启异常或超时未恢复
+     * @return true 表示 {@code verifyChannel} 在 Redis 端订阅数 >0；false 表示异常或超时未恢复
      */
     public boolean forceReconnectListenerContainer(String verifyChannel, long timeoutMs) {
+        if (!reconnectInProgress.compareAndSet(false, true)) {
+            log.warn("Force reconnect already in progress: verifyChannel={}", verifyChannel);
+            return waitForSubscriptionRestored(verifyChannel, timeoutMs);
+        }
         int affectedSubscriptions = activeListeners.size();
         log.warn("Force reconnecting RedisMessageListenerContainer: affectedSubscriptions={}, verifyChannel={}",
                 affectedSubscriptions, verifyChannel);
         try {
+            if (resubscribeActiveListener(verifyChannel, timeoutMs)) {
+                return true;
+            }
             listenerContainer.stop();
-            listenerContainer.start(); // Spring 异步重新注册 cachedListeners
+            if (!startListenerContainer(verifyChannel)) {
+                return false;
+            }
             return waitForSubscriptionRestored(verifyChannel, timeoutMs);
         } catch (Exception e) {
             log.error("forceReconnectListenerContainer failed: verifyChannel={}, error={}",
                     verifyChannel, e.getMessage(), e);
             return false;
+        } finally {
+            reconnectInProgress.set(false);
+        }
+    }
+
+    private boolean resubscribeActiveListener(String channel, long timeoutMs) {
+        if (channel == null || channel.isBlank()) {
+            return false;
+        }
+        MessageListener listener = activeListeners.get(channel);
+        if (listener == null) {
+            log.warn("Cannot resubscribe Redis channel without active listener: channel={}", channel);
+            return false;
+        }
+        try {
+            listenerContainer.addMessageListener(listener, new ChannelTopic(channel));
+            if (waitForSubscriptionRestored(channel, timeoutMs)) {
+                log.warn("Redis channel resubscribe restored subscriber: channel={}", channel);
+                return true;
+            }
+            log.warn("Redis channel resubscribe timed out: channel={}, timeoutMs={}", channel, timeoutMs);
+            return false;
+        } catch (Exception e) {
+            log.warn("Redis channel resubscribe failed: channel={}, error={}", channel, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    private boolean startListenerContainer(String verifyChannel) {
+        try {
+            listenerContainer.start();
+            return true;
+        } catch (Exception e) {
+            log.error("forceReconnectListenerContainer start failed: verifyChannel={}, error={}",
+                    verifyChannel, e.getMessage(), e);
+            resetListenerContainerAfterFailedStart(verifyChannel);
+            return false;
+        }
+    }
+
+    private void resetListenerContainerAfterFailedStart(String verifyChannel) {
+        try {
+            listenerContainer.stop();
+        } catch (Exception stopError) {
+            log.warn("Failed to reset RedisMessageListenerContainer after start failure: verifyChannel={}, error={}",
+                    verifyChannel, stopError.getMessage(), stopError);
         }
     }
 
@@ -311,6 +364,7 @@ public class RedisMessageBroker {
     // ==================== SS relay pub/sub (Task 2.6) ====================
 
     private static final String SS_RELAY_CHANNEL_PREFIX = "ss:relay:";
+    private static final String SS_EXTERNAL_RELAY_CHANNEL_PREFIX = "ss:external-relay:";
 
     /**
      * Subscribe to this instance's SS relay channel.
@@ -355,6 +409,39 @@ public class RedisMessageBroker {
     public void unsubscribeFromSsRelay(String instanceId) {
         String channel = SS_RELAY_CHANNEL_PREFIX + instanceId;
         unsubscribe(channel);
+    }
+
+    /**
+     * Subscribe to this instance's external WS relay channel.
+     *
+     * @param instanceId the local SS instance ID
+     * @param handler    callback to handle received relay messages (JSON string)
+     */
+    public void subscribeToExternalRelay(String instanceId, Consumer<String> handler) {
+        String channel = SS_EXTERNAL_RELAY_CHANNEL_PREFIX + instanceId;
+        subscribe(channel, handler);
+    }
+
+    /**
+     * Publish an external WS relay message to the target SS instance.
+     *
+     * @param targetInstanceId the target SS instance ID
+     * @param message          serialized relay envelope
+     * @return number of Redis subscribers that received the message; 0 means the
+     *         target relay channel is not currently subscribed
+     */
+    public long publishToExternalRelay(String targetInstanceId, String message) {
+        String channel = SS_EXTERNAL_RELAY_CHANNEL_PREFIX + targetInstanceId;
+        try {
+            Long receivers = redisTemplate.convertAndSend(channel, message);
+            log.info("Published to external relay channel: target={}, receivers={}",
+                    targetInstanceId, receivers);
+            return receivers != null ? receivers : 0L;
+        } catch (Exception e) {
+            log.error("Failed to publish to external relay channel: target={}, error={}",
+                    targetInstanceId, e.getMessage(), e);
+            return 0L;
+        }
     }
 
     // ==================== conn:ak 查询（v3 新增） ====================

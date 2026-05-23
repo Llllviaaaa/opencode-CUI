@@ -16,6 +16,8 @@ import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -61,7 +63,7 @@ class ExternalWsDeliveryStrategyTest {
         strategy.deliver(session, "sess-1", "user-42", msg);
 
         verify(externalStreamHandler).pushToOne(eq("im"), anyString());
-        verify(wsRegistry, never()).findInstanceWithConnection(any());
+        verify(wsRegistry, never()).findInstancesWithConnection(any());
     }
 
     @Test
@@ -71,11 +73,32 @@ class ExternalWsDeliveryStrategyTest {
         StreamMessage msg = StreamMessage.builder().type("text.done").content("hello").build();
         when(redisMessageBroker.nextStreamSeq("sess-1")).thenReturn(1L);
         when(externalStreamHandler.pushToOne(eq("im"), anyString())).thenReturn(false);
-        when(wsRegistry.findInstanceWithConnection("im")).thenReturn("ss-pod-2");
+        when(wsRegistry.findInstancesWithConnection("im")).thenReturn(List.of("ss-pod-2"));
+        when(redisMessageBroker.publishToExternalRelay(eq("ss-pod-2"), anyString())).thenReturn(1L);
 
         strategy.deliver(session, "sess-1", "user-42", msg);
 
-        verify(redisMessageBroker).publishToChannel(eq("ss:external-relay:ss-pod-2"), anyString());
+        verify(redisMessageBroker).publishToExternalRelay(eq("ss-pod-2"), anyString());
+        verify(redisMessageBroker, never()).publishToChannel(startsWith("ss:external-relay:"), any());
+    }
+
+    @Test
+    @DisplayName("L2: first remote relay has 0 subscribers, then tries next candidate")
+    void l2RemoteRelay_zeroSubscribersTriesNextCandidate() {
+        SkillSession session = SkillSession.builder().businessSessionDomain("im").build();
+        StreamMessage msg = StreamMessage.builder().type("text.done").content("hello").build();
+        when(redisMessageBroker.nextStreamSeq("sess-1")).thenReturn(1L);
+        when(externalStreamHandler.pushToOne(eq("im"), anyString())).thenReturn(false);
+        when(wsRegistry.findInstancesWithConnection("im"))
+                .thenReturn(List.of("ss-pod-2", "ss-pod-3"));
+        when(redisMessageBroker.publishToExternalRelay(eq("ss-pod-2"), anyString())).thenReturn(0L);
+        when(redisMessageBroker.publishToExternalRelay(eq("ss-pod-3"), anyString())).thenReturn(1L);
+
+        strategy.deliver(session, "sess-1", "user-42", msg);
+
+        verify(redisMessageBroker).publishToExternalRelay(eq("ss-pod-2"), anyString());
+        verify(redisMessageBroker).publishToExternalRelay(eq("ss-pod-3"), anyString());
+        verify(imOutboundService, never()).sendTextToIm(any(), any(), any(), any());
     }
 
     @Test
@@ -88,10 +111,31 @@ class ExternalWsDeliveryStrategyTest {
                 .type(StreamMessage.Types.TEXT_DONE).content("fallback msg").build();
         when(redisMessageBroker.nextStreamSeq("sess-1")).thenReturn(1L);
         when(externalStreamHandler.pushToOne(eq("im"), anyString())).thenReturn(false);
-        when(wsRegistry.findInstanceWithConnection("im")).thenReturn(null);
+        when(wsRegistry.findInstancesWithConnection("im")).thenReturn(List.of());
 
         strategy.deliver(session, "sess-1", "user-42", msg);
 
+        verify(imOutboundService).sendTextToIm("direct", "dm-001", "fallback msg", "assist-01");
+    }
+
+    @Test
+    @DisplayName("L3: all remote relay candidates have 0 subscribers, then falls back to ImRest")
+    void l3FallbackImRest_whenAllRemoteRelaysHaveZeroSubscribers() {
+        SkillSession session = SkillSession.builder()
+                .businessSessionDomain("im").businessSessionType("direct")
+                .businessSessionId("dm-001").assistantAccount("assist-01").build();
+        StreamMessage msg = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DONE).content("fallback msg").build();
+        when(redisMessageBroker.nextStreamSeq("sess-1")).thenReturn(1L);
+        when(externalStreamHandler.pushToOne(eq("im"), anyString())).thenReturn(false);
+        when(wsRegistry.findInstancesWithConnection("im"))
+                .thenReturn(List.of("ss-pod-2", "ss-pod-3"));
+        when(redisMessageBroker.publishToExternalRelay(anyString(), anyString())).thenReturn(0L);
+
+        strategy.deliver(session, "sess-1", "user-42", msg);
+
+        verify(redisMessageBroker).publishToExternalRelay(eq("ss-pod-2"), anyString());
+        verify(redisMessageBroker).publishToExternalRelay(eq("ss-pod-3"), anyString());
         verify(imOutboundService).sendTextToIm("direct", "dm-001", "fallback msg", "assist-01");
     }
 
@@ -102,12 +146,12 @@ class ExternalWsDeliveryStrategyTest {
         StreamMessage msg = StreamMessage.builder().type("text.done").content("hello").build();
         when(redisMessageBroker.nextStreamSeq("sess-1")).thenReturn(1L);
         when(externalStreamHandler.pushToOne(eq("custom"), anyString())).thenReturn(false);
-        when(wsRegistry.findInstanceWithConnection("custom")).thenReturn(null);
+        when(wsRegistry.findInstancesWithConnection("custom")).thenReturn(List.of());
 
         strategy.deliver(session, "sess-1", "user-42", msg);
 
         verify(imOutboundService, never()).sendTextToIm(any(), any(), any(), any());
-        verify(redisMessageBroker, never()).publishToChannel(startsWith("ss:external-relay:"), any());
+        verify(redisMessageBroker, never()).publishToExternalRelay(anyString(), anyString());
     }
 
     @Test

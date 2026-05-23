@@ -416,6 +416,61 @@ private void subscribeToUserStream(String userId) {
 
 ---
 
+## Redis pub/sub 自愈
+
+`SkillInstanceRegistry.refreshHeartbeat` 的订阅自检只负责判断本实例
+`ss:relay:{instanceId}` 在 Redis 端 `PUBSUB NUMSUB` 是否大于 0。恢复动作必须留在
+`RedisMessageBroker.forceReconnectListenerContainer(String verifyChannel, long timeoutMs)`。
+
+恢复顺序：
+
+1. 用 `activeListeners.get(verifyChannel)` 找到现有 `MessageListener`。
+2. 调 `listenerContainer.addMessageListener(listener, new ChannelTopic(verifyChannel))`
+   重新提交该单个 relay channel 的订阅。
+3. 用 `physicalSubscriberCount(verifyChannel)` 等待 `PUBSUB NUMSUB > 0`。
+4. 只有单通道重订阅失败或超时，才退回 `listenerContainer.stop()` +
+   `listenerContainer.start()`，并在 `start()` 异常后再次 `stop()` 复位 container。
+
+来源：`skill-server/src/main/java/com/opencode/cui/skill/service/RedisMessageBroker.java::forceReconnectListenerContainer`
+
+规则：
+
+- `NUMSUB=0` 不要一上来重启整个 `RedisMessageListenerContainer`；这会影响
+  `agent:*`、`user-stream:*`、`ss:relay:*` 下所有订阅，并可能触发 Spring Data Redis
+  `SubscriptionTask aborted` 路径。
+- 强制恢复必须是 single-flight；多个调度线程/调用方不能并发 `stop/start` 同一个共享 container。
+- 恢复失败仍然返回 `false`，让 `SkillInstanceRegistry` 跳过本轮 heartbeat 并保留 takeover 兜底。
+- 回归测试必须覆盖：单通道重订阅成功不重启 container、重订阅失败后 fallback、
+  `start()` 异常复位、重入时不重复 `stop/start`。
+
+---
+
+## External WS 跨实例投递
+
+External WS 出站由 `ExternalWsDeliveryStrategy` 分三层处理：
+
+1. L1：`ExternalStreamHandler.pushToOne(domain, payload)` 本机投递。
+2. L2：`ExternalWsRegistry.findInstancesWithConnection(domain)` 找远程候选 SS 实例，
+   逐个调用 `RedisMessageBroker.publishToExternalRelay(targetInstance, payload)`。
+3. L3：没有候选或所有候选 publish 返回 0 subscribers 后，才进入 IM fallback / discard。
+
+候选查询沿用 owner-only registry：
+
+- 每个实例只写自己的 `external-ws:held-by:{instanceId}`，字段为 `{domain -> connectionCount}`。
+- 查询时先用 `SkillInstanceRegistry.listAliveInstances()` 拿活实例花名册，排除 self。
+- 对候选实例 pipeline HGET 对应 `external-ws:held-by:{id}` 的 `{domain}` 字段。
+- 只返回 `count > 0` 的实例，且保留 alive roster 顺序。
+
+规则：
+
+- 不要再用“找到一个 target 就算 L2 成功”的逻辑；Redis `PUBLISH` 返回的 subscribers 必须大于 0 才算成功。
+- `publishToExternalRelay(...)=0` 表示目标实例 external relay channel 当前没有订阅者，应尝试下一个候选。
+- 不要在 delivery strategy 里手写 `ss:external-relay:`；统一通过 `RedisMessageBroker.publishToExternalRelay` /
+  `subscribeToExternalRelay`。
+- 回归测试必须覆盖：多候选列表、首个候选 0 subscribers 后尝试下一个、所有候选 0 后 L3。
+
+---
+
 ## MyBatis 调用风格
 
 service 层直接调用 `Repository` 接口；参数命名与 XML 保持一致，不做“二次包装 Mapper”。
