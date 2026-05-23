@@ -418,7 +418,7 @@ class GatewayRelayServiceTest {
                 String msg = "{\"type\":\"tool_event\",\"toolSessionId\":\"ts-abc\",\"event\":{\"data\":\"hello\"}}";
                 service.handleGatewayMessage(msg);
 
-                verify(sessionService).findByToolSessionId("ts-abc");
+                verify(sessionService, times(2)).findByToolSessionId("ts-abc");
                 ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
                 verify(emitter).emitToSession(any(), eq("42"), any(), msgCaptor.capture());
                 assertEquals(StreamMessage.Types.TEXT_DELTA, msgCaptor.getValue().getType());

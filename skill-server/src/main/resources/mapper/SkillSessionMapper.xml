@@ -98,6 +98,15 @@
         LIMIT 1
     </select>
 
+    <select id="findByBusinessSessionAndAssistantAccount" resultMap="SkillSessionResultMap">
+        <include refid="selectAllColumns"/>
+        WHERE business_session_domain = #{businessSessionDomain}
+          AND business_session_type = #{businessSessionType}
+          AND business_session_id = #{businessSessionId}
+          AND assistant_account = #{assistantAccount}
+        LIMIT 1
+    </select>
+
     <select id="findByStatus" resultMap="SkillSessionResultMap">
         <include refid="selectAllColumns"/>
         WHERE status = #{status}

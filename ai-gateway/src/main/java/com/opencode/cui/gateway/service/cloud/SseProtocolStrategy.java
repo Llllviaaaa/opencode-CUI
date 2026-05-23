@@ -95,7 +95,12 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
 
             // 3. 注入认证头：X-App-Id 由 cloudAuthService 内部 strategy（Soa/Apig）按需写入；
             //    NoAuthStrategy 不写。这里不再重复写入避免出现两个同名 header。
-            cloudAuthService.applyAuth(requestBuilder, context.getAppId(), context.getAuthType());
+            if (context.getRemoteHeaders() == null || context.getRemoteHeaders().isEmpty()) {
+                cloudAuthService.applyAuth(requestBuilder, context.getAppId(), context.getAuthType());
+            } else {
+                cloudAuthService.applyAuth(requestBuilder, context.getAppId(), context.getAuthType(),
+                        context.getRemoteHeaders());
+            }
 
             // 4. 发送请求
             HttpRequest request = requestBuilder.build();

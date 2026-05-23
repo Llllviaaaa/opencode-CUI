@@ -160,6 +160,21 @@ class BusinessScopeStrategyTest {
         assertEquals("asst-1", ctx.getAssistantAccount());
     }
 
+    @Test
+    @DisplayName("buildInvoke(chat) falls back to command assistantAccount when payload omits it")
+    void buildInvoke_chat_fallsBackToCommandAssistantAccount() {
+        String payload = "{\"content\":\"hello\",\"sendUserAccount\":\"user-001\",\"toolSessionId\":\"tool-1\"}";
+        InvokeCommand command = new InvokeCommand(null, "owner-1", "session-1", "chat", payload,
+                null, "im", "dm", "dm-001", null, "asst-from-command", "asst-from-command");
+        AssistantInfo info = new AssistantInfo();
+        info.setAssistantScope("business");
+        info.setBusinessTag("app-123");
+
+        strategy.buildInvoke(command, info);
+
+        assertEquals("asst-from-command", capturedContext().getAssistantAccount());
+    }
+
     // ========== businessExtParam passthrough（6 cases） ==========
 
     @Test

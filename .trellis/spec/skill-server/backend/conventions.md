@@ -827,3 +827,75 @@ The bad case drops default-assistant cloud replies because a virtual AK can reso
 Wrong: choosing the translator from the top-level gateway AK for every upstream event.
 
 Correct: recover session context from `welinkSessionId` / `toolSessionId` before choosing a translator; when a session exists, first use the session `(domain,type)` to preserve default-assistant routing, then resolve assistant info only for non-default assistant paths.
+
+## Assistant instance lookup for no-AK remote assistants
+
+### 1. Scope / Trigger
+
+This applies to IM / external inbound chat and miniapp session flows that identify an assistant by `assistantAccount`.
+The assistant instance API is now the shared source for assistant metadata, and cloud/remote assistants may not have an `appKey`.
+
+### 2. Signatures
+
+- Instance lookup: `AssistantInstanceInfoService.lookup(String partnerAccount)`.
+- Resolver entry: `ResolveOutcome AssistantAccountResolverService.resolveWithStatus(String assistantAccount)`.
+- Scope lookup with account context: `AssistantInfo AssistantInfoService.getAssistantInfo(String ak, String assistantAccount)`.
+- Session DB lookup for no-AK remote sessions: `findByBusinessSessionAndAssistantAccount(domain,type,businessSessionId,assistantAccount)`.
+
+### 3. Contracts
+
+`AssistantInstanceInfo.businessRoutableAssistant()` means `isRemote == true` or `remoteProperty` is non-empty.
+Blank `appKey` alone must not imply remote/cloud. A no-AK assistant is routable only when `businessRoutableAssistant()` is true.
+For local assistants, blank `appKey` or blank owner identity is upstream incomplete data and must remain `UNKNOWN`, not `NOT_EXISTS`.
+
+`ResolveOutcome.EXISTS` for a remote assistant may contain `ak == null`, but must carry `assistantAccount`, `remote=true`, and optional `businessTag` when available.
+`assistantAccount:status:{account}` cache values must preserve `remote` and `businessTag` so cached remote no-AK assistants do not degrade to local unknown.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+| --- | --- |
+| Instance lookup returns NOT_EXISTS or empty data | Return `NOT_EXISTS`; cache with NOT_EXISTS TTL. |
+| Instance data has `isRemote=true` and no `appKey` | Return `EXISTS`; no online AK check; route as business. |
+| Instance data has non-empty `remoteProperty` and no `appKey` | Return `EXISTS`; route as business. |
+| Instance data has `isRemote=false`, empty `remoteProperty`, and no `appKey` | Return `UNKNOWN`; do not write status cache. |
+| Instance lookup is non-2xx, body code is not 200, parse fails, or times out | Return `UNKNOWN`; do not write status cache. |
+
+### 5. Good / Base / Bad Cases
+
+Good:
+
+```java
+ResolveOutcome outcome = assistantAccountResolverService.resolveWithStatus(assistantAccount);
+AssistantInfo info = assistantInfoService.getAssistantInfo(outcome.ak(), outcome.assistantAccount());
+AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(domain, type, info);
+```
+
+Base:
+
+```java
+AssistantInfo info = assistantInfoService.getAssistantInfo(ak);
+```
+
+Bad:
+
+```java
+if (ak == null) {
+    return ExistenceStatus.NOT_EXISTS;
+}
+```
+
+The bad case blocks real remote assistants that intentionally do not expose an `appKey`, and it also cannot distinguish local incomplete data from missing assistants.
+
+### 6. Tests Required
+
+- `AssistantAccountResolverServiceTest`: no-AK remote instance returns `EXISTS`; no-AK local instance returns `UNKNOWN`.
+- `AssistantInfoServiceTest`: no-AK remote instance returns business `AssistantInfo`; no-AK local instance returns `null`.
+- `InboundProcessingServiceTest`: no-AK remote inbound chat is not blocked by `assistant_check_unknown` and creates or uses a business session.
+- `AssistantInstanceInfoServiceTest`: instance API empty data maps to `NOT_EXISTS`, failures map to `UNKNOWN`, and success maps fields used by resolver/gateway.
+
+### 7. Wrong vs Correct
+
+Wrong: treating `appKey` absence as "assistant does not exist" or as "cloud assistant".
+
+Correct: first decide existence from the instance API result, then decide routability from `isRemote || remoteProperty.nonEmpty`, and only then allow `ak` to be optional.

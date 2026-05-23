@@ -1,28 +1,22 @@
 package com.opencode.cui.skill.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.opencode.cui.skill.model.DefaultAssistantRule;
-import com.opencode.cui.skill.model.ExistenceStatus;
-import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.ApiResponse;
 import com.opencode.cui.skill.model.PageResult;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.service.AssistantAccountResolverService;
 import com.opencode.cui.skill.service.AssistantInfoService;
 import com.opencode.cui.skill.service.DefaultAssistantRuleService;
-import com.opencode.cui.skill.service.GatewayActions;
 import com.opencode.cui.skill.service.GatewayRelayService;
-
-import com.opencode.cui.skill.service.PayloadBuilder;
 import com.opencode.cui.skill.service.ProtocolUtils;
 import com.opencode.cui.skill.service.SessionAccessControlService;
+import com.opencode.cui.skill.service.SkillSessionFlowService;
 import com.opencode.cui.skill.service.SkillSessionService;
-import com.opencode.cui.skill.model.AssistantInfo;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
-import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import com.opencode.cui.skill.service.scope.DefaultAssistantScopeStrategy;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -35,7 +29,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * 会话管理控制器。
@@ -48,14 +41,17 @@ import java.util.Optional;
 public class SkillSessionController {
 
     private final SkillSessionService sessionService;
-    private final GatewayRelayService gatewayRelayService;
     private final SessionAccessControlService accessControlService;
-    private final ObjectMapper objectMapper;
-    private final AssistantInfoService assistantInfoService;
-    private final AssistantScopeDispatcher scopeDispatcher;
-    private final AssistantAccountResolverService assistantAccountResolverService;
-    private final DefaultAssistantRuleService ruleService;
-    private final DefaultAssistantScopeStrategy defaultAssistantScopeStrategy;
+    private final SkillSessionFlowService flowService;
+
+    @Autowired
+    public SkillSessionController(SkillSessionService sessionService,
+                                  SessionAccessControlService accessControlService,
+                                  SkillSessionFlowService flowService) {
+        this.sessionService = sessionService;
+        this.accessControlService = accessControlService;
+        this.flowService = flowService;
+    }
 
     public SkillSessionController(SkillSessionService sessionService,
             GatewayRelayService gatewayRelayService,
@@ -66,15 +62,10 @@ public class SkillSessionController {
             AssistantAccountResolverService assistantAccountResolverService,
             DefaultAssistantRuleService ruleService,
             DefaultAssistantScopeStrategy defaultAssistantScopeStrategy) {
-        this.sessionService = sessionService;
-        this.gatewayRelayService = gatewayRelayService;
-        this.accessControlService = accessControlService;
-        this.objectMapper = objectMapper;
-        this.assistantInfoService = assistantInfoService;
-        this.scopeDispatcher = scopeDispatcher;
-        this.assistantAccountResolverService = assistantAccountResolverService;
-        this.ruleService = ruleService;
-        this.defaultAssistantScopeStrategy = defaultAssistantScopeStrategy;
+        this(sessionService, accessControlService,
+                new SkillSessionFlowService(sessionService, gatewayRelayService, objectMapper,
+                        assistantInfoService, scopeDispatcher, assistantAccountResolverService,
+                        ruleService, defaultAssistantScopeStrategy));
     }
 
     /**
@@ -89,103 +80,20 @@ public class SkillSessionController {
         log.info("[ENTRY] createSession: ak={}, userId={}", request.getAk(), userIdCookie);
         String resolvedUserId = accessControlService.requireUserId(userIdCookie);
 
-        // PR3 D1 优先级矩阵：显式 ak/assistantAccount → 永远走老路径；
-        // 两者都为空 + (domain, type) 命中规则 → 默认助手路径；
-        // 其它（任一空 / 未命中）→ 400。
-        boolean hasExplicit = (request.getAk() != null && !request.getAk().isBlank())
-                || (request.getAssistantAccount() != null && !request.getAssistantAccount().isBlank());
-        if (!hasExplicit) {
-            Optional<DefaultAssistantRule> ruleOpt = ruleService.lookup(
-                    request.getBusinessSessionDomain(), request.getBusinessSessionType());
-            if (ruleOpt.isEmpty()) {
-                log.warn("[BLOCK] createSession: reason=missing_ak_and_no_rule, domain={}, type={}, userId={}",
-                        request.getBusinessSessionDomain(), request.getBusinessSessionType(), userIdCookie);
-                return ResponseEntity.ok(ApiResponse.error(400, "ak 和 assistantAccount 必填"));
-            }
-            DefaultAssistantRule rule = ruleOpt.get();
-            // 命中规则：注入 virtual ak/assistantAccount + 本地预生成 toolSessionId，走单事务路径
-            String toolSessionId = defaultAssistantScopeStrategy.generateToolSessionId();
-            SkillSession injected = sessionService.createSessionWithDefaultAssistant(
-                    resolvedUserId,
-                    rule.ak(),
-                    rule.assistantAccount(),
-                    request.getTitle(),
-                    request.getBusinessSessionDomain(),
-                    request.getBusinessSessionType(),
-                    request.getBusinessSessionId(),
-                    toolSessionId);
-            log.info("[INFO] createSession: rule-injected, domain={}, type={}, ak={}",
-                    request.getBusinessSessionDomain(), request.getBusinessSessionType(), rule.ak());
-            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
-            log.info("[EXIT] createSession: sessionId={}, durationMs={}", injected.getId(), elapsedMs);
-            // 默认助手路径不发 CREATE_SESSION invoke（本地预生成 toolSessionId）
-            return ResponseEntity.ok(ApiResponse.ok(injected));
-        }
-
-        // 老路径：显式 ak/assistantAccount → 现有 deletion check → 现有 createSession 流程
-        // 助理删除校验：null/blank 按开关处理；非空 → 三态判定（NOT_EXISTS 拒绝，EXISTS/UNKNOWN 放行）
-        String assistantAccount = request.getAssistantAccount();
-        if (assistantAccount == null || assistantAccount.isBlank()) {
-            if (!assistantAccountResolverService.isSkipOnNullAssistantAccount()) {
-                log.warn("[BLOCK] createSession: reason=no_assistant_account, decision=block, userId={}",
-                        userIdCookie);
-                return ResponseEntity.ok(ApiResponse.error(400, "assistantAccount is required"));
-            }
-            log.info("[SKIP] createSession: reason=no_assistant_account, decision=allow, userId={}", userIdCookie);
-        } else {
-            ExistenceStatus status = assistantAccountResolverService.check(assistantAccount);
-            if (status == ExistenceStatus.NOT_EXISTS) {
-                log.info("[SKIP] createSession: reason=assistant_not_exists, decision=block, assistantAccount={}, userId={}",
-                        assistantAccount, userIdCookie);
-                return ResponseEntity.ok(ApiResponse.error(410, assistantAccountResolverService.getDeletionMessage()));
-            }
-            if (status == ExistenceStatus.UNKNOWN) {
-                log.warn("[WARN] createSession: reason=assistant_check_unknown, decision=allow-unknown, assistantAccount={}, userId={}",
-                        assistantAccount, userIdCookie);
-            }
-        }
-
-        SkillSession session = sessionService.createSession(
-                resolvedUserId,
-                request.getAk(),
-                request.getTitle(),
-                request.getBusinessSessionDomain(),
-                request.getBusinessSessionType(),
-                request.getBusinessSessionId(),
-                request.getAssistantAccount());
-
-        if (request.getAk() != null) {
-            // 根据助手类型决定 toolSession 创建方式
-            AssistantInfo info = assistantInfoService.getAssistantInfo(request.getAk());
-            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(info);
-            String generatedToolSessionId = strategy.generateToolSessionId();
-            if (generatedToolSessionId != null) {
-                // 业务助手：本地预生成 toolSessionId，跳过 Gateway create_session
-                sessionService.updateToolSessionId(session.getId(), generatedToolSessionId);
-                log.info("Business assistant: toolSessionId pre-generated, sessionId={}, toolSessionId={}",
-                        session.getId(), generatedToolSessionId);
-            } else {
-                // 个人助手：向 Gateway 发送 create_session
-                // N1 收口：InvokeCommand 塞入 session 的 domain/domainType，让 dispatcher 走新 API
-                gatewayRelayService.sendInvokeToGateway(
-                        new InvokeCommand(request.getAk(),
-                                resolvedUserId,
-                                session.getId().toString(),
-                                GatewayActions.CREATE_SESSION,
-                                PayloadBuilder.buildPayload(objectMapper,
-                                        request.getTitle() != null && !request.getTitle().isBlank()
-                                                ? Map.of("title", request.getTitle())
-                                                : Map.of()),
-                                null,
-                                session.getBusinessSessionDomain(),
-                                session.getBusinessSessionType(),
-                                session.getBusinessSessionId()));
-            }
-        }
+        ApiResponse<SkillSession> response = flowService.createSession(
+                resolvedUserId, userIdCookie,
+                new SkillSessionFlowService.CreateSessionCommand(
+                        request.getAk(),
+                        request.getTitle(),
+                        request.getBusinessSessionDomain(),
+                        request.getBusinessSessionType(),
+                        request.getBusinessSessionId(),
+                        request.getAssistantAccount()));
 
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
-        log.info("[EXIT] createSession: sessionId={}, durationMs={}", session.getId(), elapsedMs);
-        return ResponseEntity.ok(ApiResponse.ok(session));
+        SkillSession session = response.getData();
+        log.info("[EXIT] createSession: sessionId={}, durationMs={}", session != null ? session.getId() : null, elapsedMs);
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -243,24 +151,7 @@ public class SkillSessionController {
         log.info("[ENTRY] closeSession: sessionId={}", id);
         SkillSession session = accessControlService.requireSessionAccess(sessionId, userIdCookie);
 
-        // D7：默认助手会话跳过发 GW invoke（GW ACTION_TO_SCOPE 不含 close/abort，发了会回 Unknown action）
-        boolean isDefaultAssistant = ruleService.lookup(
-                session.getBusinessSessionDomain(), session.getBusinessSessionType()).isPresent();
-        if (!isDefaultAssistant && session.getAk() != null && session.getToolSessionId() != null) {
-            // N1 收口：InvokeCommand 塞入 session 的 domain/domainType
-            gatewayRelayService.sendInvokeToGateway(
-                    new InvokeCommand(session.getAk(),
-                            session.getUserId(),
-                            session.getId().toString(),
-                            GatewayActions.CLOSE_SESSION,
-                            PayloadBuilder.buildPayload(objectMapper,
-                                    Map.of("toolSessionId", session.getToolSessionId())),
-                            null,
-                            session.getBusinessSessionDomain(),
-                            session.getBusinessSessionType(),
-                            session.getBusinessSessionId()));
-        }
-        sessionService.closeSession(sessionId);
+        flowService.closeSession(session);
         log.info("[EXIT] closeSession: sessionId={}", id);
         return ResponseEntity.ok(ApiResponse.ok(Map.of("status", "closed", "welinkSessionId", id)));
     }
@@ -283,25 +174,8 @@ public class SkillSessionController {
             return ResponseEntity.ok(ApiResponse.error(409, "Session is already closed"));
         }
 
-        // 如果 toolSessionId 和 ak 存在，向 AI-Gateway 发送 abort_session 命令
         log.info("[ENTRY] abortSession: sessionId={}", id);
-        // D7：默认助手会话跳过发 GW invoke
-        boolean isDefaultAssistant = ruleService.lookup(
-                session.getBusinessSessionDomain(), session.getBusinessSessionType()).isPresent();
-        if (!isDefaultAssistant && session.getAk() != null && session.getToolSessionId() != null) {
-            // N1 收口：InvokeCommand 塞入 session 的 domain/domainType
-            gatewayRelayService.sendInvokeToGateway(
-                    new InvokeCommand(session.getAk(),
-                            session.getUserId(),
-                            session.getId().toString(),
-                            GatewayActions.ABORT_SESSION,
-                            PayloadBuilder.buildPayload(objectMapper,
-                                    Map.of("toolSessionId", session.getToolSessionId())),
-                            null,
-                            session.getBusinessSessionDomain(),
-                            session.getBusinessSessionType(),
-                            session.getBusinessSessionId()));
-        }
+        flowService.abortSession(session);
 
         log.info("[EXIT] abortSession: sessionId={}", id);
         return ResponseEntity.ok(ApiResponse.ok(Map.of("status", "aborted", "welinkSessionId", id)));
@@ -317,4 +191,5 @@ public class SkillSessionController {
         private String businessSessionId;
         private String assistantAccount;
     }
+
 }

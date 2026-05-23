@@ -1,9 +1,11 @@
 package com.opencode.cui.gateway.service.cloud;
 
+import com.opencode.cui.gateway.model.AssistantInstanceInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.net.http.HttpRequest;
+import java.net.http.WebSocket;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -41,5 +43,76 @@ public class CloudAuthService {
             throw new IllegalArgumentException("Unknown cloud auth type: " + authType);
         }
         strategy.applyAuth(requestBuilder, appId);
+    }
+
+    public void applyAuth(HttpRequest.Builder requestBuilder, String appId, String authType,
+                          List<AssistantInstanceInfo.RemoteHeader> remoteHeaders) {
+        if (remoteHeaders != null && !remoteHeaders.isEmpty()) {
+            applyRemoteHeaders(requestBuilder, remoteHeaders);
+            return;
+        }
+        applyAuth(requestBuilder, appId, authType);
+    }
+
+    public void applyRemoteHeaders(WebSocket.Builder builder,
+                                   List<AssistantInstanceInfo.RemoteHeader> remoteHeaders) {
+        if (remoteHeaders == null || remoteHeaders.isEmpty()) {
+            return;
+        }
+        for (AssistantInstanceInfo.RemoteHeader header : remoteHeaders) {
+            HeaderPair pair = toHeaderPair(header);
+            builder.header(pair.name(), pair.value());
+        }
+    }
+
+    private void applyRemoteHeaders(HttpRequest.Builder builder,
+                                    List<AssistantInstanceInfo.RemoteHeader> remoteHeaders) {
+        for (AssistantInstanceInfo.RemoteHeader header : remoteHeaders) {
+            HeaderPair pair = toHeaderPair(header);
+            builder.header(pair.name(), pair.value());
+        }
+    }
+
+    private HeaderPair toHeaderPair(AssistantInstanceInfo.RemoteHeader header) {
+        if (header == null || header.getType() == null || header.getType().isBlank()) {
+            throw new IllegalArgumentException("remote header type is required");
+        }
+        String type = header.getType().trim().toLowerCase();
+        String customKey = blankToNull(header.getCustomKey());
+        String customValue = blankToNull(header.getCustomValue());
+        return switch (type) {
+            case "custom" -> {
+                if (customKey == null || customValue == null) {
+                    throw new IllegalArgumentException("custom remote header requires customKey/customValue");
+                }
+                yield new HeaderPair(customKey, customValue);
+            }
+            case "cookie" -> {
+                if (customValue == null) {
+                    throw new IllegalArgumentException("cookie remote header requires customValue");
+                }
+                yield new HeaderPair("Cookie", customValue);
+            }
+            case "integration" -> {
+                if (customValue == null) {
+                    throw new IllegalArgumentException("integration remote header requires customValue");
+                }
+                yield new HeaderPair(customKey != null ? customKey : "Authorization", customValue);
+            }
+            case "soa", "apig", "iam" -> {
+                if (customKey != null && customValue != null) {
+                    yield new HeaderPair(customKey, customValue);
+                }
+                yield new HeaderPair("X-Auth-Type", type);
+            }
+            default -> throw new IllegalArgumentException("Unknown remote header type: " + type);
+        };
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    private record HeaderPair(String name, String value) {
     }
 }

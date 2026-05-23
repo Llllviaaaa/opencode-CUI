@@ -193,7 +193,9 @@ public class InboundProcessingService {
 
         // 情况 B：session 存在但 toolSessionId 尚未就绪
         if (session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
-            AssistantInfo info = identity.defaultAssistant() ? null : assistantInfoService.getAssistantInfo(ak);
+            AssistantInfo info = identity.defaultAssistant()
+                    ? null
+                    : assistantInfoService.getAssistantInfo(ak, assistantAccount);
             AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(businessDomain, sessionType, info);
             String generated = strategy.generateToolSessionId();
             if (generated != null) {
@@ -257,7 +259,9 @@ public class InboundProcessingService {
 
         // 情况 C：session 就绪，转发消息到 AI Gateway
         // append pending 仅对 personal 有意义（rebuild 链路消费者），business 不写避免并发重放放大
-        AssistantInfo caseCInfo = identity.defaultAssistant() ? null : assistantInfoService.getAssistantInfo(ak);
+        AssistantInfo caseCInfo = identity.defaultAssistant()
+                ? null
+                : assistantInfoService.getAssistantInfo(ak, assistantAccount);
         AssistantScopeStrategy caseCStrategy = scopeDispatcher.getStrategy(businessDomain, sessionType, caseCInfo);
         boolean appendToPending = caseCStrategy.generateToolSessionId() == null;
         return dispatchChatToGateway(session, prompt, ak, ownerWelinkId, assistantAccount,
@@ -708,7 +712,7 @@ public class InboundProcessingService {
                     ak, businessDomain, sessionType, sessionId);
             return null;
         }
-        AssistantInfo checkInfo = assistantInfoService.getAssistantInfo(ak);
+        AssistantInfo checkInfo = assistantInfoService.getAssistantInfo(ak, assistantAccount);
         AssistantScopeStrategy scopeStrategy = scopeDispatcher.getStrategy(businessDomain, sessionType, checkInfo);
         if (!scopeStrategy.requiresOnlineCheck()) return null;
 

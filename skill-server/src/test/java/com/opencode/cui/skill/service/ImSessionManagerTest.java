@@ -102,7 +102,7 @@ class ImSessionManagerTest {
     private void stubPersonalScope(String ak) {
         AssistantInfo personalInfo = new AssistantInfo();
         personalInfo.setAssistantScope("personal");
-        when(assistantInfoService.getAssistantInfo(ak)).thenReturn(personalInfo);
+        lenient().when(assistantInfoService.getAssistantInfo(eq(ak), nullable(String.class))).thenReturn(personalInfo);
         when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(personalStrategy);
         when(personalStrategy.generateToolSessionId()).thenReturn(null);
     }
@@ -111,7 +111,7 @@ class ImSessionManagerTest {
     private void stubBusinessScope(String ak, String toolSessionId) {
         AssistantInfo bizInfo = new AssistantInfo();
         bizInfo.setAssistantScope("business");
-        when(assistantInfoService.getAssistantInfo(ak)).thenReturn(bizInfo);
+        lenient().when(assistantInfoService.getAssistantInfo(eq(ak), nullable(String.class))).thenReturn(bizInfo);
         when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
         when(businessStrategy.generateToolSessionId()).thenReturn(toolSessionId);
     }
@@ -265,7 +265,7 @@ class ImSessionManagerTest {
     @DisplayName("默认助手首次对话 → domain/type 命中策略，虚拟 AK 不依赖 AssistantInfo")
     void defaultAssistant_firstChat_usesDomainAwareScope() {
         SkillSession created = stubCreate(3001L, "AK_V");
-        when(assistantInfoService.getAssistantInfo("AK_V")).thenReturn(null);
+        when(assistantInfoService.getAssistantInfo(eq("AK_V"), eq("ACC_V"))).thenReturn(null);
         when(scopeDispatcher.getStrategy(eq("helpdesk"), eq("direct"), nullable(AssistantInfo.class)))
                 .thenReturn(businessStrategy);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-default");

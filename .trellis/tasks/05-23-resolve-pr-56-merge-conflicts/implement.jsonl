@@ -1,0 +1,3 @@
+{"type":"spec","path":".trellis/spec/skill-server/backend/conventions.md","note":"controller and assistant routing conventions"}
+{"type":"spec","path":".trellis/spec/skill-server/backend/error-handling.md","note":"controller inbound response behavior"}
+{"type":"spec","path":".trellis/spec/skill-server/backend/database-guidelines.md","note":"session lookup and migration contracts"}

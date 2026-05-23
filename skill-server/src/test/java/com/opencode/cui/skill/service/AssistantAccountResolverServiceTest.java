@@ -70,7 +70,6 @@ class AssistantAccountResolverServiceTest {
     // ==================== 远端判定三态 ====================
 
     @Test
-    @DisplayName("remote: body.code=200 + data.appKey + ownerWelinkId → EXISTS, 写 status 缓存 TTL=300s")
     void remoteExistsWritesStatusCacheExistsTtl() throws Exception {
         when(valueOperations.get(STATUS_KEY)).thenReturn(null);
         when(restTemplate.exchange(eq(REQUEST_URL), eq(HttpMethod.GET),
@@ -125,23 +124,40 @@ class AssistantAccountResolverServiceTest {
     }
 
     @Test
-    @DisplayName("remote: body.code=200 + data.appKey 缺 → NOT_EXISTS")
-    void remoteAppKeyMissingReturnsNotExists() throws Exception {
+    @DisplayName("remote: body.code=200 + data.isRemote=true + appKey 缺 → EXISTS")
+    void remoteAppKeyMissingReturnsExists() throws Exception {
         when(valueOperations.get(STATUS_KEY)).thenReturn(null);
         when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
                 eq(com.fasterxml.jackson.databind.JsonNode.class)))
                 .thenReturn(ResponseEntity.ok(new ObjectMapper().readTree(
-                        "{\"code\":200,\"data\":{\"ownerWelinkId\":\"owner-only\"}}")));
+                        "{\"code\":200,\"data\":{\"ownerWelinkId\":\"owner-only\",\"isRemote\":true}}")));
 
         ResolveOutcome outcome = service.resolveWithStatus("assist-001");
 
-        assertEquals(ExistenceStatus.NOT_EXISTS, outcome.status());
-        verify(valueOperations).set(eq(STATUS_KEY), anyString(), eq(Duration.ofSeconds(NOT_EXISTS_TTL)));
+        assertEquals(ExistenceStatus.EXISTS, outcome.status());
+        assertNull(outcome.ak());
+        assertEquals("owner-only", outcome.ownerWelinkId());
+        verify(valueOperations).set(eq(STATUS_KEY), anyString(), eq(Duration.ofSeconds(EXISTS_TTL)));
+    }
+    @Test
+    @DisplayName("local: body.code=200 + appKey missing + isRemote=false -> UNKNOWN")
+    void localAssistantWithoutAkReturnsUnknown() throws Exception {
+        when(valueOperations.get(STATUS_KEY)).thenReturn(null);
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
+                eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                .thenReturn(ResponseEntity.ok(new ObjectMapper().readTree(
+                        "{\"code\":200,\"data\":{\"ownerWelinkId\":\"owner-only\",\"isRemote\":false}}")));
+
+        ResolveOutcome outcome = service.resolveWithStatus("assist-001");
+
+        assertEquals(ExistenceStatus.UNKNOWN, outcome.status());
+        assertNull(outcome.ak());
+        assertNull(outcome.ownerWelinkId());
+        verify(valueOperations, never()).set(eq(STATUS_KEY), anyString(), any(Duration.class));
     }
 
     @Test
-    @DisplayName("remote: body.code=200 + data.appKey 有 + ownerWelinkId 缺 → UNKNOWN, 不写缓存")
-    void remoteOwnerMissingReturnsUnknownNoCache() throws Exception {
+    void remoteOwnerMissingFallsBackToPartnerAccountExists() throws Exception {
         when(valueOperations.get(STATUS_KEY)).thenReturn(null);
         when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
                 eq(com.fasterxml.jackson.databind.JsonNode.class)))
@@ -150,8 +166,10 @@ class AssistantAccountResolverServiceTest {
 
         ResolveOutcome outcome = service.resolveWithStatus("assist-001");
 
-        assertEquals(ExistenceStatus.UNKNOWN, outcome.status());
-        verify(valueOperations, never()).set(eq(STATUS_KEY), anyString(), any(Duration.class));
+        assertEquals(ExistenceStatus.EXISTS, outcome.status());
+        assertEquals("ak-only", outcome.ak());
+        assertEquals("assist-001", outcome.ownerWelinkId());
+        verify(valueOperations).set(eq(STATUS_KEY), anyString(), eq(Duration.ofSeconds(EXISTS_TTL)));
     }
 
     @Test

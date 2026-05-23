@@ -142,6 +142,28 @@ class GatewayRelayServiceScopeTest {
     }
 
     @Test
+    @DisplayName("remote assistant without AK resolves info by assistantAccount before scope dispatch")
+    void remoteAssistantWithoutAk_resolvesInfoByAssistantAccount() {
+        AssistantInfo info = new AssistantInfo();
+        info.setAssistantScope("business");
+        info.setBusinessTag("remote-tag");
+        when(assistantInfoService.getAssistantInfo(null, "bot-001")).thenReturn(info);
+        when(scopeDispatcher.getStrategy(nullable(String.class), nullable(String.class), eq(info)))
+                .thenReturn(businessStrategy);
+        when(businessStrategy.buildInvoke(any(), eq(info))).thenReturn(
+                "{\"type\":\"invoke\",\"source\":\"skill-server\",\"action\":\"chat\",\"assistantScope\":\"business\",\"payload\":{}}");
+
+        InvokeCommand command = new InvokeCommand(null, "user-1", "ses-1", "chat",
+                "{\"text\":\"hello\",\"assistantAccount\":\"bot-001\"}",
+                null, "im", "dm", "dm-001", null, "bot-001", "bot-001");
+
+        service.sendInvokeToGateway(command);
+
+        verify(assistantInfoService).getAssistantInfo(null, "bot-001");
+        verify(businessStrategy).buildInvoke(any(), eq(info));
+    }
+
+    @Test
     @DisplayName("S56: business invoke cloudRequest contains correct topicId = toolSessionId")
     void s56_businessInvokeCloudRequestTopicIdEqualsToolSessionId() throws Exception {
         // arrange

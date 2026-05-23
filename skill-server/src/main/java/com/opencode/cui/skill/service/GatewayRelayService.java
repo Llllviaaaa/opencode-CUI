@@ -108,7 +108,7 @@ public class GatewayRelayService {
         // 老 caller 不传 domain/domainType（命令字段为 null），dispatcher 内部 lookup(null, null)
         // 返 empty → 委托老 API getStrategy(info)，行为完全不变。
         String messageText;
-        AssistantInfo info = assistantInfoService.getAssistantInfo(command.ak());
+        AssistantInfo info = getAssistantInfo(command);
         AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(
                 command.domain(), command.domainType(), info);
         String scope = strategy.getScope();
@@ -144,6 +144,14 @@ public class GatewayRelayService {
 
         log.info("[EXIT->GW] GatewayRelayService.sendInvokeToGateway: action={}, ak={}",
                 action, command.ak());
+    }
+
+    private AssistantInfo getAssistantInfo(InvokeCommand command) {
+        String assistantAccount = firstNonBlank(command.assistantAccount(), command.partnerAccount());
+        if (assistantAccount != null) {
+            return assistantInfoService.getAssistantInfo(command.ak(), assistantAccount);
+        }
+        return assistantInfoService.getAssistantInfo(command.ak());
     }
 
     /**
@@ -241,6 +249,15 @@ public class GatewayRelayService {
             log.error("Failed to serialize invoke message", e);
             return null;
         }
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     // ==================== 上行：Gateway → Skill ====================

@@ -1,0 +1,7 @@
+{"type":"check","path":".trellis/spec/skill-server/backend/conventions.md","note":"verify assistant routing contract remains documented"}
+{"type":"check","path":".trellis/spec/skill-server/backend/database-guidelines.md","note":"verify migration/cache docs stay current"}
+{"type":"verify","command":"rg -n \"^(<<<<<<<|=======|>>>>>>>)\" .","result":"pass_no_matches_exit_1"}
+{"type":"verify","command":"mvn -q test","cwd":"skill-server","result":"pass_exit_0"}
+{"type":"verify","command":"mvn -q test","cwd":"ai-gateway","result":"pass_exit_0"}
+{"type":"note","path":"skill-server/src/test/java/com/opencode/cui/skill/service/GatewayApiClientTest.java","note":"updated availability test to assert POST JSON body contract from merged main"}
+{"type":"note","path":"ai-gateway/src/test/java/com/opencode/cui/gateway/service/SkillRelayServiceTest.java","note":"made async relay assertions wait for sender thread with Mockito timeout"}

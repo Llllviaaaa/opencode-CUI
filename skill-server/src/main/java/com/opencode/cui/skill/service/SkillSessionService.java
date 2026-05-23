@@ -161,13 +161,25 @@ public class SkillSessionService {
 
     @Transactional(readOnly = true)
     public SkillSession findByBusinessSession(String businessDomain, String sessionType, String sessionId, String ak) {
+        return findByBusinessSession(businessDomain, sessionType, sessionId, ak, null);
+    }
+
+    @Transactional(readOnly = true)
+    public SkillSession findByBusinessSession(String businessDomain, String sessionType, String sessionId,
+                                              String ak, String assistantAccount) {
         if (businessDomain == null || businessDomain.isBlank()
                 || sessionType == null || sessionType.isBlank()
-                || sessionId == null || sessionId.isBlank()
-                || ak == null || ak.isBlank()) {
+                || sessionId == null || sessionId.isBlank()) {
             return null;
         }
-        return sessionRepository.findByBusinessSession(businessDomain, sessionType, sessionId, ak);
+        if (ak != null && !ak.isBlank()) {
+            return sessionRepository.findByBusinessSession(businessDomain, sessionType, sessionId, ak);
+        }
+        if (assistantAccount != null && !assistantAccount.isBlank()) {
+            return sessionRepository.findByBusinessSessionAndAssistantAccount(
+                    businessDomain, sessionType, sessionId, assistantAccount);
+        }
+        return null;
     }
 
     @Transactional
