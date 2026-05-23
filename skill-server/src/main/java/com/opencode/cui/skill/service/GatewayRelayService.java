@@ -121,7 +121,7 @@ public class GatewayRelayService {
             }
         } else {
             // personal 策略（含白名单未命中降级 / 上游故障兜底）：保留本地 buildInvokeMessage
-            messageText = buildInvokeMessage(command);
+            messageText = buildInvokeMessage(command, info);
             if (messageText == null) {
                 return;
             }
@@ -147,7 +147,11 @@ public class GatewayRelayService {
     }
 
     private AssistantInfo getAssistantInfo(InvokeCommand command) {
-        String assistantAccount = firstNonBlank(command.assistantAccount(), command.partnerAccount());
+        String assistantAccount = firstNonBlank(
+                command.assistantAccount(),
+                command.partnerAccount(),
+                extractPayloadText(command.payload(), "assistantAccount"),
+                extractPayloadText(command.payload(), "partnerAccount"));
         if (assistantAccount != null) {
             return assistantInfoService.getAssistantInfo(command.ak(), assistantAccount);
         }
@@ -159,18 +163,24 @@ public class GatewayRelayService {
      *
      * @return 序列化后的 JSON 字符串，构建失败返回 null
      */
-    private String buildInvokeMessage(InvokeCommand command) {
+    private String buildInvokeMessage(InvokeCommand command, AssistantInfo info) {
+        ObjectNode message = createBaseInvokeMessage(command);
+        attachPayload(message, command.payload());
+        writeAssistantRoutingFields(message, command, info);
+        injectAssistantId(message, command);
+        injectExtParametersIfMissing(message, command);
+        return serializeInvokeMessage(message);
+    }
+
+    private ObjectNode createBaseInvokeMessage(InvokeCommand command) {
         ObjectNode message = objectMapper.createObjectNode();
         message.put("type", "invoke");
         message.put("ak", command.ak());
         message.put("source", SOURCE);
-        if (command.userId() != null && !command.userId().isBlank()) {
-            message.put("userId", command.userId());
-        }
-        if (GatewayActions.CREATE_SESSION.equals(command.action())
-                && command.sessionId() != null && !command.sessionId().isBlank()) {
+        putIfNotBlank(message, "userId", command.userId());
+        if (GatewayActions.CREATE_SESSION.equals(command.action())) {
             // 使用字符串传输 welinkSessionId，防止 JavaScript IEEE 754 大数精度丢失
-            message.put("welinkSessionId", command.sessionId());
+            putIfNotBlank(message, "welinkSessionId", command.sessionId());
         }
         message.put("action", command.action());
 
@@ -183,34 +193,47 @@ public class GatewayRelayService {
         // 注入 traceId：从 MDC 获取或自动生成，确保跨服务链路可追踪
         String traceId = MdcHelper.ensureTraceId();
         message.put("traceId", traceId);
+        return message;
+    }
 
+    private void attachPayload(ObjectNode message, String payload) {
+        if (payload == null) {
+            return;
+        }
         try {
-            if (command.payload() != null) {
-                JsonNode payloadNode = objectMapper.readTree(command.payload());
-                message.set("payload", payloadNode);
-            }
+            JsonNode payloadNode = objectMapper.readTree(payload);
+            message.set("payload", payloadNode);
         } catch (JsonProcessingException e) {
             log.warn("Failed to parse invoke payload as JSON, sending as string: {}", e.getMessage());
-            message.put("payload", command.payload());
+            message.put("payload", payload);
         }
+    }
 
+    private void writeAssistantRoutingFields(ObjectNode message, InvokeCommand command, AssistantInfo info) {
+        String assistantAccount = firstNonBlank(
+                command.assistantAccount(),
+                command.partnerAccount(),
+                extractText(message.get("payload"), "assistantAccount"),
+                extractText(message.get("payload"), "partnerAccount"));
+        putIfNotBlank(message, "assistantAccount", assistantAccount);
+        if (info != null) {
+            putIfNotBlank(message, "businessTag", info.getBusinessTag());
+        }
+    }
+
+    private void injectAssistantId(ObjectNode message, InvokeCommand command) {
         // 注入 assistantId：仅在 create_session 和 chat 时注入
-        if (GatewayActions.CREATE_SESSION.equals(command.action())
-                || GatewayActions.CHAT.equals(command.action())) {
-            String assistantId = assistantIdResolverService.resolve(command.ak(), command.sessionId());
-            if (assistantId != null) {
-                ObjectNode targetPayload;
-                JsonNode existingPayload = message.get("payload");
-                if (existingPayload instanceof ObjectNode on) {
-                    targetPayload = on;
-                } else {
-                    targetPayload = objectMapper.createObjectNode();
-                    message.set("payload", targetPayload);
-                }
-                targetPayload.put("assistantId", assistantId);
-            }
+        if (!shouldInjectAssistantId(command.action())) {
+            return;
         }
+        String assistantId = assistantIdResolverService.resolve(command.ak(), command.sessionId());
+        if (assistantId == null) {
+            return;
+        }
+        mutablePayload(message).put("assistantId", assistantId);
+    }
 
+    private void injectExtParametersIfMissing(ObjectNode message, InvokeCommand command) {
         // PR2 platformExtParam：personal scope（buildInvokeMessage 是其唯一出站路径）也补
         // extParameters 信封，与 business / default_assistant 形态对齐。同时把 payload 顶层的
         // businessExtParam 搬到 extParameters.businessExtParam，跟 business wire 形态一致（P2a）。
@@ -218,31 +241,60 @@ public class GatewayRelayService {
         // 幂等保护：如果 payload 已经有 extParameters（例如 retryPendingMessages 提前构造好），
         // 不要覆盖，避免双注入。
         JsonNode payloadAfterAssistantId = message.get("payload");
-        if (payloadAfterAssistantId instanceof ObjectNode payloadObj
-                && !payloadObj.has("extParameters")) {
-            // 1) 把 payload 顶层 businessExtParam 摘出来（与 P2a 对齐：搬入 extParameters）
-            JsonNode removedBusinessExt = payloadObj.remove("businessExtParam");
-
-            // 2) 构造 extParameters 信封：businessExtParam（兜底 {}）+ platformExtParam（三字段）
-            ObjectNode extParameters = objectMapper.createObjectNode();
-            if (removedBusinessExt != null && !removedBusinessExt.isNull()) {
-                extParameters.set("businessExtParam", removedBusinessExt);
-            } else {
-                extParameters.set("businessExtParam", objectMapper.createObjectNode());
-            }
-            // C1 (v3 allowed-slash-commands): 升 5 参 builder 传 command.allowedSlashCommands()。
-            //   personal scope CHAT normal 路径在此汇聚（caller A4 + A7 已 gated 仅 personal CHAT 显式传 list）；
-            //   其他 callsite（非 CHAT / business / default_assistant）均通过 secondary constructor 传入 null,
-            //   builder 5 参 list==null 自然不下发该 key —— 双重保险。
-            extParameters.set("platformExtParam",
-                    PlatformExtParamBuilder.build(objectMapper,
-                            command.domain(),
-                            command.domainType(),
-                            command.businessSessionId(),
-                            command.allowedSlashCommands()));
-            payloadObj.set("extParameters", extParameters);
+        if (!(payloadAfterAssistantId instanceof ObjectNode payloadObj) || payloadObj.has("extParameters")) {
+            return;
         }
 
+        // 1) 把 payload 顶层 businessExtParam 摘出来（与 P2a 对齐：搬入 extParameters）
+        JsonNode removedBusinessExt = payloadObj.remove("businessExtParam");
+        payloadObj.set("extParameters", buildExtParameters(command, removedBusinessExt));
+    }
+
+    private ObjectNode buildExtParameters(InvokeCommand command, JsonNode businessExtParam) {
+        // 2) 构造 extParameters 信封：businessExtParam（兜底 {}）+ platformExtParam（三字段）
+        ObjectNode extParameters = objectMapper.createObjectNode();
+        extParameters.set("businessExtParam", normalizedBusinessExtParam(businessExtParam));
+        // C1 (v3 allowed-slash-commands): 升 5 参 builder 传 command.allowedSlashCommands()。
+        //   personal scope CHAT normal 路径在此汇聚（caller A4 + A7 已 gated 仅 personal CHAT 显式传 list）；
+        //   其他 callsite（非 CHAT / business / default_assistant）均通过 secondary constructor 传入 null,
+        //   builder 5 参 list==null 自然不下发该 key —— 双重保险。
+        extParameters.set("platformExtParam",
+                PlatformExtParamBuilder.build(objectMapper,
+                        command.domain(),
+                        command.domainType(),
+                        command.businessSessionId(),
+                        command.allowedSlashCommands()));
+        return extParameters;
+    }
+
+    private JsonNode normalizedBusinessExtParam(JsonNode businessExtParam) {
+        if (businessExtParam != null && !businessExtParam.isNull()) {
+            return businessExtParam;
+        }
+        return objectMapper.createObjectNode();
+    }
+
+    private ObjectNode mutablePayload(ObjectNode message) {
+        JsonNode existingPayload = message.get("payload");
+        if (existingPayload instanceof ObjectNode on) {
+            return on;
+        }
+        ObjectNode targetPayload = objectMapper.createObjectNode();
+        message.set("payload", targetPayload);
+        return targetPayload;
+    }
+
+    private static boolean shouldInjectAssistantId(String action) {
+        return GatewayActions.CREATE_SESSION.equals(action) || GatewayActions.CHAT.equals(action);
+    }
+
+    private static void putIfNotBlank(ObjectNode node, String fieldName, String value) {
+        if (value != null && !value.isBlank()) {
+            node.put(fieldName, value);
+        }
+    }
+
+    private String serializeInvokeMessage(ObjectNode message) {
         try {
             return objectMapper.writeValueAsString(message);
         } catch (JsonProcessingException e) {
@@ -258,6 +310,29 @@ public class GatewayRelayService {
             }
         }
         return null;
+    }
+
+    private static String extractText(JsonNode node, String fieldName) {
+        if (node == null || !node.isObject()) {
+            return null;
+        }
+        JsonNode value = node.path(fieldName);
+        if (value.isMissingNode() || value.isNull()) {
+            return null;
+        }
+        String text = value.asText(null);
+        return (text == null || text.isBlank()) ? null : text;
+    }
+
+    private String extractPayloadText(String payload, String fieldName) {
+        if (payload == null || payload.isBlank()) {
+            return null;
+        }
+        try {
+            return extractText(objectMapper.readTree(payload), fieldName);
+        } catch (JsonProcessingException ignored) {
+            return null;
+        }
     }
 
     // ==================== 上行：Gateway → Skill ====================

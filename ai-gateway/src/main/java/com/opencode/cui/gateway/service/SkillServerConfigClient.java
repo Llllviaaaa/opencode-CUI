@@ -18,8 +18,7 @@ import java.time.Duration;
  * skill-server SysConfig 客户端。
  *
  * <p>对外暴露 {@link #getConfigValue(String, String)} 方法，用于跨服务读取 SS 端
- * 的 {@code sys_config} 表配置（例如 v1/v2 切换开关）。GW 内部由
- * {@link CallbackConfigService} 调用 + 缓存。</p>
+ * 的 {@code sys_config} 表配置。GW 内部的云端路由兜底直接通过本客户端读取。</p>
  *
  * <p>调用 SS 端 {@code GET /api/admin/configs/value?type=&key=}（见
  * {@code SysConfigController.getValue}），用 Bearer token 鉴权（与 IM inbound 同

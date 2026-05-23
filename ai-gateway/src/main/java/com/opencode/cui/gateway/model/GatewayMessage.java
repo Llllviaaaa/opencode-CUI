@@ -110,6 +110,12 @@ public class GatewayMessage {
     /** Invoke 动作类型：chat、create_session、close_session 等 */
     private String action;
 
+    /** Assistant account used by cloud routing and passed through to local agents. */
+    private String assistantAccount;
+
+    /** Business routing tag used for SysConfig lookup and cloud profile resolution. */
+    private String businessTag;
+
     /** Invoke 或 Register 消息的载荷数据 */
     private JsonNode payload;
 

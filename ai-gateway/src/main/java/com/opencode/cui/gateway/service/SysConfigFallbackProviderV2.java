@@ -11,28 +11,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * SysConfig 兜底配置 Provider V2（按 cloudProfile 维度区分）。
+ * Reads cloud route fallback config directly from skill-server SysConfig.
  *
- * <p>当 v2 cloud-route resolver 返回 null（HTTP 非 200 / data 缺失 / 业务 code != 200）或
- * 总开关 OFF 时，由 {@link CallbackConfigService} 调用本 Provider，从 skill-server
- * SysConfig（{@code type=cloud_route_fallback_v2,
- * key={cloudProfile}:{chat|question|permission}}）拉取静态配置作为兜底，构造
- * {@link CallbackConfig}。</p>
- *
- * <p>与老 {@link SysConfigFallbackProvider} 互不兜底：</p>
- * <ul>
- *   <li>SS key 命名空间分立（{@code cloud_route_fallback_v2} vs {@code cloud_route_fallback}）</li>
- *   <li>miss 时直接返回 null，<b>不</b>回查老 fallback</li>
- *   <li>缓存维度按 (cloudProfile, scope 短名) 复合 key，互不污染</li>
- * </ul>
- *
- * <p>SysConfig value 形态：JSON {@code {"channelAddress":..., "channelType":..., "authType":...}}。
- * 与老 provider 一致，不返回 appId（保持 null）。</p>
- *
- * <h3>缓存策略</h3>
- * <p>本地 in-memory 缓存按 {@code cloudProfile:shortName}（chat/question/permission）独立维护，
- * TTL 由 {@code gateway.cloud-route.sysconfig-cache-ttl-ms} 配置（默认 300000ms），
- * 与 {@link CallbackConfigService} 的版本缓存共用同一配置项，避免每次失败都打 skill-server。</p>
+ * <p>Key format: {@code type=cloud_route_fallback_v2,
+ * key={businessTag}:{chat|question|permission}}. Values are JSON objects with
+ * {@code channelAddress}, {@code channelType}, and {@code authType}.</p>
  */
 @Slf4j
 @Component
@@ -40,7 +23,7 @@ public class SysConfigFallbackProviderV2 {
 
     private static final String SS_CONFIG_TYPE = "cloud_route_fallback_v2";
 
-    /** scope 字面量 → SysConfig 短名（与 {@link SysConfigFallbackProvider} 同款映射）。 */
+    /** scope literal to SysConfig short name. */
     private static final Map<String, String> SCOPE_TO_SHORT_NAME = Map.of(
             "callback:weagent:chat", "chat",
             "callback:weagent:question_reply", "question",
@@ -64,24 +47,24 @@ public class SysConfigFallbackProviderV2 {
     }
 
     /**
-     * 加载 (ak, scope, cloudProfile) 对应的兜底配置。
+     * 加载 (ak, scope, businessTag) 对应的兜底配置。
      *
-     * @return 解析成功的 {@link CallbackConfig}；scope 不在白名单 / cloudProfile 缺失 /
-     *         SysConfig 缺失 / JSON 解析失败一律返回 null。<b>不</b>回查老 fallback。
+     * @return 解析成功的 {@link CallbackConfig}；scope 不在白名单 / businessTag 缺失 /
+     *         SysConfig 缺失 / JSON 解析失败一律返回 null。
      */
-    public CallbackConfig load(String ak, String scope, String cloudProfile) {
-        if (cloudProfile == null || cloudProfile.isBlank()) {
-            log.warn("[FALLBACK_PROVIDER_V2] cloudProfile is blank: ak={}, scope={}", ak, scope);
+    public CallbackConfig load(String ak, String scope, String businessTag) {
+        if (businessTag == null || businessTag.isBlank()) {
+            log.warn("[FALLBACK_PROVIDER_V2] businessTag is blank: ak={}, scope={}", ak, scope);
             return null;
         }
         String shortName = SCOPE_TO_SHORT_NAME.get(scope);
         if (shortName == null) {
-            log.warn("[FALLBACK_PROVIDER_V2] scope not in fallback whitelist: ak={}, scope={}, cloudProfile={}",
-                    ak, scope, cloudProfile);
+            log.warn("[FALLBACK_PROVIDER_V2] scope not in fallback whitelist: ak={}, scope={}, businessTag={}",
+                    ak, scope, businessTag);
             return null;
         }
 
-        String ssKey = cloudProfile + ":" + shortName;
+        String ssKey = businessTag + ":" + shortName;
 
         long now = System.currentTimeMillis();
         AtomicReference<CachedFallback> ref = cacheByKey.computeIfAbsent(
@@ -91,7 +74,7 @@ public class SysConfigFallbackProviderV2 {
         if (cached != null && now - cached.fetchedAtMs < fallbackCacheTtlMs) {
             template = cached.config;
         } else {
-            template = fetchFromSysConfig(ssKey, cloudProfile, shortName);
+            template = fetchFromSysConfig(ssKey, businessTag, shortName);
             ref.set(new CachedFallback(template, now));
         }
 
@@ -106,21 +89,21 @@ public class SysConfigFallbackProviderV2 {
         cfg.setChannelType(template.getChannelType());
         cfg.setAuthType(template.getAuthType());
         cfg.setAppId(null);
-        log.info("[FALLBACK_PROVIDER_V2] loaded fallback: ak={}, scope={}, cloudProfile={}, shortName={}, channelType={}, authType={}",
-                ak, scope, cloudProfile, shortName, cfg.getChannelType(), cfg.getAuthType());
+        log.info("[FALLBACK_PROVIDER_V2] loaded fallback: ak={}, scope={}, businessTag={}, shortName={}, channelType={}, authType={}",
+                ak, scope, businessTag, shortName, cfg.getChannelType(), cfg.getAuthType());
         return cfg;
     }
 
     /**
      * 从 skill-server SysConfig 拉取并解析 JSON；任何失败返回 null。
      */
-    private CallbackConfig fetchFromSysConfig(String ssKey, String cloudProfile, String shortName) {
+    private CallbackConfig fetchFromSysConfig(String ssKey, String businessTag, String shortName) {
         String json;
         try {
             json = skillServerConfigClient.getConfigValue(SS_CONFIG_TYPE, ssKey);
         } catch (Exception e) {
-            log.warn("[FALLBACK_PROVIDER_V2] SS config read failed: cloudProfile={}, shortName={}, error={}",
-                    cloudProfile, shortName, e.getMessage());
+            log.warn("[FALLBACK_PROVIDER_V2] SS config read failed: businessTag={}, shortName={}, error={}",
+                    businessTag, shortName, e.getMessage());
             return null;
         }
         if (json == null || json.isBlank()) {
@@ -133,8 +116,8 @@ public class SysConfigFallbackProviderV2 {
             String channelType = textOrNull(root.path("channelType"));
             String authType = textOrNull(root.path("authType"));
             if (channelAddress == null || channelType == null || authType == null) {
-                log.warn("[FALLBACK_PROVIDER_V2] SS config incomplete: cloudProfile={}, shortName={}, channelAddress={}, channelType={}, authType={}",
-                        cloudProfile, shortName, channelAddress, channelType, authType);
+                log.warn("[FALLBACK_PROVIDER_V2] SS config incomplete: businessTag={}, shortName={}, channelAddress={}, channelType={}, authType={}",
+                        businessTag, shortName, channelAddress, channelType, authType);
                 return null;
             }
             CallbackConfig cfg = new CallbackConfig();
@@ -143,8 +126,8 @@ public class SysConfigFallbackProviderV2 {
             cfg.setAuthType(authType);
             return cfg;
         } catch (Exception e) {
-            log.warn("[FALLBACK_PROVIDER_V2] SS config json parse failed: cloudProfile={}, shortName={}, error={}",
-                    cloudProfile, shortName, e.getMessage());
+            log.warn("[FALLBACK_PROVIDER_V2] SS config json parse failed: businessTag={}, shortName={}, error={}",
+                    businessTag, shortName, e.getMessage());
             return null;
         }
     }

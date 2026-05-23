@@ -24,6 +24,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 /**
  * PR2: 验证 {@code GatewayRelayService.buildInvokeMessage}（personal scope wire 升级）。
@@ -67,6 +68,7 @@ class GatewayRelayServiceBuildInvokeMessageTest {
         when(personalStrategy.getScope()).thenReturn("personal");
         when(scopeDispatcher.getStrategy(any(), any(), any(AssistantInfo.class))).thenReturn(personalStrategy);
         when(assistantInfoService.getAssistantInfo(anyString())).thenReturn(new AssistantInfo());
+        lenient().when(assistantInfoService.getAssistantInfo(anyString(), anyString())).thenReturn(new AssistantInfo());
         when(assistantIdResolverService.resolve(anyString(), anyString())).thenReturn(null);
 
         relayTarget = mock(GatewayRelayService.GatewayRelayTarget.class);
@@ -77,6 +79,28 @@ class GatewayRelayServiceBuildInvokeMessageTest {
                 redisMessageBroker, assistantIdResolverService, assistantInfoService,
                 scopeDispatcher, emitter);
         service.setGatewayRelayTarget(relayTarget);
+    }
+
+    @Test
+    @DisplayName("personal 路径：顶层透传 assistantAccount，并从 AssistantInfo 透传 businessTag")
+    void personal_writesTopLevelAssistantAccountAndBusinessTag() throws Exception {
+        AssistantInfo info = new AssistantInfo();
+        info.setBusinessTag("biz-tag-local");
+        when(assistantInfoService.getAssistantInfo("ak-1", "asst-1")).thenReturn(info);
+
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("text", "hello");
+        payload.put("toolSessionId", "ts-1");
+        payload.put("assistantAccount", "asst-1");
+
+        InvokeCommand cmd = new InvokeCommand(
+                "ak-1", "user-1", "1001", "chat", objectMapper.writeValueAsString(payload),
+                null, "im", "direct", "biz-dm-1");
+
+        JsonNode message = captureSentMessage(cmd);
+
+        assertEquals("asst-1", message.path("assistantAccount").asText());
+        assertEquals("biz-tag-local", message.path("businessTag").asText());
     }
 
     /** Sends invoke and captures the serialized JSON sent to gateway. */

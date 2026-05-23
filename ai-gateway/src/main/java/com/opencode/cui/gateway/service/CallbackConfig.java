@@ -2,7 +2,7 @@ package com.opencode.cui.gateway.service;
 
 import lombok.Data;
 
-/** 由 CallbackConfigResolver 返回，描述 (ak, scope) 的回调订阅配置。 */
+/** Cloud route config resolved from assistant remoteProperty or skill-server SysConfig. */
 @Data
 public class CallbackConfig {
     private String ak;

@@ -47,6 +47,18 @@ class CloudResponseProfileRegistryTest {
     }
 
     @Test
+    void resolve_businessTagMapping_readsMappedProfileDef() {
+        CloudResponseProfileRegistry registry = newRegistry(300_000L);
+        when(skillServerConfigClient.getConfigValue(eq("cloud_protocol_profile"), eq("biz-tag")))
+                .thenReturn("assistant_square");
+        when(skillServerConfigClient.getConfigValue(eq("cloud_protocol_profile_def"), eq("assistant_square")))
+                .thenReturn("{\"response_decoder\":\"assistant_square\"}");
+        CloudResponseProfile p = registry.resolve("biz-tag");
+        assertThat(p.name()).isEqualTo("assistant_square");
+        assertThat(p.responseDecoderName()).isEqualTo("assistant_square");
+    }
+
+    @Test
     void resolve_profileDefMissing_conventionFallback_decoderEqualsProfileName() {
         CloudResponseProfileRegistry registry = newRegistry(300_000L);
         when(skillServerConfigClient.getConfigValue(eq("cloud_protocol_profile_def"), eq("assistant_square")))

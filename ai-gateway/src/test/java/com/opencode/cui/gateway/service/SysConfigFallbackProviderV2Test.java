@@ -21,10 +21,10 @@ import static org.mockito.Mockito.when;
  *   <li>JSON 解析失败 → 返回 null（warn）</li>
  *   <li>SysConfig 返回 null → 返回 null</li>
  *   <li>scope 不在白名单 → 返回 null（不打 SS）</li>
- *   <li>cloudProfile 为 null/blank → 返回 null（不打 SS）</li>
+ *   <li>businessTag 为 null/blank → 返回 null（不打 SS）</li>
  *   <li>TTL 窗口内重复 load 仅打 SS 一次（in-mem 缓存）</li>
- *   <li>独立缓存 entry（按 cloudProfile + scope 维度）</li>
- *   <li>不回查老 fallback（与 {@link SysConfigFallbackProvider} 命名空间互不交叉）</li>
+ *   <li>独立缓存 entry（按 businessTag + scope 维度）</li>
+ *   <li>不回查旧接口</li>
  * </ul>
  */
 class SysConfigFallbackProviderV2Test {
