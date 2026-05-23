@@ -192,9 +192,9 @@ class SkillInstanceRegistryTest {
     }
 
     @Test
-    @DisplayName("refreshHeartbeat: NUMSUB>0 跳过重连，正常写入心跳")
+    @DisplayName("refreshHeartbeat: loopback probe 成功则跳过重连，正常写入心跳")
     void refreshHeartbeat_subscriptionAlive_shouldRenewTtlAndSkipReconnect() {
-        when(redisMessageBroker.physicalSubscriberCount(RELAY_CHANNEL)).thenReturn(1L);
+        when(redisMessageBroker.verifySubscriptionDelivery(eq(RELAY_CHANNEL), anyLong())).thenReturn(true);
 
         registry.refreshHeartbeat();
 
@@ -206,9 +206,9 @@ class SkillInstanceRegistryTest {
     }
 
     @Test
-    @DisplayName("refreshHeartbeat: NUMSUB=0 触发重连；重连成功后写心跳")
+    @DisplayName("refreshHeartbeat: loopback probe 失败触发重连；重连成功后写心跳")
     void refreshHeartbeat_subscriptionDead_reconnectSucceeds_shouldWriteHeartbeat() {
-        when(redisMessageBroker.physicalSubscriberCount(RELAY_CHANNEL)).thenReturn(0L);
+        when(redisMessageBroker.verifySubscriptionDelivery(eq(RELAY_CHANNEL), anyLong())).thenReturn(false);
         when(redisMessageBroker.forceReconnectListenerContainer(eq(RELAY_CHANNEL), anyLong()))
                 .thenReturn(true);
 
@@ -220,9 +220,9 @@ class SkillInstanceRegistryTest {
     }
 
     @Test
-    @DisplayName("refreshHeartbeat: NUMSUB=0 重连失败 → 跳过心跳写入，让 TTL 过期触发 takeover")
+    @DisplayName("refreshHeartbeat: loopback probe 失败且重连失败 → 跳过心跳写入，让 TTL 过期触发 takeover")
     void refreshHeartbeat_subscriptionDead_reconnectFails_shouldSkipHeartbeat() {
-        when(redisMessageBroker.physicalSubscriberCount(RELAY_CHANNEL)).thenReturn(0L);
+        when(redisMessageBroker.verifySubscriptionDelivery(eq(RELAY_CHANNEL), anyLong())).thenReturn(false);
         when(redisMessageBroker.forceReconnectListenerContainer(eq(RELAY_CHANNEL), anyLong()))
                 .thenReturn(false);
 

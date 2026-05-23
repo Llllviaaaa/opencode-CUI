@@ -419,29 +419,84 @@ private void subscribeToUserStream(String userId) {
 ## Redis pub/sub 自愈
 
 `SkillInstanceRegistry.refreshHeartbeat` 的订阅自检只负责判断本实例
-`ss:relay:{instanceId}` 在 Redis 端 `PUBSUB NUMSUB` 是否大于 0。恢复动作必须留在
-`RedisMessageBroker.forceReconnectListenerContainer(String verifyChannel, long timeoutMs)`。
+`ss:relay:{instanceId}` 是否能完成真实 pub/sub 投递。自检必须调用
+`RedisMessageBroker.verifySubscriptionDelivery(String channel, long timeoutMs)`：broker 向自己的
+relay channel 发布内部 loopback probe，并在同一个 JVM 的 `MessageListener` 收到 probe 后完成 ack。
 
-恢复顺序：
+不要把 `PUBSUB NUMSUB` 作为运行期硬判活。Redis 6 Cluster / 云 Redis 代理场景下，
+`PUBSUB` 统计只报告处理该命令的节点 Pub/Sub 上下文，不是整个集群真值；发布连接与订阅连接落在不同节点时，
+健康订阅也可能被查成 0。`physicalSubscriberCount` 只保留为诊断工具，不参与 heartbeat 自检。
 
-1. 用 `activeListeners.get(verifyChannel)` 找到现有 `MessageListener`。
-2. 调 `listenerContainer.addMessageListener(listener, new ChannelTopic(verifyChannel))`
-   重新提交该单个 relay channel 的订阅。
-3. 用 `physicalSubscriberCount(verifyChannel)` 等待 `PUBSUB NUMSUB > 0`。
-4. 只有单通道重订阅失败或超时，才退回 `listenerContainer.stop()` +
-   `listenerContainer.start()`，并在 `start()` 异常后再次 `stop()` 复位 container。
+### 1. Scope / Trigger
 
-来源：`skill-server/src/main/java/com/opencode/cui/skill/service/RedisMessageBroker.java::forceReconnectListenerContainer`
+- Trigger：`SkillInstanceRegistry.refreshHeartbeat` 刷新心跳前探测本实例 relay channel。
+- 目标：发现 listener silent failure，同时避免 Redis Cluster 节点局部统计导致启动期误自检失败。
 
-规则：
+### 2. Signatures
 
-- `NUMSUB=0` 不要一上来重启整个 `RedisMessageListenerContainer`；这会影响
-  `agent:*`、`user-stream:*`、`ss:relay:*` 下所有订阅，并可能触发 Spring Data Redis
-  `SubscriptionTask aborted` 路径。
-- 强制恢复必须是 single-flight；多个调度线程/调用方不能并发 `stop/start` 同一个共享 container。
-- 恢复失败仍然返回 `false`，让 `SkillInstanceRegistry` 跳过本轮 heartbeat 并保留 takeover 兜底。
-- 回归测试必须覆盖：单通道重订阅成功不重启 container、重订阅失败后 fallback、
-  `start()` 异常复位、重入时不重复 `stop/start`。
+```java
+public boolean verifySubscriptionDelivery(String channel, long timeoutMs)
+public boolean forceReconnectListenerContainer(String verifyChannel, long timeoutMs)
+public long physicalSubscriberCount(String channel) // 仅诊断，不做 heartbeat 硬判活
+```
+
+### 3. Contracts
+
+- `verifySubscriptionDelivery` 发布内部 probe 到目标 channel；probe 被 broker 自己拦截，不进入业务 handler。
+- probe 在 `timeoutMs` 内被当前 JVM listener 收到 → 返回 `true`。
+- publish 异常、等待超时、线程中断、blank channel → 返回 `false`，不抛给调度线程。
+- `forceReconnectListenerContainer` 只重订阅单个 `verifyChannel`：`removeMessageListener(listener, topic)` 后再
+  `addMessageListener(listener, topic)`，再用 loopback probe 确认投递恢复。
+- 单通道恢复失败后不再整容器 `stop()` / `start()`；共享 container 还承载 `user-stream:*`，整容器重启会打断 miniapp 跨实例流式投递。
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+| --- | --- |
+| loopback probe ack received | 自检通过，`refreshHeartbeat` 正常写 heartbeat |
+| probe timeout | 调 `forceReconnectListenerContainer` 尝试单 channel 重订阅 |
+| 单 channel 重订阅后 probe ack received | 返回 `true`，继续写 heartbeat |
+| 单 channel 重订阅后 probe 仍超时 | 返回 `false`，`refreshHeartbeat` 跳过本轮 heartbeat，让 takeover TTL 兜底 |
+| `activeListeners` 找不到 verify channel | 返回 `false`，不操作共享 container |
+| publish/probe 异常 | WARN 后返回 `false`，不让调度线程崩溃 |
+
+### 5. Good / Base / Bad Cases
+
+Good:
+
+```java
+if (!redisMessageBroker.verifySubscriptionDelivery("ss:relay:" + instanceId, 2000L)) {
+    redisMessageBroker.forceReconnectListenerContainer("ss:relay:" + instanceId, 2000L);
+}
+```
+
+Base:
+
+```java
+long count = redisMessageBroker.physicalSubscriberCount(channel); // 只用于诊断日志 / 手工排查
+```
+
+Bad:
+
+```java
+if (redisMessageBroker.physicalSubscriberCount(channel) == 0L) {
+    listenerContainer.stop();
+    listenerContainer.start();
+}
+```
+
+### 6. Tests Required
+
+- `RedisMessageBrokerTest` 覆盖 loopback probe 成功、probe 超时、probe 不进入业务 handler。
+- `RedisMessageBrokerTest` 覆盖单 channel 重订阅成功 / 失败 / 超时 / 重入时都不触发 container `stop/start`。
+- `SkillInstanceRegistryTest` 覆盖 probe 成功写 heartbeat、probe 失败且重连成功写 heartbeat、probe 失败且重连失败跳过 heartbeat。
+
+### 7. Wrong vs Correct
+
+Wrong：把 `PUBSUB NUMSUB = 0` 当作跨 Redis Cluster 的全局真值，并用整容器 `stop/start` 自愈。
+
+Correct：运行期健康检查走 loopback probe；`PUBSUB NUMSUB` 只做诊断。恢复只重订阅当前 relay channel，
+失败时保留 heartbeat-skip takeover 兜底，把连接级恢复交给 Spring Data Redis recovery/backoff。
 
 ---
 

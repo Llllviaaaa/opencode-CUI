@@ -38,11 +38,11 @@ import java.util.concurrent.atomic.AtomicReference;
  * 监听 {@code ApplicationReadyEvent} 之间默认无序，但本类首次执行延迟到
  * {@code now + interval}（10s）已经给 SUBSCRIBE settle 留出窗口，无需 {@code @Order}。
  *
- * <p>半死自愈：刷新心跳前，先用 {@link RedisMessageBroker#physicalSubscriberCount}
- * 检查本实例 {@code ss:relay:{instanceId}} 在 Redis 端的订阅数；若为 0（长连接
- * silent failed），调用 {@link RedisMessageBroker#forceReconnectListenerContainer}
- * 重建 subscription 连接。重连失败时跳过心跳写入，让 30s TTL 过期触发其他实例的
- * takeover 兜底。
+ * <p>半死自愈：刷新心跳前，先用 {@link RedisMessageBroker#verifySubscriptionDelivery}
+ * 向本实例 {@code ss:relay:{instanceId}} 发 loopback probe，确认 Redis pub/sub
+ * 能真实投递回本实例 listener；若探测失败（长连接 silent failed 或订阅未恢复），调用
+ * {@link RedisMessageBroker#forceReconnectListenerContainer} 重建 subscription 连接。
+ * 重连失败时跳过心跳写入，让 30s TTL 过期触发其他实例的 takeover 兜底。
  */
 @Slf4j
 @Component
@@ -142,7 +142,7 @@ public class SkillInstanceRegistry {
      */
     public void refreshHeartbeat() {
         if (!verifyOwnSubscriptionAlive()) {
-            log.error("Self-check failed: own relay channel has 0 subscribers, attempting reconnect: instanceId={}",
+            log.error("Self-check failed: own relay channel probe was not delivered, attempting reconnect: instanceId={}",
                     instanceId);
             boolean recovered = redisMessageBroker.forceReconnectListenerContainer(
                     SS_RELAY_CHANNEL_PREFIX + instanceId, RECONNECT_VERIFY_TIMEOUT_MS);
@@ -212,13 +212,13 @@ public class SkillInstanceRegistry {
     // ==================== 私有方法 ====================
 
     /**
-     * 通过 PUBSUB NUMSUB 校验本实例 relay channel 在 Redis 端的真实订阅数 >0。
-     * 这是 Redis server 端真值，能捕获 Spring 侧 {@code activeListeners} map 检测
-     * 不到的长连接 silent failure。
+     * 通过 loopback probe 校验本实例 relay channel 的真实投递能力。
+     * 不直接依赖 {@code PUBSUB NUMSUB}，避免 Redis Cluster / 云 Redis 代理场景下
+     * 节点局部订阅统计把健康订阅误判为 0。
      */
     private boolean verifyOwnSubscriptionAlive() {
         String channel = SS_RELAY_CHANNEL_PREFIX + instanceId;
-        return redisMessageBroker.physicalSubscriberCount(channel) > 0L;
+        return redisMessageBroker.verifySubscriptionDelivery(channel, RECONNECT_VERIFY_TIMEOUT_MS);
     }
 
     private void writeHeartbeat() {

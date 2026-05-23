@@ -20,7 +20,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -45,7 +47,10 @@ public class RedisMessageBroker {
 
     /** Track active subscriptions for cleanup */
     private final Map<String, MessageListener> activeListeners = new ConcurrentHashMap<>();
+    private final Map<String, CompletableFuture<Boolean>> pendingSubscriptionProbes = new ConcurrentHashMap<>();
     private final AtomicBoolean reconnectInProgress = new AtomicBoolean(false);
+
+    private static final String SUBSCRIPTION_PROBE_PREFIX = "__opencode_pubsub_probe__:";
 
     public RedisMessageBroker(StringRedisTemplate redisTemplate,
             RedisMessageListenerContainer listenerContainer) {
@@ -158,6 +163,10 @@ public class RedisMessageBroker {
         MessageListener listener = (Message message, byte[] pattern) -> {
             try {
                 String json = new String(message.getBody(), StandardCharsets.UTF_8);
+                if (completeSubscriptionProbeIfPresent(channel, json)) {
+                    log.debug("Received Redis subscription probe ack: channel={}", channel);
+                    return;
+                }
                 handler.accept(json);
 
                 log.info("Received from Redis channel {}", channel);
@@ -249,15 +258,62 @@ public class RedisMessageBroker {
     }
 
     /**
+     * Verifies that a channel is actually deliverable by publishing a loopback probe and waiting
+     * for this broker's subscribed listener to receive it.
+     *
+     * <p>{@code PUBSUB NUMSUB} remains useful as a diagnostic, but Redis Cluster reports it from
+     * the node that handled the command rather than as a cluster-wide truth. A loopback publish
+     * validates the same path business messages use and therefore avoids false negatives when the
+     * subscriber connection and the probing connection land on different Redis nodes.</p>
+     *
+     * @param channel   full channel name to verify
+     * @param timeoutMs maximum time to wait for the loopback acknowledgement
+     * @return true if this JVM received its own probe through Redis pub/sub; false on timeout or
+     *         publish/probe failure
+     */
+    public boolean verifySubscriptionDelivery(String channel, long timeoutMs) {
+        if (channel == null || channel.isBlank()) {
+            return false;
+        }
+        String nonce = UUID.randomUUID().toString();
+        String probeKey = probeKey(channel, nonce);
+        CompletableFuture<Boolean> ack = new CompletableFuture<>();
+        pendingSubscriptionProbes.put(probeKey, ack);
+        long effectiveTimeoutMs = Math.max(1L, timeoutMs);
+        try {
+            redisTemplate.convertAndSend(channel, SUBSCRIPTION_PROBE_PREFIX + nonce);
+            ack.get(effectiveTimeoutMs, TimeUnit.MILLISECONDS);
+            return true;
+        } catch (TimeoutException e) {
+            log.warn("Redis subscription probe timed out: channel={}, timeoutMs={}", channel, effectiveTimeoutMs);
+            return false;
+        } catch (ExecutionException e) {
+            log.warn("Redis subscription probe failed: channel={}, error={}", channel, e.getMessage(), e);
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Redis subscription probe interrupted: channel={}", channel);
+            return false;
+        } catch (Exception e) {
+            log.warn("Redis subscription probe failed: channel={}, error={}", channel, e.getMessage(), e);
+            return false;
+        } finally {
+            pendingSubscriptionProbes.remove(probeKey);
+        }
+    }
+
+    /**
      * 自愈 Redis pub/sub silent failure。
      *
-     * <p>当 {@link #physicalSubscriberCount} 检测到本实例 relay channel 在 Redis 端订阅数为 0，
-     * 但 listener 仍在 {@code activeListeners} 中时，优先重新提交该单个 channel 的订阅并确认
-     * {@code PUBSUB NUMSUB} 恢复。这样可以避开整容器 {@code stop/start} 导致的 Spring
-     * {@code SubscriptionTask aborted} 路径。</p>
+     * <p>当 {@link #verifySubscriptionDelivery} 检测到本实例 relay channel 无法完成
+     * loopback 投递，但 listener 仍在 {@code activeListeners} 中时，优先重新提交该单个
+     * channel 的订阅并确认投递恢复。这样可以避开整容器 {@code stop/start} 导致的 Spring
+     * {@code SubscriptionTask aborted} 路径，也避免 Redis Cluster 下 {@code PUBSUB NUMSUB}
+     * 节点局部统计带来的误判。</p>
      *
-     * <p>如果单通道重订阅失败或超时，再退回到重启 {@link RedisMessageListenerContainer}。
-     * 退回路径会短暂影响该 container 下所有订阅（agent:*、user-stream:*、ss:relay:*）。</p>
+     * <p>如果单通道重订阅失败或超时，不再重启共享 {@link RedisMessageListenerContainer}。
+     * 该 container 同时承载 {@code user-stream:*}，整容器 stop/start 会打断 miniapp 跨实例
+     * 流式投递；连接级异常交给 Spring Data Redis 自带 recovery/backoff 继续恢复。</p>
      *
      * @param verifyChannel 用于校验订阅恢复的 channel；通常是调用方自己的 {@code ss:relay:{instanceId}}
      * @param timeoutMs     等待物理订阅恢复的最大时间（毫秒），超时返回 false
@@ -275,11 +331,9 @@ public class RedisMessageBroker {
             if (resubscribeActiveListener(verifyChannel, timeoutMs)) {
                 return true;
             }
-            listenerContainer.stop();
-            if (!startListenerContainer(verifyChannel)) {
-                return false;
-            }
-            return waitForSubscriptionRestored(verifyChannel, timeoutMs);
+            log.warn("Redis channel resubscribe did not restore subscriber; leaving shared listener container " +
+                    "running for Spring recovery: verifyChannel={}", verifyChannel);
+            return false;
         } catch (Exception e) {
             log.error("forceReconnectListenerContainer failed: verifyChannel={}, error={}",
                     verifyChannel, e.getMessage(), e);
@@ -299,7 +353,9 @@ public class RedisMessageBroker {
             return false;
         }
         try {
-            listenerContainer.addMessageListener(listener, new ChannelTopic(channel));
+            ChannelTopic topic = new ChannelTopic(channel);
+            listenerContainer.removeMessageListener(listener, topic);
+            listenerContainer.addMessageListener(listener, topic);
             if (waitForSubscriptionRestored(channel, timeoutMs)) {
                 log.warn("Redis channel resubscribe restored subscriber: channel={}", channel);
                 return true;
@@ -312,53 +368,31 @@ public class RedisMessageBroker {
         }
     }
 
-    private boolean startListenerContainer(String verifyChannel) {
-        try {
-            listenerContainer.start();
-            return true;
-        } catch (Exception e) {
-            log.error("forceReconnectListenerContainer start failed: verifyChannel={}, error={}",
-                    verifyChannel, e.getMessage(), e);
-            resetListenerContainerAfterFailedStart(verifyChannel);
-            return false;
-        }
-    }
-
-    private void resetListenerContainerAfterFailedStart(String verifyChannel) {
-        try {
-            listenerContainer.stop();
-        } catch (Exception stopError) {
-            log.warn("Failed to reset RedisMessageListenerContainer after start failure: verifyChannel={}, error={}",
-                    verifyChannel, stopError.getMessage(), stopError);
-        }
-    }
-
     /**
-     * 短轮询等待 {@code channel} 在 Redis 端订阅数恢复 (>0)。
+     * 等待 {@code channel} 的真实 pub/sub 投递恢复。
      *
-     * <p>{@link RedisMessageListenerContainer#start()} 是异步注册 cachedListeners，
-     * 必须等待物理订阅真正落到 Redis 后再返回，否则调用方可能在 listener 还未生效时
-     * 就开始处理消息。轮询间隔 100ms。</p>
+     * <p>这里不依赖 {@code PUBSUB NUMSUB}：Redis Cluster 中该命令只返回当前节点的
+     * Pub/Sub 上下文，容易把健康订阅误判为 0。loopback probe 能验证业务消息实际使用的
+     * publish → Redis → listener 路径。</p>
      */
     private boolean waitForSubscriptionRestored(String channel, long timeoutMs) {
-        if (channel == null || channel.isBlank()) {
+        return verifySubscriptionDelivery(channel, timeoutMs);
+    }
+
+    private boolean completeSubscriptionProbeIfPresent(String channel, String message) {
+        if (message == null || !message.startsWith(SUBSCRIPTION_PROBE_PREFIX)) {
             return false;
         }
-        long deadline = System.currentTimeMillis() + Math.max(0L, timeoutMs);
-        while (true) {
-            if (physicalSubscriberCount(channel) > 0L) {
-                return true;
-            }
-            if (System.currentTimeMillis() >= deadline) {
-                return false;
-            }
-            try {
-                Thread.sleep(100L);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
+        String nonce = message.substring(SUBSCRIPTION_PROBE_PREFIX.length());
+        CompletableFuture<Boolean> ack = pendingSubscriptionProbes.remove(probeKey(channel, nonce));
+        if (ack != null) {
+            ack.complete(true);
         }
+        return true;
+    }
+
+    private String probeKey(String channel, String nonce) {
+        return channel + "\u0000" + nonce;
     }
 
     // ==================== SS relay pub/sub (Task 2.6) ====================
