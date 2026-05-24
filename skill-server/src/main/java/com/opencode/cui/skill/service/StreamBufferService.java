@@ -149,6 +149,7 @@ public class StreamBufferService {
                     String newContent = (part.getContent() != null ? part.getContent() : "") + content;
                     part.setContent(newContent);
                     part.setEmittedAt(msg.getEmittedAt());
+                    mergeMessageContext(sessionId, part, msg);
                     String updated = objectMapper.writeValueAsString(part);
                     Boolean replaced = redis.opsForValue().setIfPresent(key, updated, TTL_HOURS, TimeUnit.HOURS);
                     if (Boolean.FALSE.equals(replaced)) {
@@ -166,6 +167,56 @@ public class StreamBufferService {
             }
         }
         log.warn("Failed to append content after {} retries for part {}", MAX_APPEND_RETRIES, msg.getPartId());
+    }
+
+    private void mergeMessageContext(String sessionId, StreamMessage target, StreamMessage incoming) {
+        if (incoming.getMessageId() != null && !incoming.getMessageId().isBlank()
+                && shouldReplaceMessageId(sessionId, target, incoming)) {
+            target.setMessageId(incoming.getMessageId());
+        }
+        if (incoming.getSourceMessageId() != null && !incoming.getSourceMessageId().isBlank()
+                && shouldReplaceSourceMessageId(sessionId, target, incoming)) {
+            target.setSourceMessageId(incoming.getSourceMessageId());
+        }
+        if (incoming.getMessageSeq() != null) {
+            target.setMessageSeq(incoming.getMessageSeq());
+        }
+        if (incoming.getRole() != null && !incoming.getRole().isBlank()) {
+            target.setRole(incoming.getRole());
+        }
+        if (incoming.getPartSeq() != null) {
+            target.setPartSeq(incoming.getPartSeq());
+        }
+        if (target.getSessionId() == null) {
+            target.setSessionId(incoming.getSessionId() != null ? incoming.getSessionId() : sessionId);
+        }
+        if (target.getWelinkSessionId() == null) {
+            target.setWelinkSessionId(incoming.getWelinkSessionId());
+        }
+        if (target.getSubagentSessionId() == null) {
+            target.setSubagentSessionId(incoming.getSubagentSessionId());
+        }
+        if (target.getSubagentName() == null) {
+            target.setSubagentName(incoming.getSubagentName());
+        }
+    }
+
+    private boolean shouldReplaceMessageId(String sessionId, StreamMessage target, StreamMessage incoming) {
+        String current = target.getMessageId();
+        if (current == null || current.isBlank() || current.equals(incoming.getMessageId())) {
+            return true;
+        }
+        return ProtocolUtils.isGeneratedMessageId(sessionId, target.getMessageSeq(), current)
+                && !ProtocolUtils.isGeneratedMessageId(sessionId, incoming.getMessageSeq(), incoming.getMessageId());
+    }
+
+    private boolean shouldReplaceSourceMessageId(String sessionId, StreamMessage target, StreamMessage incoming) {
+        String current = target.getSourceMessageId();
+        if (current == null || current.isBlank() || current.equals(incoming.getSourceMessageId())) {
+            return true;
+        }
+        return ProtocolUtils.isGeneratedMessageId(sessionId, target.getMessageSeq(), current)
+                && !ProtocolUtils.isGeneratedMessageId(sessionId, incoming.getMessageSeq(), incoming.getSourceMessageId());
     }
 
     private boolean createNewPart(String sessionId, StreamMessage msg, String partType, String key) {

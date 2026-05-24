@@ -43,6 +43,22 @@ public final class ProtocolUtils {
         return role.toLowerCase();
     }
 
+    public static String generatedMessageId(Long sessionId, Integer messageSeq) {
+        if (sessionId == null || messageSeq == null) {
+            return null;
+        }
+        return "msg_" + sessionId + "_" + messageSeq;
+    }
+
+    public static boolean isGeneratedMessageId(Long sessionId, Integer messageSeq, String messageId) {
+        String generated = generatedMessageId(sessionId, messageSeq);
+        return generated != null && generated.equals(messageId);
+    }
+
+    public static boolean isGeneratedMessageId(String sessionId, Integer messageSeq, String messageId) {
+        return isGeneratedMessageId(parseSessionId(sessionId), messageSeq, messageId);
+    }
+
     // ==================== Session ID 解析 ====================
 
     /**

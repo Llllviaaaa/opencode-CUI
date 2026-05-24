@@ -247,6 +247,20 @@ public class SkillMessageService {
                 messageId, content != null ? content.length() : 0);
     }
 
+    @Transactional
+    public boolean updateProtocolMessageId(Long id, String messageId) {
+        if (id == null || messageId == null || messageId.isBlank()) {
+            return false;
+        }
+        SkillMessage message = messageRepository.findById(id);
+        boolean updated = messageRepository.updateMessageId(id, messageId) > 0;
+        if (updated) {
+            scheduleLatestHistoryRefreshAfterCommit(message != null ? message.getSessionId() : null);
+            log.debug("Updated protocol message id: id={}, messageId={}", id, messageId);
+        }
+        return updated;
+    }
+
     /** 标记消息为已完成（会话进入 IDLE 时调用）。 */
     @Transactional
     public void markMessageFinished(Long messageId) {
@@ -255,7 +269,7 @@ public class SkillMessageService {
     }
 
     private String generateMessageId(Long sessionId, int seq) {
-        return "msg_" + sessionId + "_" + seq;
+        return ProtocolUtils.generatedMessageId(sessionId, seq);
     }
 
     static int calculateTailOffset(long total, int page, int size) {

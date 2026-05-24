@@ -194,6 +194,7 @@ public class ActiveMessageTracker {
     private ActiveMessageRef doResolveActiveMessage(Long sessionId, StreamMessage msg) {
         String requestedMessageId = ProtocolUtils.firstNonBlank(msg.getMessageId(), msg.getSourceMessageId());
         String role = ProtocolUtils.normalizeRole(msg.getRole());
+        SkillMessage existing = null;
 
         ActiveMessageRef active = activeMessages.get(sessionId);
         if (active != null) {
@@ -202,20 +203,30 @@ public class ActiveMessageTracker {
                 return active;
             }
 
+            existing = messageService.findBySessionIdAndMessageId(sessionId, requestedMessageId);
+            if (existing == null && canAdoptRequestedMessageId(sessionId, active, requestedMessageId)) {
+                ActiveMessageRef adopted = new ActiveMessageRef(active.dbId(), requestedMessageId, active.messageSeq());
+                activeMessages.put(sessionId, adopted);
+                applyMessageContext(msg, adopted, role);
+                log.debug("Adopted upstream message id for active streamed message: sessionId={}, dbId={}, from={}, to={}",
+                        sessionId, active.dbId(), active.protocolMessageId(), requestedMessageId);
+                return adopted;
+            }
+
             finalizeActiveMessage(sessionId, active, "message_id_changed");
         }
 
-        if (requestedMessageId != null) {
-            SkillMessage existing = messageService.findBySessionIdAndMessageId(sessionId, requestedMessageId);
-            if (existing != null) {
-                ActiveMessageRef existingRef = new ActiveMessageRef(
-                        existing.getId(),
-                        existing.getMessageId(),
-                        existing.getSeq());
-                activeMessages.put(sessionId, existingRef);
-                applyMessageContext(msg, existingRef, role);
-                return existingRef;
-            }
+        if (existing == null && requestedMessageId != null) {
+            existing = messageService.findBySessionIdAndMessageId(sessionId, requestedMessageId);
+        }
+        if (existing != null) {
+            ActiveMessageRef existingRef = new ActiveMessageRef(
+                    existing.getId(),
+                    existing.getMessageId(),
+                    existing.getSeq());
+            activeMessages.put(sessionId, existingRef);
+            applyMessageContext(msg, existingRef, role);
+            return existingRef;
         }
 
         SkillMessage created = messageService.saveMessage(
@@ -235,6 +246,16 @@ public class ActiveMessageTracker {
         log.debug("Created active streamed message: sessionId={}, dbId={}, protocolId={}, seq={}",
                 sessionId, createdRef.dbId(), createdRef.protocolMessageId(), createdRef.messageSeq());
         return createdRef;
+    }
+
+    private boolean canAdoptRequestedMessageId(Long sessionId, ActiveMessageRef active, String requestedMessageId) {
+        if (requestedMessageId == null || requestedMessageId.isBlank()) {
+            return false;
+        }
+        if (!ProtocolUtils.isGeneratedMessageId(sessionId, active.messageSeq(), active.protocolMessageId())) {
+            return false;
+        }
+        return messageService.updateProtocolMessageId(active.dbId(), requestedMessageId);
     }
 
     /**

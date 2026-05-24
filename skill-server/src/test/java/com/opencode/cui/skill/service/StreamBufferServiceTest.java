@@ -98,6 +98,43 @@ class StreamBufferServiceTest {
     }
 
     @Test
+    @DisplayName("delta append upgrades generated message identity when upstream id arrives")
+    void appendContentUpgradesGeneratedMessageIdentity() throws Exception {
+        String partKey = "stream:42:part:part-1";
+        StreamMessage buffered = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA)
+                .sessionId("42")
+                .messageId("msg_42_1")
+                .sourceMessageId("msg_42_1")
+                .messageSeq(1)
+                .role("assistant")
+                .partId("part-1")
+                .content("hel")
+                .build();
+        when(valueOps.get(partKey)).thenReturn(objectMapper.writeValueAsString(buffered));
+        when(valueOps.setIfPresent(eq(partKey), any(String.class), eq(1L), eq(TimeUnit.HOURS)))
+                .thenReturn(true);
+
+        service.accumulate("42", StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA)
+                .messageId("opencode-msg-1")
+                .sourceMessageId("opencode-msg-1")
+                .messageSeq(1)
+                .role("assistant")
+                .partId("part-1")
+                .content("lo")
+                .build());
+
+        ArgumentCaptor<String> jsonCaptor = ArgumentCaptor.forClass(String.class);
+        verify(valueOps).setIfPresent(eq(partKey), jsonCaptor.capture(), eq(1L), eq(TimeUnit.HOURS));
+        StreamMessage persisted = objectMapper.readValue(jsonCaptor.getValue(), StreamMessage.class);
+        assertThat(persisted.getContent()).isEqualTo("hello");
+        assertThat(persisted.getMessageId()).isEqualTo("opencode-msg-1");
+        assertThat(persisted.getSourceMessageId()).isEqualTo("opencode-msg-1");
+        assertThat(persisted.getMessageSeq()).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("clearSession deletes part registration sentinels")
     void clearSessionDeletesRegisteredSentinels() {
         when(listOps.range("stream:42:parts_order", 0, -1)).thenReturn(List.of("part-1", "tool-1"));

@@ -223,6 +223,42 @@ class MessagePersistenceServiceTest {
     }
 
     @Test
+    @DisplayName("temporary generated message id is adopted when upstream message id arrives")
+    void generatedMessageIdAdoptsUpstreamMessageId() {
+        when(messageService.saveMessage(any(com.opencode.cui.skill.model.SaveMessageCommand.class)))
+                .thenReturn(SkillMessage.builder()
+                        .id(11L).messageId("msg_1_1").sessionId(1L).seq(1).build());
+        when(messageService.findBySessionIdAndMessageId(1L, "opencode-msg-1")).thenReturn(null);
+        when(messageService.updateProtocolMessageId(11L, "opencode-msg-1")).thenReturn(true);
+        when(partRepository.findConcatenatedTextByMessageId(11L)).thenReturn("answer");
+
+        service.persistIfFinal(1L, StreamMessage.builder()
+                .type(StreamMessage.Types.QUESTION)
+                .partId("question-1")
+                .status("running")
+                .tool(StreamMessage.ToolInfo.builder()
+                        .toolName("question")
+                        .toolCallId("call-1")
+                        .build())
+                .build());
+
+        service.persistIfFinal(1L, StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DONE)
+                .messageId("opencode-msg-1")
+                .sourceMessageId("opencode-msg-1")
+                .partId("text-1")
+                .content("answer")
+                .build());
+
+        verify(messageService, times(1)).saveMessage(any(com.opencode.cui.skill.model.SaveMessageCommand.class));
+        verify(messageService).updateProtocolMessageId(11L, "opencode-msg-1");
+        verify(messageService, never()).markMessageFinished(11L);
+        ArgumentCaptor<SkillMessagePart> captor = ArgumentCaptor.forClass(SkillMessagePart.class);
+        verify(partRepository, times(2)).upsert(captor.capture());
+        assertThat(captor.getAllValues()).allMatch(part -> part.getMessageId().equals(11L));
+    }
+
+    @Test
     @DisplayName("finalizeActiveAssistantTurn is a no-op when no assistant turn is open")
     void finalizeActiveAssistantTurnNoopWhenNoAssistantTurnOpen() {
         service.finalizeActiveAssistantTurn(1L);

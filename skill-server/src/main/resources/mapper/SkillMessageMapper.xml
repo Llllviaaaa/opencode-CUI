@@ -103,6 +103,12 @@
         WHERE id = #{id}
     </update>
 
+    <update id="updateMessageId">
+        UPDATE skill_message
+        SET message_id = #{messageId}
+        WHERE id = #{id}
+    </update>
+
     <update id="markFinished">
         UPDATE skill_message
         SET finished = 1
