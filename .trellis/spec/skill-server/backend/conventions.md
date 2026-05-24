@@ -949,7 +949,9 @@ The assistant instance API is now the shared source for assistant metadata, and 
 
 - Instance lookup: `AssistantInstanceInfoService.lookup(String partnerAccount)`.
 - Resolver entry: `ResolveOutcome AssistantAccountResolverService.resolveWithStatus(String assistantAccount)`.
+- Route identity: `AssistantSessionIdentity.fromResolveOutcome(outcome, requestedAssistantAccount)` or `AssistantSessionIdentity.defaultAssistant(ak, senderUserAccount, assistantAccount)`.
 - Scope lookup with account context: `AssistantInfo AssistantInfoService.getAssistantInfo(String ak, String assistantAccount)`.
+- Local session DB lookup: `findByBusinessSessionAndAkAndAssistantAccount(domain,type,businessSessionId,ak,assistantAccount)`.
 - Session DB lookup for no-AK remote sessions: `findByBusinessSessionAndAssistantAccount(domain,type,businessSessionId,assistantAccount)`.
 
 ### 3. Contracts
@@ -960,6 +962,14 @@ For local assistants, blank `appKey` or blank owner identity is upstream incompl
 
 `ResolveOutcome.EXISTS` for a remote assistant may contain `ak == null`, but must carry `assistantAccount`, `remote=true`, and optional `businessTag` when available.
 `assistantAccount:status:{account}` cache values must preserve `remote` and `businessTag` so cached remote no-AK assistants do not degrade to local unknown.
+
+Inbound chat / question-reply / permission-reply / rebuild must derive a single `AssistantSessionIdentity` before session lookup:
+
+- `LOCAL`: lookup with `ak + assistantAccount`; downstream invokes keep the real `ak` and owner.
+- `REMOTE`: lookup with `assistantAccount`; `ak` may be null and must not force personal rebuild.
+- `DEFAULT`: lookup with `assistantAccount`; downstream invokes keep the configured virtual `ak` and sender user id.
+
+`ImSessionManager#createSessionAsync(..., AssistantSessionIdentity, ...)` must reuse the same identity inside the create lock. If the lock-internal second lookup finds an existing business session, it must initialize the tool session via `AssistantScopeStrategy.generateToolSessionId()` and send the pending chat immediately. Do not fall back to the legacy `requestToolSession(session, String)` overload for remote/default business sessions.
 
 ### 4. Validation & Error Matrix
 
@@ -1002,6 +1012,8 @@ The bad case blocks real remote assistants that intentionally do not expose an `
 - `AssistantAccountResolverServiceTest`: no-AK remote instance returns `EXISTS`; no-AK local instance returns `UNKNOWN`.
 - `AssistantInfoServiceTest`: no-AK remote instance returns business `AssistantInfo`; no-AK local instance returns `null`.
 - `InboundProcessingServiceTest`: no-AK remote inbound chat is not blocked by `assistant_check_unknown` and creates or uses a business session.
+- `InboundProcessingServiceTest`: local/default/remote routes assert the expected session lookup keys; no-AK remote rebuild uses `assistantAccount` and business local toolSessionId regeneration.
+- `ImSessionManagerTest`: no-AK remote existing business session found during async creation does not call legacy rebuild and sends the chat invoke with generated `cloud-*` toolSessionId.
 - `AssistantInstanceInfoServiceTest`: instance API empty data maps to `NOT_EXISTS`, failures map to `UNKNOWN`, and success maps fields used by resolver/gateway.
 
 ### 7. Wrong vs Correct
@@ -1009,3 +1021,7 @@ The bad case blocks real remote assistants that intentionally do not expose an `
 Wrong: treating `appKey` absence as "assistant does not exist" or as "cloud assistant".
 
 Correct: first decide existence from the instance API result, then decide routability from `isRemote || remoteProperty.nonEmpty`, and only then allow `ak` to be optional.
+
+Wrong: scattering `ak == null` checks at individual session lookup / rebuild call sites.
+
+Correct: build `AssistantSessionIdentity` once at the entry point, use its `lookupAk()` / `lookupAssistantAccount()` for session lookup, and keep its real invoke identity for Gateway payloads.

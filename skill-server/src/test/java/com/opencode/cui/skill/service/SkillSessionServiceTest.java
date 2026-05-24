@@ -212,6 +212,27 @@ class SkillSessionServiceTest {
         assertEquals(55L, result.getId());
     }
 
+    @Test
+    @DisplayName("findByBusinessSession with AK and assistantAccount uses combined lookup key")
+    void findByBusinessSessionWithAkAndAssistantAccountDelegatesToCombinedKey() {
+        SkillSession session = new SkillSession();
+        session.setId(56L);
+        when(sessionRepository.findByBusinessSessionAndAkAndAssistantAccount(
+                "im", "group", "chat-1", "ak-1", "assist-1"))
+                .thenReturn(session);
+
+        SkillSession result = service.findByBusinessSession(
+                "im", "group", "chat-1", "ak-1", "assist-1");
+
+        assertNotNull(result);
+        assertEquals(56L, result.getId());
+        verify(sessionRepository).findByBusinessSessionAndAkAndAssistantAccount(
+                "im", "group", "chat-1", "ak-1", "assist-1");
+        verify(sessionRepository, never()).findByBusinessSession(any(), any(), any(), any());
+        verify(sessionRepository, never()).findByBusinessSessionAndAssistantAccount(
+                any(), any(), any(), any());
+    }
+
     // ==================== PR3: createSessionWithDefaultAssistant ====================
 
     @Test
