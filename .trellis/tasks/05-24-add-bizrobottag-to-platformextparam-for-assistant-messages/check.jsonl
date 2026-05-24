@@ -1,0 +1,5 @@
+{"file":".trellis/spec/skill-server/backend/directory-structure.md","reason":"verify touched files stay inside expected skill-server backend areas"}
+{"file":".trellis/spec/skill-server/backend/conventions.md","reason":"verify scope dispatch and helper/pending patterns remain consistent"}
+{"file":".trellis/spec/skill-server/backend/type-safety.md","reason":"verify record constructor and backward-compatible deserialization behavior"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"verify no duplicate platformExtParam assembly drift"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"verify all envelope producers expose the same platformExtParam field shape"}

@@ -101,6 +101,9 @@ class GatewayRelayServiceBuildInvokeMessageTest {
 
         assertEquals("asst-1", message.path("assistantAccount").asText());
         assertEquals("biz-tag-local", message.path("businessTag").asText());
+        assertEquals("biz-tag-local",
+                message.path("payload").path("extParameters").path("platformExtParam")
+                        .path("bizRobotTag").asText());
     }
 
     /** Sends invoke and captures the serialized JSON sent to gateway. */
@@ -219,9 +222,11 @@ class GatewayRelayServiceBuildInvokeMessageTest {
         assertTrue(platform.has("businessSessionDomain"), "key must be retained");
         assertTrue(platform.has("businessSessionType"), "key must be retained");
         assertTrue(platform.has("businessSessionId"), "key must be retained");
+        assertTrue(platform.has("bizRobotTag"), "key must be retained");
         assertTrue(platform.path("businessSessionDomain").isNull(), "null value preserved as JSON null");
         assertTrue(platform.path("businessSessionType").isNull(), "null value preserved as JSON null");
         assertTrue(platform.path("businessSessionId").isNull(), "null value preserved as JSON null");
+        assertTrue(platform.path("bizRobotTag").isNull(), "null value preserved as JSON null");
     }
 
     @Test

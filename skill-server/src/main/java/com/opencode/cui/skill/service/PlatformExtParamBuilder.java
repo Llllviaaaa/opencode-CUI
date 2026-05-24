@@ -53,14 +53,7 @@ public final class PlatformExtParamBuilder {
                                    String businessSessionDomain,
                                    String businessSessionType,
                                    String businessSessionId) {
-        ObjectNode node = objectMapper.createObjectNode();
-        node.set("businessSessionDomain",
-                businessSessionDomain != null ? new TextNode(businessSessionDomain) : NullNode.instance);
-        node.set("businessSessionType",
-                businessSessionType != null ? new TextNode(businessSessionType) : NullNode.instance);
-        node.set("businessSessionId",
-                businessSessionId != null ? new TextNode(businessSessionId) : NullNode.instance);
-        return node;
+        return build(objectMapper, businessSessionDomain, businessSessionType, businessSessionId, null, null);
     }
 
     /**
@@ -86,7 +79,25 @@ public final class PlatformExtParamBuilder {
                                    String businessSessionType,
                                    String businessSessionId,
                                    @Nullable List<String> allowedSlashCommands) {
-        ObjectNode node = build(objectMapper, businessSessionDomain, businessSessionType, businessSessionId);
+        return build(objectMapper, businessSessionDomain, businessSessionType, businessSessionId,
+                null, allowedSlashCommands);
+    }
+
+    public static ObjectNode build(ObjectMapper objectMapper,
+                                   String businessSessionDomain,
+                                   String businessSessionType,
+                                   String businessSessionId,
+                                   @Nullable String bizRobotTag,
+                                   @Nullable List<String> allowedSlashCommands) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.set("businessSessionDomain",
+                businessSessionDomain != null ? new TextNode(businessSessionDomain) : NullNode.instance);
+        node.set("businessSessionType",
+                businessSessionType != null ? new TextNode(businessSessionType) : NullNode.instance);
+        node.set("businessSessionId",
+                businessSessionId != null ? new TextNode(businessSessionId) : NullNode.instance);
+        node.set("bizRobotTag",
+                bizRobotTag != null ? new TextNode(bizRobotTag) : NullNode.instance);
         if (allowedSlashCommands != null && !allowedSlashCommands.isEmpty()) {
             ArrayNode arr = node.putArray("allowedSlashCommands");
             for (String cmd : allowedSlashCommands) {

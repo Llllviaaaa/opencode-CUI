@@ -731,11 +731,12 @@ class GatewayMessageRouterTest {
         assertTrue(extParameters.isObject(), "PR2: extParameters envelope must be injected");
         assertEquals(777, extParameters.path("businessExtParam").path("topicId").asInt());
         assertEquals("im", extParameters.path("businessExtParam").path("source").asText());
-        // platformExtParam 三字段：businessSessionDomain / businessSessionType / businessSessionId
+        // platformExtParam: businessSessionDomain / businessSessionType / businessSessionId / bizRobotTag
         com.fasterxml.jackson.databind.JsonNode platform = extParameters.path("platformExtParam");
         assertEquals("im", platform.path("businessSessionDomain").asText());
         assertEquals("group", platform.path("businessSessionType").asText());
         assertEquals("biz-group-2001", platform.path("businessSessionId").asText());
+        assertTrue(platform.path("bizRobotTag").isNull());
     }
 
     @Test
@@ -1026,6 +1027,7 @@ class GatewayMessageRouterTest {
                         null,
                         "im",
                         "group",
+                        "robot-v3",
                         java.util.List.of("plan", "ask"));
         when(rebuildService.consumePendingRequests(welinkSessionId))
                 .thenReturn(java.util.List.of(req));
@@ -1053,6 +1055,7 @@ class GatewayMessageRouterTest {
         assertEquals(2, platformExt.get("allowedSlashCommands").size());
         assertEquals("plan", platformExt.get("allowedSlashCommands").get(0).asText());
         assertEquals("ask", platformExt.get("allowedSlashCommands").get(1).asText());
+        assertEquals("robot-v3", platformExt.path("bizRobotTag").asText());
     }
 
     @Test
@@ -1102,6 +1105,8 @@ class GatewayMessageRouterTest {
         assertTrue(platformExt.has("businessSessionDomain"));
         assertTrue(platformExt.has("businessSessionType"));
         assertTrue(platformExt.has("businessSessionId"));
+        assertTrue(platformExt.has("bizRobotTag"));
+        assertTrue(platformExt.path("bizRobotTag").isNull());
     }
 
     /** 测试专用 Caffeine Ticker，可推进虚拟纳秒时间。 */

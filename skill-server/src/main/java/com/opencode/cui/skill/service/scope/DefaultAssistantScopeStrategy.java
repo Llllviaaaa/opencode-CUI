@@ -130,7 +130,8 @@ public class DefaultAssistantScopeStrategy implements AssistantScopeStrategy {
                 businessExtParam != null ? businessExtParam : objectMapper.createObjectNode());
         extParameters.put("platformExtParam",
                 PlatformExtParamBuilder.build(objectMapper,
-                        command.domain(), command.domainType(), command.businessSessionId()));
+                        command.domain(), command.domainType(), command.businessSessionId(),
+                        businessTag, null));
 
         // assistantAccount：优先 payload，缺省时从 rule 注入（与 PRD D8 一致）
         String assistantAccount = extractField(command.payload(), "assistantAccount");

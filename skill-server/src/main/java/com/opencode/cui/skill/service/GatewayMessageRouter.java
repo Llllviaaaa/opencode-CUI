@@ -1020,6 +1020,7 @@ public class GatewayMessageRouter {
                             req.businessSessionDomain(),
                             req.businessSessionType(),
                             req.imGroupId(),
+                            req.bizRobotTag(),
                             req.allowedSlashCommands()));
             chatPayload.set("extParameters", extParameters);
 

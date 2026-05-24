@@ -201,7 +201,7 @@ public class ImSessionManager {
         requestToolSession(session, buildPendingRequest(
                 businessDomain, sessionType, sessionId,
                 identity.assistantAccount(), senderUserAccount, pendingMessage, businessExtParam,
-                session.getId()));
+                session.getId(), info != null ? info.getBusinessTag() : null));
     }
 
     private String ensureBusinessToolSessionId(SkillSession session, String generatedToolSessionId) {
@@ -245,7 +245,7 @@ public class ImSessionManager {
 
     private PendingChatRequest buildPendingRequest(String businessDomain, String sessionType, String sessionId,
             String assistantAccount, String senderUserAccount, String pendingMessage,
-            JsonNode businessExtParam, Long skillSessionId) {
+            JsonNode businessExtParam, Long skillSessionId, String bizRobotTag) {
         if (pendingMessage == null || pendingMessage.isBlank()) {
             return null;
         }
@@ -259,6 +259,7 @@ public class ImSessionManager {
                 businessExtParam,
                 businessDomain,
                 sessionType,
+                bizRobotTag,
                 allowedSlashCommands);
         log.info("[ENTRY] createSessionAsync.appendPendingChatRequest: sessionId={}, sessionType={}, hasExt={}, isGroup={}",
                 skillSessionId, sessionType,

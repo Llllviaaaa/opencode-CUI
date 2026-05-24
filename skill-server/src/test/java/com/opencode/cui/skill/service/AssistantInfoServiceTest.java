@@ -49,6 +49,12 @@ class AssistantInfoServiceTest {
             super(properties, redisTemplate);
         }
 
+        TestableAssistantInfoService(AssistantInfoProperties properties,
+                                     StringRedisTemplate redisTemplate,
+                                     AssistantInstanceInfoService assistantInstanceInfoService) {
+            super(properties, redisTemplate, assistantInstanceInfoService);
+        }
+
         void stubFetch(AssistantInfo result) {
             this.stubbedResult = result;
             this.shouldThrow = false;
@@ -298,6 +304,33 @@ class AssistantInfoServiceTest {
         assertEquals("business", info.getAssistantScope());
         assertEquals("tag-001", info.getBusinessTag());
         verify(redisTemplate, never()).opsForValue();
+    }
+
+    @Test
+    @DisplayName("getAssistantInfo(ak, account): local personal instance keeps scope and injects bizRobotTag")
+    void getAssistantInfo_localPersonalInstance_injectsBizRobotTag() {
+        AssistantInstanceInfo instance = new AssistantInstanceInfo();
+        instance.setPartnerAccount("assist-local");
+        instance.setOwnerWelinkId("owner-local");
+        instance.setAppKey("ak-local");
+        instance.setIsRemote(false);
+        instance.setBizRobotTag("robot-local");
+        when(assistantInstanceInfoService.getInstanceInfo("assist-local")).thenReturn(instance);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get("ss:assistant:info:ak-local")).thenReturn(null);
+
+        TestableAssistantInfoService instanceAwareService = new TestableAssistantInfoService(
+                properties, redisTemplate, assistantInstanceInfoService);
+        AssistantInfo upstream = new AssistantInfo();
+        upstream.setAssistantScope("personal");
+        upstream.setBusinessTag(null);
+        instanceAwareService.stubFetch(upstream);
+
+        AssistantInfo info = instanceAwareService.getAssistantInfo(null, "assist-local");
+
+        assertNotNull(info);
+        assertEquals("personal", info.getAssistantScope());
+        assertEquals("robot-local", info.getBusinessTag());
     }
 
     @Test

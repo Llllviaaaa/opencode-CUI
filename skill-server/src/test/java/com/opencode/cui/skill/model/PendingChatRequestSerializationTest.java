@@ -54,7 +54,8 @@ class PendingChatRequestSerializationTest {
         assertEquals("1717939200000", req.messageId());
         assertEquals("im", req.businessSessionDomain());
         assertEquals("group", req.businessSessionType());
-        // AC8: 新字段缺失自动 → null（不下发 platformExtParam.allowedSlashCommands）
+        // 新字段缺失自动 → null
+        assertNull(req.bizRobotTag());
         assertNull(req.allowedSlashCommands());
     }
 
@@ -76,6 +77,7 @@ class PendingChatRequestSerializationTest {
         PendingChatRequest req = objectMapper.readValue(json, PendingChatRequest.class);
 
         assertNotNull(req);
+        assertNull(req.bizRobotTag());
         assertNull(req.allowedSlashCommands());
     }
 
@@ -93,6 +95,7 @@ class PendingChatRequestSerializationTest {
                 + "\"businessExtParam\":null,"
                 + "\"businessSessionDomain\":\"im\","
                 + "\"businessSessionType\":\"group\","
+                + "\"bizRobotTag\":\"robot-1\","
                 + "\"allowedSlashCommands\":[\"plan\",\"ask\",\"run\"]"
                 + "}";
 
@@ -100,6 +103,7 @@ class PendingChatRequestSerializationTest {
 
         assertNotNull(req);
         assertNotNull(req.allowedSlashCommands());
+        assertEquals("robot-1", req.bizRobotTag());
         assertEquals(3, req.allowedSlashCommands().size());
         assertEquals("plan", req.allowedSlashCommands().get(0));
         assertEquals("ask", req.allowedSlashCommands().get(1));
@@ -134,12 +138,13 @@ class PendingChatRequestSerializationTest {
     void serialize_v3EntryWithList_jsonContainsArray() throws Exception {
         PendingChatRequest req = new PendingChatRequest(
                 "hello", "a-01", "u-01", "g-1", "1717939200000",
-                null, "im", "group",
+                null, "im", "group", "robot-1",
                 List.of("plan", "ask"));
 
         String json = objectMapper.writeValueAsString(req);
 
         assertTrue(json.contains("\"allowedSlashCommands\":[\"plan\",\"ask\"]"));
+        assertTrue(json.contains("\"bizRobotTag\":\"robot-1\""));
     }
 
     @Test
@@ -147,12 +152,13 @@ class PendingChatRequestSerializationTest {
     void serialize_v3EntryWithNullList_jsonContainsNull() throws Exception {
         PendingChatRequest req = new PendingChatRequest(
                 "hello", "a-01", "u-01", "g-1", "1717939200000",
-                null, "im", "group", null);
+                null, "im", "group", null, null);
 
         String json = objectMapper.writeValueAsString(req);
 
         // Jackson 默认输出 "allowedSlashCommands":null（key 仍存在）
         assertTrue(json.contains("\"allowedSlashCommands\":null"));
+        assertTrue(json.contains("\"bizRobotTag\":null"));
     }
 
     @Test
@@ -160,13 +166,14 @@ class PendingChatRequestSerializationTest {
     void roundTrip_listPreserved() throws Exception {
         PendingChatRequest original = new PendingChatRequest(
                 "hello", "a-01", "u-01", "g-1", "1717939200000",
-                null, "im", "group",
+                null, "im", "group", "robot-rt",
                 List.of("plan", "ask", "run"));
 
         String json = objectMapper.writeValueAsString(original);
         PendingChatRequest deserialized = objectMapper.readValue(json, PendingChatRequest.class);
 
         assertEquals(original.allowedSlashCommands(), deserialized.allowedSlashCommands());
+        assertEquals(original.bizRobotTag(), deserialized.bizRobotTag());
         assertEquals(original.text(), deserialized.text());
         assertEquals(original.businessSessionDomain(), deserialized.businessSessionDomain());
     }
@@ -181,5 +188,6 @@ class PendingChatRequestSerializationTest {
                 null, "im", "group");
 
         assertNull(req.allowedSlashCommands());
+        assertNull(req.bizRobotTag());
     }
 }
