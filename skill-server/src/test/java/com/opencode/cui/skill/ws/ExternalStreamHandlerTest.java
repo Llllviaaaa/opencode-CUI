@@ -2,15 +2,20 @@ package com.opencode.cui.skill.ws;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.config.DeliveryProperties;
+import com.opencode.cui.skill.logging.MdcConstants;
+import com.opencode.cui.skill.logging.MdcHelper;
 import com.opencode.cui.skill.service.ExternalWsRegistry;
 import com.opencode.cui.skill.service.RedisMessageBroker;
 import com.opencode.cui.skill.service.SkillInstanceRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.MDC;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.server.ServerHttpRequest;
@@ -25,6 +30,7 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -55,6 +61,11 @@ class ExternalStreamHandlerTest {
         handler.subscribeRelayChannel(mock(ApplicationReadyEvent.class));
     }
 
+    @AfterEach
+    void tearDown() {
+        MdcHelper.clearAll();
+    }
+
     @Test
     @DisplayName("subscribeRelayChannel 仅在 ApplicationReadyEvent 触发后才调 broker.subscribeToExternalRelay")
     void subscribeRelayChannel_onlyRegistersAfterApplicationReadyEvent() {
@@ -72,6 +83,26 @@ class ExternalStreamHandlerTest {
         // 事件触发后：恰好对本实例 external relay 调一次 subscribeToExternalRelay
         freshHandler.subscribeRelayChannel(mock(ApplicationReadyEvent.class));
         verify(freshBroker, times(1)).subscribeToExternalRelay(eq("fresh-instance"), any());
+    }
+
+    @Test
+    @DisplayName("external relay restores MDC context from envelope")
+    @SuppressWarnings("unchecked")
+    void externalRelayRestoresMdcContextFromEnvelope() {
+        ArgumentCaptor<Consumer<String>> relayHandlerCaptor = ArgumentCaptor.forClass(Consumer.class);
+        verify(redisMessageBroker).subscribeToExternalRelay(eq("test-instance-1"), relayHandlerCaptor.capture());
+
+        String envelope = "{\"domain\":\"im\",\"payload\":\"{\\\"type\\\":\\\"text.done\\\"}\","
+                + "\"traceId\":\"trace-001\",\"welinkSessionId\":\"sess-001\","
+                + "\"ak\":\"ak-001\",\"userId\":\"user-001\"}";
+
+        relayHandlerCaptor.getValue().accept(envelope);
+
+        assertEquals("trace-001", MDC.get(MdcConstants.TRACE_ID));
+        assertEquals("sess-001", MDC.get(MdcConstants.SESSION_ID));
+        assertEquals("ak-001", MDC.get(MdcConstants.AK));
+        assertEquals("user-001", MDC.get(MdcConstants.USER_ID));
+        assertEquals("external-relay-rx", MDC.get(MdcConstants.SCENARIO));
     }
 
     private String buildAuthProtocol(String token, String source, String instanceId) {

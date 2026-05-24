@@ -163,6 +163,29 @@ class RedisMessageBrokerDeliveryTest {
         verify(redisTemplate).convertAndSend("ss:external-relay:ss-pod-2", "{}");
     }
 
+    @Test
+    @DisplayName("publishToExternalRelayBestEffort: same-node zero still means publish accepted")
+    void publishToExternalRelayBestEffort_zeroSameNodeReceiversStillReturnsTrue() {
+        when(redisTemplate.convertAndSend("ss:external-relay:ss-pod-2", "{}")).thenReturn(0L);
+
+        boolean accepted = broker.publishToExternalRelayBestEffort("ss-pod-2", "{}");
+
+        assertTrue(accepted);
+        verify(redisTemplate).convertAndSend("ss:external-relay:ss-pod-2", "{}");
+    }
+
+    @Test
+    @DisplayName("publishToExternalRelayBestEffort: publish exception returns false")
+    void publishToExternalRelayBestEffort_publishExceptionReturnsFalse() {
+        when(redisTemplate.convertAndSend("ss:external-relay:ss-pod-2", "{}"))
+                .thenThrow(new RuntimeException("redis down"));
+
+        boolean accepted = broker.publishToExternalRelayBestEffort("ss-pod-2", "{}");
+
+        assertFalse(accepted);
+        verify(redisTemplate).convertAndSend("ss:external-relay:ss-pod-2", "{}");
+    }
+
     // ==================== instance:roster ZSET ====================
 
     @Test
