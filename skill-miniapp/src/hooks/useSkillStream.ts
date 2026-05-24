@@ -422,6 +422,15 @@ function normalizeIncomingStreamMessage(raw: Record<string, unknown>): StreamMes
   };
 }
 
+function getStreamMessageSessionId(msg: StreamMessage): string | undefined {
+  const rawSessionId = (msg as StreamMessage & { sessionId?: unknown }).sessionId;
+  return normalizeWelinkSessionId(msg.welinkSessionId ?? rawSessionId);
+}
+
+function shouldWaitForHistory(msg: StreamMessage): boolean {
+  return msg.type !== 'agent.online' && msg.type !== 'agent.offline';
+}
+
 export interface UseSkillStreamOptions {
   onSessionTitleUpdate?: (sessionId: string, title: string) => void;
 }
@@ -441,6 +450,8 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
   const assemblersRef = useRef(new Map<string, StreamAssembler>());
   const activeMessageIdsRef = useRef(new Set<string>());
   const knownUserMessageIdsRef = useRef(new Set<string>());
+  const historyReadySessionRef = useRef<string | null>(null);
+  const pendingStreamMessagesRef = useRef<StreamMessage[]>([]);
   const sessionIdRef = useRef<string | null>(sessionId);
   const onSessionTitleUpdateRef = useRef(options?.onSessionTitleUpdate);
 
@@ -475,6 +486,9 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
     const ws = wsRef.current;
     const currentSessionId = sessionIdRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN || !currentSessionId) {
+      return;
+    }
+    if (historyReadySessionRef.current !== currentSessionId) {
       return;
     }
 
@@ -878,9 +892,10 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
     [setMessages],
   );
 
-  const handleStreamMessage = useCallback((msg: StreamMessage) => {
+  const processStreamMessage = useCallback((msg: StreamMessage) => {
     const currentSessionId = sessionIdRef.current;
-    if (msg.welinkSessionId && (!currentSessionId || String(msg.welinkSessionId) !== String(currentSessionId))) {
+    const messageSessionId = getStreamMessageSessionId(msg);
+    if (messageSessionId && (!currentSessionId || messageSessionId !== currentSessionId)) {
       return;
     }
 
@@ -1051,9 +1066,46 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
     }
   }, [applyStreamedMessage, handleSubagentMessage, finalizeAllStreamingMessages, restoreStreamingMessage]);
 
+  const flushPendingStreamMessages = useCallback((targetSessionId: string) => {
+    const queued = pendingStreamMessagesRef.current;
+    if (queued.length === 0) {
+      return;
+    }
+
+    pendingStreamMessagesRef.current = [];
+    queued.forEach((msg) => {
+      const messageSessionId = getStreamMessageSessionId(msg);
+      if (!messageSessionId || messageSessionId === targetSessionId) {
+        processStreamMessage(msg);
+      }
+    });
+  }, [processStreamMessage]);
+
+  const handleStreamMessage = useCallback((msg: StreamMessage) => {
+    const currentSessionId = sessionIdRef.current;
+    const messageSessionId = getStreamMessageSessionId(msg);
+    if (messageSessionId && (!currentSessionId || messageSessionId !== currentSessionId)) {
+      return;
+    }
+
+    if (
+      currentSessionId
+      && messageSessionId === currentSessionId
+      && historyReadySessionRef.current !== currentSessionId
+      && shouldWaitForHistory(msg)
+    ) {
+      pendingStreamMessagesRef.current.push(msg);
+      return;
+    }
+
+    processStreamMessage(msg);
+  }, [processStreamMessage]);
+
   useEffect(() => {
     if (!sessionId) {
       historyRequestRef.current += 1;
+      historyReadySessionRef.current = null;
+      pendingStreamMessagesRef.current = [];
       setMessages([]);
       knownUserMessageIdsRef.current.clear();
       resetStreamingState();
@@ -1063,6 +1115,8 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
     resetStreamingState();
     setMessages([]);
     knownUserMessageIdsRef.current.clear();
+    historyReadySessionRef.current = null;
+    pendingStreamMessagesRef.current = [];
     const requestId = historyRequestRef.current + 1;
     historyRequestRef.current = requestId;
     let cancelled = false;
@@ -1071,12 +1125,21 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
         const response = await api.getMessageHistory(sessionId, 50);
         if (!cancelled && historyRequestRef.current === requestId) {
           const normalized = normalizeHistoryMessages(response.content as unknown as Array<Record<string, unknown>>);
+          knownUserMessageIdsRef.current = new Set(
+            normalized
+              .filter((message) => message.role === 'user')
+              .map((message) => message.id),
+          );
+          historyReadySessionRef.current = sessionId;
           setMessages((prev) => mergeHistoryMessages(prev, normalized));
+          flushPendingStreamMessages(sessionId);
           requestResume();
         }
       } catch {
         // History loading failure is non-fatal.
         if (!cancelled && historyRequestRef.current === requestId) {
+          historyReadySessionRef.current = sessionId;
+          flushPendingStreamMessages(sessionId);
           requestResume();
         }
       }
@@ -1085,7 +1148,7 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
     return () => {
       cancelled = true;
     };
-  }, [requestResume, resetStreamingState, sessionId]);
+  }, [flushPendingStreamMessages, requestResume, resetStreamingState, sessionId]);
 
   const connect = useCallback(() => {
     ensureDevUserIdCookie();
