@@ -65,9 +65,10 @@ class MessagePersistenceServiceTest {
     }
 
     @Test
-    @DisplayName("text.done buffers part to Redis instead of direct DB upsert")
-    void textDoneBuffersToRedis() {
+    @DisplayName("text.done persists part and message content immediately")
+    void textDonePersistsImmediately() {
         setupActiveMessage();
+        when(partRepository.findConcatenatedTextByMessageId(11L)).thenReturn("final answer");
 
         service.persistIfFinal(1L, StreamMessage.builder()
                 .type(StreamMessage.Types.TEXT_DONE)
@@ -76,17 +77,19 @@ class MessagePersistenceServiceTest {
                 .build());
 
         ArgumentCaptor<SkillMessagePart> captor = ArgumentCaptor.forClass(SkillMessagePart.class);
-        verify(partBufferService).bufferPart(eq(11L), captor.capture());
+        verify(partRepository).upsert(captor.capture());
         assertThat(captor.getValue().getContent()).isEqualTo("final answer");
         assertThat(captor.getValue().getPartType()).isEqualTo("text");
 
-        verify(partRepository, never()).upsert(any());
+        verify(messageService).updateMessageContent(11L, "final answer");
+        verify(partBufferService, never()).bufferPart(eq(11L), any());
     }
 
     @Test
     @DisplayName("session.status=idle triggers flush then sync")
     void sessionIdleFlushesAndSyncs() {
         setupActiveMessage();
+        when(partRepository.findConcatenatedTextByMessageId(11L)).thenReturn("hello");
 
         service.persistIfFinal(1L, StreamMessage.builder()
                 .type(StreamMessage.Types.TEXT_DONE)
@@ -98,14 +101,13 @@ class MessagePersistenceServiceTest {
                 .partId("part-1").seq(1).partType("text").content("hello")
                 .build();
         when(partBufferService.prepareFlush(11L)).thenReturn(batchOf(11L, bufferedPart));
-        when(partRepository.findConcatenatedTextByMessageId(11L)).thenReturn("hello");
 
         service.persistIfFinal(1L, StreamMessage.sessionStatus("idle"));
 
         verify(partBufferService).prepareFlush(11L);
         verify(partRepository).batchUpsert(List.of(bufferedPart));
-        verify(partRepository).findConcatenatedTextByMessageId(11L);
-        verify(messageService).updateMessageContent(11L, "hello");
+        verify(partRepository, times(2)).findConcatenatedTextByMessageId(11L);
+        verify(messageService, times(2)).updateMessageContent(11L, "hello");
         verify(messageService).markMessageFinished(11L);
         verify(partBufferService).commitFlush(any(PartBufferService.FlushBatch.class));
         // idle/completed must invalidate the latest-history cache so the next
@@ -114,8 +116,8 @@ class MessagePersistenceServiceTest {
     }
 
     @Test
-    @DisplayName("step.done stats are accumulated and applied during flush")
-    void stepDoneStatsAccumulatedDuringFlush() {
+    @DisplayName("step.done stats are persisted and applied immediately")
+    void stepDoneStatsPersistedImmediately() {
         setupActiveMessage();
 
         service.persistIfFinal(1L, StreamMessage.builder()
@@ -127,7 +129,8 @@ class MessagePersistenceServiceTest {
                         .build())
                 .build());
 
-        verify(messageService, never()).updateMessageStats(anyLong(), any(), any(), any());
+        verify(partRepository).upsert(any(SkillMessagePart.class));
+        verify(messageService).updateMessageStats(eq(11L), eq(100), eq(200), eq(0.01));
 
         SkillMessagePart stepPart = SkillMessagePart.builder()
                 .id(501L).messageId(11L).sessionId(1L)
@@ -139,7 +142,7 @@ class MessagePersistenceServiceTest {
 
         service.persistIfFinal(1L, StreamMessage.sessionStatus("idle"));
 
-        verify(messageService).updateMessageStats(eq(11L), eq(100), eq(200), eq(0.01));
+        verify(messageService, times(2)).updateMessageStats(eq(11L), eq(100), eq(200), eq(0.01));
     }
 
     @Test

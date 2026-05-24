@@ -49,6 +49,7 @@ public class SnapshotService {
                 .type(StreamMessage.Types.SNAPSHOT)
                 .seq(seq)
                 .sessionId(sessionId)
+                .welinkSessionId(sessionId)
                 .emittedAt(Instant.now().toString())
                 .messages(messages)
                 .build();
@@ -70,6 +71,7 @@ public class SnapshotService {
                 .type(StreamMessage.Types.STREAMING)
                 .seq(seq)
                 .sessionId(sessionId)
+                .welinkSessionId(sessionId)
                 .emittedAt(Instant.now().toString())
                 .sessionStatus(isStreaming ? "busy" : "idle")
                 .parts(aggregatedParts)

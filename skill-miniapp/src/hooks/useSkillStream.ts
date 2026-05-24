@@ -479,7 +479,7 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
     }
 
     try {
-      ws.send(JSON.stringify({ action: 'resume' }));
+      ws.send(JSON.stringify({ action: 'resume', sessionId: currentSessionId }));
     } catch {
       // Best-effort recovery only.
     }

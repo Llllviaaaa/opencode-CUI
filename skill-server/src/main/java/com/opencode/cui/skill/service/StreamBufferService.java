@@ -15,14 +15,9 @@ import java.util.concurrent.TimeUnit;
 /**
  * Redis-based stream buffer for session resilience.
  *
- * Accumulates streaming Part content in Redis so that when a client
- * reconnects (e.g. after closing/switching tabs), the server can
- * provide a snapshot of in-progress content.
- *
- * Key schema (all with 1h TTL):
- * stream:{sessionId}:status → JSON { status, messageId }
- * stream:{sessionId}:part:{partId} → JSON { partType, content, ... }
- * stream:{sessionId}:parts_order → Redis List of partId strings
+ * Accumulates live streaming parts so a reconnect can recover the current
+ * in-progress response. Durable history is MySQL's job; this cache is only the
+ * live replay layer and is cleared when the session becomes idle.
  */
 @Slf4j
 @Service
@@ -43,8 +38,6 @@ public class StreamBufferService {
         this.objectMapper = objectMapper;
     }
 
-    // ==================== Accumulate ====================
-
     /**
      * Accumulate a StreamMessage into Redis buffer based on its type.
      */
@@ -52,9 +45,9 @@ public class StreamBufferService {
         try {
             switch (msg.getType()) {
                 case StreamMessage.Types.TEXT_DELTA -> accumulateDelta(sessionId, msg, "text");
-                case StreamMessage.Types.TEXT_DONE -> clearPartIfPresent(sessionId, msg);
+                case StreamMessage.Types.TEXT_DONE -> completeAccumulatedPart(sessionId, msg);
                 case StreamMessage.Types.THINKING_DELTA -> accumulateDelta(sessionId, msg, "thinking");
-                case StreamMessage.Types.THINKING_DONE -> clearPartIfPresent(sessionId, msg);
+                case StreamMessage.Types.THINKING_DONE -> completeAccumulatedPart(sessionId, msg);
                 case StreamMessage.Types.TOOL_UPDATE, StreamMessage.Types.QUESTION,
                         StreamMessage.Types.FILE ->
                     setPartFull(sessionId, msg.getPartId(), msg);
@@ -63,7 +56,8 @@ public class StreamBufferService {
                     accumulatePermission(sessionId, msg);
                 case StreamMessage.Types.SESSION_STATUS -> handleSessionStatus(sessionId, msg);
                 default -> {
-                    /* step.start, agent.online/offline, error — no buffering */ }
+                    /* step.start, agent.online/offline, error: no live replay state */
+                }
             }
         } catch (Exception e) {
             log.error("Failed to accumulate StreamMessage to Redis for session {}: {}",
@@ -74,12 +68,6 @@ public class StreamBufferService {
     private void accumulateDelta(String sessionId, StreamMessage msg, String partType) {
         appendContent(sessionId, msg, partType);
         setSessionStreaming(sessionId, true);
-    }
-
-    private void clearPartIfPresent(String sessionId, StreamMessage msg) {
-        if (msg.getPartId() != null) {
-            clearPart(sessionId, msg.getPartId());
-        }
     }
 
     private void accumulatePermission(String sessionId, StreamMessage msg) {
@@ -94,8 +82,6 @@ public class StreamBufferService {
         }
     }
 
-    // ==================== Query (for resume) ====================
-
     /**
      * Check if a session is currently streaming.
      */
@@ -106,7 +92,6 @@ public class StreamBufferService {
 
     /**
      * Get all in-progress streaming parts for a session.
-     * Returns list of StreamMessage-like objects for the frontend.
      */
     public List<StreamMessage> getStreamingParts(String sessionId) {
         String orderKey = partsOrderKey(sessionId);
@@ -133,8 +118,6 @@ public class StreamBufferService {
         return parts;
     }
 
-    // ==================== Session streaming status ====================
-
     /**
      * Set or clear the session streaming status.
      */
@@ -147,20 +130,14 @@ public class StreamBufferService {
         }
     }
 
-    // ==================== Part operations ====================
-
     private static final int MAX_APPEND_RETRIES = 3;
 
-    /**
-     * Append content to an existing part (used for text.delta / thinking.delta).
-     * If part doesn't exist, creates it.
-     * 使用 while 循环 + 有限重试替代递归，避免极端并发下栈溢出。
-     */
     private void appendContent(String sessionId, StreamMessage msg, String partType) {
         String partId = msg.getPartId();
         String content = msg.getContent();
-        if (partId == null || content == null)
+        if (partId == null || content == null) {
             return;
+        }
 
         String key = partKey(sessionId, partId);
 
@@ -175,34 +152,27 @@ public class StreamBufferService {
                     String updated = objectMapper.writeValueAsString(part);
                     Boolean replaced = redis.opsForValue().setIfPresent(key, updated, TTL_HOURS, TimeUnit.HOURS);
                     if (Boolean.FALSE.equals(replaced)) {
-                        // key 在读取后被删除，下一轮循环当作新建处理
                         continue;
                     }
-                    return; // 追加成功
+                    return;
                 } catch (JsonProcessingException e) {
                     log.warn("Failed to append to part {}: {}", partId, e.getMessage());
                     return;
                 }
             } else {
                 if (createNewPart(sessionId, msg, partType, key)) {
-                    return; // 创建成功
+                    return;
                 }
-                // 另一个线程已创建，下一轮循环尝试追加
             }
         }
         log.warn("Failed to append content after {} retries for part {}", MAX_APPEND_RETRIES, msg.getPartId());
     }
 
-    /**
-     * 创建新的 streaming part 并注册到 parts_order 列表。
-     * 使用 setIfAbsent 保证仅第一个并发线程成功创建。
-     * 
-     * @return true 如果成功创建，false 如果被其他线程抢占
-     */
     private boolean createNewPart(String sessionId, StreamMessage msg, String partType, String key) {
         StreamMessage part = StreamMessage.builder()
                 .type(partType.equals("text") ? StreamMessage.Types.TEXT_DELTA : StreamMessage.Types.THINKING_DELTA)
-                .sessionId(msg.getSessionId())
+                .sessionId(msg.getSessionId() != null ? msg.getSessionId() : sessionId)
+                .welinkSessionId(msg.getWelinkSessionId())
                 .emittedAt(msg.getEmittedAt())
                 .messageId(msg.getMessageId())
                 .messageSeq(msg.getMessageSeq())
@@ -218,59 +188,139 @@ public class StreamBufferService {
             String json = objectMapper.writeValueAsString(part);
             Boolean created = redis.opsForValue().setIfAbsent(key, json, TTL_HOURS, TimeUnit.HOURS);
             if (Boolean.TRUE.equals(created)) {
-                redis.opsForList().rightPush(partsOrderKey(sessionId), msg.getPartId());
-                redis.expire(partsOrderKey(sessionId), TTL_HOURS, TimeUnit.HOURS);
+                registerPartIfNeeded(sessionId, msg.getPartId(), key, true);
                 return true;
             }
-            return false; // 被其他线程抢占
+            return false;
         } catch (JsonProcessingException e) {
             log.warn("Failed to create part {}: {}", msg.getPartId(), e.getMessage());
-            return true; // 序列化失败不应重试
+            return true;
         }
     }
 
     /**
-     * Set a part with full StreamMessage data (used for tool.update, question,
-     * permission).
-     * 先无条件写入 part 数据，再通过 setIfAbsent 检查 order 列表是否需要注册。
+     * Store a full part. Used for tool/question/permission/file events.
      */
     private void setPartFull(String sessionId, String partId, StreamMessage msg) {
-        if (partId == null)
+        if (partId == null) {
             return;
+        }
 
         String key = partKey(sessionId, partId);
+        boolean alreadyBuffered = Boolean.TRUE.equals(redis.hasKey(key));
+        if (msg.getSessionId() == null) {
+            msg.setSessionId(sessionId);
+        }
         try {
             String serialized = objectMapper.writeValueAsString(msg);
-            // 无条件写入最新数据
             redis.opsForValue().set(key, serialized, TTL_HOURS, TimeUnit.HOURS);
-            // 尝试注册到 parts_order（如果已存在则跳过）
-            String orderKey = partsOrderKey(sessionId);
-            // 用一个 sentinel key 检查此 partId 是否已注册过
-            Boolean isNew = redis.opsForValue().setIfAbsent(
-                    key + SUFFIX_REGISTERED, "1", TTL_HOURS, TimeUnit.HOURS);
-            if (Boolean.TRUE.equals(isNew)) {
-                redis.opsForList().rightPush(orderKey, partId);
-                redis.expire(orderKey, TTL_HOURS, TimeUnit.HOURS);
-            }
+            registerPartIfNeeded(sessionId, partId, key, !alreadyBuffered);
         } catch (JsonProcessingException e) {
             log.warn("Failed to set part {}: {}", partId, e.getMessage());
         }
     }
 
     /**
-     * Clear a specific part from the buffer (called when part is
-     * finalized/persisted).
+     * text.done/thinking.done must keep the completed content in Redis until the
+     * idle event clears the live state. Otherwise a refresh between done and idle
+     * observes no part and the response appears to vanish.
+     */
+    private void completeAccumulatedPart(String sessionId, StreamMessage msg) {
+        String partId = msg.getPartId();
+        if (partId == null) {
+            return;
+        }
+
+        String key = partKey(sessionId, partId);
+        boolean alreadyBuffered = Boolean.TRUE.equals(redis.hasKey(key));
+        if (msg.getSessionId() == null) {
+            msg.setSessionId(sessionId);
+        }
+        fillMissingFieldsFromBufferedPart(key, msg);
+        try {
+            String serialized = objectMapper.writeValueAsString(msg);
+            redis.opsForValue().set(key, serialized, TTL_HOURS, TimeUnit.HOURS);
+            if (!alreadyBuffered) {
+                registerPartIfNeeded(sessionId, partId, key, true);
+            }
+            setSessionStreaming(sessionId, true);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to complete part {}: {}", partId, e.getMessage());
+        }
+    }
+
+    private void fillMissingFieldsFromBufferedPart(String key, StreamMessage msg) {
+        if (msg.getContent() != null && msg.getMessageId() != null && msg.getRole() != null) {
+            return;
+        }
+        String existing = redis.opsForValue().get(key);
+        if (existing == null) {
+            return;
+        }
+        try {
+            StreamMessage buffered = objectMapper.readValue(existing, StreamMessage.class);
+            if (msg.getContent() == null) {
+                msg.setContent(buffered.getContent());
+            }
+            if (msg.getMessageId() == null) {
+                msg.setMessageId(buffered.getMessageId());
+            }
+            if (msg.getMessageSeq() == null) {
+                msg.setMessageSeq(buffered.getMessageSeq());
+            }
+            if (msg.getRole() == null) {
+                msg.setRole(buffered.getRole());
+            }
+            if (msg.getSourceMessageId() == null) {
+                msg.setSourceMessageId(buffered.getSourceMessageId());
+            }
+            if (msg.getPartSeq() == null) {
+                msg.setPartSeq(buffered.getPartSeq());
+            }
+            if (msg.getSubagentSessionId() == null) {
+                msg.setSubagentSessionId(buffered.getSubagentSessionId());
+            }
+            if (msg.getSubagentName() == null) {
+                msg.setSubagentName(buffered.getSubagentName());
+            }
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to merge buffered part fields: {}", e.getMessage());
+        }
+    }
+
+    private void registerPartIfNeeded(String sessionId, String partId, String key, boolean partWasAbsent) {
+        String registeredKey = key + SUFFIX_REGISTERED;
+        String orderKey = partsOrderKey(sessionId);
+        Boolean isNew = redis.opsForValue().setIfAbsent(
+                registeredKey, "1", TTL_HOURS, TimeUnit.HOURS);
+        if (Boolean.TRUE.equals(isNew)) {
+            redis.opsForList().rightPush(orderKey, partId);
+            redis.expire(orderKey, TTL_HOURS, TimeUnit.HOURS);
+            return;
+        }
+        redis.expire(registeredKey, TTL_HOURS, TimeUnit.HOURS);
+        if (partWasAbsent) {
+            redis.opsForList().remove(orderKey, 0, partId);
+            redis.opsForList().rightPush(orderKey, partId);
+            redis.expire(orderKey, TTL_HOURS, TimeUnit.HOURS);
+        }
+    }
+
+    /**
+     * Clear a specific part from the buffer.
      */
     public void clearPart(String sessionId, String partId) {
-        if (partId == null)
+        if (partId == null) {
             return;
-        redis.delete(partKey(sessionId, partId));
+        }
+        String key = partKey(sessionId, partId);
+        redis.delete(List.of(key, key + SUFFIX_REGISTERED));
         redis.opsForList().remove(partsOrderKey(sessionId), 0, partId);
         log.debug("Cleared buffer part: session={}, partId={}", sessionId, partId);
     }
 
     /**
-     * Clear all streaming data for a session (called on session idle/step done).
+     * Clear all streaming data for a session.
      */
     public void clearSession(String sessionId) {
         String orderKey = partsOrderKey(sessionId);
@@ -281,15 +331,15 @@ public class StreamBufferService {
         keysToDelete.add(statusKey(sessionId));
         if (partIds != null) {
             for (String partId : partIds) {
-                keysToDelete.add(partKey(sessionId, partId));
+                String key = partKey(sessionId, partId);
+                keysToDelete.add(key);
+                keysToDelete.add(key + SUFFIX_REGISTERED);
             }
         }
         redis.delete(keysToDelete);
 
         log.debug("Cleared all buffer data for session {}", sessionId);
     }
-
-    // ==================== Key builders ====================
 
     private String statusKey(String sessionId) {
         return PREFIX + sessionId + SUFFIX_STATUS;

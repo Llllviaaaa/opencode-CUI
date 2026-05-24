@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
+import com.opencode.cui.skill.service.ProtocolUtils;
 import com.opencode.cui.skill.service.RedisMessageBroker;
 import com.opencode.cui.skill.service.SkillSessionService;
 import com.opencode.cui.skill.service.SnapshotService;
@@ -108,7 +109,12 @@ public class SkillStreamHandler extends TextWebSocketHandler {
             if (ACTION_RESUME.equals(action)) {
                 String userId = (String) session.getAttributes().get(ATTR_USER_ID);
                 if (userId != null) {
-                    sendInitialStreamingState(session, userId);
+                    String requestedSessionId = node.path("sessionId").asText(null);
+                    if (requestedSessionId != null && !requestedSessionId.isBlank()) {
+                        sendStreamingStateForSession(session, userId, requestedSessionId);
+                    } else {
+                        sendInitialStreamingState(session, userId);
+                    }
                 }
                 return;
             }
@@ -281,6 +287,30 @@ public class SkillStreamHandler extends TextWebSocketHandler {
             sessionOwners.put(sessionId, skillSession.getUserId());
             sendStreamingState(session, sessionId);
         }
+    }
+
+    /** Send streaming state only for the requested session after ownership check. */
+    private void sendStreamingStateForSession(WebSocketSession session, String userId, String requestedSessionId) {
+        Long numericSessionId = ProtocolUtils.parseSessionId(requestedSessionId);
+        if (numericSessionId == null) {
+            log.warn("Ignoring resume for invalid sessionId: userId={}, sessionId={}", userId, requestedSessionId);
+            return;
+        }
+
+        SkillSession skillSession = sessionService.findByIdSafe(numericSessionId);
+        if (skillSession == null || skillSession.getId() == null) {
+            log.warn("Ignoring resume for missing session: userId={}, sessionId={}", userId, requestedSessionId);
+            return;
+        }
+        if (!userId.equals(skillSession.getUserId())) {
+            log.warn("Ignoring resume for unauthorized session: userId={}, sessionId={}",
+                    userId, requestedSessionId);
+            return;
+        }
+
+        String sessionId = String.valueOf(skillSession.getId());
+        sessionOwners.put(sessionId, skillSession.getUserId());
+        sendStreamingState(session, sessionId);
     }
 
     /** 发送会话当前流式状态。 */
