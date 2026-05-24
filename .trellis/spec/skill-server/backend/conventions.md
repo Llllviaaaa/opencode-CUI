@@ -502,12 +502,13 @@ Correct：运行期健康检查走 loopback probe；`PUBSUB NUMSUB` 只做诊断
 
 ## External WS 跨实例投递
 
-External WS 出站由 `ExternalWsDeliveryStrategy` 分三层处理：
+External WS 出站由 `ExternalWsDeliveryStrategy` 分两层处理：
 
 1. L1：`ExternalStreamHandler.pushToOne(domain, payload)` 本机投递。
 2. L2：`ExternalWsRegistry.findInstancesWithConnection(domain)` 找远程候选 SS 实例，
-   逐个调用 `RedisMessageBroker.publishToExternalRelay(targetInstance, payload)`。
-3. L3：没有候选或所有候选 publish 返回 0 subscribers 后，才进入 IM fallback / discard。
+   逐个调用 `RedisMessageBroker.publishToExternalRelayBestEffort(targetInstance, envelope)`。
+
+不再有 L3 IM REST fallback。external 出站路径不能在 WebSocket/relay 不可用时再向 IM REST 发送一份 assistant 文本，否则 external 客户端与 IM 会看到重复回复。
 
 候选查询沿用 owner-only registry：
 
@@ -518,11 +519,12 @@ External WS 出站由 `ExternalWsDeliveryStrategy` 分三层处理：
 
 规则：
 
-- 不要再用“找到一个 target 就算 L2 成功”的逻辑；Redis `PUBLISH` 返回的 subscribers 必须大于 0 才算成功。
-- `publishToExternalRelay(...)=0` 表示目标实例 external relay channel 当前没有订阅者，应尝试下一个候选。
-- 不要在 delivery strategy 里手写 `ss:external-relay:`；统一通过 `RedisMessageBroker.publishToExternalRelay` /
+- Redis `PUBLISH` / `RedisTemplate.convertAndSend` 返回的 subscriber count 只能做诊断日志。在 Redis Cluster / 云 Redis 代理场景下，该值可能只是 same-node count，不是端到端 delivery ACK。
+- L2 成功条件是 `PUBLISH` 命令成功返回；只有 `convertAndSend` 抛异常才尝试下一个候选。
+- external relay envelope 必须携带 `traceId`、`welinkSessionId`、`ak`、`userId`，接收实例用 `MdcHelper.fromJsonNode(...)` 恢复 MDC 后再写 `[RELAY-RX]` 日志。
+- 不要在 delivery strategy 里手写 `ss:external-relay:`；统一通过 `RedisMessageBroker.publishToExternalRelayBestEffort` /
   `subscribeToExternalRelay`。
-- 回归测试必须覆盖：多候选列表、首个候选 0 subscribers 后尝试下一个、所有候选 0 后 L3。
+- 回归测试必须覆盖：same-node subscriber count 为 0 仍视为 publish accepted、所有候选 publish 异常时停止且不走 IM REST、Pub/Sub relay 后 MDC 可恢复。
 
 ---
 

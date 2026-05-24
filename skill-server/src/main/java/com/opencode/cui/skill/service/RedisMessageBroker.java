@@ -1,5 +1,6 @@
 package com.opencode.cui.skill.service;
 
+import com.opencode.cui.skill.logging.MdcHelper;
 import io.lettuce.core.api.async.BaseRedisAsyncCommands;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.Message;
@@ -173,6 +174,8 @@ public class RedisMessageBroker {
             } catch (Exception e) {
                 log.error("Failed to process message from channel {}: {}",
                         channel, e.getMessage(), e);
+            } finally {
+                MdcHelper.clearAll();
             }
         };
 
@@ -468,13 +471,39 @@ public class RedisMessageBroker {
         String channel = SS_EXTERNAL_RELAY_CHANNEL_PREFIX + targetInstanceId;
         try {
             Long receivers = redisTemplate.convertAndSend(channel, message);
-            log.info("Published to external relay channel: target={}, receivers={}",
+            log.info("Published to external relay channel: target={}, sameNodeReceivers={}",
                     targetInstanceId, receivers);
             return receivers != null ? receivers : 0L;
         } catch (Exception e) {
             log.error("Failed to publish to external relay channel: target={}, error={}",
                     targetInstanceId, e.getMessage(), e);
             return 0L;
+        }
+    }
+
+    /**
+     * Publish an external WS relay message and treat Redis PUBLISH as best-effort.
+     *
+     * <p>In Redis Cluster, {@code convertAndSend} returns subscribers connected to
+     * the same Redis node as the publisher, not a cluster-wide delivery ACK. A
+     * zero count can still be delivered to a subscriber on another node, so this
+     * method returns false only when the publish command itself fails.</p>
+     *
+     * @param targetInstanceId the target SS instance ID
+     * @param message          serialized relay envelope
+     * @return true if the Redis PUBLISH command completed without exception
+     */
+    public boolean publishToExternalRelayBestEffort(String targetInstanceId, String message) {
+        String channel = SS_EXTERNAL_RELAY_CHANNEL_PREFIX + targetInstanceId;
+        try {
+            Long sameNodeReceivers = redisTemplate.convertAndSend(channel, message);
+            log.info("Published to external relay channel: target={}, sameNodeReceivers={}",
+                    targetInstanceId, sameNodeReceivers);
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to publish to external relay channel: target={}, error={}",
+                    targetInstanceId, e.getMessage(), e);
+            return false;
         }
     }
 

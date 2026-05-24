@@ -1,7 +1,10 @@
 package com.opencode.cui.skill.service;
 
+import com.opencode.cui.skill.logging.MdcConstants;
+import com.opencode.cui.skill.logging.MdcHelper;
 import io.lettuce.core.RedisFuture;
 import io.lettuce.core.cluster.api.async.RedisClusterAsyncCommands;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -10,6 +13,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.MDC;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
 import org.springframework.data.redis.connection.RedisConnection;
@@ -85,6 +89,11 @@ class RedisMessageBrokerTest {
         broker = new RedisMessageBroker(redisTemplate, listenerContainer);
         activeListenerRef.set(null);
         relayHandlerInvocations.set(0);
+    }
+
+    @AfterEach
+    void tearDown() {
+        MdcHelper.clearAll();
     }
 
     @Test
@@ -309,6 +318,21 @@ class RedisMessageBrokerTest {
         assertEquals(0L, broker.physicalSubscriberCount(VERIFY_CHANNEL));
         // cast guard 早 return；不应触达 LettuceConnection 路径
         verifyNoInteractions(lettuceConnection);
+    }
+
+    @Test
+    @DisplayName("subscribe clears MDC after handler finishes")
+    void subscribe_clearsMdcAfterHandler() {
+        broker.subscribeToChannel(VERIFY_CHANNEL, ignored -> MdcHelper.putTraceId("trace-from-handler"));
+        ArgumentCaptor<MessageListener> listenerCaptor = ArgumentCaptor.forClass(MessageListener.class);
+        verify(listenerContainer).addMessageListener(listenerCaptor.capture(), any(ChannelTopic.class));
+
+        Message message = org.mockito.Mockito.mock(Message.class);
+        when(message.getBody()).thenReturn("{\"ok\":true}".getBytes(StandardCharsets.UTF_8));
+
+        listenerCaptor.getValue().onMessage(message, null);
+
+        assertEquals(null, MDC.get(MdcConstants.TRACE_ID));
     }
 
     // ==================== 测试辅助方法 ====================

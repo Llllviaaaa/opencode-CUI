@@ -2,6 +2,7 @@ package com.opencode.cui.skill.ws;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.config.DeliveryProperties;
+import com.opencode.cui.skill.logging.MdcHelper;
 import com.opencode.cui.skill.service.ExternalWsRegistry;
 import com.opencode.cui.skill.service.RedisMessageBroker;
 import com.opencode.cui.skill.service.SkillInstanceRegistry;
@@ -205,6 +206,9 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
     private void handleExternalRelayMessage(String message) {
         try {
             var node = objectMapper.readTree(message);
+            MdcHelper.fromJsonNode(node);
+            MdcHelper.ensureTraceId();
+            MdcHelper.putScenario("external-relay-rx");
             String domain = node.path("domain").asText(null);
             String payload = node.path("payload").asText(null);
             if (domain != null && payload != null) {
