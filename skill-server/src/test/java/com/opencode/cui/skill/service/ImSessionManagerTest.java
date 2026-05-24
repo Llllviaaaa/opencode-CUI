@@ -3,6 +3,7 @@ package com.opencode.cui.skill.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.model.AssistantInfo;
+import com.opencode.cui.skill.model.AssistantSessionIdentity;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.PendingChatRequest;
 import com.opencode.cui.skill.model.SkillSession;
@@ -69,7 +70,8 @@ class ImSessionManagerTest {
         // 锁获取成功（lock 路径不在本测试关注范围内）
         lenient().when(valueOps.setIfAbsent(any(), any(), any())).thenReturn(true);
         // findByBusinessSession 默认返 null，走"新建 session"路径
-        lenient().when(sessionService.findByBusinessSession(any(), any(), any(), any())).thenReturn(null);
+        lenient().when(sessionService.findByBusinessSession(any(), any(), any(), any(), any()))
+                .thenReturn(null);
         // resolver 默认返 null（未配置，与生产兜底语义一致）
         lenient().when(allowedSlashCommandsResolver.resolve(anyString(), anyString())).thenReturn(null);
         lenient().when(scopeDispatcher.getStrategy(
@@ -265,14 +267,16 @@ class ImSessionManagerTest {
     @DisplayName("默认助手首次对话 → domain/type 命中策略，虚拟 AK 不依赖 AssistantInfo")
     void defaultAssistant_firstChat_usesDomainAwareScope() {
         SkillSession created = stubCreate(3001L, "AK_V");
-        when(assistantInfoService.getAssistantInfo(eq("AK_V"), eq("ACC_V"))).thenReturn(null);
         when(scopeDispatcher.getStrategy(eq("helpdesk"), eq("direct"), nullable(AssistantInfo.class)))
                 .thenReturn(businessStrategy);
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-default");
 
-        sessionManager.createSessionAsync("helpdesk", "direct", "dm-default", "AK_V",
-                "sender-real", "ACC_V", "sender-real", "你好", null);
+        sessionManager.createSessionAsync("helpdesk", "direct", "dm-default",
+                AssistantSessionIdentity.defaultAssistant("AK_V", "sender-real", "ACC_V"),
+                "sender-real", "你好", null);
 
+        verify(sessionService).findByBusinessSession("helpdesk", "direct", "dm-default", null, "ACC_V");
+        verify(assistantInfoService, never()).getAssistantInfo(any(), any());
         verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(String.class));
         verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(PendingChatRequest.class));
         verify(sessionService).updateToolSessionId(eq(3001L), eq("cloud-default"));
@@ -286,5 +290,48 @@ class ImSessionManagerTest {
         assertEquals("direct", cmd.domainType());
         assertTrue(cmd.payload().contains("\"assistantAccount\":\"ACC_V\""));
         assertTrue(cmd.payload().contains("\"sendUserAccount\":\"sender-real\""));
+    }
+
+    @Test
+    @DisplayName("远端 no-AK 已有 business session → 按 assistantAccount 命中并直接发送 CHAT，不走 legacy rebuild")
+    void remoteNoAk_existingBusinessSession_sendsImmediateChatWithoutLegacyRebuild() {
+        SkillSession existing = new SkillSession();
+        existing.setId(4001L);
+        existing.setAk(null);
+        existing.setUserId("owner-remote");
+        existing.setAssistantAccount("assist-remote");
+        existing.setBusinessSessionDomain("im");
+        existing.setBusinessSessionType("group");
+        existing.setBusinessSessionId("group-001");
+
+        when(sessionService.findByBusinessSession("im", "group", "group-001", null, "assist-remote"))
+                .thenReturn(existing);
+        AssistantInfo bizInfo = new AssistantInfo();
+        bizInfo.setAssistantScope("business");
+        when(assistantInfoService.getAssistantInfo(nullable(String.class), eq("assist-remote")))
+                .thenReturn(bizInfo);
+        when(scopeDispatcher.getStrategy(any(AssistantInfo.class))).thenReturn(businessStrategy);
+        when(businessStrategy.generateToolSessionId()).thenReturn("cloud-remote");
+
+        sessionManager.createSessionAsync("im", "group", "group-001",
+                new AssistantSessionIdentity(null, "owner-remote", "assist-remote",
+                        AssistantSessionIdentity.RouteKind.REMOTE),
+                "sender-001", "你好", null);
+
+        verify(sessionService, never()).createSession(any(), any(), any(), any(), any(), any(), any());
+        verify(sessionService).updateToolSessionId(4001L, "cloud-remote");
+        verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(String.class));
+        verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(PendingChatRequest.class));
+
+        ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
+        InvokeCommand cmd = cmdCaptor.getValue();
+        assertNull(cmd.ak());
+        assertEquals("owner-remote", cmd.userId());
+        assertEquals("4001", cmd.sessionId());
+        assertEquals("assist-remote", cmd.assistantAccount());
+        assertTrue(cmd.payload().contains("\"assistantAccount\":\"assist-remote\""));
+        assertTrue(cmd.payload().contains("\"imGroupId\":\"group-001\""));
+        assertTrue(cmd.payload().contains("\"toolSessionId\":\"cloud-remote\""));
     }
 }

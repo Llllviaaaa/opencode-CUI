@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "verify remote no-AK behavior remains intentional"}
+{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "verify inbound failure behavior and stream error semantics"}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "verify pending rebuild and Redis compatibility"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "verify DTO field compatibility and no unsafe contract drift"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "verify skill-server to ai-gateway data flow"}

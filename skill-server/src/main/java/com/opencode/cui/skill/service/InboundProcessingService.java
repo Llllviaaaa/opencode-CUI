@@ -14,6 +14,7 @@ import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.delivery.StreamMessageEmitter;
 import com.opencode.cui.skill.model.AssistantInfo;
+import com.opencode.cui.skill.model.AssistantSessionIdentity;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import lombok.extern.slf4j.Slf4j;
@@ -142,7 +143,7 @@ public class InboundProcessingService {
                                       String inboundSource,
                                       JsonNode businessExtParam) {
         // 第 1 步：解析助手账号 → 三态 existence 判定；默认助手命中时直接使用规则中的虚拟身份
-        AssistantIdentity identity = resolveDefaultAssistantIdentity(
+        AssistantSessionIdentity identity = resolveDefaultAssistantIdentity(
                 "processChat", businessDomain, sessionType, sessionId, senderUserAccount);
         if (identity == null) {
             ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
@@ -157,7 +158,7 @@ public class InboundProcessingService {
                         assistantAccount, businessDomain, sessionType, sessionId);
                 return InboundResult.error(404, "Invalid assistant account");
             }
-            identity = new AssistantIdentity(outcome.ak(), outcome.ownerWelinkId(), assistantAccount, false);
+            identity = AssistantSessionIdentity.fromResolveOutcome(outcome, assistantAccount);
             log.info("processChat: resolved assistant={}, ak={}, ownerWelinkId={}",
                     assistantAccount, identity.ak(), identity.gatewayUserId());
         }
@@ -166,7 +167,7 @@ public class InboundProcessingService {
         assistantAccount = identity.assistantAccount();
 
         // 第 2 步：Agent 在线检查（开关控制，业务助手跳过）
-        InboundResult offline = checkAgentOnline(businessDomain, sessionType, sessionId, ak, assistantAccount);
+        InboundResult offline = checkAgentOnline(businessDomain, sessionType, sessionId, identity);
         if (offline != null) return offline;
 
         // 第 3 步：上下文注入
@@ -175,17 +176,16 @@ public class InboundProcessingService {
                 sessionType, prompt != null ? prompt.length() : 0);
 
         // 第 4 步：查找已有 session
-        SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
+        SkillSession session = findSessionForIdentity(businessDomain, sessionType, sessionId, identity);
 
         // 情况 A：session 不存在 → 异步创建（welinkSessionId 异步生成，暂不返回）
         if (session == null) {
             log.info("No existing session found, creating async: domain={}, sessionType={}, sessionId={}, ak={}",
                     businessDomain, sessionType, sessionId, ak);
             sessionManager.createSessionAsync(businessDomain, sessionType, sessionId,
-                    ak, ownerWelinkId, assistantAccount, senderUserAccount, prompt,
-                    businessExtParam);
+                    identity, senderUserAccount, prompt, businessExtParam);
             // 异步创建后重新查询获取 session ID
-            SkillSession created = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
+            SkillSession created = findSessionForIdentity(businessDomain, sessionType, sessionId, identity);
             writeInvokeSource(created, inboundSource);
             return InboundResult.ok(sessionId,
                     created != null ? String.valueOf(created.getId()) : null);
@@ -458,7 +458,7 @@ public class InboundProcessingService {
                                                String content, String toolCallId,
                                                String subagentSessionId, String inboundSource,
                                                JsonNode businessExtParam) {
-        AssistantIdentity identity = resolveDefaultAssistantIdentity(
+        AssistantSessionIdentity identity = resolveDefaultAssistantIdentity(
                 "processQuestionReply", businessDomain, sessionType, sessionId, senderUserAccount);
         if (identity == null) {
             ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
@@ -472,20 +472,20 @@ public class InboundProcessingService {
                         assistantAccount, businessDomain, sessionType, sessionId);
                 return InboundResult.error(404, "Invalid assistant account");
             }
-            identity = new AssistantIdentity(outcome.ak(), outcome.ownerWelinkId(), assistantAccount, false);
+            identity = AssistantSessionIdentity.fromResolveOutcome(outcome, assistantAccount);
         }
         String ak = identity.ak();
         String ownerWelinkId = identity.gatewayUserId();
         assistantAccount = identity.assistantAccount();
 
-        SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
+        SkillSession session = findSessionForIdentity(businessDomain, sessionType, sessionId, identity);
         if (session == null || session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
             return InboundResult.error(404, "Session not found or not ready", sessionId,
                     session != null ? String.valueOf(session.getId()) : null);
         }
 
         // 在线检查（404 后置：保留 session 不存在 → 404 语义；session 存在 + 离线 → 503）
-        InboundResult offline = checkAgentOnline(businessDomain, sessionType, sessionId, ak, assistantAccount);
+        InboundResult offline = checkAgentOnline(businessDomain, sessionType, sessionId, identity);
         if (offline != null) return offline;
 
         String targetToolSessionId = subagentSessionId != null ? subagentSessionId : session.getToolSessionId();
@@ -532,7 +532,7 @@ public class InboundProcessingService {
                                                  String permissionId, String response,
                                                  String subagentSessionId, String inboundSource,
                                                  JsonNode businessExtParam) {
-        AssistantIdentity identity = resolveDefaultAssistantIdentity(
+        AssistantSessionIdentity identity = resolveDefaultAssistantIdentity(
                 "processPermissionReply", businessDomain, sessionType, sessionId, senderUserAccount);
         if (identity == null) {
             ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
@@ -546,20 +546,20 @@ public class InboundProcessingService {
                         assistantAccount, businessDomain, sessionType, sessionId);
                 return InboundResult.error(404, "Invalid assistant account");
             }
-            identity = new AssistantIdentity(outcome.ak(), outcome.ownerWelinkId(), assistantAccount, false);
+            identity = AssistantSessionIdentity.fromResolveOutcome(outcome, assistantAccount);
         }
         String ak = identity.ak();
         String ownerWelinkId = identity.gatewayUserId();
         assistantAccount = identity.assistantAccount();
 
-        SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
+        SkillSession session = findSessionForIdentity(businessDomain, sessionType, sessionId, identity);
         if (session == null || session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
             return InboundResult.error(404, "Session not found or not ready", sessionId,
                     session != null ? String.valueOf(session.getId()) : null);
         }
 
         // 在线检查（404 后置：同 processQuestionReply）
-        InboundResult offline = checkAgentOnline(businessDomain, sessionType, sessionId, ak, assistantAccount);
+        InboundResult offline = checkAgentOnline(businessDomain, sessionType, sessionId, identity);
         if (offline != null) return offline;
 
         String targetToolSessionId = subagentSessionId != null ? subagentSessionId : session.getToolSessionId();
@@ -613,7 +613,7 @@ public class InboundProcessingService {
     public InboundResult processRebuild(String businessDomain, String sessionType,
                                          String sessionId, String assistantAccount,
                                          String senderUserAccount) {
-        AssistantIdentity identity = resolveDefaultAssistantIdentity(
+        AssistantSessionIdentity identity = resolveDefaultAssistantIdentity(
                 "processRebuild", businessDomain, sessionType, sessionId, senderUserAccount);
         if (identity == null) {
             ResolveOutcome outcome = resolverService.resolveWithStatus(assistantAccount);
@@ -627,18 +627,20 @@ public class InboundProcessingService {
                         assistantAccount, businessDomain, sessionType, sessionId);
                 return InboundResult.error(404, "Invalid assistant account");
             }
-            identity = new AssistantIdentity(outcome.ak(), outcome.ownerWelinkId(), assistantAccount, false);
+            identity = AssistantSessionIdentity.fromResolveOutcome(outcome, assistantAccount);
         }
         String ak = identity.ak();
         String ownerWelinkId = identity.gatewayUserId();
         assistantAccount = identity.assistantAccount();
 
-        InboundResult offline = checkAgentOnline(businessDomain, sessionType, sessionId, ak, assistantAccount);
+        InboundResult offline = checkAgentOnline(businessDomain, sessionType, sessionId, identity);
         if (offline != null) return offline;
 
-        SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
+        SkillSession session = findSessionForIdentity(businessDomain, sessionType, sessionId, identity);
         if (session != null) {
-            AssistantInfo info = identity.defaultAssistant() ? null : assistantInfoService.getAssistantInfo(ak);
+            AssistantInfo info = identity.defaultAssistant()
+                    ? null
+                    : assistantInfoService.getAssistantInfo(ak, assistantAccount);
             AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(businessDomain, sessionType, info);
             String generated = strategy.generateToolSessionId();
             if (generated != null) {
@@ -669,12 +671,18 @@ public class InboundProcessingService {
             return InboundResult.ok(sessionId, String.valueOf(session.getId()));
         } else {
             sessionManager.createSessionAsync(businessDomain, sessionType, sessionId,
-                    ak, ownerWelinkId, assistantAccount, senderUserAccount, null,
-                    null);
-            SkillSession created = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
+                    identity, senderUserAccount, null, null);
+            SkillSession created = findSessionForIdentity(businessDomain, sessionType, sessionId, identity);
             return InboundResult.ok(sessionId,
                     created != null ? String.valueOf(created.getId()) : null);
         }
+    }
+
+    private SkillSession findSessionForIdentity(String businessDomain, String sessionType,
+                                                String sessionId, AssistantSessionIdentity identity) {
+        return sessionManager.findSession(
+                businessDomain, sessionType, sessionId,
+                identity.lookupAk(), identity.lookupAssistantAccount());
     }
 
     private void writeInvokeSource(SkillSession session, String inboundSource) {
@@ -685,15 +693,16 @@ public class InboundProcessingService {
         }
     }
 
-    private AssistantIdentity resolveDefaultAssistantIdentity(String action, String businessDomain,
-                                                              String sessionType, String sessionId,
-                                                              String senderUserAccount) {
+    private AssistantSessionIdentity resolveDefaultAssistantIdentity(String action, String businessDomain,
+                                                                     String sessionType, String sessionId,
+                                                                     String senderUserAccount) {
         return ruleService.lookup(businessDomain, sessionType)
                 .map(rule -> {
                     log.info("[SKIP] {}.assistantResolve: reason=default_assistant_rule_matched, domain={}, type={}, sessionId={}, ak={}",
                             action, businessDomain, sessionType, sessionId, rule.ak());
                     // 默认助手的虚拟 AK/account 不存在上游 owner；InvokeCommand.userId 使用信封真实 sender。
-                    return new AssistantIdentity(rule.ak(), senderUserAccount, rule.assistantAccount(), true);
+                    return AssistantSessionIdentity.defaultAssistant(
+                            rule.ak(), senderUserAccount, rule.assistantAccount());
                 })
                 .orElse(null);
     }
@@ -704,8 +713,9 @@ public class InboundProcessingService {
      * （已带好 code=503、errormsg、session IDs，并已执行 handleAgentOffline 副作用）。
      */
     private InboundResult checkAgentOnline(String businessDomain, String sessionType,
-                                           String sessionId, String ak,
-                                           String assistantAccount) {
+                                           String sessionId, AssistantSessionIdentity identity) {
+        String ak = identity.ak();
+        String assistantAccount = identity.assistantAccount();
         if (!assistantIdProperties.isEnabled()) return null;
         if (ruleService.lookup(businessDomain, sessionType).isPresent()) {
             log.info("[SKIP] checkAgentOnline: reason=default_assistant_rule_matched, ak={}, domain={}, sessionType={}, sessionId={}",
@@ -721,8 +731,8 @@ public class InboundProcessingService {
 
         log.warn("[SKIP] checkAgentOnline: reason=agent_offline, ak={}, domain={}, sessionType={}, sessionId={}, source={}",
                 ak, businessDomain, sessionType, sessionId, r.source());
-        SkillSession existing = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
-        handleAgentOffline(businessDomain, sessionType, sessionId, ak, assistantAccount, r.message());
+        SkillSession existing = findSessionForIdentity(businessDomain, sessionType, sessionId, identity);
+        handleAgentOffline(businessDomain, sessionType, sessionId, identity, r.message());
         return InboundResult.error(
                 503,
                 r.message(),
@@ -737,7 +747,14 @@ public class InboundProcessingService {
     void handleAgentOffline(String businessDomain, String sessionType,
                                      String sessionId, String ak, String assistantAccount,
                                      String offlineMessage) {
-        SkillSession session = sessionManager.findSession(businessDomain, sessionType, sessionId, ak);
+        handleAgentOffline(businessDomain, sessionType, sessionId,
+                AssistantSessionIdentity.local(ak, null, assistantAccount), offlineMessage);
+    }
+
+    private void handleAgentOffline(String businessDomain, String sessionType,
+                                    String sessionId, AssistantSessionIdentity identity,
+                                    String offlineMessage) {
+        SkillSession session = findSessionForIdentity(businessDomain, sessionType, sessionId, identity);
         if (session != null) {
             StreamMessage offlineMsg = StreamMessage.builder()
                     .type(StreamMessage.Types.ERROR)
@@ -753,10 +770,6 @@ public class InboundProcessingService {
                 }
             }
         }
-    }
-
-    private record AssistantIdentity(String ak, String gatewayUserId,
-                                     String assistantAccount, boolean defaultAssistant) {
     }
 
     /**

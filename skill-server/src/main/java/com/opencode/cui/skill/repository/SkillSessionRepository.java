@@ -73,7 +73,15 @@ public interface SkillSessionRepository {
                         @Param("businessSessionId") String businessSessionId,
                         @Param("ak") String ak);
 
-        /** 按业务会话三元组 + assistantAccount 查询（用于无 AK 的远端助手）。 */
+        /** 按业务会话三元组 + AK + assistantAccount 查询（用于本地助手的精确复用）。 */
+        SkillSession findByBusinessSessionAndAkAndAssistantAccount(
+                        @Param("businessSessionDomain") String businessSessionDomain,
+                        @Param("businessSessionType") String businessSessionType,
+                        @Param("businessSessionId") String businessSessionId,
+                        @Param("ak") String ak,
+                        @Param("assistantAccount") String assistantAccount);
+
+        /** 按业务会话三元组 + assistantAccount 查询（用于无 AK 的远端/默认助手）。 */
         SkillSession findByBusinessSessionAndAssistantAccount(
                         @Param("businessSessionDomain") String businessSessionDomain,
                         @Param("businessSessionType") String businessSessionType,

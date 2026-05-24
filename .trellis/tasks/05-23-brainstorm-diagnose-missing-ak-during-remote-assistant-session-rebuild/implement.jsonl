@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/skill-server/backend/directory-structure.md", "reason": "skill-server service/model placement and PendingChatRequest DTO conventions"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "remote no-AK assistant and assistant scope routing contracts"}
+{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "InboundProcessingService and external/IM business failure semantics"}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "Redis pending rebuild entries, session lookup, and assistantAccount status cache contracts"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "expected diagnostic logging style and sensitive AK masking"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "InvokeCommand and PendingChatRequest field compatibility rules"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "miniapp to skill-server to gateway flow checks"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "search-before-changing and reuse guidance"}

@@ -2,6 +2,7 @@ package com.opencode.cui.skill.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.model.AssistantSessionIdentity;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.PendingChatRequest;
 import com.opencode.cui.skill.model.SkillSession;
@@ -110,8 +111,23 @@ public class ImSessionManager {
             String assistantAccount, String senderUserAccount,
             String pendingMessage,
             JsonNode businessExtParam) {
+        createSessionAsync(businessDomain, sessionType, sessionId,
+                AssistantSessionIdentity.local(ak, ownerWelinkId, assistantAccount),
+                senderUserAccount, pendingMessage, businessExtParam);
+    }
+
+    public void createSessionAsync(String businessDomain, String sessionType,
+            String sessionId, AssistantSessionIdentity identity,
+            String senderUserAccount, String pendingMessage,
+            JsonNode businessExtParam) {
+        String ak = identity.ak();
+        String ownerWelinkId = identity.gatewayUserId();
+        String assistantAccount = identity.assistantAccount();
+        String lookupAk = identity.lookupAk();
+        String lookupAssistantAccount = identity.lookupAssistantAccount();
         // 构建分布式锁 key
-        String lockKey = buildCreateLockKey(businessDomain, sessionType, sessionId, ak, assistantAccount);
+        String lockKey = buildCreateLockKey(
+                businessDomain, sessionType, sessionId, lookupAk, lookupAssistantAccount);
         String lockValue = UUID.randomUUID().toString();
         boolean locked = false;
 
@@ -123,16 +139,17 @@ public class ImSessionManager {
                 log.info("Session creation already in progress for sessionId={}, skipping", sessionId);
                 return; // 其他实例正在创建，直接跳过
             }
-            log.info("Acquired creation lock: sessionId={}, ak={}", sessionId, ak);
+            log.info("Acquired creation lock: sessionId={}, ak={}", sessionId, lookupAk);
 
             // 二次检查：在获取锁后再查一次，避免重复创建
             SkillSession existing = sessionService.findByBusinessSession(
-                    businessDomain, sessionType, sessionId, ak, assistantAccount);
+                    businessDomain, sessionType, sessionId, lookupAk, lookupAssistantAccount);
             if (existing != null) {
-                log.info("Session already exists during async creation: skillSessionId={}, requesting toolSession",
-                        existing.getId());
+                log.info("Session already exists during async creation: skillSessionId={}, routeKind={}",
+                        existing.getId(), identity.routeKind());
                 sessionService.touchSession(existing.getId());
-                requestToolSession(existing, pendingMessage); // session 存在但可能缺少 toolSession
+                initializeToolSession(businessDomain, sessionType, sessionId,
+                        existing, identity, senderUserAccount, pendingMessage, businessExtParam);
                 return;
             }
 
@@ -148,71 +165,8 @@ public class ImSessionManager {
             log.info("Session created: skillSessionId={}, userId={}, ak={}, sessionId={}",
                     created.getId(), ownerWelinkId, ak, sessionId);
 
-            // 根据助手类型决定 toolSession 创建方式
-            AssistantInfo info = assistantInfoService.getAssistantInfo(ak, assistantAccount);
-            AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(businessDomain, sessionType, info);
-            String generatedToolSessionId = strategy.generateToolSessionId();
-            if (generatedToolSessionId != null) {
-                // 业务助手：本地预生成 toolSessionId，跳过 Gateway create_session
-                sessionService.updateToolSessionId(created.getId(), generatedToolSessionId);
-                log.info("Business assistant: toolSessionId pre-generated locally, skillSessionId={}, toolSessionId={}, ak={}",
-                        created.getId(), generatedToolSessionId, ak);
-                // 会话直接就绪，立即发送待发消息（不经过 session_created 回调）
-                if (pendingMessage != null && !pendingMessage.isBlank()) {
-                    Map<String, Object> payloadFields = new LinkedHashMap<>();
-                    payloadFields.put("text", pendingMessage);
-                    payloadFields.put("toolSessionId", generatedToolSessionId);
-                    payloadFields.put("assistantAccount", assistantAccount);
-                    // 单聊 / 群聊都用真实发送者；blank/null 在控制器层已 4xx 拒绝。
-                    payloadFields.put("sendUserAccount", senderUserAccount);
-                    payloadFields.put("imGroupId", "group".equals(sessionType) ? sessionId : null);
-                    payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
-                    payloadFields.put("businessExtParam", businessExtParam);
-                    gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
-                            ak,
-                            ownerWelinkId,
-                            String.valueOf(created.getId()),
-                            GatewayActions.CHAT,
-                            PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields),
-                            null,
-                            businessDomain,
-                            sessionType,
-                            sessionId,
-                            null,
-                            assistantAccount,
-                            assistantAccount));
-                    log.info("Business assistant: chat invoke sent immediately, skillSessionId={}, ak={}",
-                            created.getId(), ak);
-                }
-            } else {
-                // 个人助手：向 Gateway 请求创建 toolSession，等待 session_created 回调。
-                // PR3：构造完整 PendingChatRequest（含 sender / assistantAccount / imGroupId /
-                // businessExtParam）入 Redis pending list, 让 retryPendingMessages 重建完整
-                // chat invoke payload — 首次对话 plugin 端不再丢字段。
-                PendingChatRequest pendingRequest = null;
-                if (pendingMessage != null && !pendingMessage.isBlank()) {
-                    // 单聊 / 群聊都用真实发送者；blank/null 在控制器层已 4xx 拒绝（契约保证非空）。
-                    // B3 (v3): personal 分支已确认（else 块），直接 resolve 不需再做 scope gating。
-                    //   frozen 语义：first 入 pending 时 resolve 一次，retry 复用 frozen 值。
-                    List<String> allowedSlashCommands =
-                            allowedSlashCommandsResolver.resolve(businessDomain, sessionType);
-                    pendingRequest = new PendingChatRequest(
-                            pendingMessage,
-                            assistantAccount,
-                            senderUserAccount,
-                            "group".equals(sessionType) ? sessionId : null,
-                            String.valueOf(System.currentTimeMillis()),
-                            businessExtParam,
-                            businessDomain,
-                            sessionType,
-                            allowedSlashCommands);
-                    log.info("[ENTRY] createSessionAsync.appendPendingChatRequest: sessionId={}, sessionType={}, hasExt={}, isGroup={}",
-                            created.getId(), sessionType,
-                            businessExtParam != null,
-                            "group".equals(sessionType));
-                }
-                requestToolSession(created, pendingRequest);
-            }
+            initializeToolSession(businessDomain, sessionType, sessionId,
+                    created, identity, senderUserAccount, pendingMessage, businessExtParam);
         } finally {
             releaseCreateLock(lockKey, lockValue, locked);
         }
@@ -226,6 +180,93 @@ public class ImSessionManager {
      *
      * @param pendingRequest 完整结构化 pending 消息；为 null 表示无 pending 仅请求建会话
      */
+    private void initializeToolSession(String businessDomain, String sessionType, String sessionId,
+            SkillSession session, AssistantSessionIdentity identity, String senderUserAccount,
+            String pendingMessage, JsonNode businessExtParam) {
+        AssistantInfo info = identity.defaultAssistant()
+                ? null
+                : assistantInfoService.getAssistantInfo(identity.ak(), identity.assistantAccount());
+        AssistantScopeStrategy strategy = scopeDispatcher.getStrategy(businessDomain, sessionType, info);
+        String generatedToolSessionId = strategy.generateToolSessionId();
+        if (generatedToolSessionId != null) {
+            String toolSessionId = ensureBusinessToolSessionId(session, generatedToolSessionId);
+            if (pendingMessage != null && !pendingMessage.isBlank()) {
+                sendBusinessChatImmediately(businessDomain, sessionType, sessionId,
+                        session, identity, senderUserAccount, pendingMessage, businessExtParam,
+                        toolSessionId);
+            }
+            return;
+        }
+
+        requestToolSession(session, buildPendingRequest(
+                businessDomain, sessionType, sessionId,
+                identity.assistantAccount(), senderUserAccount, pendingMessage, businessExtParam,
+                session.getId()));
+    }
+
+    private String ensureBusinessToolSessionId(SkillSession session, String generatedToolSessionId) {
+        if (session.getToolSessionId() != null && !session.getToolSessionId().isBlank()) {
+            return session.getToolSessionId();
+        }
+        sessionService.updateToolSessionId(session.getId(), generatedToolSessionId);
+        session.setToolSessionId(generatedToolSessionId);
+        log.info("Business assistant: toolSessionId pre-generated locally, skillSessionId={}, toolSessionId={}, ak={}",
+                session.getId(), generatedToolSessionId, session.getAk());
+        return generatedToolSessionId;
+    }
+
+    private void sendBusinessChatImmediately(String businessDomain, String sessionType, String sessionId,
+            SkillSession session, AssistantSessionIdentity identity, String senderUserAccount,
+            String pendingMessage, JsonNode businessExtParam, String toolSessionId) {
+        Map<String, Object> payloadFields = new LinkedHashMap<>();
+        payloadFields.put("text", pendingMessage);
+        payloadFields.put("toolSessionId", toolSessionId);
+        payloadFields.put("assistantAccount", identity.assistantAccount());
+        payloadFields.put("sendUserAccount", senderUserAccount);
+        payloadFields.put("imGroupId", "group".equals(sessionType) ? sessionId : null);
+        payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
+        payloadFields.put("businessExtParam", businessExtParam);
+        gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
+                identity.ak(),
+                identity.gatewayUserId(),
+                String.valueOf(session.getId()),
+                GatewayActions.CHAT,
+                PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields),
+                null,
+                businessDomain,
+                sessionType,
+                sessionId,
+                null,
+                identity.assistantAccount(),
+                identity.assistantAccount()));
+        log.info("Business assistant: chat invoke sent immediately, skillSessionId={}, ak={}",
+                session.getId(), identity.ak());
+    }
+
+    private PendingChatRequest buildPendingRequest(String businessDomain, String sessionType, String sessionId,
+            String assistantAccount, String senderUserAccount, String pendingMessage,
+            JsonNode businessExtParam, Long skillSessionId) {
+        if (pendingMessage == null || pendingMessage.isBlank()) {
+            return null;
+        }
+        List<String> allowedSlashCommands = allowedSlashCommandsResolver.resolve(businessDomain, sessionType);
+        PendingChatRequest pendingRequest = new PendingChatRequest(
+                pendingMessage,
+                assistantAccount,
+                senderUserAccount,
+                "group".equals(sessionType) ? sessionId : null,
+                String.valueOf(System.currentTimeMillis()),
+                businessExtParam,
+                businessDomain,
+                sessionType,
+                allowedSlashCommands);
+        log.info("[ENTRY] createSessionAsync.appendPendingChatRequest: sessionId={}, sessionType={}, hasExt={}, isGroup={}",
+                skillSessionId, sessionType,
+                businessExtParam != null,
+                "group".equals(sessionType));
+        return pendingRequest;
+    }
+
     public void requestToolSession(SkillSession session, PendingChatRequest pendingRequest) {
         String sessionIdStr = String.valueOf(session.getId());
         gatewayRelayService.rebuildToolSession(sessionIdStr, session, pendingRequest);

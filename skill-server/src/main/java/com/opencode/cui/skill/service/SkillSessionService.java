@@ -172,6 +172,11 @@ public class SkillSessionService {
                 || sessionId == null || sessionId.isBlank()) {
             return null;
         }
+        if (ak != null && !ak.isBlank()
+                && assistantAccount != null && !assistantAccount.isBlank()) {
+            return sessionRepository.findByBusinessSessionAndAkAndAssistantAccount(
+                    businessDomain, sessionType, sessionId, ak, assistantAccount);
+        }
         if (ak != null && !ak.isBlank()) {
             return sessionRepository.findByBusinessSession(businessDomain, sessionType, sessionId, ak);
         }
