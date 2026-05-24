@@ -96,7 +96,8 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
                 businessExtParam != null ? businessExtParam : objectMapper.createObjectNode());
         extParameters.put("platformExtParam",
                 PlatformExtParamBuilder.build(objectMapper,
-                        command.domain(), command.domainType(), command.businessSessionId()));
+                        command.domain(), command.domainType(), command.businessSessionId(),
+                        businessTag, null));
 
         String assistantAccount = firstNonBlank(
                 extractField(command.payload(), "assistantAccount"),

@@ -138,7 +138,20 @@ public class AssistantInfoService {
         }
         String effectiveAk = instance.effectiveAk();
         if (effectiveAk != null) {
-            return getAssistantInfo(effectiveAk);
+            AssistantInfo info = getAssistantInfo(effectiveAk);
+            String bizRobotTag = firstNonBlank(instance.getBizRobotTag(), null);
+            if (info != null) {
+                if (info.isPersonal() && bizRobotTag != null) {
+                    info.setBusinessTag(bizRobotTag);
+                }
+                return info;
+            }
+            if (bizRobotTag != null) {
+                AssistantInfo fallback = new AssistantInfo();
+                fallback.setAssistantScope("personal");
+                fallback.setBusinessTag(bizRobotTag);
+                return fallback;
+            }
         }
         return null;
     }
@@ -276,5 +289,12 @@ public class AssistantInfoService {
 
     private String buildCacheKey(String ak) {
         return CACHE_KEY_PREFIX + ak;
+    }
+
+    private static String firstNonBlank(String first, String second) {
+        if (first != null && !first.isBlank()) {
+            return first;
+        }
+        return second != null && !second.isBlank() ? second : null;
     }
 }

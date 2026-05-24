@@ -96,7 +96,7 @@ class PendingChatRequestTest {
     class JacksonRoundtrip {
 
         @Test
-        @DisplayName("序列化 → JSON 字段按 record 声明顺序：text → assistantAccount → ... → businessSessionType")
+        @DisplayName("序列化 → JSON 字段按 record 声明顺序：text → assistantAccount → ... → bizRobotTag")
         void serialize_preservesDeclarationOrder() throws Exception {
             JsonNode ext = objectMapper.readTree("{\"foo\":\"bar\"}");
             PendingChatRequest req = new PendingChatRequest(
@@ -119,6 +119,7 @@ class PendingChatRequestTest {
             int idxExt = json.indexOf("\"businessExtParam\"");
             int idxDomain = json.indexOf("\"businessSessionDomain\"");
             int idxType = json.indexOf("\"businessSessionType\"");
+            int idxBizRobotTag = json.indexOf("\"bizRobotTag\"");
 
             assertTrue(idxText >= 0, "text key missing: " + json);
             assertTrue(idxText < idxAssistant, "text before assistantAccount: " + json);
@@ -128,6 +129,7 @@ class PendingChatRequestTest {
             assertTrue(idxMsgId < idxExt, "messageId before businessExtParam: " + json);
             assertTrue(idxExt < idxDomain, "businessExtParam before businessSessionDomain: " + json);
             assertTrue(idxDomain < idxType, "businessSessionDomain before businessSessionType: " + json);
+            assertTrue(idxType < idxBizRobotTag, "businessSessionType before bizRobotTag: " + json);
         }
 
         @Test
@@ -154,6 +156,7 @@ class PendingChatRequestTest {
             assertInstanceOf(ObjectNode.class, req.businessExtParam());
             assertEquals("bar", req.businessExtParam().get("foo").asText());
             assertEquals(1, req.businessExtParam().get("n").asInt());
+            assertNull(req.bizRobotTag());
         }
 
         @Test
@@ -227,6 +230,7 @@ class PendingChatRequestTest {
             assertEquals(original.businessExtParam(), restored.businessExtParam());
             assertEquals(original.businessSessionDomain(), restored.businessSessionDomain());
             assertEquals(original.businessSessionType(), restored.businessSessionType());
+            assertEquals(original.bizRobotTag(), restored.bizRobotTag());
             assertEquals(original, restored);
         }
 
@@ -251,6 +255,8 @@ class PendingChatRequestTest {
                     "missing businessSessionDomain must deserialize to Java null");
             assertNull(req.businessSessionType(),
                     "missing businessSessionType must deserialize to Java null");
+            assertNull(req.bizRobotTag(),
+                    "missing bizRobotTag must deserialize to Java null");
         }
 
         @Test
@@ -264,13 +270,15 @@ class PendingChatRequestTest {
                     + "\"messageId\":\"m-1\","
                     + "\"businessExtParam\":null,"
                     + "\"businessSessionDomain\":\"im\","
-                    + "\"businessSessionType\":\"group\""
+                    + "\"businessSessionType\":\"group\","
+                    + "\"bizRobotTag\":\"robot-new\""
                     + "}";
 
             PendingChatRequest req = objectMapper.readValue(newJson, PendingChatRequest.class);
 
             assertEquals("im", req.businessSessionDomain());
             assertEquals("group", req.businessSessionType());
+            assertEquals("robot-new", req.bizRobotTag());
         }
     }
 
@@ -302,6 +310,7 @@ class PendingChatRequestTest {
             assertNotNull(req.messageId());
             assertFalse(req.messageId().isBlank());
             assertNull(req.businessExtParam());
+            assertNull(req.bizRobotTag());
         }
 
         @Test

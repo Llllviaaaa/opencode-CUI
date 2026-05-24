@@ -27,15 +27,16 @@ class PlatformExtParamBuilderTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
-    @DisplayName("三字段全填 → 三个 TextNode，key 顺序：domain → type → id")
+    @DisplayName("三字段全填 → 三个 TextNode + bizRobotTag null")
     void build_allThreeFields_returnsTextNodes() {
         ObjectNode node = PlatformExtParamBuilder.build(
                 objectMapper, "im", "group", "wx-group-abc");
 
-        assertEquals(3, node.size());
+        assertEquals(4, node.size());
         assertEquals("im", node.get("businessSessionDomain").asText());
         assertEquals("group", node.get("businessSessionType").asText());
         assertEquals("wx-group-abc", node.get("businessSessionId").asText());
+        assertTrue(node.get("bizRobotTag").isNull());
         // 验证均非 null node
         assertFalse(node.get("businessSessionDomain").isNull());
         assertFalse(node.get("businessSessionType").isNull());
@@ -47,13 +48,15 @@ class PlatformExtParamBuilderTest {
     void build_allNullFields_keysRetainedAsJsonNull() {
         ObjectNode node = PlatformExtParamBuilder.build(objectMapper, null, null, null);
 
-        assertEquals(3, node.size());
+        assertEquals(4, node.size());
         assertTrue(node.has("businessSessionDomain"));
         assertTrue(node.has("businessSessionType"));
         assertTrue(node.has("businessSessionId"));
+        assertTrue(node.has("bizRobotTag"));
         assertTrue(node.get("businessSessionDomain").isNull());
         assertTrue(node.get("businessSessionType").isNull());
         assertTrue(node.get("businessSessionId").isNull());
+        assertTrue(node.get("bizRobotTag").isNull());
     }
 
     @Test
@@ -61,10 +64,11 @@ class PlatformExtParamBuilderTest {
     void build_onlyDomainPresent_othersAreNull() {
         ObjectNode node = PlatformExtParamBuilder.build(objectMapper, "external", null, null);
 
-        assertEquals(3, node.size());
+        assertEquals(4, node.size());
         assertEquals("external", node.get("businessSessionDomain").asText());
         assertTrue(node.get("businessSessionType").isNull());
         assertTrue(node.get("businessSessionId").isNull());
+        assertTrue(node.get("bizRobotTag").isNull());
     }
 
     @Test
@@ -72,10 +76,11 @@ class PlatformExtParamBuilderTest {
     void build_domainAndTypePresent_idNull() {
         ObjectNode node = PlatformExtParamBuilder.build(objectMapper, "im", "direct", null);
 
-        assertEquals(3, node.size());
+        assertEquals(4, node.size());
         assertEquals("im", node.get("businessSessionDomain").asText());
         assertEquals("direct", node.get("businessSessionType").asText());
         assertTrue(node.get("businessSessionId").isNull());
+        assertTrue(node.get("bizRobotTag").isNull());
     }
 
     @Test
@@ -83,7 +88,7 @@ class PlatformExtParamBuilderTest {
     void build_emptyStringIsNotNull_preservedAsTextNode() {
         ObjectNode node = PlatformExtParamBuilder.build(objectMapper, "", "", "");
 
-        assertEquals(3, node.size());
+        assertEquals(4, node.size());
         // 空字符串保留为 TextNode（非 NullNode），与协议契约对齐
         assertFalse(node.get("businessSessionDomain").isNull());
         assertEquals("", node.get("businessSessionDomain").asText());
@@ -91,6 +96,7 @@ class PlatformExtParamBuilderTest {
         assertEquals("", node.get("businessSessionType").asText());
         assertFalse(node.get("businessSessionId").isNull());
         assertEquals("", node.get("businessSessionId").asText());
+        assertTrue(node.get("bizRobotTag").isNull());
     }
 
     @Test
@@ -113,8 +119,8 @@ class PlatformExtParamBuilderTest {
         ObjectNode node = PlatformExtParamBuilder.build(
                 objectMapper, "im", "group", "wx-g-1", null);
 
-        // 仍是三字段
-        assertEquals(3, node.size());
+        assertEquals(4, node.size());
+        assertTrue(node.get("bizRobotTag").isNull());
         assertFalse(node.has("allowedSlashCommands"));
     }
 
@@ -125,7 +131,8 @@ class PlatformExtParamBuilderTest {
                 objectMapper, "im", "group", "wx-g-1",
                 Arrays.asList("plan", "ask", "run"));
 
-        assertEquals(4, node.size());
+        assertEquals(5, node.size());
+        assertTrue(node.get("bizRobotTag").isNull());
         assertTrue(node.get("allowedSlashCommands").isArray());
         assertEquals(3, node.get("allowedSlashCommands").size());
         assertEquals("plan", node.get("allowedSlashCommands").get(0).asText());
@@ -139,7 +146,8 @@ class PlatformExtParamBuilderTest {
         ObjectNode node = PlatformExtParamBuilder.build(
                 objectMapper, "im", "group", "wx-g-1", Collections.emptyList());
 
-        assertEquals(3, node.size());
+        assertEquals(4, node.size());
+        assertTrue(node.get("bizRobotTag").isNull());
         assertFalse(node.has("allowedSlashCommands"));
     }
 
@@ -149,11 +157,12 @@ class PlatformExtParamBuilderTest {
         ObjectNode node5 = PlatformExtParamBuilder.build(
                 objectMapper, "im", null, "wx-g-1", null);
 
-        // 三字段保留 key + null 序列化为 JSON null
-        assertEquals(3, node5.size());
+        // 三字段 + bizRobotTag 保留 key + null 序列化为 JSON null
+        assertEquals(4, node5.size());
         assertEquals("im", node5.get("businessSessionDomain").asText());
         assertTrue(node5.get("businessSessionType").isNull());
         assertEquals("wx-g-1", node5.get("businessSessionId").asText());
+        assertTrue(node5.get("bizRobotTag").isNull());
     }
 
     @Test
@@ -166,5 +175,26 @@ class PlatformExtParamBuilderTest {
 
         assertTrue(json.contains("\"allowedSlashCommands\":[\"plan\",\"ask\"]"));
         assertTrue(json.contains("\"businessSessionDomain\":\"im\""));
+    }
+
+    @Test
+    @DisplayName("6 参 / bizRobotTag 非空 → 写入 TextNode")
+    void build6_bizRobotTagNonBlank_writesTextNode() {
+        ObjectNode node = PlatformExtParamBuilder.build(
+                objectMapper, "im", "group", "wx-g-1", "robot-tag-1", null);
+
+        assertEquals(4, node.size());
+        assertEquals("robot-tag-1", node.get("bizRobotTag").asText());
+    }
+
+    @Test
+    @DisplayName("6 参 / bizRobotTag + allowedSlashCommands 同时写入")
+    void build6_bizRobotTagAndAllowedSlashCommands() {
+        ObjectNode node = PlatformExtParamBuilder.build(
+                objectMapper, "im", "group", "wx-g-1", "robot-tag-1", List.of("plan"));
+
+        assertEquals(5, node.size());
+        assertEquals("robot-tag-1", node.get("bizRobotTag").asText());
+        assertEquals("plan", node.get("allowedSlashCommands").get(0).asText());
     }
 }

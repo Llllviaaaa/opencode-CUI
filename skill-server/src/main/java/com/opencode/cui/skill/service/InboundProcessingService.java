@@ -237,13 +237,13 @@ public class InboundProcessingService {
                         dispatchChatToGateway(session, legacyText, ak, ownerWelinkId, assistantAccount,
                                 senderUserAccount, businessDomain, sessionType, sessionId,
                                 inboundSource, legacyText, false,
-                                null);
+                                null, null);
                     }
                 }
                 return dispatchChatToGateway(session, prompt, ak, ownerWelinkId, assistantAccount,
                         senderUserAccount, businessDomain, sessionType, sessionId,
                         inboundSource, content, false,
-                        businessExtParam);
+                        businessExtParam, null);
             }
             // personal / scope 识别降级：保持现行 rebuild 路径
             log.info("Session exists but toolSessionId not ready, requesting rebuild: skillSessionId={}",
@@ -264,10 +264,11 @@ public class InboundProcessingService {
                 : assistantInfoService.getAssistantInfo(ak, assistantAccount);
         AssistantScopeStrategy caseCStrategy = scopeDispatcher.getStrategy(businessDomain, sessionType, caseCInfo);
         boolean appendToPending = caseCStrategy.generateToolSessionId() == null;
+        String bizRobotTag = caseCInfo != null ? caseCInfo.getBusinessTag() : null;
         return dispatchChatToGateway(session, prompt, ak, ownerWelinkId, assistantAccount,
                 senderUserAccount, businessDomain, sessionType, sessionId,
                 inboundSource, content, appendToPending,
-                businessExtParam);
+                businessExtParam, bizRobotTag);
     }
 
     /**
@@ -361,7 +362,7 @@ public class InboundProcessingService {
             String senderUserAccount, String businessDomain,
             String sessionType, String sessionId,
             String inboundSource, String content, boolean appendToPending,
-            JsonNode businessExtParam) {
+            JsonNode businessExtParam, String bizRobotTag) {
         log.info("Session ready, forwarding to gateway: skillSessionId={}, toolSessionId={}, sessionType={}",
                 session.getId(), session.getToolSessionId(), sessionType);
 
@@ -395,6 +396,7 @@ public class InboundProcessingService {
                     businessExtParam,
                     businessDomain,
                     sessionType,
+                    bizRobotTag,
                     allowedSlashCommands);
             rebuildService.appendPendingMessage(String.valueOf(session.getId()), pendingRequest);
         }

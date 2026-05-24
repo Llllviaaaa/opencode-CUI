@@ -168,7 +168,7 @@ public class GatewayRelayService {
         attachPayload(message, command.payload());
         writeAssistantRoutingFields(message, command, info);
         injectAssistantId(message, command);
-        injectExtParametersIfMissing(message, command);
+        injectExtParametersIfMissing(message, command, info);
         return serializeInvokeMessage(message);
     }
 
@@ -233,7 +233,7 @@ public class GatewayRelayService {
         mutablePayload(message).put("assistantId", assistantId);
     }
 
-    private void injectExtParametersIfMissing(ObjectNode message, InvokeCommand command) {
+    private void injectExtParametersIfMissing(ObjectNode message, InvokeCommand command, AssistantInfo info) {
         // PR2 platformExtParam：personal scope（buildInvokeMessage 是其唯一出站路径）也补
         // extParameters 信封，与 business / default_assistant 形态对齐。同时把 payload 顶层的
         // businessExtParam 搬到 extParameters.businessExtParam，跟 business wire 形态一致（P2a）。
@@ -247,10 +247,12 @@ public class GatewayRelayService {
 
         // 1) 把 payload 顶层 businessExtParam 摘出来（与 P2a 对齐：搬入 extParameters）
         JsonNode removedBusinessExt = payloadObj.remove("businessExtParam");
-        payloadObj.set("extParameters", buildExtParameters(command, removedBusinessExt));
+        payloadObj.set("extParameters", buildExtParameters(command, removedBusinessExt,
+                info != null ? info.getBusinessTag() : null));
     }
 
-    private ObjectNode buildExtParameters(InvokeCommand command, JsonNode businessExtParam) {
+    private ObjectNode buildExtParameters(InvokeCommand command, JsonNode businessExtParam,
+            String bizRobotTag) {
         // 2) 构造 extParameters 信封：businessExtParam（兜底 {}）+ platformExtParam（三字段）
         ObjectNode extParameters = objectMapper.createObjectNode();
         extParameters.set("businessExtParam", normalizedBusinessExtParam(businessExtParam));
@@ -263,6 +265,7 @@ public class GatewayRelayService {
                         command.domain(),
                         command.domainType(),
                         command.businessSessionId(),
+                        bizRobotTag,
                         command.allowedSlashCommands()));
         return extParameters;
     }

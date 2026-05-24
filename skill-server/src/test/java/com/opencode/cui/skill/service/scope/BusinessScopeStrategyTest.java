@@ -201,11 +201,11 @@ class BusinessScopeStrategyTest {
         assertTrue(bep.get("k").isArray());
         JsonNode pep = (JsonNode) ext.get("platformExtParam");
         assertTrue(pep.isObject());
-        // PR1: platformExtParam 含三字段 key（domain/domainType/businessSessionId 均未传 → JSON null）
-        assertEquals(3, pep.size());
+        assertEquals(4, pep.size());
         assertTrue(pep.get("businessSessionDomain").isNull());
         assertTrue(pep.get("businessSessionType").isNull());
         assertTrue(pep.get("businessSessionId").isNull());
+        assertEquals("app-001", pep.get("bizRobotTag").asText());
     }
 
     @Test
@@ -340,10 +340,11 @@ class BusinessScopeStrategyTest {
 
         JsonNode pep = (JsonNode) capturedContext().getExtParameters().get("platformExtParam");
         assertTrue(pep.isObject());
-        assertEquals(3, pep.size());
+        assertEquals(4, pep.size());
         assertEquals("im", pep.get("businessSessionDomain").asText());
         assertEquals("group", pep.get("businessSessionType").asText());
         assertEquals("wx-group-abc", pep.get("businessSessionId").asText());
+        assertEquals("app-001", pep.get("bizRobotTag").asText());
     }
 
     @Test
@@ -360,10 +361,11 @@ class BusinessScopeStrategyTest {
 
         JsonNode pep = (JsonNode) capturedContext().getExtParameters().get("platformExtParam");
         assertTrue(pep.isObject());
-        assertEquals(3, pep.size());
+        assertEquals(4, pep.size());
         assertTrue(pep.get("businessSessionDomain").isNull());
         assertTrue(pep.get("businessSessionType").isNull());
         assertTrue(pep.get("businessSessionId").isNull());
+        assertEquals("app-001", pep.get("bizRobotTag").asText());
     }
 
     // ========== parseAnswers helper（4 cases） ==========

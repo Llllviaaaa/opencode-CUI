@@ -106,13 +106,14 @@ class ExtParametersIntegrationTest {
         assertTrue(pep.isObject());
         // platformExtParam 现在含三字段 key（PR1：domain/domainType/businessSessionId 均未传，
         // 序列化为 JSON null，key 保留）
-        assertEquals(3, pep.size());
+        assertEquals(4, pep.size());
         assertTrue(pep.has("businessSessionDomain"));
         assertTrue(pep.get("businessSessionDomain").isNull());
         assertTrue(pep.has("businessSessionType"));
         assertTrue(pep.get("businessSessionType").isNull());
         assertTrue(pep.has("businessSessionId"));
         assertTrue(pep.get("businessSessionId").isNull());
+        assertEquals("app-001", pep.path("bizRobotTag").asText());
     }
 
     @Test
@@ -138,10 +139,11 @@ class ExtParametersIntegrationTest {
         assertEquals(0, ext.get("businessExtParam").size());
         assertTrue(ext.get("platformExtParam").isObject());
         // platformExtParam 现在含三字段 key（PR1：均未传 → JSON null）
-        assertEquals(3, ext.get("platformExtParam").size());
+        assertEquals(4, ext.get("platformExtParam").size());
         assertTrue(ext.get("platformExtParam").get("businessSessionDomain").isNull());
         assertTrue(ext.get("platformExtParam").get("businessSessionType").isNull());
         assertTrue(ext.get("platformExtParam").get("businessSessionId").isNull());
+        assertEquals("app-001", ext.get("platformExtParam").path("bizRobotTag").asText());
     }
 
     // =====================================================================
@@ -243,9 +245,11 @@ class ExtParametersIntegrationTest {
             assertTrue(platform.has("businessSessionDomain"));
             assertTrue(platform.has("businessSessionType"));
             assertTrue(platform.has("businessSessionId"));
+            assertTrue(platform.has("bizRobotTag"));
             assertTrue(platform.path("businessSessionDomain").isNull());
             assertTrue(platform.path("businessSessionType").isNull());
             assertTrue(platform.path("businessSessionId").isNull());
+            assertTrue(platform.path("bizRobotTag").isNull());
         }
 
         @Test
@@ -269,6 +273,8 @@ class ExtParametersIntegrationTest {
             assertTrue(platform.has("businessSessionId"));
             assertTrue(platform.path("businessSessionId").isNull(),
                     "businessSessionId null → JSON null, key 保留");
+            assertTrue(platform.has("bizRobotTag"));
+            assertTrue(platform.path("bizRobotTag").isNull());
         }
 
         @Test
@@ -373,7 +379,9 @@ class ExtParametersIntegrationTest {
                     com.opencode.cui.skill.service.PlatformExtParamBuilder.build(retryMapper,
                             req.businessSessionDomain(),
                             req.businessSessionType(),
-                            req.imGroupId()));
+                            req.imGroupId(),
+                            req.bizRobotTag(),
+                            req.allowedSlashCommands()));
             chatPayload.set("extParameters", extParameters);
 
             String payloadStr = retryMapper.writeValueAsString(chatPayload);
@@ -390,7 +398,7 @@ class ExtParametersIntegrationTest {
             JsonNode bep = retryMapper.readTree("{\"flag\":true}");
             PendingChatRequest req = new PendingChatRequest(
                     "hello", "assist-r1", "sender-r1", "biz-group-r1", "msg-r1",
-                    bep, "im", "group");
+                    bep, "im", "group", "robot-r1", null);
 
             InvokeCommand cmd = simulateRetryRebuildOne(
                     "ak-r1", "user-r1", "2101", "tool-r1", req, null);
@@ -407,6 +415,7 @@ class ExtParametersIntegrationTest {
             assertEquals("im", platform.path("businessSessionDomain").asText());
             assertEquals("group", platform.path("businessSessionType").asText());
             assertEquals("biz-group-r1", platform.path("businessSessionId").asText());
+            assertEquals("robot-r1", platform.path("bizRobotTag").asText());
         }
 
         @Test
@@ -427,12 +436,14 @@ class ExtParametersIntegrationTest {
             assertTrue(platform.has("businessSessionDomain"));
             assertTrue(platform.has("businessSessionType"));
             assertTrue(platform.has("businessSessionId"));
+            assertTrue(platform.has("bizRobotTag"));
             assertTrue(platform.path("businessSessionDomain").isNull(),
                     "老 entry domain null → JSON null");
             assertTrue(platform.path("businessSessionType").isNull(),
                     "老 entry type null → JSON null");
             assertTrue(platform.path("businessSessionId").isNull(),
                     "imGroupId null → businessSessionId JSON null");
+            assertTrue(platform.path("bizRobotTag").isNull());
 
             // 关键不变量：老 entry 也得 businessExtParam 兜底 {}
             assertTrue(payload.path("extParameters").path("businessExtParam").isObject());

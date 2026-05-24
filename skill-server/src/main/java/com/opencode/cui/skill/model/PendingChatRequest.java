@@ -17,7 +17,7 @@ import java.util.List;
  * 然后由 {@code GatewayMessageRouter.retryPendingMessages} 重建完整 chat invoke payload。
  *
  * <p><strong>字段顺序固定</strong>：用于稳定 JSON 字段顺序（便于排查 / diff），与 PRD §Requirements 1 对齐。
- * 字段 9 个（PR2 platformExtParam 新增 2 个 + v3 allowed-slash 新增 1 个），逐一对应
+ * 字段 10 个（PR2 platformExtParam 新增 2 个 + bizRobotTag 新增 1 个 + v3 allowed-slash 新增 1 个），逐一对应
  * {@code dispatchChatToGateway} / retryPendingMessages 构造的 chat payload 关键字段。
  *
  * <p><strong>businessSessionDomain / businessSessionType</strong>（PR2 platformExtParam 新增）：
@@ -49,6 +49,7 @@ import java.util.List;
  *   "businessExtParam": {"foo": "bar"},
  *   "businessSessionDomain": "im",
  *   "businessSessionType": "group",
+ *   "bizRobotTag": "robot-a",
  *   "allowedSlashCommands": ["plan","ask","run"]
  * }
  * }</pre>
@@ -68,6 +69,7 @@ import java.util.List;
  * @param businessExtParam      业务扩展参数（透传给下游，可为 null）
  * @param businessSessionDomain 业务域（PR2 platformExtParam 新增；来自 {@code SkillSession.businessSessionDomain}）
  * @param businessSessionType   业务会话类型（PR2 platformExtParam 新增；来自 {@code SkillSession.businessSessionType}）
+ * @param bizRobotTag           助理业务机器人标签；用于 retry 时重建 {@code platformExtParam.bizRobotTag}
  * @param allowedSlashCommands  personal scope CHAT 允许的 slash 命令清单（v3 新增；first 入 pending 时 frozen，retry 复用）
  */
 public record PendingChatRequest(
@@ -79,6 +81,7 @@ public record PendingChatRequest(
         @JsonProperty("businessExtParam") JsonNode businessExtParam,
         @JsonProperty("businessSessionDomain") String businessSessionDomain,
         @JsonProperty("businessSessionType") String businessSessionType,
+        @JsonProperty("bizRobotTag") String bizRobotTag,
         @JsonProperty("allowedSlashCommands") @Nullable List<String> allowedSlashCommands) {
 
     /**
@@ -98,7 +101,8 @@ public record PendingChatRequest(
     }
 
     /**
-     * 兼容性构造：保留原 8 参签名（v3 前的 canonical），{@code allowedSlashCommands} 默认 null。
+     * 兼容性构造：保留原 8 参签名（v3 前的 canonical），{@code bizRobotTag} /
+     * {@code allowedSlashCommands} 默认 null。
      *
      * <p>覆盖 PRD B 表中 B4/B5/B6 三处生产代码非升级 callsite（IAE 兜底 + plain text fallback）
      * + ~20 处 test callsite + business self-heal fallback。
@@ -107,7 +111,18 @@ public record PendingChatRequest(
                               String imGroupId, String messageId, JsonNode businessExtParam,
                               String businessSessionDomain, String businessSessionType) {
         this(text, assistantAccount, sendUserAccount, imGroupId, messageId, businessExtParam,
-                businessSessionDomain, businessSessionType, null);
+                businessSessionDomain, businessSessionType, null, null);
+    }
+
+    /**
+     * 兼容性构造：保留 allowed-slash 任务后的 9 参签名，{@code bizRobotTag} 默认 null。
+     */
+    public PendingChatRequest(String text, String assistantAccount, String sendUserAccount,
+                              String imGroupId, String messageId, JsonNode businessExtParam,
+                              String businessSessionDomain, String businessSessionType,
+                              @Nullable List<String> allowedSlashCommands) {
+        this(text, assistantAccount, sendUserAccount, imGroupId, messageId, businessExtParam,
+                businessSessionDomain, businessSessionType, null, allowedSlashCommands);
     }
 
     /**
@@ -194,6 +209,7 @@ public record PendingChatRequest(
                 null,
                 session.getBusinessSessionDomain(),
                 session.getBusinessSessionType(),
+                null,
                 allowedSlashCommands);
     }
 

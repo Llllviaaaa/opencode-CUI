@@ -138,7 +138,9 @@ class DefaultAssistantScopeStrategyTest {
         assertNotNull(result);
         // profile 是按 businessTag 反查（不是 ak/info）
         verify(profileRegistry).resolve(eq("assistant_square"));
-        verify(defaultStrategy).build(any(CloudRequestContext.class));
+        CloudRequestContext ctx = capturedContext();
+        JsonNode platform = (JsonNode) ctx.getExtParameters().get("platformExtParam");
+        assertEquals("assistant_square", platform.path("bizRobotTag").asText());
 
         JsonNode root = objectMapper.readTree(result);
         assertEquals("invoke", root.path("type").asText());

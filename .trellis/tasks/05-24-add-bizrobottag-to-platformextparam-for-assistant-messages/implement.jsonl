@@ -1,0 +1,5 @@
+{"file":".trellis/spec/skill-server/backend/directory-structure.md","reason":"skill-server package layout and where scope/helper/model changes belong"}
+{"file":".trellis/spec/skill-server/backend/conventions.md","reason":"scope dispatch, helper reuse, Redis/pending and gateway routing conventions"}
+{"file":".trellis/spec/skill-server/backend/type-safety.md","reason":"InvokeCommand and PendingChatRequest record compatibility guidance"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"reuse existing PlatformExtParamBuilder instead of duplicating envelope assembly"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"multi-producer envelope parity for live send and retry paths"}
