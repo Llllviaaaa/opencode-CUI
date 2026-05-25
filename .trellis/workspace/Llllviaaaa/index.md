@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-0.md`
-- **Total Sessions**: 14
-- **Last Active**: 2026-05-23
+- **Total Sessions**: 15
+- **Last Active**: 2026-05-25
 <!-- @@@/auto:current-status -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 15 | 2026-05-25 | Fix external owner and sender identity routing | `9e7b7da` | `codex/external-owner-sender-identity` |
 | 14 | 2026-05-23 | Redis relay recovery and external WS fallback | `398184c`, `4045ef3`, `6dbca0a` | `codex/fix-skill-instance-redis-reconnect` |
 | 13 | 2026-05-21 | chat 埋码上报（POLICY_WELINK_SERVER fire-and-forget） | `94940bf` | `main` |
 | 12 | 2026-05-20 | 单聊 sender fallback 移除 + 信封必填校验 | `c807f53`, `4af1feb` | `main` |
