@@ -1027,3 +1027,91 @@ Correct: first decide existence from the instance API result, then decide routab
 Wrong: scattering `ak == null` checks at individual session lookup / rebuild call sites.
 
 Correct: build `AssistantSessionIdentity` once at the entry point, use its `lookupAk()` / `lookupAssistantAccount()` for session lookup, and keep its real invoke identity for Gateway payloads.
+
+---
+
+## Streaming Snapshot Assistant Turn Identity
+
+Streaming persistence treats one assistant turn as a canonical DB message, even when upstream
+events inside that turn carry different `messageId` values for text, tool calls, tool errors,
+or final text. `messageId` changes are transport metadata unless a newer user message has
+already started the next turn.
+
+### 1. Scope / Trigger
+
+- Trigger: `MessagePersistenceService` receives assistant streaming parts from Gateway or
+  snapshot replay paths.
+- Scope: text, thinking, tool, and other assistant parts that share the same user turn.
+- Goal: keep history and streaming snapshots reconstructing the same assistant bubble.
+
+### 2. Signatures
+
+- Active turn resolver: `ActiveMessageTracker.resolveActiveMessage(...)`.
+- User-turn guard: `ActiveMessageTracker.hasNewerUserMessage(...)`.
+- User lookup: `SkillMessageService.findLastUserMessage(Long sessionId)`.
+- Persistence entry: `MessagePersistenceService.handleStreamingData(...)`.
+
+### 3. Contracts
+
+- A generated placeholder message id such as `msg_{session}_{seq}` may be adopted by the first
+  real upstream assistant `messageId` in the same turn.
+- After adoption, `ActiveAssistantMessage.messageId` is the canonical persisted message id.
+  Later upstream ids stay in `sourceMessageId` and must not split the DB row by themselves.
+- A new upstream assistant `messageId` may finalize the active assistant row only when the
+  latest persisted user message has `seq > active.seq`.
+- Tool parts must be ordered and persisted by `partId` / `partSeq`, not by forcing a new
+  assistant message whenever `toolCallId` or upstream `messageId` changes.
+- Snapshot payloads must be safe to merge back into history by stable part identity:
+  `partId` first, then `toolCallId` for tool parts.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+| --- | --- |
+| text -> tool -> text in one assistant turn with different upstream ids | Persist all parts under one canonical assistant message id. |
+| placeholder id followed by real upstream id | Adopt the real id without duplicating the assistant row. |
+| new user message after active assistant seq, then new assistant id | Finalize previous active row and create the next assistant row. |
+| tool error arrives after text | Keep tool error as a part of the same assistant message unless a newer user turn exists. |
+| snapshot contains parts already present in history shells | Frontend restore may remove duplicate parts by stable part id/tool call id. |
+
+### 5. Good / Base / Bad Cases
+
+Good:
+
+```java
+if (hasNewerUserMessage(sessionId, active)) {
+    finalizeActiveAssistantTurn(sessionId);
+    return startNewAssistantMessage(upstreamMessageId);
+}
+return active.withSourceMessageId(upstreamMessageId);
+```
+
+Base:
+
+```java
+active.appendPart(partId, partSeq, type, content);
+```
+
+Bad:
+
+```java
+if (!Objects.equals(active.messageId(), upstreamMessageId)) {
+    finalizeActiveAssistantTurn(sessionId);
+}
+```
+
+### 6. Tests Required
+
+- `MessagePersistenceServiceTest`: same-turn upstream id switches across text/tool/text stay on
+  one canonical assistant message.
+- `MessagePersistenceServiceTest`: a newer user message still allows the next assistant id to
+  create a new assistant message.
+- Snapshot / stream tests must include at least one tool error or tool done part when changing
+  assistant turn reconstruction.
+
+### 7. Wrong vs Correct
+
+Wrong: treating each assistant upstream `messageId` as a persisted bubble boundary.
+
+Correct: use the persisted canonical assistant message as the turn identity, and use the latest
+user `seq` as the only guard that permits an upstream id switch to start a new assistant turn.

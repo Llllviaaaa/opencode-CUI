@@ -260,3 +260,75 @@ If message grouping needs to change:
 - adjust `protocol/history.ts` for historical payloads,
 - adjust `StreamAssembler.ts` for live streams,
 - keep message identity stable in React state.
+
+## Snapshot Restore Must Reconcile Duplicate Parts
+
+Streaming snapshot restore is an overlay on top of history, not a second history source. When a
+snapshot carries the canonical assistant message and history also contains split assistant shells
+from earlier tool events, `useSkillStream()` must preserve the canonical snapshot message and
+remove duplicate parts from other assistant messages.
+
+### 1. Scope / Trigger
+
+- Trigger: `restoreStreamingMessage` receives a `streaming` snapshot while history is already
+  loaded or is being merged into React state.
+- Scope: assistant text, thinking, tool, and tool-error parts.
+- Goal: avoid rendering the same assistant turn as "snapshot bubble + history fragments".
+
+### 2. Signatures
+
+- Restore entry: `restoreStreamingMessage` in `useSkillStream()`.
+- Duplicate pruning helper: `pruneSnapshotDuplicateParts(...)`.
+- Text derivation helper: `textContentFromParts(...)`.
+
+### 3. Contracts
+
+- Snapshot message id wins for the active assistant turn.
+- Duplicate detection uses stable part identity: `partId` first; for tool parts, `toolCallId`
+  is an additional key because failed tool calls may be replayed with the same call id.
+- After duplicate parts are removed, empty assistant shells must be dropped.
+- Do not reintroduce broad "merge consecutive assistant messages" behavior in components.
+  The fix is scoped to snapshot reconciliation in `useSkillStream()`.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+| --- | --- |
+| snapshot has canonical text/tool/text and history has split tool shell | Render only the canonical snapshot message for those parts. |
+| history has a distinct assistant message with unique parts | Keep it unchanged. |
+| duplicate pruning empties an assistant shell | Remove the shell from React state. |
+| snapshot has no parts | Keep existing messages and do not derive content from empty parts. |
+
+### 5. Good / Base / Bad Cases
+
+Good:
+
+```ts
+const reconciled = pruneSnapshotDuplicateParts(prev, snapshotMessage);
+return upsertMessage(reconciled, snapshotMessage);
+```
+
+Base:
+
+```ts
+const content = textContentFromParts(snapshotMessage.parts);
+```
+
+Bad:
+
+```ts
+return [...prev, snapshotMessage];
+```
+
+### 6. Tests Required
+
+- Add a hook or reducer-level regression for snapshot restore with tool parts whenever this
+  path is refactored.
+- Keep `npm run typecheck` and `npm run build` green after message shape changes.
+
+### 7. Wrong vs Correct
+
+Wrong: appending snapshot content beside already loaded history fragments and relying on visual
+ordering to hide the duplicate.
+
+Correct: reconcile by part identity first, then upsert the canonical snapshot message.

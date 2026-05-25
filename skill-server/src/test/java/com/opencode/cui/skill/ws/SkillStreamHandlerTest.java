@@ -25,6 +25,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
@@ -98,6 +99,65 @@ class SkillStreamHandlerTest {
                 verify(session).sendMessage(captor.capture());
                 var json = objectMapper.readTree(captor.getValue().getPayload());
                 Assertions.assertEquals("streaming", json.path("type").asText());
+        }
+
+        @Test
+        @DisplayName("resume action with sessionId replays only that owned session")
+        void resumeWithSessionIdReplaysOnlyRequestedSession() throws Exception {
+                WebSocketSession session = mockSession("/ws/skill/stream", "userId=10001");
+                SkillSession activeSession = new SkillSession();
+                activeSession.setId(42L);
+                activeSession.setUserId("10001");
+                when(snapshotService.getActiveSessionsForUser("10001")).thenReturn(List.of(activeSession));
+                when(snapshotService.buildStreamingState(eq("42"), any(Long.class))).thenReturn(
+                                StreamMessage.builder().type(StreamMessage.Types.STREAMING).seq(1L)
+                                                .sessionId("42").welinkSessionId("42").sessionStatus("busy").build());
+
+                handler.afterConnectionEstablished(session);
+                clearInvocations(snapshotService);
+                reset(session);
+                when(session.getAttributes()).thenReturn(new HashMap<>(java.util.Map.of("userId", "10001")));
+                when(session.isOpen()).thenReturn(true);
+
+                SkillSession requested = new SkillSession();
+                requested.setId(43L);
+                requested.setUserId("10001");
+                when(sessionService.findByIdSafe(43L)).thenReturn(requested);
+                when(snapshotService.buildStreamingState(eq("43"), any(Long.class))).thenReturn(
+                                StreamMessage.builder().type(StreamMessage.Types.STREAMING).seq(2L)
+                                                .sessionId("43").welinkSessionId("43").sessionStatus("busy").build());
+
+                handler.handleMessage(session, new TextMessage("{\"action\":\"resume\",\"sessionId\":\"43\"}"));
+
+                verify(snapshotService, never()).getActiveSessionsForUser("10001");
+                verify(snapshotService).buildStreamingState(eq("43"), any(Long.class));
+
+                ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
+                verify(session).sendMessage(captor.capture());
+                var json = objectMapper.readTree(captor.getValue().getPayload());
+                Assertions.assertEquals("streaming", json.path("type").asText());
+                Assertions.assertEquals("43", json.path("welinkSessionId").asText());
+        }
+
+        @Test
+        @DisplayName("resume action rejects sessions owned by another user")
+        void resumeWithSessionIdRejectsWrongOwner() throws Exception {
+                WebSocketSession session = mockSession("/ws/skill/stream", "userId=10001");
+                when(snapshotService.getActiveSessionsForUser("10001")).thenReturn(List.of());
+                handler.afterConnectionEstablished(session);
+                reset(session);
+                when(session.getAttributes()).thenReturn(new HashMap<>(java.util.Map.of("userId", "10001")));
+                when(session.isOpen()).thenReturn(true);
+
+                SkillSession requested = new SkillSession();
+                requested.setId(43L);
+                requested.setUserId("20002");
+                when(sessionService.findByIdSafe(43L)).thenReturn(requested);
+
+                handler.handleMessage(session, new TextMessage("{\"action\":\"resume\",\"sessionId\":\"43\"}"));
+
+                verify(session, never()).sendMessage(any(TextMessage.class));
+                verify(snapshotService, never()).buildStreamingState(eq("43"), any(Long.class));
         }
 
         @Test

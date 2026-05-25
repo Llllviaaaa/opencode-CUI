@@ -65,9 +65,10 @@ class MessagePersistenceServiceTest {
     }
 
     @Test
-    @DisplayName("text.done buffers part to Redis instead of direct DB upsert")
-    void textDoneBuffersToRedis() {
+    @DisplayName("text.done persists part and message content immediately")
+    void textDonePersistsImmediately() {
         setupActiveMessage();
+        when(partRepository.findConcatenatedTextByMessageId(11L)).thenReturn("final answer");
 
         service.persistIfFinal(1L, StreamMessage.builder()
                 .type(StreamMessage.Types.TEXT_DONE)
@@ -76,17 +77,19 @@ class MessagePersistenceServiceTest {
                 .build());
 
         ArgumentCaptor<SkillMessagePart> captor = ArgumentCaptor.forClass(SkillMessagePart.class);
-        verify(partBufferService).bufferPart(eq(11L), captor.capture());
+        verify(partRepository).upsert(captor.capture());
         assertThat(captor.getValue().getContent()).isEqualTo("final answer");
         assertThat(captor.getValue().getPartType()).isEqualTo("text");
 
-        verify(partRepository, never()).upsert(any());
+        verify(messageService).updateMessageContent(11L, "final answer");
+        verify(partBufferService, never()).bufferPart(eq(11L), any());
     }
 
     @Test
     @DisplayName("session.status=idle triggers flush then sync")
     void sessionIdleFlushesAndSyncs() {
         setupActiveMessage();
+        when(partRepository.findConcatenatedTextByMessageId(11L)).thenReturn("hello");
 
         service.persistIfFinal(1L, StreamMessage.builder()
                 .type(StreamMessage.Types.TEXT_DONE)
@@ -98,14 +101,13 @@ class MessagePersistenceServiceTest {
                 .partId("part-1").seq(1).partType("text").content("hello")
                 .build();
         when(partBufferService.prepareFlush(11L)).thenReturn(batchOf(11L, bufferedPart));
-        when(partRepository.findConcatenatedTextByMessageId(11L)).thenReturn("hello");
 
         service.persistIfFinal(1L, StreamMessage.sessionStatus("idle"));
 
         verify(partBufferService).prepareFlush(11L);
         verify(partRepository).batchUpsert(List.of(bufferedPart));
-        verify(partRepository).findConcatenatedTextByMessageId(11L);
-        verify(messageService).updateMessageContent(11L, "hello");
+        verify(partRepository, times(2)).findConcatenatedTextByMessageId(11L);
+        verify(messageService, times(2)).updateMessageContent(11L, "hello");
         verify(messageService).markMessageFinished(11L);
         verify(partBufferService).commitFlush(any(PartBufferService.FlushBatch.class));
         // idle/completed must invalidate the latest-history cache so the next
@@ -114,8 +116,8 @@ class MessagePersistenceServiceTest {
     }
 
     @Test
-    @DisplayName("step.done stats are accumulated and applied during flush")
-    void stepDoneStatsAccumulatedDuringFlush() {
+    @DisplayName("step.done stats are persisted and applied immediately")
+    void stepDoneStatsPersistedImmediately() {
         setupActiveMessage();
 
         service.persistIfFinal(1L, StreamMessage.builder()
@@ -127,7 +129,8 @@ class MessagePersistenceServiceTest {
                         .build())
                 .build());
 
-        verify(messageService, never()).updateMessageStats(anyLong(), any(), any(), any());
+        verify(partRepository).upsert(any(SkillMessagePart.class));
+        verify(messageService).updateMessageStats(eq(11L), eq(100), eq(200), eq(0.01));
 
         SkillMessagePart stepPart = SkillMessagePart.builder()
                 .id(501L).messageId(11L).sessionId(1L)
@@ -139,7 +142,7 @@ class MessagePersistenceServiceTest {
 
         service.persistIfFinal(1L, StreamMessage.sessionStatus("idle"));
 
-        verify(messageService).updateMessageStats(eq(11L), eq(100), eq(200), eq(0.01));
+        verify(messageService, times(2)).updateMessageStats(eq(11L), eq(100), eq(200), eq(0.01));
     }
 
     @Test
@@ -185,13 +188,13 @@ class MessagePersistenceServiceTest {
     }
 
     @Test
-    @DisplayName("messageId switch flushes buffered parts of previous active message")
-    void messageIdSwitchFlushesPreviousActiveMessageParts() {
+    @DisplayName("messageId switch after a new user turn flushes previous active message")
+    void messageIdSwitchAfterNewUserTurnFlushesPreviousActiveMessageParts() {
         when(messageService.saveMessage(any(com.opencode.cui.skill.model.SaveMessageCommand.class)))
                 .thenReturn(SkillMessage.builder()
                         .id(11L).messageId("msg_old").sessionId(1L).seq(1).build())
                 .thenReturn(SkillMessage.builder()
-                        .id(22L).messageId("msg_new").sessionId(1L).seq(2).build());
+                        .id(22L).messageId("msg_new").sessionId(1L).seq(3).build());
 
         service.persistIfFinal(1L, StreamMessage.builder()
                 .type(StreamMessage.Types.TEXT_DONE)
@@ -205,6 +208,9 @@ class MessagePersistenceServiceTest {
                 .build();
         when(partBufferService.prepareFlush(11L)).thenReturn(batchOf(11L, bufferedPart));
         when(partRepository.findConcatenatedTextByMessageId(11L)).thenReturn("old");
+        when(messageService.findLastUserMessage(1L)).thenReturn(SkillMessage.builder()
+                .id(99L).messageId("user-after-old").sessionId(1L).seq(2)
+                .role(SkillMessage.Role.USER).build());
 
         service.persistIfFinal(1L, StreamMessage.builder()
                 .type(StreamMessage.Types.TEXT_DONE)
@@ -217,6 +223,95 @@ class MessagePersistenceServiceTest {
         verify(messageService).updateMessageContent(11L, "old");
         verify(messageService).markMessageFinished(11L);
         verify(partBufferService).commitFlush(any(PartBufferService.FlushBatch.class));
+    }
+
+    @Test
+    @DisplayName("tool/text upstream messageId switches stay in the same assistant turn")
+    void upstreamMessageIdSwitchInsideAssistantTurnKeepsCanonicalActiveMessage() {
+        when(messageService.saveMessage(any(com.opencode.cui.skill.model.SaveMessageCommand.class)))
+                .thenReturn(SkillMessage.builder()
+                        .id(11L).messageId("msg_e5a985").sessionId(1L).seq(2).build());
+        when(messageService.findLastUserMessage(1L)).thenReturn(SkillMessage.builder()
+                .id(10L).messageId("user-1").sessionId(1L).seq(1)
+                .role(SkillMessage.Role.USER).build());
+        when(partRepository.findConcatenatedTextByMessageId(11L)).thenReturn("intro", "introanswer");
+
+        StreamMessage firstText = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DONE)
+                .messageId("msg_e5a985")
+                .sourceMessageId("msg_e5a985")
+                .partId("text-1")
+                .content("intro")
+                .build();
+        StreamMessage secondTool = StreamMessage.builder()
+                .type(StreamMessage.Types.TOOL_UPDATE)
+                .messageId("msg_e5a988")
+                .sourceMessageId("msg_e5a988")
+                .partId("tool-2")
+                .status("error")
+                .tool(StreamMessage.ToolInfo.builder()
+                        .toolName("webfetch")
+                        .toolCallId("call-2")
+                        .build())
+                .build();
+        StreamMessage finalText = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DONE)
+                .messageId("msg_e5a98a")
+                .sourceMessageId("msg_e5a98a")
+                .partId("text-2")
+                .content("answer")
+                .build();
+
+        service.persistIfFinal(1L, firstText);
+        service.persistIfFinal(1L, secondTool);
+        service.persistIfFinal(1L, finalText);
+
+        verify(messageService, times(1)).saveMessage(any(com.opencode.cui.skill.model.SaveMessageCommand.class));
+        verify(messageService, never()).markMessageFinished(11L);
+        assertThat(secondTool.getMessageId()).isEqualTo("msg_e5a985");
+        assertThat(secondTool.getSourceMessageId()).isEqualTo("msg_e5a988");
+        assertThat(finalText.getMessageId()).isEqualTo("msg_e5a985");
+        assertThat(finalText.getSourceMessageId()).isEqualTo("msg_e5a98a");
+
+        ArgumentCaptor<SkillMessagePart> captor = ArgumentCaptor.forClass(SkillMessagePart.class);
+        verify(partRepository, times(3)).upsert(captor.capture());
+        assertThat(captor.getAllValues()).allMatch(part -> part.getMessageId().equals(11L));
+    }
+
+    @Test
+    @DisplayName("temporary generated message id is adopted when upstream message id arrives")
+    void generatedMessageIdAdoptsUpstreamMessageId() {
+        when(messageService.saveMessage(any(com.opencode.cui.skill.model.SaveMessageCommand.class)))
+                .thenReturn(SkillMessage.builder()
+                        .id(11L).messageId("msg_1_1").sessionId(1L).seq(1).build());
+        when(messageService.findBySessionIdAndMessageId(1L, "opencode-msg-1")).thenReturn(null);
+        when(messageService.updateProtocolMessageId(11L, "opencode-msg-1")).thenReturn(true);
+        when(partRepository.findConcatenatedTextByMessageId(11L)).thenReturn("answer");
+
+        service.persistIfFinal(1L, StreamMessage.builder()
+                .type(StreamMessage.Types.QUESTION)
+                .partId("question-1")
+                .status("running")
+                .tool(StreamMessage.ToolInfo.builder()
+                        .toolName("question")
+                        .toolCallId("call-1")
+                        .build())
+                .build());
+
+        service.persistIfFinal(1L, StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DONE)
+                .messageId("opencode-msg-1")
+                .sourceMessageId("opencode-msg-1")
+                .partId("text-1")
+                .content("answer")
+                .build());
+
+        verify(messageService, times(1)).saveMessage(any(com.opencode.cui.skill.model.SaveMessageCommand.class));
+        verify(messageService).updateProtocolMessageId(11L, "opencode-msg-1");
+        verify(messageService, never()).markMessageFinished(11L);
+        ArgumentCaptor<SkillMessagePart> captor = ArgumentCaptor.forClass(SkillMessagePart.class);
+        verify(partRepository, times(2)).upsert(captor.capture());
+        assertThat(captor.getAllValues()).allMatch(part -> part.getMessageId().equals(11L));
     }
 
     @Test

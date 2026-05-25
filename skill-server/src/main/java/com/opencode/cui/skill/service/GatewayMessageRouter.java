@@ -748,6 +748,7 @@ public class GatewayMessageRouter {
         }
 
         // 统一投递（enrich + deliver）
+        prepareStableMessageContext(sessionId, msg, session, numericId);
         emitter.emitToSession(session, sessionId, userId, msg);
 
         // 缓冲（miniapp 用）
@@ -762,6 +763,20 @@ public class GatewayMessageRouter {
             } catch (Exception e) {
                 log.error("Failed to persist StreamMessage for session {}: {}", sessionId, e.getMessage(), e);
             }
+        }
+    }
+
+    /** Prepare stable message identity before live emit and Redis buffering. */
+    private void prepareStableMessageContext(String sessionId, StreamMessage msg,
+            SkillSession session, Long numericId) {
+        if (numericId == null || !(session == null || session.isMiniappDomain() || session.isImDirectSession())) {
+            return;
+        }
+        try {
+            persistenceService.prepareMessageContext(numericId, msg);
+        } catch (Exception e) {
+            log.warn("Failed to prepare StreamMessage context before emit: sessionId={}, type={}, error={}",
+                    sessionId, msg != null ? msg.getType() : null, e.getMessage());
         }
     }
 

@@ -49,6 +49,7 @@ public class SnapshotService {
                 .type(StreamMessage.Types.SNAPSHOT)
                 .seq(seq)
                 .sessionId(sessionId)
+                .welinkSessionId(sessionId)
                 .emittedAt(Instant.now().toString())
                 .messages(messages)
                 .build();
@@ -70,19 +71,31 @@ public class SnapshotService {
                 .type(StreamMessage.Types.STREAMING)
                 .seq(seq)
                 .sessionId(sessionId)
+                .welinkSessionId(sessionId)
                 .emittedAt(Instant.now().toString())
                 .sessionStatus(isStreaming ? "busy" : "idle")
                 .parts(aggregatedParts)
                 .build();
 
         if (!parts.isEmpty()) {
-            StreamMessage firstPart = parts.get(0);
-            streamingMsg.setMessageId(firstPart.getMessageId());
-            streamingMsg.setMessageSeq(firstPart.getMessageSeq());
-            streamingMsg.setRole(firstPart.getRole());
+            StreamMessage identityPart = selectIdentityPart(sessionId, parts);
+            streamingMsg.setMessageId(identityPart.getMessageId());
+            streamingMsg.setMessageSeq(identityPart.getMessageSeq());
+            streamingMsg.setRole(identityPart.getRole());
         }
 
         return streamingMsg;
+    }
+
+    private StreamMessage selectIdentityPart(String sessionId, List<StreamMessage> parts) {
+        return parts.stream()
+                .filter(part -> part.getMessageId() != null && !part.getMessageId().isBlank())
+                .filter(part -> !ProtocolUtils.isGeneratedMessageId(sessionId, part.getMessageSeq(), part.getMessageId()))
+                .findFirst()
+                .orElseGet(() -> parts.stream()
+                        .filter(part -> part.getMessageId() != null && !part.getMessageId().isBlank())
+                        .findFirst()
+                        .orElse(parts.get(0)));
     }
 
     /**

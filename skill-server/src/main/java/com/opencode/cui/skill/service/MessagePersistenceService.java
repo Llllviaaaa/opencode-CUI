@@ -281,8 +281,9 @@ public class MessagePersistenceService {
                 .subagentName(msg.getSubagentName())
                 .build();
 
-        partBufferService.bufferPart(active.dbId(), part);
-        log.debug("Buffered {} part: sessionId={}, protocolId={}, partId={}",
+        partRepository.upsert(part);
+        syncMessageContent(active);
+        log.debug("Persisted {} part immediately: sessionId={}, protocolId={}, partId={}",
                 partType, sessionId, active.protocolMessageId(), part.getPartId());
 
         return true;
@@ -331,19 +332,11 @@ public class MessagePersistenceService {
                 .subagentName(msg.getSubagentName())
                 .build();
 
-        // Question parts must hit DB synchronously: the front-end refresh path reads
-        // history from MySQL only, and the placeholder ASSISTANT message hosting a
-        // pending Question card may stay alive for minutes waiting for the user.
-        // Going through Redis buffer + finalize-time flush would lose it on refresh.
-        if ("question".equals(part.getToolName())) {
-            partRepository.upsert(part);
-            log.debug("Persisted question part immediately: sessionId={}, protocolId={}, toolCallId={}, status={}",
-                    sessionId, active.protocolMessageId(), part.getToolCallId(), part.getToolStatus());
-            return true;
-        }
-
-        partBufferService.bufferPart(active.dbId(), part);
-        log.debug("Buffered tool part: sessionId={}, protocolId={}, tool={}, status={}",
+        // Semantic tool states must be durable as soon as they become meaningful.
+        // Running question cards and completed/error tool parts are recovered from
+        // MySQL history after a refresh; Redis remains only the live replay layer.
+        partRepository.upsert(part);
+        log.debug("Persisted tool part immediately: sessionId={}, protocolId={}, tool={}, status={}",
                 sessionId, active.protocolMessageId(),
                 tool != null ? tool.getToolName() : null, msg.getStatus());
         return true;
@@ -458,8 +451,8 @@ public class MessagePersistenceService {
                 .subagentName(msg.getSubagentName())
                 .build();
 
-        partBufferService.bufferPart(active.dbId(), part);
-        log.debug("Buffered file part: sessionId={}, protocolId={}, file={}",
+        partRepository.upsert(part);
+        log.debug("Persisted file part immediately: sessionId={}, protocolId={}, file={}",
                 sessionId, active.protocolMessageId(),
                 f != null ? f.getFileName() : null);
         return true;
@@ -505,8 +498,9 @@ public class MessagePersistenceService {
                 .subagentName(msg.getSubagentName())
                 .build();
 
-        partBufferService.bufferPart(active.dbId(), part);
-        log.debug("Buffered step.done: sessionId={}, protocolId={}, tokensIn={}, tokensOut={}, cost={}",
+        partRepository.upsert(part);
+        applyFlushedPartStats(active.dbId(), List.of(part));
+        log.debug("Persisted step.done immediately: sessionId={}, protocolId={}, tokensIn={}, tokensOut={}, cost={}",
                 sessionId, active.protocolMessageId(), stats.tokensIn(), stats.tokensOut(), cost);
         return true;
     }

@@ -37,6 +37,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.inOrder;
 
 /**
  * GatewayMessageRouter route_confirm 去重单元测试。
@@ -215,6 +216,43 @@ class GatewayMessageRouterTest {
         verify(scopeStrategy).translateEvent(event, WELINK_SESSION_ID);
         verify(assistantInfoService, never()).getAssistantInfo("AK_V");
         verify(emitter).emitToSession(session, WELINK_SESSION_ID, "user-1", translated);
+    }
+
+    @Test
+    @DisplayName("miniapp tool_event prepares stable message context before emit and buffer")
+    void toolEvent_miniappSession_preparesContextBeforeEmitAndBuffer() {
+        router = buildRouter(true);
+        SkillSession session = SkillSession.builder()
+                .id(Long.parseLong(WELINK_SESSION_ID))
+                .userId("user-1")
+                .ak("AK_V")
+                .businessSessionDomain(SkillSession.DOMAIN_MINIAPP)
+                .businessSessionType("default")
+                .build();
+        when(sessionService.findByIdSafe(Long.parseLong(WELINK_SESSION_ID))).thenReturn(session);
+
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("type", "tool_event");
+        node.put("welinkSessionId", WELINK_SESSION_ID);
+        node.put("ak", "AK_V");
+        ObjectNode event = objectMapper.createObjectNode();
+        event.put("type", "text.delta");
+        node.set("event", event);
+
+        StreamMessage translated = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA)
+                .partId("part-1")
+                .content("hello")
+                .role("assistant")
+                .build();
+        when(scopeStrategy.translateEvent(event, WELINK_SESSION_ID)).thenReturn(translated);
+
+        router.route("tool_event", "AK_V", "user-1", node);
+
+        var order = inOrder(persistenceService, emitter, bufferService);
+        order.verify(persistenceService).prepareMessageContext(Long.parseLong(WELINK_SESSION_ID), translated);
+        order.verify(emitter).emitToSession(session, WELINK_SESSION_ID, "user-1", translated);
+        order.verify(bufferService).accumulate(WELINK_SESSION_ID, translated);
     }
 
     @Test

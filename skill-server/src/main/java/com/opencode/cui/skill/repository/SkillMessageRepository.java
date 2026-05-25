@@ -57,6 +57,9 @@ public interface SkillMessageRepository {
         int updateContent(@Param("id") Long id,
                         @Param("content") String content);
 
+        int updateMessageId(@Param("id") Long id,
+                        @Param("messageId") String messageId);
+
         /** 标记消息为已完成 */
         int markFinished(@Param("id") Long id);
 }
