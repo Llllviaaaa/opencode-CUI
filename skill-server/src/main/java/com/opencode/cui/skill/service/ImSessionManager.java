@@ -155,7 +155,7 @@ public class ImSessionManager {
 
             // 创建新的 SkillSession 记录
             SkillSession created = sessionService.createSession(
-                    ownerWelinkId, // 用户 ID = 助手拥有者的 WeLink ID
+                    resolveSessionUserId(sessionType, senderUserAccount),
                     ak, // 应用密钥
                     buildTitle(businessDomain, sessionType, sessionId),
                     businessDomain,
@@ -163,7 +163,7 @@ public class ImSessionManager {
                     sessionId,
                     assistantAccount);
             log.info("Session created: skillSessionId={}, userId={}, ak={}, sessionId={}",
-                    created.getId(), ownerWelinkId, ak, sessionId);
+                    created.getId(), created.getUserId(), ak, sessionId);
 
             initializeToolSession(businessDomain, sessionType, sessionId,
                     created, identity, senderUserAccount, pendingMessage, businessExtParam);
@@ -266,6 +266,16 @@ public class ImSessionManager {
                 businessExtParam != null,
                 "group".equals(sessionType));
         return pendingRequest;
+    }
+
+    private String resolveSessionUserId(String sessionType, String senderUserAccount) {
+        if ("group".equals(sessionType)) {
+            return null;
+        }
+        if (senderUserAccount != null && !senderUserAccount.isBlank()) {
+            return senderUserAccount;
+        }
+        return null;
     }
 
     public void requestToolSession(SkillSession session, PendingChatRequest pendingRequest) {

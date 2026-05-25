@@ -280,6 +280,63 @@ log.info("Agent connected: mac={}, token={}",
 
 ---
 
+## Scenario: SS Stream Event Boundary Logging
+
+### 1. Scope / Trigger
+
+- Trigger: logging stream messages sent from SS to miniapp WebSocket clients and external WebSocket clients.
+- Boundary: log only after the actual WebSocket `sendMessage(...)` succeeds. Do not log the same stream event from delivery strategies, emitters, Redis relay helpers, or internal route methods.
+- Source files: `skill-server/src/main/java/com/opencode/cui/skill/ws/SkillStreamHandler.java`, `skill-server/src/main/java/com/opencode/cui/skill/ws/ExternalStreamHandler.java`, `skill-server/src/main/java/com/opencode/cui/skill/logging/StreamEventLogHelper.java`.
+
+### 2. Signatures
+
+```java
+StreamEventLogHelper.outbound(Logger log, String endpoint, String result, String payload);
+StreamEventLogHelper.outbound(Logger log, String endpoint, String result, Object payload);
+```
+
+### 3. Contracts
+
+- Log format must keep service/instance/MDC before the level:
+  `%d [%thread] [${SERVICE_NAME}] [${INSTANCE_ID}] [%X{traceId}] [%X{sessionId}] [%X{ak}] [%X{userId}] [%X{scenario}] %-5level ...`
+- Stream event payload must be the exact payload string sent to the WebSocket. Do not flatten, split, or re-shape `content` fields.
+- Use `endpoint=ss.miniapp` for miniapp WebSocket egress and `endpoint=ss.external_ws` for external WebSocket egress.
+- The helper log line shape is fixed:
+  `event=ws_event direction=outbound endpoint={} result={} payload={}`
+- Internal high-frequency `tool_event` route logs must be `DEBUG`; production `INFO` should keep only actual outbound events plus lifecycle/error records.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+|------|-------------------|
+| Local miniapp WebSocket send succeeds | Log one `direction=outbound endpoint=ss.miniapp` record with the raw sent payload. |
+| External WebSocket send succeeds | Log one `direction=outbound endpoint=ss.external_ws` record with the raw sent payload. |
+| WebSocket send fails | Log the existing warn/error with failure reason; do not log a successful outbound event. |
+| Redis relay delivers to local SS handler | Log only when the final local WebSocket send succeeds. |
+| Internal route or delivery strategy sees `tool_event` | Use `DEBUG` or no log; do not duplicate the boundary event log. |
+
+### 5. Tests Required
+
+- `StreamEventLogHelperTest` must assert the fixed `event=ws_event` outbound log shape.
+- Handler tests should assert outbound logging happens after send success when the handler is touched.
+- Routing tests should verify high-frequency `tool_event` internal logs do not require `INFO` assertions.
+
+### 6. Wrong vs Correct
+
+#### Wrong
+
+```java
+log.info("[DELIVERY] Miniapp: sessionId={}, type={}, userId={}", sessionId, type, userId);
+log.info("[RELAY-RX] External relay: domain={}, sent={}", domain, sent);
+```
+
+#### Correct
+
+```java
+session.sendMessage(new TextMessage(messageText));
+StreamEventLogHelper.outbound(log, "ss.miniapp", "sent", messageText);
+```
+
 ## 常见错误
 
 1. 不要再引用 `logback-spring.xml`；当前配置是 `log4j2-spring.xml`。

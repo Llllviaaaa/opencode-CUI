@@ -3,6 +3,7 @@ package com.opencode.cui.skill.ws;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.config.DeliveryProperties;
 import com.opencode.cui.skill.logging.MdcHelper;
+import com.opencode.cui.skill.logging.StreamEventLogHelper;
 import com.opencode.cui.skill.service.ExternalWsRegistry;
 import com.opencode.cui.skill.service.RedisMessageBroker;
 import com.opencode.cui.skill.service.SkillInstanceRegistry;
@@ -150,6 +151,7 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
             if (session.isOpen()) {
                 try {
                     synchronized (session) { session.sendMessage(textMessage); }
+                    StreamEventLogHelper.outbound(log, "ss.external_ws", "sent", message);
                 } catch (Exception e) {
                     log.error("Failed to push to external WS: source={}, key={}, error={}",
                             source, key, e.getMessage());
@@ -172,6 +174,7 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
             if (session == null) return false;
             try {
                 synchronized (session) { session.sendMessage(textMessage); }
+                StreamEventLogHelper.outbound(log, "ss.external_ws", "sent", message);
                 return true;
             } catch (Exception e) {
                 log.warn("pushToOne failed, removing session and retrying: source={}, sessionId={}, attempt={}/{}",
@@ -212,8 +215,7 @@ public class ExternalStreamHandler extends TextWebSocketHandler implements Hands
             String domain = node.path("domain").asText(null);
             String payload = node.path("payload").asText(null);
             if (domain != null && payload != null) {
-                boolean sent = pushToOne(domain, payload);
-                log.info("[RELAY-RX] External relay: domain={}, sent={}", domain, sent);
+                pushToOne(domain, payload);
             }
         } catch (Exception e) {
             log.error("Failed to handle external relay message: {}", e.getMessage());

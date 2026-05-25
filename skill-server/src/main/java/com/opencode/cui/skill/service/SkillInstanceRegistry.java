@@ -153,7 +153,7 @@ public class SkillInstanceRegistry {
             log.info("Self-healed via reconnect: instanceId={}", instanceId);
         }
         writeHeartbeat();
-        log.info("[ENTRY] SkillInstanceRegistry.refreshHeartbeat: instanceId={}", instanceId);
+        log.debug("[ENTRY] SkillInstanceRegistry.refreshHeartbeat: instanceId={}", instanceId);
     }
 
     /**

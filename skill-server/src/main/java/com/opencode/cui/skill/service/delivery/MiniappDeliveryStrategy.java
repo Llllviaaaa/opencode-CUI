@@ -40,8 +40,6 @@ public class MiniappDeliveryStrategy implements OutboundDeliveryStrategy {
             envelope.put("userId", userId);
             envelope.set("message", objectMapper.valueToTree(msg));
             redisMessageBroker.publishToUser(userId, objectMapper.writeValueAsString(envelope));
-            log.info("[DELIVERY] Miniapp: sessionId={}, type={}, userId={}",
-                    sessionId, msg != null ? msg.getType() : null, userId);
         } catch (Exception e) {
             log.error("Failed to deliver miniapp message: sessionId={}, error={}", sessionId, e.getMessage());
         }

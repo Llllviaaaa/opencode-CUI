@@ -18,6 +18,7 @@ public class AssistantInstanceInfo {
 
     private String partnerAccount;
     private String ownerWelinkId;
+    private String createdBy;
     private String appKey;
     private Boolean isRemote;
     private String bizRobotTag;
@@ -43,6 +44,14 @@ public class AssistantInstanceInfo {
     @JsonIgnore
     public String effectivePartnerAccount(String fallback) {
         return partnerAccount != null && !partnerAccount.isBlank() ? partnerAccount : fallback;
+    }
+
+    @JsonIgnore
+    public String effectiveOwnerUserId() {
+        if (createdBy != null && !createdBy.isBlank()) {
+            return createdBy;
+        }
+        return ownerWelinkId != null && !ownerWelinkId.isBlank() ? ownerWelinkId : null;
     }
 
     @Data

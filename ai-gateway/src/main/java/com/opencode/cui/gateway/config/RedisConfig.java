@@ -1,6 +1,7 @@
 package com.opencode.cui.gateway.config;
 
 import lombok.extern.slf4j.Slf4j;
+import com.opencode.cui.gateway.logging.MdcTaskDecorator;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -55,6 +56,7 @@ public class RedisConfig {
         executor.setMaxPoolSize(listenerMaxPoolSize);
         executor.setQueueCapacity(listenerQueueCapacity);
         executor.setThreadNamePrefix("redis-listener-");
+        executor.setTaskDecorator(new MdcTaskDecorator());
         return executor;
     }
 
@@ -69,6 +71,7 @@ public class RedisConfig {
         executor.setMaxPoolSize(subscriptionMaxPoolSize);
         executor.setQueueCapacity(subscriptionQueueCapacity);
         executor.setThreadNamePrefix("redis-subscription-");
+        executor.setTaskDecorator(new MdcTaskDecorator());
         return executor;
     }
 

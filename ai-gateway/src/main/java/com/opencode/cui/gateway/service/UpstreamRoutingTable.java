@@ -134,7 +134,7 @@ public class UpstreamRoutingTable {
         if (toolSessionId != null && !toolSessionId.isBlank()) {
             String sourceType = routingTable.getIfPresent(toolSessionId);
             if (sourceType != null) {
-                log.info("[EXIT] UpstreamRoutingTable.resolveSourceType: resolved via toolSessionId={} -> sourceType={}",
+                log.debug("[EXIT] UpstreamRoutingTable.resolveSourceType: resolved via toolSessionId={} -> sourceType={}",
                         toolSessionId, sourceType);
                 return sourceType;
             }
@@ -146,13 +146,13 @@ public class UpstreamRoutingTable {
             String key = WELINK_KEY_PREFIX + welinkSessionId;
             String sourceType = routingTable.getIfPresent(key);
             if (sourceType != null) {
-                log.info("[EXIT] UpstreamRoutingTable.resolveSourceType: resolved via welinkSessionId={} -> sourceType={}",
+                log.debug("[EXIT] UpstreamRoutingTable.resolveSourceType: resolved via welinkSessionId={} -> sourceType={}",
                         welinkSessionId, sourceType);
                 return sourceType;
             }
         }
 
-        log.info("[EXIT] UpstreamRoutingTable.resolveSourceType: no route found for toolSessionId={}, welinkSessionId={}",
+        log.debug("[EXIT] UpstreamRoutingTable.resolveSourceType: no route found for toolSessionId={}, welinkSessionId={}",
                 toolSessionId, welinkSessionId);
         return null;
     }

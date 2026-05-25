@@ -1,5 +1,6 @@
 package com.opencode.cui.skill.config;
 
+import com.opencode.cui.skill.logging.MdcTaskDecorator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -51,6 +52,7 @@ public class RedisConfig {
         executor.setKeepAliveSeconds(keepAliveSeconds);
         executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix("redis-sub-");
+        executor.setTaskDecorator(new MdcTaskDecorator());
         executor.initialize();
         container.setTaskExecutor(executor);
 
@@ -60,6 +62,7 @@ public class RedisConfig {
         subscriptionExecutor.setMaxPoolSize(10);
         subscriptionExecutor.setQueueCapacity(50);
         subscriptionExecutor.setThreadNamePrefix("redis-subscription-");
+        subscriptionExecutor.setTaskDecorator(new MdcTaskDecorator());
         subscriptionExecutor.initialize();
         container.setSubscriptionExecutor(subscriptionExecutor);
 

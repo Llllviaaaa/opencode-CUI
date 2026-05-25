@@ -75,7 +75,7 @@ class AssistantAccountResolverServiceTest {
         when(restTemplate.exchange(eq(REQUEST_URL), eq(HttpMethod.GET),
                 any(HttpEntity.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
                 .thenReturn(ResponseEntity.ok(new ObjectMapper().readTree(
-                        "{\"code\":200,\"data\":{\"appKey\":\"ak-001\",\"ownerWelinkId\":\"owner-001\"}}")));
+                        "{\"code\":200,\"data\":{\"appKey\":\"ak-001\",\"createdBy\":\"owner-001\"}}")));
 
         ResolveOutcome outcome = service.resolveWithStatus("assist-001");
 
@@ -130,13 +130,13 @@ class AssistantAccountResolverServiceTest {
         when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
                 eq(com.fasterxml.jackson.databind.JsonNode.class)))
                 .thenReturn(ResponseEntity.ok(new ObjectMapper().readTree(
-                        "{\"code\":200,\"data\":{\"ownerWelinkId\":\"owner-only\",\"isRemote\":true}}")));
+                        "{\"code\":200,\"data\":{\"isRemote\":true}}")));
 
         ResolveOutcome outcome = service.resolveWithStatus("assist-001");
 
         assertEquals(ExistenceStatus.EXISTS, outcome.status());
         assertNull(outcome.ak());
-        assertEquals("owner-only", outcome.ownerWelinkId());
+        assertNull(outcome.ownerWelinkId());
         verify(valueOperations).set(eq(STATUS_KEY), anyString(), eq(Duration.ofSeconds(EXISTS_TTL)));
     }
     @Test
@@ -146,7 +146,7 @@ class AssistantAccountResolverServiceTest {
         when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
                 eq(com.fasterxml.jackson.databind.JsonNode.class)))
                 .thenReturn(ResponseEntity.ok(new ObjectMapper().readTree(
-                        "{\"code\":200,\"data\":{\"ownerWelinkId\":\"owner-only\",\"isRemote\":false}}")));
+                        "{\"code\":200,\"data\":{\"createdBy\":\"owner-only\",\"isRemote\":false}}")));
 
         ResolveOutcome outcome = service.resolveWithStatus("assist-001");
 
@@ -157,7 +157,8 @@ class AssistantAccountResolverServiceTest {
     }
 
     @Test
-    void remoteOwnerMissingFallsBackToPartnerAccountExists() throws Exception {
+    @DisplayName("local: ownerWelinkId missing does not fall back to assistantAccount")
+    void localOwnerMissingReturnsUnknownNoCache() throws Exception {
         when(valueOperations.get(STATUS_KEY)).thenReturn(null);
         when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
                 eq(com.fasterxml.jackson.databind.JsonNode.class)))
@@ -166,9 +167,27 @@ class AssistantAccountResolverServiceTest {
 
         ResolveOutcome outcome = service.resolveWithStatus("assist-001");
 
+        assertEquals(ExistenceStatus.UNKNOWN, outcome.status());
+        assertNull(outcome.ak());
+        assertNull(outcome.ownerWelinkId());
+        verify(valueOperations, never()).set(eq(STATUS_KEY), anyString(), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("remote: ownerWelinkId missing remains null, never assistantAccount")
+    void remoteOwnerMissingDoesNotFallbackToAssistantAccount() throws Exception {
+        when(valueOperations.get(STATUS_KEY)).thenReturn(null);
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
+                eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                .thenReturn(ResponseEntity.ok(new ObjectMapper().readTree(
+                        "{\"code\":200,\"data\":{\"isRemote\":true}}")));
+
+        ResolveOutcome outcome = service.resolveWithStatus("assist-001");
+
         assertEquals(ExistenceStatus.EXISTS, outcome.status());
-        assertEquals("ak-only", outcome.ak());
-        assertEquals("assist-001", outcome.ownerWelinkId());
+        assertNull(outcome.ak());
+        assertNull(outcome.ownerWelinkId());
+        assertEquals("assist-001", outcome.assistantAccount());
         verify(valueOperations).set(eq(STATUS_KEY), anyString(), eq(Duration.ofSeconds(EXISTS_TTL)));
     }
 
@@ -201,6 +220,26 @@ class AssistantAccountResolverServiceTest {
         assertEquals("cached-ak", outcome.ak());
         assertEquals("cached-owner", outcome.ownerWelinkId());
         verify(restTemplate, never()).exchange(any(String.class), eq(HttpMethod.GET), any(),
+                eq(com.fasterxml.jackson.databind.JsonNode.class));
+    }
+
+    @Test
+    @DisplayName("cache hit: legacy owner==assistantAccount is dirty and refreshes")
+    void cacheHitLegacyAssistantOwnerFallbackRefreshes() throws Exception {
+        when(valueOperations.get(STATUS_KEY))
+                .thenReturn("{\"status\":\"EXISTS\",\"ak\":\"cached-ak\","
+                        + "\"ownerWelinkId\":\"assist-001\",\"assistantAccount\":\"assist-001\"}");
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
+                eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                .thenReturn(ResponseEntity.ok(new ObjectMapper().readTree(
+                        "{\"code\":200,\"data\":{\"appKey\":\"fresh-ak\",\"createdBy\":\"owner-fresh\"}}")));
+
+        ResolveOutcome outcome = service.resolveWithStatus("assist-001");
+
+        assertEquals(ExistenceStatus.EXISTS, outcome.status());
+        assertEquals("fresh-ak", outcome.ak());
+        assertEquals("owner-fresh", outcome.ownerWelinkId());
+        verify(restTemplate).exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
                 eq(com.fasterxml.jackson.databind.JsonNode.class));
     }
 

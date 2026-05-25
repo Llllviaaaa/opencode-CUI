@@ -961,15 +961,22 @@ The assistant instance API is now the shared source for assistant metadata, and 
 `AssistantInstanceInfo.businessRoutableAssistant()` means `isRemote == true` or `remoteProperty` is non-empty.
 Blank `appKey` alone must not imply remote/cloud. A no-AK assistant is routable only when `businessRoutableAssistant()` is true.
 For local assistants, blank `appKey` or blank owner identity is upstream incomplete data and must remain `UNKNOWN`, not `NOT_EXISTS`.
+The owner identity for local assistants comes from instance API `createdBy`; do not synthesize it from `partnerAccount` or `assistantAccount`.
+Cloud/remote assistants have no per-user owner; their route identity owner must remain null.
 
 `ResolveOutcome.EXISTS` for a remote assistant may contain `ak == null`, but must carry `assistantAccount`, `remote=true`, and optional `businessTag` when available.
 `assistantAccount:status:{account}` cache values must preserve `remote` and `businessTag` so cached remote no-AK assistants do not degrade to local unknown.
 
 Inbound chat / question-reply / permission-reply / rebuild must derive a single `AssistantSessionIdentity` before session lookup:
 
-- `LOCAL`: lookup with `ak + assistantAccount`; downstream invokes keep the real `ak` and owner.
+- `LOCAL`: lookup with `ak + assistantAccount`; downstream invokes keep the real `ak` and `createdBy` owner where an owner route hint is needed.
 - `REMOTE`: lookup with `assistantAccount`; `ak` may be null and must not force personal rebuild.
 - `DEFAULT`: lookup with `assistantAccount`; downstream invokes keep the configured virtual `ak` and sender user id.
+
+Newly-created `SkillSession.userId` is a session owner/current-user field, not an assistant owner field:
+`direct` IM/external sessions use the current sender identity (`senderUserAccount`), miniapp uses cookie `userId`, and IM `group` sessions must store `NULL`.
+Do not use `SkillSession.userId` to infer local assistant owner or group sender; group replay/fallback paths must use the structured pending request sender or fail loudly.
+For local assistants, Gateway `InvokeCommand.userId` may carry the `createdBy` owner as an internal route hint, while payload `sendUserAccount` always stays the per-message sender.
 
 `ImSessionManager#createSessionAsync(..., AssistantSessionIdentity, ...)` must reuse the same identity inside the create lock. If the lock-internal second lookup finds an existing business session, it must initialize the tool session via `AssistantScopeStrategy.generateToolSessionId()` and send the pending chat immediately. Do not fall back to the legacy `requestToolSession(session, String)` overload for remote/default business sessions.
 

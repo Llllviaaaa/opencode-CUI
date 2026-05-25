@@ -3,6 +3,7 @@ package com.opencode.cui.skill.ws;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.skill.logging.StreamEventLogHelper;
 import com.opencode.cui.skill.model.SkillSession;
 import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.ProtocolUtils;
@@ -381,7 +382,9 @@ public class SkillStreamHandler extends TextWebSocketHandler {
             }
             try {
                 StreamMessage msg = messageSupplier.get();
-                session.sendMessage(new TextMessage(objectMapper.writeValueAsString(msg)));
+                String messageText = objectMapper.writeValueAsString(msg);
+                session.sendMessage(new TextMessage(messageText));
+                StreamEventLogHelper.outbound(log, "ss.miniapp", "sent", messageText);
                 log.info(logFormatter.apply(msg));
             } catch (Exception e) {
                 log.error("Failed to send message for session {}: {}", sessionId, e.getMessage(), e);
@@ -399,6 +402,7 @@ public class SkillStreamHandler extends TextWebSocketHandler {
                 if (ws.isOpen()) {
                     try {
                         ws.sendMessage(textMessage);
+                        StreamEventLogHelper.outbound(log, "ss.miniapp", "sent", textMessage.getPayload());
                     } catch (IOException e) {
                         log.error("Failed to push message: context={}, wsId={}, error={}",
                                 context, ws.getId(), e.getMessage());

@@ -122,6 +122,43 @@ class EventRelayServiceTest {
     // ==================== Downstream: Skill → PCAgent ====================
 
     @Test
+    @DisplayName("ensureAgentEventTraceId recovers traceId by toolSessionId")
+    void ensureAgentEventTraceIdRecoversByToolSessionId() {
+        service.rememberAgentTrace(GatewayMessage.builder()
+                .type(GatewayMessage.Type.INVOKE)
+                .toolSessionId("tool-1")
+                .traceId("trace-1")
+                .build());
+
+        GatewayMessage event = GatewayMessage.builder()
+                .type(GatewayMessage.Type.TOOL_EVENT)
+                .toolSessionId("tool-1")
+                .build();
+
+        GatewayMessage traced = service.ensureAgentEventTraceId(event);
+
+        assertEquals("trace-1", traced.getTraceId());
+    }
+
+    @Test
+    @DisplayName("ensureAgentEventTraceId generates once then reuses for later events")
+    void ensureAgentEventTraceIdGeneratesOnceThenReuses() {
+        GatewayMessage first = GatewayMessage.builder()
+                .type(GatewayMessage.Type.TOOL_EVENT)
+                .toolSessionId("tool-2")
+                .build();
+
+        GatewayMessage firstTraced = service.ensureAgentEventTraceId(first);
+        GatewayMessage nextTraced = service.ensureAgentEventTraceId(GatewayMessage.builder()
+                .type(GatewayMessage.Type.TOOL_DONE)
+                .toolSessionId("tool-2")
+                .build());
+
+        assertNotNull(firstTraced.getTraceId());
+        assertEquals(firstTraced.getTraceId(), nextTraced.getTraceId());
+    }
+
+    @Test
     @DisplayName("relayToAgent publishes invoke to Gateway Redis agent:{ak}")
     void relayToAgentPublishesToRedis() {
         GatewayMessage msg = GatewayMessage.builder()

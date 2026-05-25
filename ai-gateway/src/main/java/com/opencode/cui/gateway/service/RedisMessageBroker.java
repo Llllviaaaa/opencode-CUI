@@ -315,7 +315,7 @@ public class RedisMessageBroker {
             try {
                 String json = new String(message.getBody());
                 handler.accept(json);
-                log.info("Received from GW relay channel {}: length={}", channel, json.length());
+                log.debug("Received from GW relay channel {}: length={}", channel, json.length());
             } catch (Exception e) {
                 log.error("Failed to process message from GW relay channel {}: {}", channel, e.getMessage(), e);
             }
@@ -336,7 +336,7 @@ public class RedisMessageBroker {
         String channel = GW_RELAY_CHANNEL_PREFIX + targetInstanceId;
         try {
             redisTemplate.convertAndSend(channel, message);
-            log.info("Published to GW relay channel {}: length={}", channel, message.length());
+            log.debug("Published to GW relay channel {}: length={}", channel, message.length());
         } catch (Exception e) {
             log.error("Failed to publish to GW relay channel {}: {}", channel, e.getMessage(), e);
         }
@@ -738,7 +738,7 @@ public class RedisMessageBroker {
             RelayMessage relayMessage = RelayMessage.toSource(targetSourceType, targetSourceInstanceId, payload);
             String json = objectMapper.writeValueAsString(relayMessage);
             publishToGwRelay(targetGwId, json);
-            log.info("RedisMessageBroker.publishToSourceRelay: targetGw={}, sourceType={}, sourceInstanceId={}",
+            log.debug("RedisMessageBroker.publishToSourceRelay: targetGw={}, sourceType={}, sourceInstanceId={}",
                     targetGwId, targetSourceType, targetSourceInstanceId);
         } catch (Exception e) {
             log.error("RedisMessageBroker.publishToSourceRelay: failed, targetGw={}, error={}",

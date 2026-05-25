@@ -1,6 +1,7 @@
 package com.opencode.cui.gateway.ws;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.gateway.logging.GatewayStreamEventLogHelper;
 import com.opencode.cui.gateway.logging.MdcHelper;
 import com.opencode.cui.gateway.model.AgentConnection;
 import com.opencode.cui.gateway.model.GatewayMessage;
@@ -248,24 +249,42 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
             log.warn("Message without type from PCAgent: sessionId={}", session.getId());
             return;
         }
-
-
         String userId = (String) session.getAttributes().get(ATTR_USER_ID);
         String akId = (String) session.getAttributes().get(ATTR_AK_ID);
+        boolean relayEvent = isAgentRelayEvent(type);
+        boolean missingTraceId = relayEvent && isBlank(message.getTraceId());
+        boolean recoveredTraceId = missingTraceId && eventRelayService.hasRememberedAgentTrace(message);
+        if (relayEvent) {
+            GatewayMessage tracedMessage = eventRelayService.ensureAgentEventTraceId(message);
+            if (tracedMessage != null) {
+                message = tracedMessage;
+            }
+        }
 
         try {
             MdcHelper.fromGatewayMessage(message);
             MdcHelper.putAk(akId);
             MdcHelper.putUserId(userId);
             MdcHelper.putScenario("ws-agent-" + type);
+            if (missingTraceId) {
+                log.warn("Agent event missing traceId; gateway {} traceId by correlation: type={}, toolSessionId={}, welinkSessionId={}",
+                        recoveredTraceId ? "recovered" : "generated",
+                        type, message.getToolSessionId(), message.getWelinkSessionId());
+            }
 
             switch (type) {
                 case GatewayMessage.Type.REGISTER -> handleRegister(session, message, userId, akId);
                 case GatewayMessage.Type.HEARTBEAT -> handleHeartbeat(session);
-                case GatewayMessage.Type.TOOL_EVENT, GatewayMessage.Type.TOOL_DONE,
-                        GatewayMessage.Type.TOOL_ERROR, GatewayMessage.Type.SESSION_CREATED,
-                        GatewayMessage.Type.PERMISSION_REQUEST ->
+                case GatewayMessage.Type.TOOL_EVENT -> {
+                    GatewayStreamEventLogHelper.inbound(log, "gw.local_agent", "received", payload);
                     handleRelayToSkillServer(session, message);
+                }
+                case GatewayMessage.Type.TOOL_DONE,
+                        GatewayMessage.Type.TOOL_ERROR, GatewayMessage.Type.SESSION_CREATED,
+                        GatewayMessage.Type.PERMISSION_REQUEST -> {
+                    GatewayStreamEventLogHelper.inbound(log, "gw.local_agent", "received", payload);
+                    handleRelayToSkillServer(session, message);
+                }
                 case GatewayMessage.Type.STATUS_RESPONSE -> handleStatusResponse(session, message);
                 default -> log.warn("Unknown message type from PCAgent: type={}, sessionId={}",
                         type, session.getId());
@@ -455,16 +474,29 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
         }
 
         long start = System.nanoTime();
-        log.info(
-                "[ENTRY] AgentWSHandler.handleRelayToSkillServer: type={}, ak={}, welinkSessionId={}, toolSessionId={}, subagentSessionId={}, subagentName={}",
-                message.getType(), ak, message.getWelinkSessionId(), message.getToolSessionId(),
-                message.getSubagentSessionId(), message.getSubagentName());
+        boolean streamEvent = GatewayMessage.Type.TOOL_EVENT.equals(message.getType());
+        if (streamEvent) {
+            log.debug(
+                    "[ENTRY] AgentWSHandler.handleRelayToSkillServer: type={}, ak={}, welinkSessionId={}, toolSessionId={}, subagentSessionId={}, subagentName={}",
+                    message.getType(), ak, message.getWelinkSessionId(), message.getToolSessionId(),
+                    message.getSubagentSessionId(), message.getSubagentName());
+        } else {
+            log.info(
+                    "[ENTRY] AgentWSHandler.handleRelayToSkillServer: type={}, ak={}, welinkSessionId={}, toolSessionId={}, subagentSessionId={}, subagentName={}",
+                    message.getType(), ak, message.getWelinkSessionId(), message.getToolSessionId(),
+                    message.getSubagentSessionId(), message.getSubagentName());
+        }
 
         eventRelayService.relayToSkillServer(ak, message);
 
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
-        log.info("[EXIT] AgentWSHandler.handleRelayToSkillServer: type={}, ak={}, durationMs={}",
-                message.getType(), ak, elapsedMs);
+        if (streamEvent) {
+            log.debug("[EXIT] AgentWSHandler.handleRelayToSkillServer: type={}, ak={}, durationMs={}",
+                    message.getType(), ak, elapsedMs);
+        } else {
+            log.info("[EXIT] AgentWSHandler.handleRelayToSkillServer: type={}, ak={}, durationMs={}",
+                    message.getType(), ak, elapsedMs);
+        }
     }
 
     /** 处理状态响应：记录 Agent 的 OpenCode 在线状态。 */
@@ -480,6 +512,18 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Hands
     }
 
     // ==================== 辅助方法 ====================
+
+    private static boolean isAgentRelayEvent(String type) {
+        return GatewayMessage.Type.TOOL_EVENT.equals(type)
+                || GatewayMessage.Type.TOOL_DONE.equals(type)
+                || GatewayMessage.Type.TOOL_ERROR.equals(type)
+                || GatewayMessage.Type.SESSION_CREATED.equals(type)
+                || GatewayMessage.Type.PERMISSION_REQUEST.equals(type);
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
 
     private String findRemoteOwnerGateway(String akId) {
         String connOwner = redisMessageBroker.getConnAk(akId);

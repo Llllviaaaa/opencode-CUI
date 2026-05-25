@@ -2,9 +2,10 @@
 <Configuration status="WARN">
     <Properties>
         <Property name="SERVICE_NAME">ai-gateway</Property>
+        <Property name="INSTANCE_ID">${spring:gateway.instance-id:-${env:HOSTNAME:-gateway-local}}</Property>
         <Property name="LOG_FILE">${sys:opencode.logging.file:-./logs/ai-gateway/ai-gateway.log}</Property>
         <Property name="ARCHIVE_DIR">${sys:opencode.logging.archive-dir:-./logs/ai-gateway/archive}</Property>
-        <Property name="LOG_PATTERN">%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [${SERVICE_NAME}] [%X{traceId}] [%X{sessionId}] [%X{ak}] %logger{36}.%method - %msg%n</Property>
+        <Property name="LOG_PATTERN">%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [${SERVICE_NAME}] [${INSTANCE_ID}] [%X{traceId}] [%X{sessionId}] [%X{ak}] [%X{userId}] [%X{scenario}] %-5level %logger{36}.%method - %msg%n</Property>
     </Properties>
 
     <Appenders>
