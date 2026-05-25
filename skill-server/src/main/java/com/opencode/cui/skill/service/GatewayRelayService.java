@@ -346,7 +346,7 @@ public class GatewayRelayService {
      */
     public void handleGatewayMessage(String rawMessage) {
         long start = System.nanoTime();
-        log.info("[ENTRY] GatewayRelayService.handleGatewayMessage: length={}",
+        log.debug("[ENTRY] GatewayRelayService.handleGatewayMessage: length={}",
                 rawMessage != null ? rawMessage.length() : 0);
         JsonNode node;
         try {
@@ -369,13 +369,15 @@ public class GatewayRelayService {
                 ak = node.path("agentId").asText(null);
                 MdcHelper.putAk(ak); // 补充 fallback 的 ak 到 MDC
             }
-            log.info("GatewayRelayService.handleGatewayMessage: dispatching type={}, ak={}, userId={}",
+            logGatewayMessageInfo(type,
+                    "GatewayRelayService.handleGatewayMessage: dispatching type={}, ak={}, userId={}",
                     type, ak, userId);
 
             messageRouter.route(type, ak, userId, node);
 
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
-            log.info("[EXIT] GatewayRelayService.handleGatewayMessage: type={}, ak={}, durationMs={}",
+            logGatewayMessageInfo(type,
+                    "[EXIT] GatewayRelayService.handleGatewayMessage: type={}, ak={}, durationMs={}",
                     type, ak, elapsedMs);
         } finally {
             MdcHelper.clearAll();
@@ -525,5 +527,13 @@ public class GatewayRelayService {
                         sendInvokeToGateway(command);
                     }
                 });
+    }
+
+    private void logGatewayMessageInfo(String type, String format, Object... args) {
+        if ("tool_event".equals(type)) {
+            log.debug(format, args);
+            return;
+        }
+        log.info(format, args);
     }
 }

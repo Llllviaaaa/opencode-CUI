@@ -13,10 +13,19 @@ const DEFAULT_BASE_URL =
     : '';
 
 let baseURL = DEFAULT_BASE_URL;
+const TRACE_ID_HEADER = 'X-Trace-Id';
 
 /** Override the Skill Server base URL at runtime. */
 export function setBaseURL(url: string): void {
   baseURL = url.replace(/\/+$/, '');
+}
+
+function createTraceId(): string {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === 'function') {
+    return cryptoApi.randomUUID();
+  }
+  return `miniapp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -41,10 +50,13 @@ async function request<T>(
   ensureDevUserIdCookie();
   const url = `${baseURL}${path}`;
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string> | undefined),
-  };
+  const headers = new Headers(options.headers);
+  if (!headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  if (!headers.has(TRACE_ID_HEADER)) {
+    headers.set(TRACE_ID_HEADER, createTraceId());
+  }
 
   const res = await fetch(url, {
     credentials: options.credentials ?? 'include',

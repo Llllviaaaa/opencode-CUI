@@ -1,6 +1,9 @@
 package com.opencode.cui.gateway.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.opencode.cui.gateway.logging.MdcHelper;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.model.RelayMessage;
@@ -13,7 +16,10 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.io.IOException;
+import java.time.Duration;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -28,12 +34,19 @@ public class EventRelayService {
 
     /** 状态查询等待超时（毫秒） */
     private static final long STATUS_QUERY_TIMEOUT_MS = 1500L;
+    private static final Duration AGENT_TRACE_TTL = Duration.ofMinutes(30);
+    private static final String TRACE_TOOL_PREFIX = "tool:";
+    private static final String TRACE_WELINK_PREFIX = "welink:";
 
     /** 已连接 Agent 的 WebSocket 会话映射：ak → session */
     private final Map<String, WebSocketSession> agentSessions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, AsyncSessionSender> sessionSenders = new ConcurrentHashMap<>();
     private final Map<String, Boolean> opencodeStatusCache = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<Boolean>> pendingStatusQueries = new ConcurrentHashMap<>();
+    private final Cache<String, String> agentTraceByCorrelationKey = Caffeine.newBuilder()
+            .maximumSize(100_000)
+            .expireAfterAccess(AGENT_TRACE_TTL)
+            .build();
 
     private final ObjectMapper objectMapper;
     private final RedisMessageBroker redisMessageBroker;
@@ -122,15 +135,23 @@ public class EventRelayService {
             }
 
             GatewayMessage message = objectMapper.readValue(gatewayMessageJson, GatewayMessage.class);
-            String ak = message.getAk();
-            if (ak == null || ak.isBlank()) {
-                log.warn("[ERROR] EventRelayService.handleGwRelayMessage: ak is null or blank, dropping message type={}",
-                        message.getType());
-                return;
-            }
+            var previousMdc = MdcHelper.snapshot();
+            try {
+                MdcHelper.fromGatewayMessage(message);
+                MdcHelper.putScenario("gw-relay-rx");
+                String ak = message.getAk();
+                if (ak == null || ak.isBlank()) {
+                    log.warn("[ERROR] EventRelayService.handleGwRelayMessage: ak is null or blank, dropping message type={}",
+                            message.getType());
+                    return;
+                }
 
-            log.info("EventRelayService.handleGwRelayMessage: delivering to local agent, ak={}, type={}", ak, message.getType());
-            sendToLocalAgent(ak, message);
+                log.info("EventRelayService.handleGwRelayMessage: delivering to local agent, ak={}, type={}",
+                        ak, message.getType());
+                sendToLocalAgent(ak, message);
+            } finally {
+                MdcHelper.restore(previousMdc);
+            }
         } catch (Exception e) {
             log.error("[ERROR] EventRelayService.handleGwRelayMessage: failed to process relay message: {}",
                     e.getMessage(), e);
@@ -143,6 +164,16 @@ public class EventRelayService {
      * @param relayMessage the relay message with relayType="to-source"
      */
     private void handleToSourceRelay(RelayMessage relayMessage) {
+        var previousMdc = MdcHelper.snapshot();
+        try {
+            restoreMdcFromGatewayPayload(relayMessage.originalMessage(), "gw-to-source-relay-rx");
+            handleToSourceRelayWithMdc(relayMessage);
+        } finally {
+            MdcHelper.restore(previousMdc);
+        }
+    }
+
+    private void handleToSourceRelayWithMdc(RelayMessage relayMessage) {
         String targetSourceType = relayMessage.targetSourceType();
         String targetSourceInstanceId = relayMessage.targetSourceInstanceId();
         String payload = relayMessage.originalMessage();
@@ -164,6 +195,16 @@ public class EventRelayService {
         } else {
             log.debug("No local connection for source {}/{}, discarding relay",
                     targetSourceType, targetSourceInstanceId);
+        }
+    }
+
+    private void restoreMdcFromGatewayPayload(String payload, String scenario) {
+        try {
+            GatewayMessage message = objectMapper.readValue(payload, GatewayMessage.class);
+            MdcHelper.fromGatewayMessage(message);
+            MdcHelper.putScenario(scenario);
+        } catch (Exception e) {
+            log.debug("Failed to restore MDC from gateway payload: {}", e.getMessage());
         }
     }
 
@@ -211,6 +252,36 @@ public class EventRelayService {
         return session != null && session.isOpen();
     }
 
+    public boolean hasRememberedAgentTrace(GatewayMessage message) {
+        return findRememberedAgentTrace(message) != null;
+    }
+
+    public GatewayMessage ensureAgentEventTraceId(GatewayMessage message) {
+        if (message == null) {
+            return null;
+        }
+        if (hasText(message.getTraceId())) {
+            rememberAgentTrace(message);
+            return message;
+        }
+
+        String traceId = findRememberedAgentTrace(message);
+        GatewayMessage tracedMessage = traceId != null
+                ? message.withTraceId(traceId)
+                : message.ensureTraceId();
+        rememberAgentTrace(tracedMessage);
+        return tracedMessage;
+    }
+
+    void rememberAgentTrace(GatewayMessage message) {
+        if (message == null || !hasText(message.getTraceId())) {
+            return;
+        }
+        for (String key : agentTraceKeys(message)) {
+            agentTraceByCorrelationKey.put(key, message.getTraceId());
+        }
+    }
+
     /**
      * 上行消息路由到 Source 服务。
      * v3: 注入 ak/userId/traceId 后直接交给 SkillRelayService 路由。
@@ -229,7 +300,8 @@ public class EventRelayService {
             MdcHelper.fromGatewayMessage(forwarded);
             MdcHelper.putScenario("relay-to-skill");
 
-            log.info(
+            logMessageInfo(
+                    forwarded,
                     "[ENTRY] EventRelayService.relayToSkillServer: type={}, ak={}, toolSessionId={}, welinkSessionId={}",
                     tracedMessage.getType(), ak, forwarded.getToolSessionId(), forwarded.getWelinkSessionId());
 
@@ -240,7 +312,7 @@ public class EventRelayService {
                         "[ERROR] EventRelayService.relayToSkillServer: reason=route_failed, type={}, welinkSessionId={}, durationMs={}",
                         message.getType(), forwarded.getWelinkSessionId(), elapsedMs);
             } else {
-                log.info("[EXIT] EventRelayService.relayToSkillServer: type={}, durationMs={}",
+                logMessageInfo(forwarded, "[EXIT] EventRelayService.relayToSkillServer: type={}, durationMs={}",
                         message.getType(), elapsedMs);
             }
         } catch (Exception e) {
@@ -278,6 +350,7 @@ public class EventRelayService {
                         ak, message.getType());
                 return false;
             }
+            rememberAgentTrace(message);
             log.info("[EXIT->AGENT] Sent to local agent (V2 direct): ak={}, type={}",
                     ak, message.getType());
             return true;
@@ -297,12 +370,14 @@ public class EventRelayService {
         }
 
         try {
-            String json = objectMapper.writeValueAsString(message.withoutRoutingContext());
+            GatewayMessage agentMessage = message.withoutRoutingContext();
+            String json = objectMapper.writeValueAsString(agentMessage);
             boolean enqueued = getOrCreateSender(session).enqueue(new TextMessage(json));
             if (!enqueued) {
                 log.warn("[EXIT->AGENT] Failed to enqueue message for local agent: ak={}, type={}",
                         ak, message.getType());
             } else {
+                rememberAgentTrace(agentMessage);
                 log.info("[EXIT->AGENT] Sent to local agent: type={}, seq={}",
                         message.getType(), message.getSequenceNumber());
             }
@@ -320,6 +395,59 @@ public class EventRelayService {
         GatewayMessage query = GatewayMessage.statusQuery();
         sendToLocalAgent(ak, query);
         log.info("Sent status_query to agent: ak={}", ak);
+    }
+
+    private void logMessageInfo(GatewayMessage message, String format, Object... args) {
+        if (message != null && GatewayMessage.Type.TOOL_EVENT.equals(message.getType())) {
+            log.debug(format, args);
+            return;
+        }
+        log.info(format, args);
+    }
+
+    private String findRememberedAgentTrace(GatewayMessage message) {
+        for (String key : agentTraceKeys(message)) {
+            String traceId = agentTraceByCorrelationKey.getIfPresent(key);
+            if (hasText(traceId)) {
+                return traceId;
+            }
+        }
+        return null;
+    }
+
+    private Set<String> agentTraceKeys(GatewayMessage message) {
+        Set<String> keys = new LinkedHashSet<>();
+        if (message == null) {
+            return keys;
+        }
+        addTraceKey(keys, TRACE_TOOL_PREFIX, message.getToolSessionId());
+        addTraceKey(keys, TRACE_TOOL_PREFIX, payloadText(message, "toolSessionId"));
+        addTraceKey(keys, TRACE_WELINK_PREFIX, message.getWelinkSessionId());
+        addTraceKey(keys, TRACE_WELINK_PREFIX, payloadText(message, "welinkSessionId"));
+        return keys;
+    }
+
+    private static void addTraceKey(Set<String> keys, String prefix, String value) {
+        if (hasText(value)) {
+            keys.add(prefix + value);
+        }
+    }
+
+    private static String payloadText(GatewayMessage message, String fieldName) {
+        JsonNode payload = message.getPayload();
+        if (payload == null || payload.isMissingNode() || payload.isNull()) {
+            return null;
+        }
+        JsonNode value = payload.path(fieldName);
+        if (value.isMissingNode() || value.isNull()) {
+            return null;
+        }
+        String text = value.asText(null);
+        return hasText(text) ? text : null;
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     /**

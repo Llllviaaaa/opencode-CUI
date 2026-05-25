@@ -262,7 +262,8 @@ public class SkillRelayService {
             if (ring != null && !ring.isEmpty() && routingKey != null) {
                 WebSocketSession target = ring.getNode(routingKey);
                 if (target != null && target.isOpen()) {
-                    log.info("[V2-L1] Hash-routed to source: sourceType={}, routingKey={}, linkId={}, type={}",
+                    logRoutingInfo(tracedMessage,
+                            "[V2-L1] Hash-routed to source: sourceType={}, routingKey={}, linkId={}, type={}",
                             sourceType, routingKey, target.getId(), tracedMessage.getType());
                     if (sendToSession(target, tracedMessage)) {
                         routingHitCount.incrementAndGet();
@@ -285,7 +286,8 @@ public class SkillRelayService {
             if (ring != null && !ring.isEmpty() && routingKey != null) {
                 WebSocketSession target = ring.getNode(routingKey);
                 if (target != null && target.isOpen()) {
-                    log.info("[V2-L1] Hash-routed via message.source: sourceType={}, routingKey={}, linkId={}, type={}",
+                    logRoutingInfo(tracedMessage,
+                            "[V2-L1] Hash-routed via message.source: sourceType={}, routingKey={}, linkId={}, type={}",
                             messageSource, routingKey, target.getId(), tracedMessage.getType());
                     if (sendToSession(target, tracedMessage)) {
                         routingHitCount.incrementAndGet();
@@ -351,7 +353,7 @@ public class SkillRelayService {
         // Try local delivery first
         WebSocketSession localSession = findLocalSourceConnection(targetSourceType, targetSourceInstanceId);
         if (localSession != null) {
-            log.info("[V2-L2] Local delivery: sourceType={}, sourceInstanceId={}, linkId={}, type={}",
+            logRoutingInfo(message, "[V2-L2] Local delivery: sourceType={}, sourceInstanceId={}, linkId={}, type={}",
                     targetSourceType, targetSourceInstanceId, localSession.getId(), message.getType());
             if (sendToSession(localSession, message)) {
                 return true;
@@ -367,7 +369,7 @@ public class SkillRelayService {
                     String messageJson = objectMapper.writeValueAsString(message);
                     redisMessageBroker.publishToSourceRelay(targetGwId, targetSourceType,
                             targetSourceInstanceId, messageJson);
-                    log.info("[V2-L2] Cross-GW relay: targetGw={}, sourceType={}, sourceInstanceId={}, type={}",
+                    logRoutingInfo(message, "[V2-L2] Cross-GW relay: targetGw={}, sourceType={}, sourceInstanceId={}, type={}",
                             targetGwId, targetSourceType, targetSourceInstanceId, message.getType());
                     return true;
                 } catch (Exception e) {
@@ -412,7 +414,7 @@ public class SkillRelayService {
                 redisMessageBroker.publishToGwRelay(targetGwId, relayJson);
                 relayed++;
             }
-            log.info("[V2-L3] Broadcast relay to {} remote GWs: type={}, source={}",
+            logRoutingInfo(message, "[V2-L3] Broadcast relay to {} remote GWs: type={}, source={}",
                     relayed, message.getType(), sourceHint);
         } catch (Exception e) {
             log.error("[V2-L3] Failed to broadcast relay: type={}", message.getType(), e);
@@ -501,7 +503,7 @@ public class SkillRelayService {
             }
         }
 
-        log.info("[V2] Broadcast to all groups: groupsSent={}, totalGroups={}, type={}",
+        logRoutingInfo(message, "[V2] Broadcast to all groups: groupsSent={}, totalGroups={}, type={}",
                 groupsSent, hashRings.size(), message.getType());
         return groupsSent > 0;
     }
@@ -526,7 +528,7 @@ public class SkillRelayService {
             }
         }
 
-        log.info("Broadcast to source_type={}: sent to {} connections, msgType={}",
+        logRoutingInfo(message, "Broadcast to source_type={}: sent to {} connections, msgType={}",
                 sourceType, sent, message.getType());
         return sent > 0;
     }
@@ -864,13 +866,21 @@ public class SkillRelayService {
         }
     }
 
+    private void logRoutingInfo(GatewayMessage message, String format, Object... args) {
+        if (message != null && GatewayMessage.Type.TOOL_EVENT.equals(message.getType())) {
+            log.debug(format, args);
+            return;
+        }
+        log.info(format, args);
+    }
+
     private boolean sendToSession(WebSocketSession session, GatewayMessage message) {
         try {
             String json = objectMapper.writeValueAsString(message);
             AsyncSessionSender sender = getOrCreateSender(session);
             boolean enqueued = sender.enqueue(new TextMessage(json));
             if (enqueued) {
-                log.info("[EXIT->SS] Enqueued to skill session: linkId={}, type={}, pending={}",
+                logRoutingInfo(message, "[EXIT->SS] Enqueued to skill session: linkId={}, type={}, pending={}",
                         session.getId(), message.getType(), sender.pendingCount());
             }
             return enqueued;

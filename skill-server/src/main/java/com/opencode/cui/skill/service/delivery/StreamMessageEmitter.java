@@ -100,8 +100,6 @@ public class StreamMessageEmitter {
                 return;
             }
             sendToUserChannel(sessionId, userId, msg);
-            log.info("[EMIT->CLIENT] sessionId={}, type={}, userId={}",
-                    sessionId, msg.getType(), userId);
         } catch (Exception e) {
             log.error("emitToClient failed: sessionId={}, type={}, error={}",
                     sessionId, msg != null ? msg.getType() : null, e.getMessage());

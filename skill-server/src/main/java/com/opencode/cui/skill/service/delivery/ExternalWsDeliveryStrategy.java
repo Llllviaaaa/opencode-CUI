@@ -59,8 +59,6 @@ public class ExternalWsDeliveryStrategy implements OutboundDeliveryStrategy {
 
             // L1: local external WebSocket.
             if (externalStreamHandler.pushToOne(domain, json)) {
-                log.debug("[DELIVERY] ExternalWs-L1: sessionId={}, type={}, domain={}",
-                        sessionId, msg.getType(), domain);
                 return;
             }
 
@@ -71,9 +69,6 @@ public class ExternalWsDeliveryStrategy implements OutboundDeliveryStrategy {
                         buildRelayEnvelope(domain, json, sessionId, userId));
                 for (String targetInstance : targetInstances) {
                     if (redisMessageBroker.publishToExternalRelayBestEffort(targetInstance, relayPayload)) {
-                        log.info("[DELIVERY] ExternalWs-L2: relay publish accepted: " +
-                                        "sessionId={}, type={}, domain={}, target={}",
-                                sessionId, msg.getType(), domain, targetInstance);
                         return;
                     }
                     log.warn("[DELIVERY] ExternalWs-L2: relay publish failed, trying next: " +

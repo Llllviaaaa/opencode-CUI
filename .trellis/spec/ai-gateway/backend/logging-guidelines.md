@@ -120,6 +120,71 @@ SensitiveDataMasker.maskToken(token);      // -> abcd****mnop
 
 `AgentWebSocketHandler.handleRegister()` 已经用它输出 MAC 地址。来源：`ws/AgentWebSocketHandler.java:387-392`。
 
+## Scenario: GW Stream Event Boundary Logging
+
+### 1. Scope / Trigger
+
+- Trigger: logging local/cloud agent streaming events, including `tool_event`, `tool_done`, `tool_error`, `session_created`, and `permission_request`.
+- Boundary: log these events only at the GW ingress boundary, not in internal relay/helper methods.
+- Source files: `ai-gateway/src/main/java/com/opencode/cui/gateway/ws/AgentWebSocketHandler.java`, `ai-gateway/src/main/java/com/opencode/cui/gateway/service/CloudAgentService.java`, `ai-gateway/src/main/java/com/opencode/cui/gateway/logging/GatewayStreamEventLogHelper.java`.
+
+### 2. Signatures
+
+```java
+GatewayStreamEventLogHelper.inbound(Logger log, String endpoint, String result, String payload);
+GatewayStreamEventLogHelper.inbound(Logger log, String endpoint, String result, Object payload);
+```
+
+### 3. Contracts
+
+- Log format must keep service/instance/MDC before the level:
+  `%d [%thread] [${SERVICE_NAME}] [${INSTANCE_ID}] [%X{traceId}] [%X{sessionId}] [%X{ak}] [%X{userId}] [%X{scenario}] %-5level ...`
+- Stream event payload must be the raw inbound payload string where available. Do not flatten or re-map the event fields for the boundary log.
+- Use `endpoint=gw.local_agent` for local agent WebSocket ingress and `endpoint=gw.cloud_agent` for cloud agent stream ingress.
+- The helper log line shape is fixed:
+  `event=ws_event direction=inbound endpoint={} result={} payload={}`
+- Internal high-frequency `tool_event` route logs must be `DEBUG`; production `INFO` should keep only boundary event logs plus important lifecycle/error records.
+
+### 4. TraceId Contract
+
+- Miniapp/REST callers should provide `X-Trace-Id`; if absent, the gateway may generate through the existing `GatewayMessage.ensureTraceId()` path.
+- When GW sends an invoke to a local agent, remember `toolSessionId` and `welinkSessionId` to the invoke `traceId`.
+- When a local agent stream event comes back without `traceId`, recover it from `toolSessionId` or `welinkSessionId` before setting MDC, logging the raw inbound payload, or relaying to SS.
+- If no correlation key exists, generate once via `GatewayMessage.ensureTraceId()` and remember it for later events with the same key.
+- Emit a `WARN` when a relay event is missing `traceId`; the warning should state whether GW recovered or generated the value.
+
+### 5. Validation & Error Matrix
+
+| Case | Required behavior |
+|------|-------------------|
+| Event has `traceId` | Preserve it and remember correlation keys. |
+| Event lacks `traceId` but has known `toolSessionId` | Recover the invoke traceId. |
+| Event lacks `traceId` but has known `welinkSessionId` | Recover the invoke traceId. |
+| Event lacks `traceId` and no known key | Generate via `GatewayMessage.ensureTraceId()` and warn. |
+| Event lacks any correlation key | Cannot guarantee turn-level trace continuity; warn and avoid inventing unrelated keys. |
+
+### 6. Tests Required
+
+- `EventRelayServiceTest` must assert recovery by `toolSessionId`.
+- `EventRelayServiceTest` must assert first generated traceId is reused for later events with the same correlation key.
+- `AgentWebSocketHandlerTest` or log helper tests must cover raw inbound event logging shape.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```java
+log.info("tool_event: type={}, content={}, session={}", type, content, sessionId);
+log.info("[ENTRY] internalRelay: payload={}", payload);
+```
+
+#### Correct
+
+```java
+GatewayStreamEventLogHelper.inbound(log, "gw.local_agent", "received", rawPayload);
+log.debug("[ENTRY] internalRelay: type={}, sessionId={}", type, sessionId);
+```
+
 ## 禁止事项
 
 1. 不要在文档或代码示例中混用其他服务标签；本服务统一是 `[ai-gateway]`。

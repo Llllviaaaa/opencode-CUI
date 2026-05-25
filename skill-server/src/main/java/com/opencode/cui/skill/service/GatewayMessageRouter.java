@@ -325,17 +325,19 @@ public class GatewayMessageRouter {
             String sessionId = envelope.path("sessionId").asText(null);
             JsonNode payload = envelope.path("payload");
 
+            MdcHelper.putTraceId(envelope.path("traceId").asText(null));
+            MdcHelper.ensureTraceId();
             MdcHelper.putAk(ak);
             MdcHelper.putSessionId(sessionId);
             MdcHelper.putScenario("ss-relay-" + type);
 
             routeRelayReceiveCount.incrementAndGet();
-            log.info("[ENTRY] GatewayMessageRouter.handleSsRelayMessage: type={}, sessionId={}, ak={}",
+            logRouteInfo(type, "[ENTRY] GatewayMessageRouter.handleSsRelayMessage: type={}, sessionId={}, ak={}",
                     type, sessionId, ak);
 
             dispatchLocally(type, sessionId, ak, userId, payload);
 
-            log.info("[EXIT] GatewayMessageRouter.handleSsRelayMessage: type={}, sessionId={}",
+            logRouteInfo(type, "[EXIT] GatewayMessageRouter.handleSsRelayMessage: type={}, sessionId={}",
                     type, sessionId);
         } catch (Exception e) {
             log.error("[ERROR] GatewayMessageRouter.handleSsRelayMessage: error={}", e.getMessage(), e);
@@ -378,11 +380,11 @@ public class GatewayMessageRouter {
 
         // Non-session-affinity messages (agent_online, agent_offline, session_created): always process locally
         if (sessionId == null) {
-            log.info("[ENTRY] GatewayMessageRouter.route: type={}, sessionId=null, ak={}, userId={}",
+            logRouteInfo(type, "[ENTRY] GatewayMessageRouter.route: type={}, sessionId=null, ak={}, userId={}",
                     type, ak, userId);
             routeLocalCount.incrementAndGet();
             dispatchLocally(type, sessionId, ak, userId, node);
-            log.info("[EXIT] GatewayMessageRouter.route: type={}, sessionId=null", type);
+            logRouteInfo(type, "[EXIT] GatewayMessageRouter.route: type={}, sessionId=null", type);
             return;
         }
 
@@ -391,11 +393,11 @@ public class GatewayMessageRouter {
 
         // Case 1: This instance is the owner → process locally
         if (instanceId.equals(ownerInstance)) {
-            log.info("[ENTRY] GatewayMessageRouter.route: type={}, sessionId={}, ak={}, strategy=local_owner",
+            logRouteInfo(type, "[ENTRY] GatewayMessageRouter.route: type={}, sessionId={}, ak={}, strategy=local_owner",
                     type, sessionId, ak);
             routeLocalCount.incrementAndGet();
             dispatchLocally(type, sessionId, ak, userId, node);
-            log.info("[EXIT] GatewayMessageRouter.route: type={}, sessionId={}", type, sessionId);
+            logRouteInfo(type, "[EXIT] GatewayMessageRouter.route: type={}, sessionId={}", type, sessionId);
             return;
         }
 
@@ -406,7 +408,7 @@ public class GatewayMessageRouter {
             long subscribers = redisMessageBroker.publishToSsRelay(ownerInstance, rawMessage);
             if (subscribers > 0) {
                 routeRelayCount.incrementAndGet();
-                log.info("[EXIT] GatewayMessageRouter.route: type={}, sessionId={}, strategy=relay_to_{}",
+                logRouteInfo(type, "[EXIT] GatewayMessageRouter.route: type={}, sessionId={}, strategy=relay_to_{}",
                         type, sessionId, ownerInstance);
                 return; // relay succeeded
             }
@@ -423,10 +425,10 @@ public class GatewayMessageRouter {
                 boolean claimed = sessionRouteService.ensureRouteOwnership(sessionId, ak, userId);
                 if (claimed) {
                     takeoverCount.incrementAndGet();
-                    log.info("[ENTRY] GatewayMessageRouter.route: type={}, sessionId={}, strategy=auto_claim",
+                    logRouteInfo(type, "[ENTRY] GatewayMessageRouter.route: type={}, sessionId={}, strategy=auto_claim",
                             type, sessionId);
                     dispatchLocally(type, sessionId, ak, userId, node);
-                    log.info("[EXIT] GatewayMessageRouter.route: type={}, sessionId={}", type, sessionId);
+                    logRouteInfo(type, "[EXIT] GatewayMessageRouter.route: type={}, sessionId={}", type, sessionId);
                     return;
                 }
             } else {
@@ -434,10 +436,10 @@ public class GatewayMessageRouter {
                 boolean taken = sessionRouteService.tryTakeover(sessionId, ownerInstance, instanceId);
                 if (taken) {
                     takeoverCount.incrementAndGet();
-                    log.info("[ENTRY] GatewayMessageRouter.route: type={}, sessionId={}, strategy=takeover_from_{}",
+                    logRouteInfo(type, "[ENTRY] GatewayMessageRouter.route: type={}, sessionId={}, strategy=takeover_from_{}",
                             type, sessionId, ownerInstance);
                     dispatchLocally(type, sessionId, ak, userId, node);
-                    log.info("[EXIT] GatewayMessageRouter.route: type={}, sessionId={}", type, sessionId);
+                    logRouteInfo(type, "[EXIT] GatewayMessageRouter.route: type={}, sessionId={}", type, sessionId);
                     return;
                 }
             }
@@ -447,17 +449,17 @@ public class GatewayMessageRouter {
             if (winner != null && !instanceId.equals(winner)) {
                 String rawMessage = serializeRelayMessage(type, sessionId, ak, userId, node);
                 redisMessageBroker.publishToSsRelay(winner, rawMessage);
-                log.info("[EXIT] GatewayMessageRouter.route: type={}, sessionId={}, strategy=forward_to_winner_{}",
+                logRouteInfo(type, "[EXIT] GatewayMessageRouter.route: type={}, sessionId={}, strategy=forward_to_winner_{}",
                         type, sessionId, winner);
                 return;
             }
             // Winner is this instance (race condition) → process locally
             if (instanceId.equals(winner)) {
                 routeLocalCount.incrementAndGet();
-                log.info("[ENTRY] GatewayMessageRouter.route: type={}, sessionId={}, strategy=won_race",
+                logRouteInfo(type, "[ENTRY] GatewayMessageRouter.route: type={}, sessionId={}, strategy=won_race",
                         type, sessionId);
                 dispatchLocally(type, sessionId, ak, userId, node);
-                log.info("[EXIT] GatewayMessageRouter.route: type={}, sessionId={}", type, sessionId);
+                logRouteInfo(type, "[EXIT] GatewayMessageRouter.route: type={}, sessionId={}", type, sessionId);
                 return;
             }
         }
@@ -482,6 +484,14 @@ public class GatewayMessageRouter {
             case "im_push" -> handleImPush(sessionId, node);
             default -> log.warn("[SKIP] GatewayMessageRouter.route: reason=unknown_type, type={}", type);
         }
+    }
+
+    private void logRouteInfo(String type, String format, Object... args) {
+        if ("tool_event".equals(type)) {
+            log.debug(format, args);
+            return;
+        }
+        log.info(format, args);
     }
 
     /**
@@ -531,6 +541,13 @@ public class GatewayMessageRouter {
             envelope.put("type", type);
             envelope.put("ak", ak);
             envelope.put("userId", userId);
+            String traceId = node.path("traceId").asText(null);
+            if (traceId != null && !traceId.isBlank()) {
+                MdcHelper.putTraceId(traceId);
+            } else {
+                traceId = MdcHelper.ensureTraceId();
+            }
+            envelope.put("traceId", traceId);
             if (sessionId != null) {
                 envelope.put("sessionId", sessionId);
             }
@@ -542,7 +559,7 @@ public class GatewayMessageRouter {
         }
     }
 
-    /** 处理 tool_event：翻译事件、区分用户/助手消息、检测上下文溢出。 */
+    /** Handles tool_event by translating, filtering, and routing stream messages. */
     private void handleToolEvent(String sessionId, String ak, String userId, JsonNode node) {
         if (sessionId == null) {
             log.warn("tool_event missing sessionId, agentId={}, raw keys={}",
@@ -584,14 +601,12 @@ public class GatewayMessageRouter {
                     strategy.getScope());
             return;
         }
-
         // 注入 subagent 字段（Plugin 层映射重写后附加的）
         JsonNode subagentNode = node.path("subagentSessionId");
         if (!subagentNode.isMissingNode() && !subagentNode.isNull()) {
             msg.setSubagentSessionId(subagentNode.asText());
             msg.setSubagentName(node.path("subagentName").asText(null));
         }
-
         if (completedSessions.getIfPresent(sessionId) != null
                 && !StreamMessage.Types.QUESTION.equals(msg.getType())
                 && !StreamMessage.Types.PERMISSION_ASK.equals(msg.getType())

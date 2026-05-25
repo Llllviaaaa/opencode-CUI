@@ -152,7 +152,7 @@ public class RedisMessageBroker {
     private void publishMessage(String channel, String message) {
         try {
             redisTemplate.convertAndSend(channel, message);
-            log.info("Published to Redis channel {}", channel);
+            log.debug("Published to Redis channel {}", channel);
         } catch (Exception e) {
             log.error("Failed to publish to Redis channel {}: {}", channel, e.getMessage(), e);
         }
@@ -170,7 +170,7 @@ public class RedisMessageBroker {
                 }
                 handler.accept(json);
 
-                log.info("Received from Redis channel {}", channel);
+                log.debug("Received from Redis channel {}", channel);
             } catch (Exception e) {
                 log.error("Failed to process message from channel {}: {}",
                         channel, e.getMessage(), e);
@@ -429,7 +429,7 @@ public class RedisMessageBroker {
         String channel = SS_RELAY_CHANNEL_PREFIX + targetInstanceId;
         try {
             Long receivers = redisTemplate.convertAndSend(channel, message);
-            log.info("Published to SS relay channel: target={}, receivers={}", targetInstanceId, receivers);
+            log.debug("Published to SS relay channel: target={}, receivers={}", targetInstanceId, receivers);
             return receivers != null ? receivers : 0;
         } catch (Exception e) {
             log.error("Failed to publish to SS relay channel: target={}, error={}",
@@ -471,7 +471,7 @@ public class RedisMessageBroker {
         String channel = SS_EXTERNAL_RELAY_CHANNEL_PREFIX + targetInstanceId;
         try {
             Long receivers = redisTemplate.convertAndSend(channel, message);
-            log.info("Published to external relay channel: target={}, sameNodeReceivers={}",
+            log.debug("Published to external relay channel: target={}, sameNodeReceivers={}",
                     targetInstanceId, receivers);
             return receivers != null ? receivers : 0L;
         } catch (Exception e) {
@@ -497,7 +497,7 @@ public class RedisMessageBroker {
         String channel = SS_EXTERNAL_RELAY_CHANNEL_PREFIX + targetInstanceId;
         try {
             Long sameNodeReceivers = redisTemplate.convertAndSend(channel, message);
-            log.info("Published to external relay channel: target={}, sameNodeReceivers={}",
+            log.debug("Published to external relay channel: target={}, sameNodeReceivers={}",
                     targetInstanceId, sameNodeReceivers);
             return true;
         } catch (Exception e) {

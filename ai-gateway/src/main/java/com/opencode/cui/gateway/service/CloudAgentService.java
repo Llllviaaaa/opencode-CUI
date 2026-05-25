@@ -3,6 +3,8 @@ package com.opencode.cui.gateway.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.gateway.config.CloudTimeoutProperties;
+import com.opencode.cui.gateway.logging.GatewayStreamEventLogHelper;
+import com.opencode.cui.gateway.logging.MdcHelper;
 import com.opencode.cui.gateway.model.AssistantInstanceInfo;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionContext;
@@ -300,6 +302,7 @@ public class CloudAgentService {
         try {
             cloudProtocolClient.connect(protocol, context, lifecycle,
                     event -> {
+                        String rawPayload = rawCloudPayload(event);
                         // 注入路由上下文
                         event.setAk(ak);
                         event.setUserId(invokeMessage.getUserId());
@@ -348,7 +351,15 @@ public class CloudAgentService {
                         }
 
                         if (errorSent.get()) return;
-                        onRelay.accept(event);
+                        var previousMdc = MdcHelper.snapshot();
+                        try {
+                            MdcHelper.fromGatewayMessage(event);
+                            MdcHelper.putScenario("cloud-agent-stream-rx");
+                            GatewayStreamEventLogHelper.inbound(log, "gw.cloud_agent", "received", rawPayload);
+                            onRelay.accept(event);
+                        } finally {
+                            MdcHelper.restore(previousMdc);
+                        }
                     },
                     error -> {
                         log.error("[CLOUD_AGENT] Cloud connection error: ak={}, traceId={}, error={}",
@@ -370,6 +381,21 @@ public class CloudAgentService {
         if (eventType.endsWith(".delta")) return eventType.substring(0, eventType.length() - 6);
         if (eventType.endsWith(".done")) return eventType.substring(0, eventType.length() - 5);
         return eventType;
+    }
+
+    private static String rawCloudPayload(GatewayMessage event) {
+        if (event == null) {
+            return null;
+        }
+        JsonNode eventNode = event.getEvent();
+        if (eventNode != null && !eventNode.isMissingNode() && !eventNode.isNull()) {
+            return eventNode.toString();
+        }
+        JsonNode payload = event.getPayload();
+        if (payload != null && !payload.isMissingNode() && !payload.isNull()) {
+            return payload.toString();
+        }
+        return String.valueOf(event);
     }
 
     /**

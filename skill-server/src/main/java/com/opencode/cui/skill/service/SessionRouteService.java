@@ -136,7 +136,7 @@ public class SessionRouteService {
             // Key exists — check if we are the owner
             String existingOwner = redisTemplate.opsForValue().get(key);
             boolean isMine = instanceId.equals(existingOwner);
-            log.info("ensureRouteOwnership existing owner: sessionId={}, owner={}, isMine={}",
+            log.debug("ensureRouteOwnership existing owner: sessionId={}, owner={}, isMine={}",
                     sessionId, existingOwner, isMine);
             return isMine;
         } catch (Exception e) {
@@ -162,9 +162,9 @@ public class SessionRouteService {
         try {
             String owner = redisTemplate.opsForValue().get(SESSION_CACHE_PREFIX + welinkSessionId);
             if (owner != null) {
-                log.info("getOwnerInstance hit: welinkSessionId={}, owner={}", welinkSessionId, owner);
+                log.debug("getOwnerInstance hit: welinkSessionId={}, owner={}", welinkSessionId, owner);
             } else {
-                log.info("getOwnerInstance miss: welinkSessionId={}", welinkSessionId);
+                log.debug("getOwnerInstance miss: welinkSessionId={}", welinkSessionId);
             }
             return owner;
         } catch (Exception e) {
