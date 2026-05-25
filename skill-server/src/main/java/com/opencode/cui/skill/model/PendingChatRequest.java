@@ -55,14 +55,13 @@ import java.util.List;
  * }</pre>
  *
  * <p><strong>降级路径</strong>：当上下文不全（如 {@code rebuildFromStoredUserMessage} 仅有 text + session）时，
- * 通过 {@link #fromSessionFallback(SkillSession, String)} 用 session 反查 owner / businessSessionId 兜底；
- * sender 退化为 owner、businessExtParam = null，businessSessionDomain / businessSessionType 从
- * {@code session.getBusinessSession*()} 取值。fallback 之前会校验 {@code assistantAccount} / {@code userId} 非空，
- * 缺失即抛 {@link IllegalArgumentException}，避免后续云端 fast-fail，参见 PRD Codex Review Major M5。
+ * 仅 direct / miniapp 可通过 {@link #fromSessionFallback(SkillSession, String)} 用 session 反查 sender；
+ * IM group 不允许从 {@code session.userId} 推断发送人。fallback 之前会校验 {@code assistantAccount} /
+ * {@code userId} 非空，缺失即抛 {@link IllegalArgumentException}，避免后续云端 fast-fail，参见 PRD Codex Review Major M5。
  *
  * @param text                  用户输入的纯文本 prompt
  * @param assistantAccount      助手账号（信封层必填，下游云端策略消费）
- * @param sendUserAccount       实际发送者账号（群聊真实 sender；单聊场景为 owner）
+ * @param sendUserAccount       实际发送者账号（优先真实 sender；降级路径只能从 session 反查）
  * @param imGroupId             群聊业务会话 ID（== {@code SkillSession.businessSessionId}）；单聊场景为 null；
  *                              亦作为 platformExtParam.businessSessionId 来源
  * @param messageId             消息 ID（首次对话用毫秒时间戳即可，无业务幂等语义）
@@ -161,7 +160,7 @@ public record PendingChatRequest(
      * <p><strong>规则</strong>：
      * <ul>
      *   <li>{@code assistantAccount} = {@code session.getAssistantAccount()}</li>
-     *   <li>{@code sendUserAccount}  = {@code session.getUserId()}（owner，群聊语义降级）</li>
+     *   <li>{@code sendUserAccount}  = {@code session.getUserId()}（仅 direct / miniapp 降级可用）</li>
      *   <li>{@code imGroupId}        = {@code session.isImGroupSession()} ?
      *       <strong>{@code session.getBusinessSessionId()}</strong> : null
      *       （绝对不能误用 {@code session.getId()}：那是 skill 主键，不是 IM 业务 ID。
@@ -174,7 +173,8 @@ public record PendingChatRequest(
      *       其它路径 null）</li>
      * </ul>
      *
-     * <p><strong>校验</strong>：{@code session.getAssistantAccount()} 或 {@code session.getUserId()} 任一空白即抛
+     * <p><strong>校验</strong>：IM group 直接拒绝；{@code session.getAssistantAccount()} 或
+     * {@code session.getUserId()} 任一空白即抛
      * {@link IllegalArgumentException}，调用方应 catch 并记 ERROR + 保留 pending 供人工排查，
      * 不要静默 fallback 后让下游云端策略 fast-fail。参见 PRD Codex Review Major M5。
      *
@@ -190,6 +190,12 @@ public record PendingChatRequest(
             throw new IllegalArgumentException("PendingChatRequest.fromSessionFallback: session must not be null");
         }
         String assistantAccount = session.getAssistantAccount();
+        if (session.isImGroupSession()) {
+            throw new IllegalArgumentException(
+                    "PendingChatRequest.fromSessionFallback: group session cannot infer sender from session.userId,"
+                            + " assistantAccount=" + assistantAccount
+                            + ", skillSessionId=" + session.getId());
+        }
         String userId = session.getUserId();
         if (isBlank(assistantAccount) || isBlank(userId)) {
             throw new IllegalArgumentException(

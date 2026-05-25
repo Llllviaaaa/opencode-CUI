@@ -8,7 +8,6 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -287,8 +286,8 @@ class PendingChatRequestTest {
     class FromSessionFallback {
 
         @Test
-        @DisplayName("群聊 session：imGroupId == businessSessionId，sender == owner userId")
-        void groupSession_imGroupIdFromBusinessSessionId() {
+        @DisplayName("IM group session: fallback must not infer sender from session.userId")
+        void groupSession_rejectsSessionUserIdFallback() {
             SkillSession session = buildSession(
                     /* id */ 9999L,
                     /* userId (owner) */ "owner-welink-001",
@@ -297,20 +296,9 @@ class PendingChatRequestTest {
                     /* type */ SkillSession.SESSION_TYPE_GROUP,
                     /* businessSessionId */ "group-real-id-777");
 
-            PendingChatRequest req = PendingChatRequest.fromSessionFallback(session, "fallback text");
-
-            assertEquals("fallback text", req.text());
-            assertEquals("assist-01", req.assistantAccount());
-            assertEquals("owner-welink-001", req.sendUserAccount());
-            assertEquals("group-real-id-777", req.imGroupId());
-            assertEquals(SkillSession.DOMAIN_IM, req.businessSessionDomain(),
-                    "PR2: businessSessionDomain must come from session.getBusinessSessionDomain()");
-            assertEquals(SkillSession.SESSION_TYPE_GROUP, req.businessSessionType(),
-                    "PR2: businessSessionType must come from session.getBusinessSessionType()");
-            assertNotNull(req.messageId());
-            assertFalse(req.messageId().isBlank());
-            assertNull(req.businessExtParam());
-            assertNull(req.bizRobotTag());
+            IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                    () -> PendingChatRequest.fromSessionFallback(session, "fallback text"));
+            assertTrue(ex.getMessage().contains("group session cannot infer sender"));
         }
 
         @Test
@@ -335,9 +323,8 @@ class PendingChatRequestTest {
         }
 
         @Test
-        @DisplayName("回归 M3：imGroupId 取的是 businessSessionId，不是 session.getId()")
-        void groupSession_imGroupIdMustNotBeSkillPrimaryKey() {
-            // 关键：故意让 id (skill 主键) 与 businessSessionId 不同，确认 fallback 取后者。
+        @DisplayName("IM group session: even with businessSessionId, fallback is rejected")
+        void groupSession_businessSessionIdStillRejected() {
             Long skillPrimaryKey = 123456789L;
             String businessGroupId = "im-group-9999";
 
@@ -349,12 +336,8 @@ class PendingChatRequestTest {
                     SkillSession.SESSION_TYPE_GROUP,
                     businessGroupId);
 
-            PendingChatRequest req = PendingChatRequest.fromSessionFallback(session, "t");
-
-            assertEquals(businessGroupId, req.imGroupId(),
-                    "imGroupId must be businessSessionId, not skill primary key");
-            assertNotEquals(String.valueOf(skillPrimaryKey), req.imGroupId(),
-                    "regression: imGroupId must not equal SkillSession.getId()");
+            assertThrows(IllegalArgumentException.class,
+                    () -> PendingChatRequest.fromSessionFallback(session, "t"));
         }
 
         @Test

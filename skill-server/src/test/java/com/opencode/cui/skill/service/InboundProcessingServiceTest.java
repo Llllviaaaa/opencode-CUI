@@ -398,14 +398,14 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-new", "assist-001",
-                null, "first msg", "text", null, null, "IM", null);
+                "user-first", "first msg", "text", null, null, "IM", null);
 
         assertTrue(result.success());
         verify(sessionManager).createSessionAsync(
                 eq("im"), eq("direct"), eq("dm-new"),
                 identityMatching(AssistantSessionIdentity.RouteKind.LOCAL,
                         "ak-001", "owner-001", "assist-001", "ak-001", "assist-001"),
-                isNull(), eq("first msg"), isNull());
+                eq("user-first"), eq("first msg"), isNull());
         verify(gatewayRelayService, never()).sendInvokeToGateway(any());
     }
 
@@ -419,7 +419,7 @@ class InboundProcessingServiceTest {
         when(businessStrategy.requiresOnlineCheck()).thenReturn(false);
 
         when(resolverService.resolveWithStatus("assist-001"))
-                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, null, "owner-001",
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, null, null,
                         "assist-001", true, "tag-001"));
         when(assistantInfoService.getAssistantInfo(null, "assist-001")).thenReturn(bizInfo);
         when(scopeDispatcher.getStrategy("im", "group", bizInfo)).thenReturn(businessStrategy);
@@ -436,7 +436,7 @@ class InboundProcessingServiceTest {
         verify(sessionManager).createSessionAsync(
                 eq("im"), eq("group"), eq("group-001"),
                 identityMatching(AssistantSessionIdentity.RouteKind.REMOTE,
-                        null, "owner-001", "assist-001", null, "assist-001"),
+                        null, null, "assist-001", null, "assist-001"),
                 eq("sender-001"), eq("first msg"), isNull());
         verify(gatewayRelayService, never()).sendInvokeToGateway(any());
     }
@@ -509,6 +509,8 @@ class InboundProcessingServiceTest {
         assertTrue(result.success());
         ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
         verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
+        assertEquals("owner-001", captor.getValue().userId(),
+                "direct chat invoke userId should use assistant owner for local routing");
         JsonNode payload = objectMapper.readTree(captor.getValue().payload());
         assertEquals("user-non-owner", payload.get("sendUserAccount").asText(),
                 "direct chat: 非 owner 的真实 senderUserAccount 必须直接透传，不能被覆盖为 owner");
@@ -638,6 +640,8 @@ class InboundProcessingServiceTest {
         ArgumentCaptor<InvokeCommand> captor = ArgumentCaptor.forClass(InvokeCommand.class);
         verify(gatewayRelayService).sendInvokeToGateway(captor.capture());
         assertEquals(GatewayActions.QUESTION_REPLY, captor.getValue().action());
+        assertEquals("owner-001", captor.getValue().userId(),
+                "direct question_reply invoke userId should use assistant owner for local routing");
         assertTrue(captor.getValue().payload().contains("yes"));
         assertTrue(captor.getValue().payload().contains("tc-001"));
         assertTrue(captor.getValue().payload().contains("tool-001"));
@@ -717,6 +721,8 @@ class InboundProcessingServiceTest {
         ArgumentCaptor<InvokeCommand> invokeCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
         verify(gatewayRelayService).sendInvokeToGateway(invokeCaptor.capture());
         assertEquals(GatewayActions.PERMISSION_REPLY, invokeCaptor.getValue().action());
+        assertEquals("owner-001", invokeCaptor.getValue().userId(),
+                "direct permission_reply invoke userId should use assistant owner for local routing");
         assertTrue(invokeCaptor.getValue().payload().contains("perm-001"));
         assertTrue(invokeCaptor.getValue().payload().contains("allow"));
         JsonNode permissionPayload = objectMapper.readTree(invokeCaptor.getValue().payload());
@@ -1034,7 +1040,7 @@ class InboundProcessingServiceTest {
         when(assistantInfoService.getAssistantInfo(null, "assist-001")).thenReturn(bizInfo);
 
         when(resolverService.resolveWithStatus("assist-001"))
-                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, null, "owner-001",
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, null, null,
                         "assist-001", true, "tag-001"));
         SkillSession session = buildReadySession();
         session.setAk(null);

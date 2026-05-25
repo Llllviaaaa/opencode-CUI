@@ -192,7 +192,7 @@ public class InboundProcessingService {
         }
 
         // 情况 B：session 存在但 toolSessionId 尚未就绪
-        if (session.getToolSessionId() == null || session.getToolSessionId().isBlank()) {
+        if (!hasReadyToolSession(session)) {
             AssistantInfo info = identity.defaultAssistant()
                     ? null
                     : assistantInfoService.getAssistantInfo(ak, assistantAccount);
@@ -269,6 +269,10 @@ public class InboundProcessingService {
                 senderUserAccount, businessDomain, sessionType, sessionId,
                 inboundSource, content, appendToPending,
                 businessExtParam, bizRobotTag);
+    }
+
+    private boolean hasReadyToolSession(SkillSession session) {
+        return session.getToolSessionId() != null && !session.getToolSessionId().isBlank();
     }
 
     /**
@@ -428,7 +432,8 @@ public class InboundProcessingService {
         //   business scope 时 allowedSlashCommands=null（caller null + 下游 BusinessScopeStrategy 用
         //   4 参 builder 自然不下发）—— 双重保险。
         gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
-                ak, ownerWelinkId, String.valueOf(session.getId()),
+                ak, ownerWelinkId,
+                String.valueOf(session.getId()),
                 GatewayActions.CHAT,
                 PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields),
                 suppressReply,
@@ -503,7 +508,8 @@ public class InboundProcessingService {
         payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
         payloadFields.put("businessExtParam", businessExtParam);
         gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
-                ak, ownerWelinkId, String.valueOf(session.getId()),
+                ak, ownerWelinkId,
+                String.valueOf(session.getId()),
                 GatewayActions.QUESTION_REPLY,
                 PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields),
                 null,
@@ -577,7 +583,8 @@ public class InboundProcessingService {
         payloadFields.put("messageId", String.valueOf(System.currentTimeMillis()));
         payloadFields.put("businessExtParam", businessExtParam);
         gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
-                ak, ownerWelinkId, String.valueOf(session.getId()),
+                ak, ownerWelinkId,
+                String.valueOf(session.getId()),
                 GatewayActions.PERMISSION_REPLY,
                 PayloadBuilder.buildPayloadWithObjects(objectMapper, payloadFields),
                 null,

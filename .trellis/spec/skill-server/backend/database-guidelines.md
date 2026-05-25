@@ -212,7 +212,7 @@ private static final String SS_EXTERNAL_RELAY_CHANNEL_PREFIX = "ss:external-rela
 | `conn:ak:{ak}` | AK 所在 gateway instance | `RedisMessageBroker.java:223-235` |
 | `ss:tool-session:{toolSessionId}` | toolSessionId -> sessionId 映射 | `RedisMessageBroker.java:239-251` |
 | `ss:stream-seq:{sessionId}` | 跨实例传输序号 | `RedisMessageBroker.java:255-260` |
-| `assistantAccount:status:{account}` | 助手 existence 三态缓存；value 为 JSON `{status, ak?, ownerWelinkId?, assistantAccount?, remote?, businessTag?}`；远端助手允许 `ak` 为空；双 TTL：EXISTS 300s / NOT_EXISTS 60s / UNKNOWN 不写 | `AssistantAccountResolverService.java` |
+| `assistantAccount:status:{account}` | 助手 existence 三态缓存；value 为 JSON `{status, ak?, ownerWelinkId?, assistantAccount?, remote?, businessTag?}`；`ownerWelinkId` 为兼容字段，语义是本地助手 `createdBy` owner；远端助手允许 `ak` 为空且 owner 为空；双 TTL：EXISTS 300s / NOT_EXISTS 60s / UNKNOWN 不写 | `AssistantAccountResolverService.java` |
 | ~~`assistantAccount:ak:{account}`~~ | **DEPRECATED**：已合并到 `assistantAccount:status:*`，旧 key 自然过期失效，不再读写 | — |
 | ~~`assistantAccount:owner:{account}`~~ | **DEPRECATED**：已合并到 `assistantAccount:status:*`，旧 key 自然过期失效，不再读写 | — |
 

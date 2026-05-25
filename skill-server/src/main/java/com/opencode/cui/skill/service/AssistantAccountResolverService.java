@@ -177,8 +177,8 @@ public class AssistantAccountResolverService {
 
         String ak = info.effectiveAk();
         String resolvedAccount = info.effectivePartnerAccount(fallbackAssistantAccount);
-        String ownerWelinkId = firstNonBlank(info.getOwnerWelinkId(), resolvedAccount);
         boolean remote = info.businessRoutableAssistant();
+        String ownerWelinkId = remote ? null : info.effectiveOwnerUserId();
 
         if (!remote && (ak == null || ak.isBlank())) {
             log.warn("[EXT_CALL] AssistantResolve local_missing_ak: decision=unknown, source=instance, assistantAccount={}",
@@ -223,10 +223,20 @@ public class AssistantAccountResolverService {
             if (statusStr == null) return null;
             if ("EXISTS".equals(statusStr)) {
                 String ak = node.path("ak").asText(null);
-                String owner = node.path("ownerWelinkId").asText(null);
+                String owner = firstNonBlank(
+                        node.path("createdBy").asText(null),
+                        node.path("ownerWelinkId").asText(null));
                 String assistantAccount = node.path("assistantAccount").asText(null);
                 boolean remote = node.path("remote").asBoolean(false);
                 String businessTag = node.path("businessTag").asText(null);
+                if (remote) {
+                    owner = null;
+                }
+                if (owner != null && !owner.isBlank()
+                        && assistantAccount != null && owner.equals(assistantAccount)) {
+                    log.warn("AssistantResolve cache dirty: reason=owner_equals_assistantAccount, key={}", cacheKey);
+                    return null;
+                }
                 if (!remote && (ak == null || ak.isBlank() || owner == null || owner.isBlank())) {
                     return null; // 脏缓存，当未命中
                 }
@@ -275,12 +285,8 @@ public class AssistantAccountResolverService {
         }
     }
 
-    private static String firstNonBlank(String... values) {
-        for (String v : values) {
-            if (v != null && !v.isBlank()) {
-                return v;
-            }
-        }
-        return null;
+    private static String firstNonBlank(String first, String second) {
+        return first != null && !first.isBlank() ? first : second;
     }
+
 }

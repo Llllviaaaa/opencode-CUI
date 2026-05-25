@@ -26,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -129,6 +130,8 @@ class ImSessionManagerTest {
         sessionManager.createSessionAsync("im", "direct", "dm-001", "ak-personal",
                 "owner-001", "assist-001", "user-real-1", "你好", null);
 
+        verify(sessionService).createSession(eq("user-real-1"), eq("ak-personal"), anyString(),
+                eq("im"), eq("direct"), eq("dm-001"), eq("assist-001"));
         ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
         verify(gatewayRelayService).rebuildToolSession(eq("1001"), eq(created), captor.capture());
         PendingChatRequest req = captor.getValue();
@@ -150,6 +153,8 @@ class ImSessionManagerTest {
         sessionManager.createSessionAsync("im", "group", "grp-555", "ak-personal",
                 "owner-002", "assist-002", "real-sender-99", "群消息", null);
 
+        verify(sessionService).createSession(isNull(), eq("ak-personal"), anyString(),
+                eq("im"), eq("group"), eq("grp-555"), eq("assist-002"));
         ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
         verify(gatewayRelayService).rebuildToolSession(eq("1002"), eq(created), captor.capture());
         PendingChatRequest req = captor.getValue();
@@ -169,6 +174,8 @@ class ImSessionManagerTest {
         sessionManager.createSessionAsync("im", "direct", "dm-003", "ak-personal",
                 "owner-003", "assist-003", "user-non-owner", "单聊非 owner", null);
 
+        verify(sessionService).createSession(eq("user-non-owner"), eq("ak-personal"), anyString(),
+                eq("im"), eq("direct"), eq("dm-003"), eq("assist-003"));
         ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
         verify(gatewayRelayService).rebuildToolSession(eq("1003"), eq(created), captor.capture());
         PendingChatRequest req = captor.getValue();
@@ -186,7 +193,7 @@ class ImSessionManagerTest {
         ObjectMapper om = new ObjectMapper();
         JsonNode ext = om.readTree("{\"topicId\":42}");
         sessionManager.createSessionAsync("im", "direct", "dm-004", "ak-personal",
-                "owner-004", "assist-004", null, "带 ext 的消息", ext);
+                "owner-004", "assist-004", "user-004", "带 ext 的消息", ext);
 
         ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
         verify(gatewayRelayService).rebuildToolSession(eq("1004"), eq(created), captor.capture());
@@ -203,7 +210,7 @@ class ImSessionManagerTest {
 
         // 入参 prompt 为空白 — 不应构造 PendingChatRequest
         sessionManager.createSessionAsync("im", "direct", "dm-005", "ak-personal",
-                "owner-005", "assist-005", null, "  ", null);
+                "owner-005", "assist-005", "user-005", "  ", null);
 
         ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
         verify(gatewayRelayService).rebuildToolSession(eq("1005"), eq(created), captor.capture());
@@ -217,7 +224,7 @@ class ImSessionManagerTest {
         stubPersonalScope("ak-personal");
 
         sessionManager.createSessionAsync("im", "direct", "dm-006", "ak-personal",
-                "owner-006", "assist-006", null, null, null);
+                "owner-006", "assist-006", "user-006", null, null);
 
         ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
         verify(gatewayRelayService).rebuildToolSession(eq("1006"), eq(created), captor.capture());
@@ -233,7 +240,7 @@ class ImSessionManagerTest {
         stubBusinessScope("ak-biz", "cloud-fresh-uuid");
 
         sessionManager.createSessionAsync("im", "direct", "dm-biz", "ak-biz",
-                "owner-biz", "assist-biz", null, "你好", null);
+                "owner-biz", "assist-biz", "sender-biz", "你好", null);
 
         // 关键：business 路径不应调任何 rebuildToolSession 重载
         verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(String.class));
@@ -247,8 +254,10 @@ class ImSessionManagerTest {
         verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
         InvokeCommand cmd = cmdCaptor.getValue();
         assertEquals(GatewayActions.CHAT, cmd.action());
+        assertEquals("owner-biz", cmd.userId());
         assertTrue(cmd.payload().contains("cloud-fresh-uuid"));
         assertTrue(cmd.payload().contains("assist-biz"));
+        assertTrue(cmd.payload().contains("\"sendUserAccount\":\"sender-biz\""));
     }
 
     @Test
@@ -258,7 +267,7 @@ class ImSessionManagerTest {
         stubBusinessScope("ak-biz", "cloud-uuid-2");
 
         sessionManager.createSessionAsync("im", "direct", "dm-biz", "ak-biz",
-                "owner-biz", "assist-biz", null, "你好", null);
+                "owner-biz", "assist-biz", "sender-biz", "你好", null);
 
         verify(rebuildService, never()).appendPendingMessage(anyString(), any(PendingChatRequest.class));
     }
@@ -298,7 +307,7 @@ class ImSessionManagerTest {
         SkillSession existing = new SkillSession();
         existing.setId(4001L);
         existing.setAk(null);
-        existing.setUserId("owner-remote");
+        existing.setUserId(null);
         existing.setAssistantAccount("assist-remote");
         existing.setBusinessSessionDomain("im");
         existing.setBusinessSessionType("group");
@@ -314,7 +323,7 @@ class ImSessionManagerTest {
         when(businessStrategy.generateToolSessionId()).thenReturn("cloud-remote");
 
         sessionManager.createSessionAsync("im", "group", "group-001",
-                new AssistantSessionIdentity(null, "owner-remote", "assist-remote",
+                new AssistantSessionIdentity(null, null, "assist-remote",
                         AssistantSessionIdentity.RouteKind.REMOTE),
                 "sender-001", "你好", null);
 
@@ -327,7 +336,7 @@ class ImSessionManagerTest {
         verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
         InvokeCommand cmd = cmdCaptor.getValue();
         assertNull(cmd.ak());
-        assertEquals("owner-remote", cmd.userId());
+        assertNull(cmd.userId());
         assertEquals("4001", cmd.sessionId());
         assertEquals("assist-remote", cmd.assistantAccount());
         assertTrue(cmd.payload().contains("\"assistantAccount\":\"assist-remote\""));
