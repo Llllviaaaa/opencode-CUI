@@ -237,6 +237,46 @@ function mergeMessageParts(existingParts: MessagePart[], incomingParts: MessageP
   });
 }
 
+function textContentFromParts(parts: MessagePart[]): string {
+  return parts
+    .filter((part) => part.type === 'text')
+    .map((part) => part.content)
+    .join('');
+}
+
+function pruneSnapshotDuplicateParts(
+  messages: Message[],
+  canonicalMessageId: string,
+  snapshotParts: MessagePart[],
+): Message[] {
+  if (snapshotParts.length === 0) {
+    return messages;
+  }
+
+  return messages.flatMap((message) => {
+    if (message.id === canonicalMessageId || message.role !== 'assistant' || !message.parts?.length) {
+      return [message];
+    }
+
+    const remainingParts = message.parts.filter(
+      (part) => !snapshotParts.some((snapshotPart) => isSameMessagePart(part, snapshotPart)),
+    );
+    if (remainingParts.length === message.parts.length) {
+      return [message];
+    }
+    if (remainingParts.length === 0) {
+      return [];
+    }
+
+    const content = textContentFromParts(remainingParts);
+    return [{
+      ...message,
+      content: content || message.content,
+      parts: remainingParts,
+    }];
+  });
+}
+
 function isKnownStreamType(type: unknown): type is StreamMessageType {
   return typeof type === 'string' && [
     'text.delta',
@@ -726,8 +766,9 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
       const timestamp = normalizeTimestamp(msg.emittedAt ?? mainParts[0]?.emittedAt);
 
       setMessages((prev) => {
-        const existing = prev.find((message) => message.id === messageId);
-        return upsertMessage(prev, {
+        const deduped = pruneSnapshotDuplicateParts(prev, messageId, parts);
+        const existing = deduped.find((message) => message.id === messageId);
+        return upsertMessage(deduped, {
           id: messageId,
           role,
           content: content || existing?.content || '',

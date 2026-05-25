@@ -203,16 +203,28 @@ public class ActiveMessageTracker {
                 return active;
             }
 
-            existing = messageService.findBySessionIdAndMessageId(sessionId, requestedMessageId);
-            if (existing == null && canAdoptRequestedMessageId(sessionId, active, requestedMessageId)) {
-                ActiveMessageRef adopted = new ActiveMessageRef(active.dbId(), requestedMessageId, active.messageSeq());
-                activeMessages.put(sessionId, adopted);
-                applyMessageContext(msg, adopted, role);
-                log.debug("Adopted upstream message id for active streamed message: sessionId={}, dbId={}, from={}, to={}",
-                        sessionId, active.dbId(), active.protocolMessageId(), requestedMessageId);
-                return adopted;
+            if (ProtocolUtils.isGeneratedMessageId(sessionId, active.messageSeq(), active.protocolMessageId())) {
+                existing = messageService.findBySessionIdAndMessageId(sessionId, requestedMessageId);
+                if (existing == null && canAdoptRequestedMessageId(sessionId, active, requestedMessageId)) {
+                    ActiveMessageRef adopted = new ActiveMessageRef(active.dbId(), requestedMessageId, active.messageSeq());
+                    activeMessages.put(sessionId, adopted);
+                    applyMessageContext(msg, adopted, role);
+                    log.debug("Adopted upstream message id for active streamed message: sessionId={}, dbId={}, from={}, to={}",
+                            sessionId, active.dbId(), active.protocolMessageId(), requestedMessageId);
+                    return adopted;
+                }
             }
 
+            if (shouldKeepCurrentAssistantTurn(sessionId, active, msg, role)) {
+                applyMessageContext(msg, active, role);
+                log.debug("Kept active assistant turn despite upstream message id switch: sessionId={}, dbId={}, activeProtocolId={}, requestedProtocolId={}",
+                        sessionId, active.dbId(), active.protocolMessageId(), requestedMessageId);
+                return active;
+            }
+
+            if (existing == null) {
+                existing = messageService.findBySessionIdAndMessageId(sessionId, requestedMessageId);
+            }
             finalizeActiveMessage(sessionId, active, "message_id_changed");
         }
 
@@ -256,6 +268,53 @@ public class ActiveMessageTracker {
             return false;
         }
         return messageService.updateProtocolMessageId(active.dbId(), requestedMessageId);
+    }
+
+    private boolean shouldKeepCurrentAssistantTurn(Long sessionId,
+            ActiveMessageRef active,
+            StreamMessage msg,
+            String role) {
+        if (!"assistant".equals(role) || !isAssistantTurnPart(msg)) {
+            return false;
+        }
+        return !hasNewerUserMessage(sessionId, active);
+    }
+
+    private boolean isAssistantTurnPart(StreamMessage msg) {
+        if (msg == null || msg.getType() == null) {
+            return false;
+        }
+        return switch (msg.getType()) {
+            case StreamMessage.Types.TEXT_DELTA,
+                    StreamMessage.Types.TEXT_DONE,
+                    StreamMessage.Types.THINKING_DELTA,
+                    StreamMessage.Types.THINKING_DONE,
+                    StreamMessage.Types.TOOL_UPDATE,
+                    StreamMessage.Types.QUESTION,
+                    StreamMessage.Types.FILE,
+                    StreamMessage.Types.STEP_START,
+                    StreamMessage.Types.STEP_DONE,
+                    StreamMessage.Types.PERMISSION_ASK,
+                    StreamMessage.Types.PERMISSION_REPLY,
+                    StreamMessage.Types.PLANNING_DELTA,
+                    StreamMessage.Types.PLANNING_DONE,
+                    StreamMessage.Types.SEARCHING,
+                    StreamMessage.Types.SEARCH_RESULT,
+                    StreamMessage.Types.REFERENCE,
+                    StreamMessage.Types.ASK_MORE ->
+                true;
+            default -> false;
+        };
+    }
+
+    private boolean hasNewerUserMessage(Long sessionId, ActiveMessageRef active) {
+        if (sessionId == null || active == null || active.messageSeq() == null) {
+            return false;
+        }
+        SkillMessage lastUser = messageService.findLastUserMessage(sessionId);
+        return lastUser != null
+                && lastUser.getSeq() != null
+                && lastUser.getSeq() > active.messageSeq();
     }
 
     /**

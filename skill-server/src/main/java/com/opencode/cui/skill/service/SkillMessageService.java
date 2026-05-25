@@ -261,7 +261,15 @@ public class SkillMessageService {
         return updated;
     }
 
-    /** 标记消息为已完成（会话进入 IDLE 时调用）。 */
+    @Transactional(readOnly = true)
+    public SkillMessage findLastUserMessage(Long sessionId) {
+        if (sessionId == null) {
+            return null;
+        }
+        return messageRepository.findLastUserMessage(sessionId);
+    }
+
+    /** Mark a message as finished when the assistant turn closes. */
     @Transactional
     public void markMessageFinished(Long messageId) {
         messageRepository.markFinished(messageId);
