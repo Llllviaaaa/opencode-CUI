@@ -30,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -454,6 +455,34 @@ class BusinessScopeStrategyTest {
         JsonNode root = objectMapper.readTree(result);
         JsonNode cr = root.path("payload").path("cloudRequest");
         assertThat(cr.has("replyContext")).isFalse();
+    }
+
+    @Test
+    @DisplayName("buildInvoke(abort_session) sends control invoke without building cloudRequest")
+    void buildInvoke_abortSession_sendsControlInvokeWithoutCloudRequest() throws Exception {
+        when(profileRegistry.resolve(eq("app-001")))
+                .thenReturn(new CloudRequestProfile("assistant_square", defaultStrategy));
+
+        String payload = "{\"toolSessionId\":\"cloud-001\"}";
+        InvokeCommand command = new InvokeCommand(
+                "ak-1", "u-1", "1", GatewayActions.ABORT_SESSION, payload,
+                null, "miniapp", "direct", "biz-001", null, "asst-1", "asst-1");
+        AssistantInfo info = new AssistantInfo();
+        info.setAssistantScope("business");
+        info.setBusinessTag("app-001");
+
+        String result = strategy.buildInvoke(command, info);
+
+        assertNotNull(result);
+        verify(defaultStrategy, never()).build(any(CloudRequestContext.class));
+        JsonNode root = objectMapper.readTree(result);
+        assertEquals(GatewayActions.ABORT_SESSION, root.path("action").asText());
+        assertEquals("business", root.path("assistantScope").asText());
+        assertEquals("asst-1", root.path("assistantAccount").asText());
+        assertEquals("app-001", root.path("businessTag").asText());
+        assertEquals("cloud-001", root.path("payload").path("toolSessionId").asText());
+        assertEquals("assistant_square", root.path("payload").path("cloudProfile").asText());
+        assertFalse(root.path("payload").has("cloudRequest"));
     }
 
     @Test

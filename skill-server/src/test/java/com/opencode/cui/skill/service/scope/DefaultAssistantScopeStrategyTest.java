@@ -30,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -263,6 +264,30 @@ class DefaultAssistantScopeStrategyTest {
         assertNull(ctx.getReplyAnswers());
         assertNull(ctx.getReplyPermissionId());
         assertNull(ctx.getReplyResponse());
+    }
+
+    @Test
+    @DisplayName("buildInvoke(abort_session): 不构造 cloudRequest，也不需要 sendUserAccount")
+    void buildInvoke_abortSession_sendsControlInvokeWithoutCloudRequest() throws Exception {
+        ruleHit();
+
+        String payload = "{\"toolSessionId\":\"ts-1\"}";
+        InvokeCommand command = new InvokeCommand(
+                "AK_V", "u-1", "session-1", GatewayActions.ABORT_SESSION,
+                payload, null, "helpdesk", "direct");
+
+        String result = strategy.buildInvoke(command, null);
+
+        assertNotNull(result);
+        verify(defaultStrategy, never()).build(any(CloudRequestContext.class));
+        JsonNode root = objectMapper.readTree(result);
+        assertEquals(GatewayActions.ABORT_SESSION, root.path("action").asText());
+        assertEquals("business", root.path("assistantScope").asText());
+        assertEquals("ACC_V", root.path("assistantAccount").asText());
+        assertEquals("assistant_square", root.path("businessTag").asText());
+        assertEquals("ts-1", root.path("payload").path("toolSessionId").asText());
+        assertEquals("assistant_square", root.path("payload").path("cloudProfile").asText());
+        assertFalse(root.path("payload").has("cloudRequest"));
     }
 
     @Test

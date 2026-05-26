@@ -809,6 +809,86 @@ try {
 
 Registry 必须 in-memory TTL cache（5min 量级），SysConfig 不要进热路径。跨服务（SS↔GW）只共享 profile name 字符串。参考：`CloudRequestProfileRegistry`、`BusinessScopeStrategy.buildInvoke` 调用点。
 
+## 云端 abort_session 是控制帧，不构造 cloudRequest
+
+### 1. Scope / Trigger
+
+适用于 `BusinessScopeStrategy.buildInvoke(...)` 与
+`DefaultAssistantScopeStrategy.buildInvoke(...)` 处理
+`GatewayActions.ABORT_SESSION`。`abort_session` 用来通知 GW 取消已有 SSE/WebSocket
+流，不是一次新的云端请求，因此不能进入 `CloudRequestStrategy.build(...)`。
+
+### 2. Signatures
+
+- 入口：`GatewayRelayService.sendInvokeToGateway(InvokeCommand)`。
+- business scope：`BusinessScopeStrategy.buildInvoke(InvokeCommand, AssistantInfo)`。
+- default assistant scope：`DefaultAssistantScopeStrategy.buildInvoke(InvokeCommand, AssistantInfo)`。
+- GW 取消键：`payload.toolSessionId`，profile hint：`payload.cloudProfile` 或顶层 `businessTag`。
+
+### 3. Contracts
+
+当 `action == abort_session` 时，SS 只发送控制 payload：
+
+- `type=invoke`
+- `action=abort_session`
+- `assistantScope=business`
+- `payload.toolSessionId=<current toolSessionId>`
+- `payload.cloudProfile=<resolved profile name>`
+- 可选顶层 `assistantAccount`、`businessTag`、`userId`
+
+`payload.cloudRequest` 必须缺失。`abort_session` 不需要 `content`、
+`assistantAccount`、`sendUserAccount` 组成 `CloudRequestContext`，也不得触发
+`DefaultCloudRequestStrategy` / `AssistantSquareCloudRequestStrategy` 的账号 fast-fail。
+chat / question_reply / permission_reply 仍按原逻辑构造 `cloudRequest`，保持
+`sendUserAccount` 强校验。
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+| --- | --- |
+| Business cloud session abort, payload only has `toolSessionId` | Build control invoke; do not call `CloudRequestStrategy.build`. |
+| Default-assistant session abort | Inject rule `assistantAccount` for top-level routing; still omit `cloudRequest`. |
+| chat / reply missing `sendUserAccount` | Preserve existing fast-fail; do not borrow abort's relaxed behavior. |
+| `toolSessionId` missing | Emit control invoke without `payload.toolSessionId`; GW logs no connection key/no active connection. |
+
+### 5. Good / Base / Bad Cases
+
+Good:
+
+```java
+if (GatewayActions.ABORT_SESSION.equals(action)) {
+    return buildAbortInvoke(command, toolSessionId, assistantAccount, businessTag, profile);
+}
+```
+
+Base:
+
+```java
+payload.put("cloudProfile", profile.name());
+payload.put("toolSessionId", toolSessionId);
+```
+
+Bad:
+
+```java
+CloudRequestContext context = CloudRequestContext.builder()
+        .sendUserAccount(extractField(command.payload(), "sendUserAccount"))
+        .build();
+return strategy.build(context); // wrong for abort_session
+```
+
+### 6. Tests Required
+
+- `BusinessScopeStrategyTest`: `abort_session` has no `payload.cloudRequest` and never calls `CloudRequestStrategy.build`.
+- `DefaultAssistantScopeStrategyTest`: default-assistant abort does not require `sendUserAccount`.
+- `DefaultAssistantRuleE2EIntegrationTest`: rule-injected abort wire payload contains `payload.toolSessionId` and omits `payload.cloudRequest`.
+
+### 7. Wrong vs Correct
+
+Wrong: fixing abort by adding fake `sendUserAccount` / fake `content` only to satisfy cloud request validation.
+
+Correct: treat abort as a GW control frame and keep the cloud request builders reserved for real cloud callback actions.
+
 ## JSON wire format 与 Java 字段名解耦
 
 `StreamMessage` / `SendMessageRequest` / 类似跨服务 DTO 序列化 JSON 时，**wire format（JSON 字段名）是契约，Java 字段名只是内部代号**——两者绝不能耦合。

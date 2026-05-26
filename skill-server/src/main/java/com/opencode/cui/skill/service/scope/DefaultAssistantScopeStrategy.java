@@ -108,6 +108,17 @@ public class DefaultAssistantScopeStrategy implements AssistantScopeStrategy {
         // 从 command payload 提取 toolSessionId 作为 topicId
         String toolSessionId = extractField(command.payload(), "toolSessionId");
 
+        // assistantAccount：优先 payload，缺省时从 rule 注入（与 PRD D8 一致）
+        String assistantAccount = extractField(command.payload(), "assistantAccount");
+        if (isBlank(assistantAccount)) {
+            assistantAccount = rule.assistantAccount();
+        }
+
+        CloudRequestProfile profile = profileRegistry.resolve(businessTag);
+        if (GatewayActions.ABORT_SESSION.equals(action)) {
+            return buildAbortInvoke(command, toolSessionId, assistantAccount, businessTag, profile);
+        }
+
         // 取业务方扩展参数（缺省 / 非 object → null，由下方兜底为 {}）
         JsonNode businessExtParam = extractObjectField(command.payload(), "businessExtParam");
 
@@ -133,11 +144,6 @@ public class DefaultAssistantScopeStrategy implements AssistantScopeStrategy {
                         command.domain(), command.domainType(), command.businessSessionId(),
                         businessTag, null));
 
-        // assistantAccount：优先 payload，缺省时从 rule 注入（与 PRD D8 一致）
-        String assistantAccount = extractField(command.payload(), "assistantAccount");
-        if (isBlank(assistantAccount)) {
-            assistantAccount = rule.assistantAccount();
-        }
         // sendUserAccount：优先 payload，缺省时回退 command.userId()（miniapp 通道 cookieUserId）
         String sendUserAccount = extractField(command.payload(), "sendUserAccount");
         if (isBlank(sendUserAccount)) {
@@ -160,7 +166,6 @@ public class DefaultAssistantScopeStrategy implements AssistantScopeStrategy {
                 .replyResponse(replyResponse)
                 .build();
 
-        CloudRequestProfile profile = profileRegistry.resolve(businessTag);
         CloudRequestStrategy strategy = profile.requestStrategy();
         ObjectNode cloudRequest = strategy.build(context);
 
@@ -197,6 +202,46 @@ public class DefaultAssistantScopeStrategy implements AssistantScopeStrategy {
             return objectMapper.writeValueAsString(message);
         } catch (JsonProcessingException e) {
             log.error("Failed to serialize default-assistant invoke message: ak={}, businessTag={}",
+                    command.ak(), businessTag, e);
+            return null;
+        }
+    }
+
+    private String buildAbortInvoke(InvokeCommand command,
+                                    String toolSessionId,
+                                    String assistantAccount,
+                                    String businessTag,
+                                    CloudRequestProfile profile) {
+        ObjectNode payload = objectMapper.createObjectNode();
+        if (toolSessionId != null && !toolSessionId.isBlank()) {
+            payload.put("toolSessionId", toolSessionId);
+        }
+        payload.put("cloudProfile", profile.name());
+
+        ObjectNode message = objectMapper.createObjectNode();
+        message.put("type", "invoke");
+        message.put("ak", command.ak());
+        message.put("source", "skill-server");
+        message.put("action", command.action());
+        message.put("assistantScope", "business");
+        if (assistantAccount != null && !assistantAccount.isBlank()) {
+            message.put("assistantAccount", assistantAccount);
+        }
+        if (businessTag != null && !businessTag.isBlank()) {
+            message.put("businessTag", businessTag);
+        }
+        if (command.userId() != null && !command.userId().isBlank()) {
+            message.put("userId", command.userId());
+        }
+
+        String traceId = MdcHelper.ensureTraceId();
+        message.put("traceId", traceId);
+        message.set("payload", payload);
+
+        try {
+            return objectMapper.writeValueAsString(message);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to serialize default-assistant abort invoke message: ak={}, businessTag={}",
                     command.ak(), businessTag, e);
             return null;
         }
