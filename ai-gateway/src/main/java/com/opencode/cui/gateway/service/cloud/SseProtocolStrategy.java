@@ -1,6 +1,8 @@
 package com.opencode.cui.gateway.service.cloud;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.gateway.logging.GatewayStreamEventLogHelper;
+import com.opencode.cui.gateway.logging.MdcHelper;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.cloud.decoder.DecoderSession;
 import com.opencode.cui.gateway.service.cloud.decoder.SseEventDecoder;
@@ -200,6 +202,7 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
             notifyLifecycle(lifecycle, CloudConnectionLifecycle::onTerminalEvent);
             return true;
         }
+        logSseInbound(jsonData, traceId);
         try {
             List<GatewayMessage> messages = decoder.decode(jsonData, session);
             if (messages == null || messages.isEmpty()) {
@@ -222,6 +225,17 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                     traceId, jsonData, e.getMessage());
         }
         return false;
+    }
+
+    private void logSseInbound(String payload, String traceId) {
+        var previousMdc = MdcHelper.snapshot();
+        try {
+            MdcHelper.putTraceId(traceId);
+            MdcHelper.putScenario("cloud-agent-sse-rx");
+            GatewayStreamEventLogHelper.inbound(log, "gw.cloud_agent", "received", payload);
+        } finally {
+            MdcHelper.restore(previousMdc);
+        }
     }
 
     private static void notifyLifecycle(CloudConnectionLifecycle lifecycle,

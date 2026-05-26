@@ -141,6 +141,8 @@ GatewayStreamEventLogHelper.inbound(Logger log, String endpoint, String result, 
   `%d [%thread] [${SERVICE_NAME}] [${INSTANCE_ID}] [%X{traceId}] [%X{sessionId}] [%X{ak}] [%X{userId}] [%X{scenario}] %-5level ...`
 - Stream event payload must be the raw inbound payload string where available. Do not flatten or re-map the event fields for the boundary log.
 - Use `endpoint=gw.local_agent` for local agent WebSocket ingress and `endpoint=gw.cloud_agent` for cloud agent stream or REST IM push ingress.
+- SSE stream ingress must log the raw `data:` body in `SseProtocolStrategy` after heartbeat/terminator filtering and before decoder translation.
+- `CloudAgentService` should keep decoded stream event boundary logging for non-SSE protocols such as cloud WebSocket; SSE must not duplicate the protocol-level boundary log.
 - Cloud REST IM push must log the serialized inbound request payload after validation and before relay to SS.
 - The helper log line shape is fixed:
   `event=ws_event direction=inbound endpoint={} result={} payload={}`
@@ -170,6 +172,7 @@ GatewayStreamEventLogHelper.inbound(Logger log, String endpoint, String result, 
 - `EventRelayServiceTest` must assert recovery by `toolSessionId`.
 - `EventRelayServiceTest` must assert first generated traceId is reused for later events with the same correlation key.
 - `AgentWebSocketHandlerTest` or log helper tests must cover raw inbound event logging shape.
+- `SseProtocolStrategyTest` must cover `gw.cloud_agent` boundary logging for raw SSE `data:` lines.
 - `CloudPushControllerTest` must cover `gw.cloud_agent` boundary logging for REST IM push.
 
 ### 7. Wrong vs Correct

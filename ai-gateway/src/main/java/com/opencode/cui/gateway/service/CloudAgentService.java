@@ -375,7 +375,9 @@ public class CloudAgentService {
                         try {
                             MdcHelper.fromGatewayMessage(event);
                             MdcHelper.putScenario("cloud-agent-stream-rx");
-                            GatewayStreamEventLogHelper.inbound(log, "gw.cloud_agent", "received", rawPayload);
+                            if (!isSseProtocol(protocol)) {
+                                GatewayStreamEventLogHelper.inbound(log, "gw.cloud_agent", "received", rawPayload);
+                            }
                             onRelay.accept(event);
                         } finally {
                             MdcHelper.restore(previousMdc);
@@ -391,6 +393,10 @@ public class CloudAgentService {
         } finally {
             lifecycle.close();
         }
+    }
+
+    private static boolean isSseProtocol(String protocol) {
+        return "sse".equalsIgnoreCase(protocol);
     }
 
     /**

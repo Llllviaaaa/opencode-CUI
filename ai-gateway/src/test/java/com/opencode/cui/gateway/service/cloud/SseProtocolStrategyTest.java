@@ -1,6 +1,7 @@
 package com.opencode.cui.gateway.service.cloud;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.gateway.logging.GatewayStreamEventLogHelper;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.cloud.decoder.DecoderSession;
 import com.opencode.cui.gateway.service.cloud.decoder.DefaultSseEventDecoder;
@@ -13,8 +14,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.MockedStatic;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.Logger;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -28,6 +31,7 @@ import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -142,6 +146,29 @@ class SseProtocolStrategyTest {
         assertEquals("s1", receivedEvents.get(0).getToolSessionId());
         assertEquals(GatewayMessage.Type.TOOL_EVENT, receivedEvents.get(1).getType());
         assertTrue(receivedErrors.isEmpty(), "should have no errors");
+    }
+
+    @Test
+    @DisplayName("G24b: SSE data line logs gw.cloud_agent inbound boundary event")
+    void shouldLogInboundSseDataLine() throws Exception {
+        String sseStream = String.join("\n",
+                "data: {\"type\":\"tool_event\",\"toolSessionId\":\"s1\",\"event\":{\"text\":\"hello\"}}",
+                "data: [DONE]",
+                "");
+        HttpResponse<InputStream> response = mockResponse(200, sseStream);
+        doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
+
+        try (MockedStatic<GatewayStreamEventLogHelper> eventLogs =
+                     mockStatic(GatewayStreamEventLogHelper.class)) {
+            strategy.connect(buildContext(), lifecycle, onEvent, onError);
+
+            eventLogs.verify(() -> GatewayStreamEventLogHelper.inbound(
+                    any(Logger.class),
+                    eq("gw.cloud_agent"),
+                    eq("received"),
+                    argThat(payload -> payload.contains("\"toolSessionId\":\"s1\"")
+                            && payload.contains("\"text\":\"hello\""))));
+        }
     }
 
     // ==================== G25: SSE 含 tool_done ====================
