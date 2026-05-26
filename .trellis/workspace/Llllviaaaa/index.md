@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-0.md`
-- **Total Sessions**: 15
-- **Last Active**: 2026-05-25
+- **Total Sessions**: 16
+- **Last Active**: 2026-05-26
 <!-- @@@/auto:current-status -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 16 | 2026-05-26 | Fix gateway cloud config and stream event logging | `ac36232`, `228d7c5`, `ebba6fc` | `main` |
 | 15 | 2026-05-25 | Fix external owner and sender identity routing | `9e7b7da` | `codex/external-owner-sender-identity` |
 | 14 | 2026-05-23 | Redis relay recovery and external WS fallback | `398184c`, `4045ef3`, `6dbca0a` | `codex/fix-skill-instance-redis-reconnect` |
 | 13 | 2026-05-21 | chat 埋码上报（POLICY_WELINK_SERVER fire-and-forget） | `94940bf` | `main` |
