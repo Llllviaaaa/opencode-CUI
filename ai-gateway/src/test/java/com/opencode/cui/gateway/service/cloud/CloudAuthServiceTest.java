@@ -1,74 +1,63 @@
 package com.opencode.cui.gateway.service.cloud;
 
-import com.opencode.cui.gateway.model.AssistantInstanceInfo;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
-import java.net.http.HttpRequest;
 import java.net.URI;
+import java.net.http.HttpRequest;
+import java.net.http.WebSocket;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.*;
 
-/**
- * CloudAuthService 单元测试（TDD）。
- *
- * <ul>
- *   <li>调度到正确的认证策略</li>
- *   <li>未知 authType 抛出异常</li>
- * </ul>
- */
 class CloudAuthServiceTest {
 
     private CloudAuthService cloudAuthService;
-    private SoaAuthStrategy soaStrategy;
-    private ApigAuthStrategy apigStrategy;
-    private NoAuthStrategy noAuthStrategy;
 
     @BeforeEach
     void setUp() {
-        soaStrategy = new SoaAuthStrategy();
-        apigStrategy = new ApigAuthStrategy();
-        noAuthStrategy = new NoAuthStrategy();
-        cloudAuthService = new CloudAuthService(List.of(soaStrategy, apigStrategy, noAuthStrategy));
+        cloudAuthService = new CloudAuthService(List.of(
+                new SoaAuthStrategy(),
+                new ApigAuthStrategy(),
+                new NoAuthStrategy(),
+                new IntegrationTokenAuthStrategy("tk-123")));
     }
 
     @Nested
-    @DisplayName("策略调度")
+    @DisplayName("strategy dispatch")
     class StrategyDispatchTests {
 
         @Test
-        @DisplayName("authType=soa 时调度到 SoaAuthStrategy 并设置 SOA header")
+        @DisplayName("authType=soa dispatches to SoaAuthStrategy")
         void shouldDispatchToSoaStrategy() {
             HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://example.com"));
 
             cloudAuthService.applyAuth(builder, "app_123", "soa");
 
             HttpRequest request = builder.build();
-            assertTrue(request.headers().firstValue("X-Auth-Type").isPresent());
-            assertEquals("soa", request.headers().firstValue("X-Auth-Type").get());
-            assertTrue(request.headers().firstValue("X-App-Id").isPresent());
-            assertEquals("app_123", request.headers().firstValue("X-App-Id").get());
+            assertEquals("soa", request.headers().firstValue("X-Auth-Type").orElse(null));
+            assertEquals("app_123", request.headers().firstValue("X-App-Id").orElse(null));
         }
 
         @Test
-        @DisplayName("authType=apig 时调度到 ApigAuthStrategy 并设置 APIG header")
+        @DisplayName("authType=apig dispatches to ApigAuthStrategy")
         void shouldDispatchToApigStrategy() {
             HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://example.com"));
 
             cloudAuthService.applyAuth(builder, "app_456", "apig");
 
             HttpRequest request = builder.build();
-            assertTrue(request.headers().firstValue("X-Auth-Type").isPresent());
-            assertEquals("apig", request.headers().firstValue("X-Auth-Type").get());
-            assertTrue(request.headers().firstValue("X-App-Id").isPresent());
-            assertEquals("app_456", request.headers().firstValue("X-App-Id").get());
+            assertEquals("apig", request.headers().firstValue("X-Auth-Type").orElse(null));
+            assertEquals("app_456", request.headers().firstValue("X-App-Id").orElse(null));
         }
 
         @Test
-        @DisplayName("authType=none 时调度到 NoAuthStrategy 且不写入任何鉴权 header")
+        @DisplayName("authType=none writes no auth headers")
         void applyAuth_noneAuthType_noHeaderWritten() {
             HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://x.example"));
 
@@ -80,7 +69,7 @@ class CloudAuthServiceTest {
         }
 
         @Test
-        @DisplayName("SoaAuthStrategy: appId=null 时不写 X-App-Id（仅写 X-Auth-Type）")
+        @DisplayName("soa skips X-App-Id when appId is null")
         void soaStrategy_appIdNull_skipsXAppIdHeader() {
             HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://x.example"));
 
@@ -92,7 +81,7 @@ class CloudAuthServiceTest {
         }
 
         @Test
-        @DisplayName("SoaAuthStrategy: appId 非空时仅写一次 X-App-Id（防重复回归）")
+        @DisplayName("soa writes X-App-Id exactly once")
         void soaStrategy_appIdPresent_writesXAppIdExactlyOnce() {
             HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://x.example"));
 
@@ -103,7 +92,7 @@ class CloudAuthServiceTest {
         }
 
         @Test
-        @DisplayName("ApigAuthStrategy: appId=null 时不写 X-App-Id（仅写 X-Auth-Type）")
+        @DisplayName("apig skips X-App-Id when appId is null")
         void apigStrategy_appIdNull_skipsXAppIdHeader() {
             HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://x.example"));
 
@@ -115,64 +104,65 @@ class CloudAuthServiceTest {
         }
 
         @Test
-        @DisplayName("remoteProperty headers: custom/cookie 多 header 逐项写入，跳过单 authType")
-        void remotePropertyHeaders_customAndCookie_areApplied() {
-            AssistantInstanceInfo.RemoteHeader custom = new AssistantInstanceInfo.RemoteHeader();
-            custom.setType("custom");
-            custom.setCustomKey("X-Custom-Token");
-            custom.setCustomValue("secret-1");
-            AssistantInstanceInfo.RemoteHeader cookie = new AssistantInstanceInfo.RemoteHeader();
-            cookie.setType("cookie");
-            cookie.setCustomValue("sid=secret-2");
-            HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://x.example"));
+        @DisplayName("WebSocket authType=soa dispatches to SoaAuthStrategy")
+        void applyAuth_webSocketBuilder_dispatchesSoaStrategyHeaders() {
+            WebSocket.Builder builder = mock(WebSocket.Builder.class);
+            when(builder.header(anyString(), anyString())).thenReturn(builder);
 
-            cloudAuthService.applyAuth(builder, "ignored-app", "soa", List.of(custom, cookie));
+            cloudAuthService.applyAuth(builder, "app_ws", "soa");
 
-            HttpRequest request = builder.GET().build();
-            assertEquals("secret-1", request.headers().firstValue("X-Custom-Token").orElse(null));
-            assertEquals("sid=secret-2", request.headers().firstValue("Cookie").orElse(null));
-            assertTrue(request.headers().allValues("X-Auth-Type").isEmpty());
-            assertTrue(request.headers().allValues("X-App-Id").isEmpty());
+            verify(builder).header("X-Auth-Type", "soa");
+            verify(builder).header("X-App-Id", "app_ws");
+            verify(builder, never()).header(eq("X-Bot-Token"), anyString());
+        }
+
+        @Test
+        @DisplayName("WebSocket authType=integration_token dispatches to IntegrationTokenAuthStrategy")
+        void applyAuth_webSocketBuilder_dispatchesIntegrationTokenStrategy() {
+            WebSocket.Builder builder = mock(WebSocket.Builder.class);
+            when(builder.header(anyString(), anyString())).thenReturn(builder);
+
+            cloudAuthService.applyAuth(builder, "ignored-app", "integration_token");
+
+            verify(builder).header("Authorization", "tk-123");
+            verify(builder, never()).header(eq("X-App-Id"), anyString());
         }
     }
 
     @Nested
-    @DisplayName("未知 authType")
+    @DisplayName("unknown authType")
     class UnknownAuthTypeTests {
 
         @Test
-        @DisplayName("未知 authType 抛出 IllegalArgumentException")
+        @DisplayName("unknown authType throws IllegalArgumentException")
         void shouldThrowOnUnknownAuthType() {
             HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://example.com"));
 
             IllegalArgumentException ex = assertThrows(
                     IllegalArgumentException.class,
-                    () -> cloudAuthService.applyAuth(builder, "app_789", "unknown_type")
-            );
+                    () -> cloudAuthService.applyAuth(builder, "app_789", "unknown_type"));
             assertTrue(ex.getMessage().contains("unknown_type"));
         }
 
         @Test
-        @DisplayName("null authType 抛出 IllegalArgumentException")
+        @DisplayName("null authType throws IllegalArgumentException")
         void shouldThrowOnNullAuthType() {
             HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://example.com"));
 
             assertThrows(
                     IllegalArgumentException.class,
-                    () -> cloudAuthService.applyAuth(builder, "app_789", null)
-            );
+                    () -> cloudAuthService.applyAuth(builder, "app_789", null));
         }
 
         @Test
-        @DisplayName("remoteProperty headers: 未知 header type 抛明确异常")
-        void remotePropertyHeaders_unknownTypeThrows() {
-            AssistantInstanceInfo.RemoteHeader header = new AssistantInstanceInfo.RemoteHeader();
-            header.setType("mystery");
-            HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create("https://example.com"));
+        @DisplayName("WebSocket unknown authType throws IllegalArgumentException")
+        void webSocketBuilder_shouldThrowOnUnknownAuthType() {
+            WebSocket.Builder builder = mock(WebSocket.Builder.class);
 
-            IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
-                    () -> cloudAuthService.applyAuth(builder, null, "none", List.of(header)));
-            assertTrue(ex.getMessage().contains("Unknown remote header type"));
+            IllegalArgumentException ex = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> cloudAuthService.applyAuth(builder, null, "mystery"));
+            assertTrue(ex.getMessage().contains("mystery"));
         }
     }
 }

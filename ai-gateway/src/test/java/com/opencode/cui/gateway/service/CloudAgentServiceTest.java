@@ -125,23 +125,38 @@ class CloudAgentServiceTest {
     }
 
     private AssistantInstanceInfo buildInstance(String type, String protocol, String url) {
+        return buildInstance(type, protocol, url, "soa");
+    }
+
+    private AssistantInstanceInfo buildInstance(String type, String protocol, String url,
+                                                String firstHeaderType, String... extraHeaderTypes) {
         AssistantInstanceInfo.RemoteProperty property = new AssistantInstanceInfo.RemoteProperty();
         property.setType(type);
         property.setCommProtocol(protocol);
         property.setUrl(url);
-        property.setDataProtocol("assistant_square");
+        property.setDataProtocol("wrong_data_protocol");
 
-        AssistantInstanceInfo.RemoteHeader header = new AssistantInstanceInfo.RemoteHeader();
-        header.setType("custom");
-        header.setCustomKey("X-Bot-Token");
-        header.setCustomValue("secret-token");
-        property.setHeaders(java.util.List.of(header));
+        java.util.List<AssistantInstanceInfo.RemoteHeader> headers = new java.util.ArrayList<>();
+        headers.add(buildHeader(firstHeaderType));
+        for (String extraHeaderType : extraHeaderTypes) {
+            headers.add(buildHeader(extraHeaderType));
+        }
+        property.setHeaders(headers);
 
         AssistantInstanceInfo info = new AssistantInstanceInfo();
         info.setPartnerAccount("bot-001");
         info.setIsRemote(true);
+        info.setBizRobotTag("assistant_square");
         info.setRemoteProperty(java.util.List.of(property));
         return info;
+    }
+
+    private AssistantInstanceInfo.RemoteHeader buildHeader(String type) {
+        AssistantInstanceInfo.RemoteHeader header = new AssistantInstanceInfo.RemoteHeader();
+        header.setType(type);
+        header.setCustomKey("X-Bot-Token");
+        header.setCustomValue("secret-token");
+        return header;
     }
 
     // ---------------------------------------------------------------------
@@ -164,8 +179,33 @@ class CloudAgentServiceTest {
             CloudConnectionContext ctx = contextCaptor.getValue();
             assertEquals("https://remote.example.com/chat", ctx.getChannelAddress());
             assertEquals("assistant_square", ctx.getCloudProfile());
-            assertEquals("none", ctx.getAuthType());
-            assertEquals("X-Bot-Token", ctx.getRemoteHeaders().get(0).getCustomKey());
+            assertEquals("soa", ctx.getAuthType());
+            verifyNoInteractions(sysConfigRouteProvider, webHookExecutor);
+        }
+
+        @Test
+        @DisplayName("remoteProperty headers 只取第一个 header.type 作为 authType")
+        void handleInvoke_remotePropertyUsesFirstHeaderTypeOnly() {
+            when(assistantInstanceInfoService.getInstanceInfo("bot-001"))
+                    .thenReturn(buildInstance("chat", "sse", "https://remote.example.com/chat", "apig", "soa"));
+
+            cloudAgentService.handleInvoke(buildRemoteInvoke("chat"), onRelay);
+
+            verify(cloudProtocolClient).connect(eq("sse"), contextCaptor.capture(), any(), any(), any());
+            assertEquals("apig", contextCaptor.getValue().getAuthType());
+            verifyNoInteractions(sysConfigRouteProvider, webHookExecutor);
+        }
+
+        @Test
+        @DisplayName("remoteProperty header.type=integration 映射到 integration_token authType")
+        void handleInvoke_remotePropertyIntegrationHeader_mapsToIntegrationToken() {
+            when(assistantInstanceInfoService.getInstanceInfo("bot-001"))
+                    .thenReturn(buildInstance("chat", "sse", "https://remote.example.com/chat", "integration"));
+
+            cloudAgentService.handleInvoke(buildRemoteInvoke("chat"), onRelay);
+
+            verify(cloudProtocolClient).connect(eq("sse"), contextCaptor.capture(), any(), any(), any());
+            assertEquals("integration_token", contextCaptor.getValue().getAuthType());
             verifyNoInteractions(sysConfigRouteProvider, webHookExecutor);
         }
 

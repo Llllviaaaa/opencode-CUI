@@ -205,9 +205,6 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
      */
     void applyHeaders(WebSocket.Builder wsBuilder, CloudConnectionContext context) {
         wsBuilder.header("X-Trace-Id", context.getTraceId() != null ? context.getTraceId() : "");
-        cloudAuthService.applyRemoteHeaders(wsBuilder, context.getRemoteHeaders());
-        if (context.getAppId() != null) {
-            wsBuilder.header("X-App-Id", context.getAppId());
-        }
+        cloudAuthService.applyAuth(wsBuilder, context.getAppId(), context.getAuthType());
     }
 }

@@ -196,18 +196,20 @@ class WebSocketProtocolStrategyTest {
         CloudConnectionContext context = CloudConnectionContext.builder()
                 .channelAddress("wss://cloud.example.com/ws")
                 .appId(null)
+                .authType("soa")
                 .traceId("trace_null_app")
                 .build();
 
         strategy.applyHeaders(builder, context);
 
         verify(builder).header("X-Trace-Id", "trace_null_app");
+        verify(cloudAuthService).applyAuth(builder, null, "soa");
         verify(builder, never()).header(eq("X-App-Id"), anyString());
     }
 
     @Test
-    @DisplayName("T13: appId 非空时 applyHeaders 写入 X-App-Id header")
-    void ws_appIdPresent_writesXAppIdHeader() {
+    @DisplayName("T13: appId 非空时 applyHeaders 交给 CloudAuthService 写认证 header")
+    void ws_appIdPresent_delegatesAuthHeadersToCloudAuthService() {
         WebSocketProtocolStrategy strategy = new WebSocketProtocolStrategy(
                 cloudAuthService, objectMapper, timeoutProperties);
         WebSocket.Builder builder = mock(WebSocket.Builder.class);
@@ -216,12 +218,14 @@ class WebSocketProtocolStrategyTest {
         CloudConnectionContext context = CloudConnectionContext.builder()
                 .channelAddress("wss://cloud.example.com/ws")
                 .appId("app_test")
+                .authType("soa")
                 .traceId("trace_001")
                 .build();
 
         strategy.applyHeaders(builder, context);
 
         verify(builder).header("X-Trace-Id", "trace_001");
-        verify(builder).header("X-App-Id", "app_test");
+        verify(cloudAuthService).applyAuth(builder, "app_test", "soa");
+        verify(builder, never()).header(eq("X-App-Id"), anyString());
     }
 }

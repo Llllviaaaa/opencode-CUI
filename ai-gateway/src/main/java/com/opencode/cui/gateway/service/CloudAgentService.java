@@ -206,8 +206,7 @@ public class CloudAgentService {
                 .channelType(remoteRoute.channelType())
                 .scope(scope)
                 .appId(remoteRoute.appId())
-                .authType("none")
-                .remoteHeaders(remoteRoute.headers())
+                .authType(remoteRoute.authType())
                 .cloudRequest(cloudRequest)
                 .traceId(invokeMessage.getTraceId())
                 .cloudProfile(remoteRoute.cloudProfile())
@@ -240,9 +239,10 @@ public class CloudAgentService {
             if (channelAddress == null || channelType == null) {
                 continue;
             }
+            String authType = resolveAuthType(property.getHeaders());
             return new RemoteRoute(channelAddress, channelType, null,
-                    firstNonBlank(property.getDataProtocol(), fallbackBusinessTag),
-                    property.getHeaders());
+                    firstNonBlank(info.getBizRobotTag(), fallbackBusinessTag),
+                    authType);
         }
         return null;
     }
@@ -262,6 +262,26 @@ public class CloudAgentService {
             case "ws", "websocket" -> "websocket";
             case "http", "webhook" -> "webhook";
             default -> null;
+        };
+    }
+
+    private static String resolveAuthType(List<AssistantInstanceInfo.RemoteHeader> headers) {
+        if (headers == null || headers.isEmpty()) {
+            return "none";
+        }
+        AssistantInstanceInfo.RemoteHeader first = headers.get(0);
+        return mapRemoteHeaderTypeToAuthType(first == null ? null : first.getType());
+    }
+
+    private static String mapRemoteHeaderTypeToAuthType(String type) {
+        String value = blankToEmpty(type).trim().toLowerCase();
+        return switch (value) {
+            case "" -> null;
+            case "0", "none", "noauth", "no_auth" -> "none";
+            case "1", "soa" -> "soa";
+            case "2", "apig" -> "apig";
+            case "3", "integration", "integration_token" -> "integration_token";
+            default -> value;
         };
     }
 
@@ -454,6 +474,6 @@ public class CloudAgentService {
                                String channelType,
                                String appId,
                                String cloudProfile,
-                               List<AssistantInstanceInfo.RemoteHeader> headers) {
+                               String authType) {
     }
 }

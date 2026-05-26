@@ -143,24 +143,29 @@ Remote cloud routing must prefer the assistant instance API over legacy callback
 ### 2. Signatures
 
 - Instance lookup: `AssistantInstanceInfoService.getInstanceInfo(String partnerAccount)`.
-- Route resolution: `CloudAgentService.resolveRemoteRoute(JsonNode payload, String action)`.
-- Auth/header application: `CloudAuthService.applyAuth(..., List<AssistantInstanceInfo.RemoteHeader> remoteHeaders)`.
-- Connection context: `CloudConnectionContext.remoteHeaders()`.
+- Route resolution: `CloudAgentService.resolveRemoteRoute(String assistantAccount, String action, String fallbackBusinessTag)`.
+- HTTP auth application: `CloudAuthService.applyAuth(HttpRequest.Builder builder, String appId, String authType)`.
+- WebSocket auth application: `CloudAuthService.applyAuth(WebSocket.Builder builder, String appId, String authType)`.
+- Connection context: `CloudConnectionContext.authType()` and `CloudConnectionContext.cloudProfile()`.
 
 ### 3. Contracts
 
 `assistantAccount` / `partnerAccount` is the primary identity for remote assistant routing.
-`AssistantInstanceInfo.remoteProperty[]` is selected by action (`chat`, `question_reply`, `permission_reply`, etc.) and supplies protocol, endpoint, auth type, and remote headers.
-Headers from `remoteProperty` are applied by protocol executors (`WebHookExecutor`, `SseProtocolStrategy`, `WebSocketProtocolStrategy`) after validation and without logging secret values.
+`AssistantInstanceInfo.remoteProperty[]` is selected by action (`chat`, `question_reply`, `permission_reply`, etc.) and supplies protocol, endpoint, and auth type.
+`remoteProperty.headers` is an array, but GW uses only the first `header.type` to derive `CloudConnectionContext.authType`; protocol executors must then call `CloudAuthService.applyAuth(..., authType)`.
+`remoteProperty.headers[].customKey` and `customValue` are not raw outbound cloud request headers in this flow and must not be replayed by GW.
+`CloudConnectionContext.cloudProfile` comes from `AssistantInstanceInfo.bizRobotTag` when present, otherwise the SS-provided business tag / legacy `cloudProfile`; never use `remoteProperty.dataProtocol` as the profile override.
 
 ### 4. Validation & Error Matrix
 
 | Case | Required behavior |
 | --- | --- |
-| Instance API returns a matching `remoteProperty` for action | Use endpoint/protocol/auth/headers from instance data. |
+| Instance API returns a matching `remoteProperty` for action | Use endpoint/protocol from instance data, derive `authType` from `remoteProperty.headers[0].type`, and derive `cloudProfile` from `bizRobotTag` or SS fallback. |
 | Instance API succeeds but action property is missing | Emit remote-property-missing failure; do not invent a legacy endpoint. |
 | Instance API fails or no partner account is present | Preserve legacy fallback path when configured. |
-| Remote header type is unsupported | Fail fast in `CloudAuthService` test path; do not silently drop unknown auth material. |
+| `remoteProperty.headers` is empty | Use `authType="none"` so no auth headers are written. |
+| First `header.type` is unsupported | Pass the normalized value as `authType`; `CloudAuthService` must fail fast rather than silently dropping auth material. |
+| `customKey/customValue` are present | Ignore them for cloud outbound auth; never write them as raw request headers. |
 
 ### 5. Good / Base / Bad Cases
 
@@ -169,7 +174,11 @@ Good:
 ```java
 AssistantInstanceInfo info = assistantInstanceInfoService.getInstanceInfo(partnerAccount);
 RemoteRoute route = resolveRemoteRouteFromInstance(info, action);
-cloudAuthService.applyAuth(builder, route.authType(), route.authConfig(), route.remoteHeaders());
+CloudConnectionContext ctx = CloudConnectionContext.builder()
+        .authType(route.authType())       // from remoteProperty.headers[0].type
+        .cloudProfile(route.cloudProfile()) // from bizRobotTag or SS fallback
+        .build();
+cloudAuthService.applyAuth(builder, ctx.getAppId(), ctx.getAuthType());
 ```
 
 Base:
@@ -190,11 +199,11 @@ The bad case cannot route no-AK remote assistants and causes skill-server to blo
 ### 6. Tests Required
 
 - `AssistantInstanceInfoServiceTest`: success, not-exists/empty data, upstream failure, and cache behavior.
-- `CloudAgentServiceTest`: action-specific `remoteProperty` selection, no-AK remote invocation, missing remote property failure, and legacy fallback.
-- `CloudAuthServiceTest`: custom/cookie remote headers are applied and unknown header/auth types fail predictably.
+- `CloudAgentServiceTest`: action-specific `remoteProperty` selection, no-AK remote invocation, first `headers[0].type` auth mapping, `bizRobotTag` cloudProfile mapping, and legacy fallback.
+- `CloudAuthServiceTest`: HTTP and WebSocket authType strategy dispatch, including unknown authType failure.
 
 ### 7. Wrong vs Correct
 
-Wrong: use AK as the only route key for cloud assistants.
+Wrong: use AK as the only route key for cloud assistants, map `remoteProperty.dataProtocol` into `cloudProfile`, or replay `remoteProperty.headers[].customKey/customValue` as raw outbound headers.
 
-Correct: use `assistantAccount` / `partnerAccount` to load instance metadata, select `remoteProperty` by action, and treat AK as optional context.
+Correct: use `assistantAccount` / `partnerAccount` to load instance metadata, select `remoteProperty` by action, derive `authType` from the first `header.type`, keep `cloudProfile` from `bizRobotTag` or SS fallback, and treat AK as optional context.
