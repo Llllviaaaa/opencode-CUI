@@ -139,6 +139,35 @@ public class GatewayMessageRouter {
     private record ConfirmedState(String welinkSessionId, Instant confirmedAt) {
     }
 
+    private static final class CloudImTextAccumulator {
+        private final String messageId;
+        private final long order;
+        private final StringBuilder content = new StringBuilder();
+        private String traceId;
+        private String partId;
+
+        private CloudImTextAccumulator(String messageId, long order) {
+            this.messageId = messageId;
+            this.order = order;
+        }
+
+        private void append(String delta, String traceId, String partId) {
+            content.append(delta);
+            String normalizedTraceId = ProtocolUtils.firstNonBlank(traceId, null);
+            if (normalizedTraceId != null) {
+                this.traceId = normalizedTraceId;
+            }
+            String normalizedPartId = ProtocolUtils.firstNonBlank(partId, null);
+            if (normalizedPartId != null) {
+                this.partId = normalizedPartId;
+            }
+        }
+
+        private boolean isEmpty() {
+            return content.isEmpty();
+        }
+    }
+
     /** 下游发送者引用（延迟注入） */
     private volatile DownstreamSender downstreamSender;
 
@@ -154,9 +183,11 @@ public class GatewayMessageRouter {
     /** Owner 被判定为死亡的超时阈值（秒） */
     private final int ownerDeadThresholdSeconds;
 
-    /** 业务助手 IM 场景 text.delta 内容累积器：sessionId → StringBuilder */
-    private final java.util.concurrent.ConcurrentHashMap<String, StringBuilder> cloudImTextBuffer =
+    /** IM text.delta accumulator: sessionId -> messageId/traceId bucket. */
+    private final java.util.concurrent.ConcurrentHashMap<String,
+            java.util.concurrent.ConcurrentHashMap<String, CloudImTextAccumulator>> cloudImTextBuffer =
             new java.util.concurrent.ConcurrentHashMap<>();
+    private final AtomicLong cloudImTextBufferOrder = new AtomicLong();
 
     /** route_confirm 去重 kill switch；false 时退化为每条上行都发 confirm（与改动前行为一致）。 */
     private final boolean confirmDedupEnabled;
@@ -175,6 +206,8 @@ public class GatewayMessageRouter {
             StreamMessage.Types.THINKING_DELTA, StreamMessage.Types.THINKING_DONE,
             StreamMessage.Types.SEARCHING, StreamMessage.Types.SEARCH_RESULT,
             StreamMessage.Types.REFERENCE, StreamMessage.Types.ASK_MORE);
+
+    private static final String MISSING_MESSAGE_ID_BUFFER_KEY = "__missing_message_id__";
 
     /**
      * Spring 主构造：自动注入 Clock / Ticker（生产默认 systemUTC / systemTicker）。
@@ -628,7 +661,7 @@ public class GatewayMessageRouter {
         if ("user".equals(ProtocolUtils.normalizeRole(msg.getRole()))) {
             return;
         }
-        handleAssistantToolEvent(sessionId, userId, msg, session);
+        handleAssistantToolEvent(sessionId, userId, msg, session, node.path("traceId").asText(null));
     }
 
     private SkillSession resolveToolEventSession(String sessionId, JsonNode node) {
@@ -705,14 +738,15 @@ public class GatewayMessageRouter {
     }
 
     /** 处理助手角色的 tool_event（含权限回复合成、消息路由）。 */
-    private void handleAssistantToolEvent(String sessionId, String userId, StreamMessage msg, SkillSession session) {
+    private void handleAssistantToolEvent(String sessionId, String userId, StreamMessage msg, SkillSession session,
+            String traceId) {
         Long numericId = ProtocolUtils.parseSessionId(sessionId);
         StreamMessage permissionReply = numericId != null
                 ? persistenceService.synthesizePermissionReplyFromToolOutcome(numericId, msg)
                 : null;
 
         if (permissionReply != null) {
-            routeAssistantMessage(sessionId, userId, permissionReply, session, numericId);
+            routeAssistantMessage(sessionId, userId, permissionReply, session, numericId, traceId);
             String response = permissionReply.getPermission() != null
                     ? permissionReply.getPermission().getResponse()
                     : null;
@@ -728,12 +762,12 @@ public class GatewayMessageRouter {
             }
         }
 
-        routeAssistantMessage(sessionId, userId, msg, session, numericId);
+        routeAssistantMessage(sessionId, userId, msg, session, numericId, traceId);
     }
 
     /** 路由助手消息：通过 OutboundDeliveryDispatcher 统一投递。 */
     private void routeAssistantMessage(String sessionId, String userId, StreamMessage msg,
-            SkillSession session, Long numericId) {
+            SkillSession session, Long numericId, String traceId) {
         // 同步会话标题（标题变化时更新）
         if (StreamMessage.Types.SESSION_TITLE.equals(msg.getType()) && numericId != null) {
             sessionService.updateTitle(numericId, msg.getTitle());
@@ -753,14 +787,7 @@ public class GatewayMessageRouter {
         }
 
         // IM 非流式渠道：累积 text.delta，兼容上游不发 text.done 的场景（业务/个人助手通用）
-        if (session != null && session.isImDomain()) {
-            if (StreamMessage.Types.TEXT_DELTA.equals(msg.getType()) && msg.getContent() != null) {
-                cloudImTextBuffer.computeIfAbsent(sessionId, k -> new StringBuilder())
-                        .append(msg.getContent());
-            } else if (StreamMessage.Types.TEXT_DONE.equals(msg.getType())) {
-                cloudImTextBuffer.remove(sessionId);
-            }
-        }
+        accumulateCloudImText(sessionId, msg, session, traceId);
 
         // 统一投递（enrich + deliver）
         prepareStableMessageContext(sessionId, msg, session, numericId);
@@ -778,6 +805,149 @@ public class GatewayMessageRouter {
             } catch (Exception e) {
                 log.error("Failed to persist StreamMessage for session {}: {}", sessionId, e.getMessage(), e);
             }
+        }
+    }
+
+    private void accumulateCloudImText(String sessionId, StreamMessage msg, SkillSession session, String traceId) {
+        if (session == null || !session.isImDomain() || msg == null || msg.getType() == null) {
+            return;
+        }
+
+        if (StreamMessage.Types.TEXT_DELTA.equals(msg.getType())) {
+            if (msg.getContent() == null) {
+                return;
+            }
+            String messageId = ProtocolUtils.firstNonBlank(msg.getSourceMessageId(), msg.getMessageId());
+            String bufferKey = cloudImBufferKey(messageId, traceId);
+            CloudImTextAccumulator accumulator = cloudImTextBuffer
+                    .computeIfAbsent(sessionId, k -> new java.util.concurrent.ConcurrentHashMap<>())
+                    .computeIfAbsent(bufferKey, k -> new CloudImTextAccumulator(
+                            messageId, cloudImTextBufferOrder.incrementAndGet()));
+            accumulator.append(msg.getContent(), traceId, msg.getPartId());
+            return;
+        }
+
+        if (StreamMessage.Types.TEXT_DONE.equals(msg.getType())) {
+            removeCloudImTextAccumulator(sessionId,
+                    ProtocolUtils.firstNonBlank(msg.getSourceMessageId(), msg.getMessageId()), traceId);
+        }
+    }
+
+    private String cloudImBufferKey(String messageId, String traceId) {
+        String normalizedMessageId = ProtocolUtils.firstNonBlank(messageId, null);
+        if (normalizedMessageId != null) {
+            return normalizedMessageId;
+        }
+        String normalizedTraceId = ProtocolUtils.firstNonBlank(traceId, null);
+        if (normalizedTraceId != null) {
+            return "trace:" + normalizedTraceId;
+        }
+        return MISSING_MESSAGE_ID_BUFFER_KEY;
+    }
+
+    private CloudImTextAccumulator removeCloudImTextAccumulator(String sessionId, String messageId, String traceId) {
+        java.util.concurrent.ConcurrentHashMap<String, CloudImTextAccumulator> buffers = cloudImTextBuffer.get(sessionId);
+        if (buffers == null || buffers.isEmpty()) {
+            return null;
+        }
+
+        CloudImTextAccumulator removed = null;
+        String normalizedMessageId = ProtocolUtils.firstNonBlank(messageId, null);
+        if (normalizedMessageId != null) {
+            removed = buffers.remove(normalizedMessageId);
+        }
+        if (removed == null) {
+            removed = removeCloudImTextAccumulatorByTrace(buffers, traceId);
+        }
+        if (removed == null && normalizedMessageId == null) {
+            removed = buffers.remove(MISSING_MESSAGE_ID_BUFFER_KEY);
+        }
+        cleanupCloudImTextBuffer(sessionId, buffers);
+        return removed;
+    }
+
+    private CloudImTextAccumulator removeCloudImTextAccumulatorByTrace(
+            java.util.concurrent.ConcurrentHashMap<String, CloudImTextAccumulator> buffers, String traceId) {
+        String normalizedTraceId = ProtocolUtils.firstNonBlank(traceId, null);
+        if (normalizedTraceId == null) {
+            return null;
+        }
+        for (var entry : buffers.entrySet()) {
+            CloudImTextAccumulator accumulator = entry.getValue();
+            if (normalizedTraceId.equals(accumulator.traceId)
+                    && buffers.remove(entry.getKey(), accumulator)) {
+                return accumulator;
+            }
+        }
+        return null;
+    }
+
+    private void flushAccumulatedCloudImTextDone(String sessionId, String userId, SkillSession session, String traceId) {
+        if (session == null || !session.isImDomain()) {
+            return;
+        }
+        java.util.concurrent.ConcurrentHashMap<String, CloudImTextAccumulator> buffers = cloudImTextBuffer.get(sessionId);
+        if (buffers == null || buffers.isEmpty()) {
+            return;
+        }
+
+        CloudImTextAccumulator accumulated = removeCloudImTextAccumulatorByTrace(buffers, traceId);
+        if (accumulated == null && buffers.size() == 1) {
+            accumulated = removeSingleCloudImTextAccumulator(buffers);
+        }
+        if (accumulated == null) {
+            accumulated = removeOldestCloudImTextAccumulator(buffers);
+        }
+        cleanupCloudImTextBuffer(sessionId, buffers);
+
+        if (accumulated == null || accumulated.isEmpty()) {
+            return;
+        }
+        StreamMessage textDoneMsg = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DONE)
+                .messageId(accumulated.messageId)
+                .sourceMessageId(accumulated.messageId)
+                .partId(accumulated.partId)
+                .content(accumulated.content.toString())
+                .role("assistant")
+                .build();
+        emitter.emitToSession(session, sessionId, userId, textDoneMsg);
+        log.info("Flushed accumulated text.delta as text.done to IM: sessionId={}, messageId={}, length={}",
+                sessionId, accumulated.messageId, accumulated.content.length());
+    }
+
+    private CloudImTextAccumulator removeSingleCloudImTextAccumulator(
+            java.util.concurrent.ConcurrentHashMap<String, CloudImTextAccumulator> buffers) {
+        for (var entry : buffers.entrySet()) {
+            CloudImTextAccumulator accumulator = entry.getValue();
+            if (buffers.remove(entry.getKey(), accumulator)) {
+                return accumulator;
+            }
+        }
+        return null;
+    }
+
+    private CloudImTextAccumulator removeOldestCloudImTextAccumulator(
+            java.util.concurrent.ConcurrentHashMap<String, CloudImTextAccumulator> buffers) {
+        String oldestKey = null;
+        CloudImTextAccumulator oldest = null;
+        for (var entry : buffers.entrySet()) {
+            CloudImTextAccumulator candidate = entry.getValue();
+            if (oldest == null || candidate.order < oldest.order) {
+                oldestKey = entry.getKey();
+                oldest = candidate;
+            }
+        }
+        if (oldestKey != null && buffers.remove(oldestKey, oldest)) {
+            return oldest;
+        }
+        return null;
+    }
+
+    private void cleanupCloudImTextBuffer(String sessionId,
+            java.util.concurrent.ConcurrentHashMap<String, CloudImTextAccumulator> buffers) {
+        if (buffers.isEmpty()) {
+            cloudImTextBuffer.remove(sessionId, buffers);
         }
     }
 
@@ -806,18 +976,8 @@ public class GatewayMessageRouter {
         completedSessions.put(sessionId, Instant.now());
 
         // 刷出累积的 text.delta 内容（上游未发 text.done 时，用累积内容合成 text.done）
-        StringBuilder accumulated = cloudImTextBuffer.remove(sessionId);
         SkillSession session = resolveSession(sessionId);
-        if (accumulated != null && !accumulated.isEmpty() && session != null && session.isImDomain()) {
-            StreamMessage textDoneMsg = StreamMessage.builder()
-                    .type(StreamMessage.Types.TEXT_DONE)
-                    .content(accumulated.toString())
-                    .role("assistant")
-                    .build();
-            emitter.emitToSession(session, sessionId, userId, textDoneMsg);
-            log.info("Flushed accumulated text.delta as text.done to IM: sessionId={}, length={}",
-                    sessionId, accumulated.length());
-        }
+        flushAccumulatedCloudImTextDone(sessionId, userId, session, node.path("traceId").asText(null));
 
         StreamMessage msg = StreamMessage.sessionStatus("idle");
         Long numericId = ProtocolUtils.parseSessionId(sessionId);

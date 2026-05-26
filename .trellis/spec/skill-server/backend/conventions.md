@@ -1122,3 +1122,94 @@ Wrong: treating each assistant upstream `messageId` as a persisted bubble bounda
 
 Correct: use the persisted canonical assistant message as the turn identity, and use the latest
 user `seq` as the only guard that permits an upstream id switch to start a new assistant turn.
+
+### 8. Overlapping External / IM Streaming Guard
+
+When an external or IM client sends a second user message before the first assistant reply has
+fully drained, late events from reply 1 may arrive after reply 2 has become the active assistant
+turn. SS must route those late events by the upstream reply identity they already carry, not by
+the currently active reply.
+
+#### Scope / Trigger
+
+- Trigger: `GatewayMessageRouter.handleToolEvent(...)` / `handleToolDone(...)` receives
+  overlapping assistant events for the same `welinkSessionId`.
+- Trigger: `MessagePersistenceService.prepareMessageContext(...)` or `persistIfFinal(...)`
+  sees `msg.messageId` / `msg.sourceMessageId` for an older persisted assistant message while
+  a newer assistant message is active.
+- Default cloud protocol note: cloud events may omit `partId`; `step.start` / `step.done` may
+  carry `messageId` without `partId`. SS must not repair this by using the user request
+  `messageId` as the assistant reply id.
+
+#### Signatures
+
+- `ActiveMessageTracker.resolveActiveMessage(Long sessionId, StreamMessage msg)`
+- `SkillMessageService.findBySessionIdAndMessageId(Long sessionId, String messageId)`
+- `GatewayMessageRouter.accumulateCloudImText(String sessionId, StreamMessage msg, SkillSession session, String traceId)`
+- `GatewayMessageRouter.flushAccumulatedCloudImTextDone(String sessionId, String userId, SkillSession session, String traceId)`
+
+#### Contracts
+
+- If `requestedMessageId` exists in DB and `existing.seq < active.seq`, apply that existing
+  message context to the current `StreamMessage` and return it, but do not replace
+  `activeMessages[sessionId]`.
+- `StreamMessage.messageId` is the delivery / canonical bubble id. `sourceMessageId` remains
+  the upstream event's original id and must not be overwritten when older events are rebound to
+  their old persisted message.
+- IM fallback text accumulation is scoped by `sourceMessageId || messageId`; when both are
+  missing, use the top-level Gateway `traceId`; only then use a missing-id bucket.
+- A real upstream `text.done` removes only the matching bucket. It must not clear all
+  `text.delta` content for the session.
+- A synthesized fallback `text.done` must include the accumulator's `messageId`,
+  `sourceMessageId`, and last known `partId` so `StreamMessageEmitter` and external WS delivery
+  cannot enrich it onto the newer active reply.
+- `tool_done` with a `traceId` flushes only the matching trace bucket. If there is no trace and
+  multiple buckets exist, flush the oldest bucket instead of merging all buckets into one
+  `text.done`.
+
+#### Validation & Error Matrix
+
+| Case | Required behavior |
+| --- | --- |
+| reply 1 event arrives while reply 2 is active | Emit and persist under reply 1 `messageId`; keep reply 2 active. |
+| reply 1 and reply 2 both have buffered IM `text.delta` | `tool_done(traceId=reply1)` emits only reply 1 fallback `text.done`. |
+| upstream sends real `text.done` for reply 1 | Remove reply 1 bucket only; leave reply 2 bucket intact. |
+| event has no `messageId` but has `traceId` | Use `trace:{traceId}` as the temporary accumulator key. |
+| event has no `messageId` and no `traceId` | Use the missing-id bucket; do not borrow the inbound request message id. |
+
+#### Good / Base / Bad Cases
+
+Good:
+
+```java
+SkillMessage existing = messageService.findBySessionIdAndMessageId(sessionId, requestedMessageId);
+if (existing != null && existing.getSeq() < active.messageSeq()) {
+    applyMessageContext(msg, toActiveMessageRef(existing), role);
+    return existingRef; // activeMessages keeps the newer reply
+}
+```
+
+Base:
+
+```java
+String key = firstNonBlank(msg.getSourceMessageId(), msg.getMessageId());
+if (key == null) {
+    key = firstNonBlank(traceId, "__missing_message_id__");
+}
+```
+
+Bad:
+
+```java
+cloudImTextBuffer.computeIfAbsent(sessionId, k -> new StringBuilder()).append(delta);
+cloudImTextBuffer.remove(sessionId); // clears unrelated overlapping reply content
+```
+
+#### Tests Required
+
+- `MessagePersistenceServiceTest`: late older upstream `messageId` keeps its original message
+  context while a newer turn remains active.
+- `GatewayMessageRouterTest`: IM fallback `text.done` flushes only the matching `traceId` /
+  message bucket and does not emit the other reply's buffered text.
+- Any future Gateway fallback change must assert assistant reply ids are generated reply ids,
+  never the inbound user request `messageId`.
