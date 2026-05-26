@@ -2,6 +2,7 @@ package com.opencode.cui.gateway.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.gateway.model.GatewayMessage;
+import com.opencode.cui.gateway.model.RelayMessage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -187,5 +188,22 @@ class EventRelayServiceTest {
         service.registerAgentSession("ak_test_001", "user-1", wsSession);
 
         assertEquals(1, service.getActiveSessionCount());
+    }
+
+    @Test
+    @DisplayName("cloud-control relay is routed to SkillRelayService")
+    void handleGwRelayMessageCloudControlRoutesToSkillRelayService() throws Exception {
+        GatewayMessage abort = GatewayMessage.builder()
+                .type(GatewayMessage.Type.INVOKE)
+                .action("abort_session")
+                .toolSessionId("tool-001")
+                .build();
+        String payload = objectMapper.writeValueAsString(abort);
+        String relayJson = objectMapper.writeValueAsString(RelayMessage.toCloudControl(payload));
+
+        service.handleGwRelayMessage(relayJson);
+
+        verify(skillRelayService).handleCloudControlRelay(payload);
+        verify(skillRelayService, never()).relayToSkill(any());
     }
 }

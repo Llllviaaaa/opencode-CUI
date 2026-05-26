@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -19,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -120,6 +122,29 @@ class SkillRelayServiceTest {
         verify(businessStrategy).route(any(GatewayMessage.class), any());
         verify(redisMessageBroker).setSessionRoute("ts-1", SOURCE_TYPE_SKILL, "ss-1");
         verify(redisMessageBroker, never()).getAgentUser(anyString());
+    }
+
+    @Test
+    @DisplayName("cloud-control relay routes through business strategy locally")
+    void handleCloudControlRelayRoutesThroughBusinessStrategy() throws Exception {
+        InvokeRouteStrategy businessStrategy = mock(InvokeRouteStrategy.class);
+        when(businessStrategy.getScope()).thenReturn("business");
+        SkillRelayService serviceWithBusinessRoute = new SkillRelayService(
+                redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, List.of(businessStrategy));
+        GatewayMessage abort = GatewayMessage.builder()
+                .type(GatewayMessage.Type.INVOKE)
+                .action("abort_session")
+                .toolSessionId("tool-001")
+                .traceId("trace-001")
+                .build();
+        ArgumentCaptor<GatewayMessage> messageCaptor = ArgumentCaptor.forClass(GatewayMessage.class);
+
+        serviceWithBusinessRoute.handleCloudControlRelay(objectMapper.writeValueAsString(abort));
+
+        verify(businessStrategy).route(messageCaptor.capture(), any());
+        assertEquals("abort_session", messageCaptor.getValue().getAction());
+        assertEquals("tool-001", messageCaptor.getValue().getToolSessionId());
+        verify(redisMessageBroker, never()).setSessionRoute(anyString(), anyString(), anyString());
     }
 
     @Nested

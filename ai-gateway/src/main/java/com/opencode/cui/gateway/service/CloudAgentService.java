@@ -1,12 +1,14 @@
 package com.opencode.cui.gateway.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.gateway.config.CloudTimeoutProperties;
 import com.opencode.cui.gateway.logging.GatewayStreamEventLogHelper;
 import com.opencode.cui.gateway.logging.MdcHelper;
 import com.opencode.cui.gateway.model.AssistantInstanceInfo;
 import com.opencode.cui.gateway.model.GatewayMessage;
+import com.opencode.cui.gateway.model.RelayMessage;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionContext;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionHandle;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionLifecycle;
@@ -14,8 +16,10 @@ import com.opencode.cui.gateway.service.cloud.CloudProtocolClient;
 import com.opencode.cui.gateway.service.cloud.WebHookExecutor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -64,6 +68,9 @@ public class CloudAgentService {
     private final CloudProtocolClient cloudProtocolClient;
     private final WebHookExecutor webHookExecutor;
     private final CloudTimeoutProperties timeoutProperties;
+    private final RedisMessageBroker redisMessageBroker;
+    private final ObjectMapper objectMapper;
+    private final String gatewayInstanceId;
     private final ConcurrentHashMap<String, ActiveCloudConnection> activeStreamingConnections =
             new ConcurrentHashMap<>();
 
@@ -73,13 +80,29 @@ public class CloudAgentService {
                              AssistantInstanceInfoService assistantInstanceInfoService,
                              CloudProtocolClient cloudProtocolClient,
                              WebHookExecutor webHookExecutor,
-                             CloudTimeoutProperties timeoutProperties) {
+                             CloudTimeoutProperties timeoutProperties,
+                             RedisMessageBroker redisMessageBroker,
+                             ObjectMapper objectMapper,
+                             @Value("${gateway.instance-id:${HOSTNAME:gateway-local}}") String gatewayInstanceId) {
         this.sysConfigRouteProvider = sysConfigRouteProvider;
         this.cloudRouteSwitchService = cloudRouteSwitchService;
         this.assistantInstanceInfoService = assistantInstanceInfoService;
         this.cloudProtocolClient = cloudProtocolClient;
         this.webHookExecutor = webHookExecutor;
         this.timeoutProperties = timeoutProperties;
+        this.redisMessageBroker = redisMessageBroker;
+        this.objectMapper = objectMapper;
+        this.gatewayInstanceId = gatewayInstanceId;
+    }
+
+    public CloudAgentService(SysConfigFallbackProviderV2 sysConfigRouteProvider,
+                             CloudRouteSwitchService cloudRouteSwitchService,
+                             AssistantInstanceInfoService assistantInstanceInfoService,
+                             CloudProtocolClient cloudProtocolClient,
+                             WebHookExecutor webHookExecutor,
+                             CloudTimeoutProperties timeoutProperties) {
+        this(sysConfigRouteProvider, cloudRouteSwitchService, assistantInstanceInfoService,
+                cloudProtocolClient, webHookExecutor, timeoutProperties, null, new ObjectMapper(), "gateway-local");
     }
 
     public CloudAgentService(SysConfigFallbackProviderV2 sysConfigRouteProvider,
@@ -111,7 +134,9 @@ public class CloudAgentService {
         }
         JsonNode payload = invokeMessage.getPayload();
         JsonNode cloudRequest = payload == null ? null : payload.path("cloudRequest");
-        String toolSessionId = payload == null ? null : payload.path("toolSessionId").asText(null);
+        String toolSessionId = firstNonBlank(
+                invokeMessage.getToolSessionId(),
+                textAt(payload, "toolSessionId"));
         String assistantAccount = firstNonBlank(
                 invokeMessage.getAssistantAccount(),
                 textAt(payload, "assistantAccount"),
@@ -329,6 +354,7 @@ public class CloudAgentService {
         context.setConnectionHandle(connectionHandle);
         ActiveCloudConnection activeConnection = registerActiveConnection(
                 toolSessionId, invokeMessage.getWelinkSessionId(), connectionHandle);
+        registerCloudStreamRoute(toolSessionId);
 
         CloudConnectionLifecycle lifecycle = new CloudConnectionLifecycle(
                 timeoutProperties.getFirstEventTimeoutSeconds(),
@@ -431,6 +457,7 @@ public class CloudAgentService {
             );
         } finally {
             removeActiveConnection(activeConnection);
+            removeCloudStreamRoute(toolSessionId);
             lifecycle.close();
         }
     }
@@ -451,15 +478,63 @@ public class CloudAgentService {
             }
         }
         if (activeConnection == null) {
+            if (relayAbortToOwningGateway(invokeMessage, toolSessionId)) {
+                return;
+            }
             log.info("[CLOUD_AGENT] abort_session ignored: reason=no_active_connection, toolSessionId={}, welinkSessionId={}, traceId={}",
                     toolSessionId, invokeMessage.getWelinkSessionId(), invokeMessage.getTraceId());
             return;
         }
 
         removeActiveConnection(activeConnection);
+        removeCloudStreamRoute(toolSessionId);
         boolean cancelled = activeConnection.handle().cancel();
         log.info("[CLOUD_AGENT] abort_session cancelled active stream: cancelled={}, toolSessionId={}, welinkSessionId={}, traceId={}",
                 cancelled, toolSessionId, invokeMessage.getWelinkSessionId(), invokeMessage.getTraceId());
+    }
+
+    private void registerCloudStreamRoute(String toolSessionId) {
+        if (!hasText(toolSessionId) || redisMessageBroker == null || !hasText(gatewayInstanceId)) {
+            return;
+        }
+        redisMessageBroker.setCloudStreamRoute(toolSessionId, gatewayInstanceId, cloudStreamRouteTtl());
+    }
+
+    private void removeCloudStreamRoute(String toolSessionId) {
+        if (!hasText(toolSessionId) || redisMessageBroker == null || !hasText(gatewayInstanceId)) {
+            return;
+        }
+        redisMessageBroker.removeCloudStreamRoute(toolSessionId, gatewayInstanceId);
+    }
+
+    private Duration cloudStreamRouteTtl() {
+        long maxDurationSeconds = Math.max(0, timeoutProperties.getMaxDurationSeconds());
+        return Duration.ofSeconds(Math.max(60, maxDurationSeconds + 60));
+    }
+
+    private boolean relayAbortToOwningGateway(GatewayMessage invokeMessage, String toolSessionId) {
+        if (!hasText(toolSessionId)
+                || redisMessageBroker == null
+                || objectMapper == null
+                || !hasText(gatewayInstanceId)) {
+            return false;
+        }
+        String ownerGatewayId = redisMessageBroker.getCloudStreamRoute(toolSessionId);
+        if (!hasText(ownerGatewayId) || gatewayInstanceId.equals(ownerGatewayId)) {
+            return false;
+        }
+        try {
+            String originalJson = objectMapper.writeValueAsString(invokeMessage);
+            String relayJson = objectMapper.writeValueAsString(RelayMessage.toCloudControl(originalJson));
+            redisMessageBroker.publishToGwRelay(ownerGatewayId, relayJson);
+            log.info("[CLOUD_AGENT] abort_session relayed to active stream owner: ownerGw={}, toolSessionId={}, traceId={}",
+                    ownerGatewayId, toolSessionId, invokeMessage.getTraceId());
+            return true;
+        } catch (Exception e) {
+            log.warn("[CLOUD_AGENT] abort_session owner relay failed: ownerGw={}, toolSessionId={}, traceId={}, error={}",
+                    ownerGatewayId, toolSessionId, invokeMessage.getTraceId(), e.getMessage());
+            return false;
+        }
     }
 
     private ActiveCloudConnection registerActiveConnection(String toolSessionId, String welinkSessionId,
@@ -578,6 +653,10 @@ public class CloudAgentService {
             return "****";
         }
         return value.substring(0, 2) + "****" + value.substring(value.length() - 2);
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private record RemoteRoute(String channelAddress,

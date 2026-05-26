@@ -52,6 +52,18 @@ class RelayMessageTest {
         assertEquals("{\"type\":\"invoke\"}", msg.originalMessage());
     }
 
+    @Test
+    @DisplayName("toCloudControl sets relayType and payload")
+    void toCloudControlSetsRelayTypeAndPayload() {
+        RelayMessage msg = RelayMessage.toCloudControl("{\"action\":\"abort_session\"}");
+
+        assertEquals("relay", msg.type());
+        assertEquals(RelayMessage.RELAY_TO_CLOUD_CONTROL, msg.relayType());
+        assertEquals("{\"action\":\"abort_session\"}", msg.originalMessage());
+        assertNull(msg.targetSourceType());
+        assertNull(msg.targetSourceInstanceId());
+    }
+
     // ==================== serialization ====================
 
     @Nested

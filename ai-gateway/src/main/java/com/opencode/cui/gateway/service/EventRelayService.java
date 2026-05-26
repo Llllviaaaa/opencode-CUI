@@ -116,6 +116,13 @@ public class EventRelayService {
                     return;
                 }
 
+                // Handle cloud-control relay: process a control frame on the GW instance that owns
+                // the local cloud SSE/WebSocket stream.
+                if (RelayMessage.RELAY_TO_CLOUD_CONTROL.equals(relayMessage.relayType())) {
+                    skillRelayService.handleCloudControlRelay(relayMessage.originalMessage());
+                    return;
+                }
+
                 gatewayMessageJson = relayMessage.originalMessage();
                 relaySourceType = relayMessage.sourceType();
                 relayRoutingKeys = relayMessage.routingKeys();

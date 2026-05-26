@@ -121,6 +121,54 @@ class RedisMessageBrokerTest {
         }
     }
 
+    // ==================== cloud stream route ====================
+
+    @Nested
+    @DisplayName("cloud stream 路由表")
+    class CloudStreamRouteTests {
+
+        @Test
+        @DisplayName("setCloudStreamRoute writes owner gateway with TTL")
+        void setCloudStreamRouteWritesOwnerWithTtl() {
+            broker.setCloudStreamRoute("tool-001", "gw-owner", Duration.ofSeconds(660));
+
+            verify(valueOperations).set("gw:cloud-stream:tool-001", "gw-owner", Duration.ofSeconds(660));
+        }
+
+        @Test
+        @DisplayName("getCloudStreamRoute returns stored owner gateway")
+        void getCloudStreamRouteReturnsStoredOwner() {
+            when(valueOperations.get("gw:cloud-stream:tool-001")).thenReturn("gw-owner");
+
+            assertEquals("gw-owner", broker.getCloudStreamRoute("tool-001"));
+        }
+
+        @SuppressWarnings("unchecked")
+        @Test
+        @DisplayName("removeCloudStreamRoute uses conditional owner delete")
+        void removeCloudStreamRouteUsesConditionalOwnerDelete() {
+            broker.removeCloudStreamRoute("tool-001", "gw-owner");
+
+            verify(redisTemplate).execute(any(), anyList(), any(Object[].class));
+        }
+
+        @SuppressWarnings("unchecked")
+        @Test
+        @DisplayName("cloud stream route ignores blank params")
+        void cloudStreamRouteIgnoresBlankParams() {
+            broker.setCloudStreamRoute("", "gw-owner", Duration.ofSeconds(660));
+            broker.setCloudStreamRoute("tool-001", "", Duration.ofSeconds(660));
+            broker.setCloudStreamRoute("tool-001", "gw-owner", null);
+            assertNull(broker.getCloudStreamRoute(""));
+            broker.removeCloudStreamRoute("", "gw-owner");
+            broker.removeCloudStreamRoute("tool-001", "");
+
+            verify(valueOperations, never()).set(
+                    eq("gw:cloud-stream:"), eq("gw-owner"), any(Duration.class));
+            verify(redisTemplate, never()).execute(any(), anyList(), any(Object[].class));
+        }
+    }
+
     // ==================== agentUser（保留的方法） ====================
 
     @Nested

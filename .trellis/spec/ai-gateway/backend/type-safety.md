@@ -46,7 +46,7 @@ public class GatewayMessage {
 GW→GW Redis 中继使用 `RelayMessage` record，而不是裸 `GatewayMessage`。它用 `type="relay"` 做格式判别，并额外挂载 `sourceType`、`routingKeys`、`relayType` 等元数据。
 
 ```java
-// Source: ai-gateway/src/main/java/com/opencode/cui/gateway/model/RelayMessage.java:27-121
+// Source: ai-gateway/src/main/java/com/opencode/cui/gateway/model/RelayMessage.java:27-132
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record RelayMessage(
         String type,
@@ -60,10 +60,13 @@ public record RelayMessage(
     public static final String TYPE = "relay";
     public static RelayMessage of(String originalMessageJson) { ... }
     public static RelayMessage toSource(String targetSourceType, String targetSourceInstanceId, String payload) { ... }
+    public static RelayMessage toCloudControl(String payload) { ... }
 }
 ```
 
-`RelayMessageTest` 明确验证了 Jackson round-trip、`type="relay"` 判别字段和 `routingKeys` 的 null/empty 行为。来源：`src/test/java/com/opencode/cui/gateway/model/RelayMessageTest.java:24-160`。
+`relayType` 的现有取值包括 `to-agent`（默认/空）、`to-source`、`to-source-broadcast`、`to-cloud-control`。`to-cloud-control` 只用于 GW 内部云端控制帧（例如跨 GW 的 `abort_session`），接收端必须交给本机 cloud/business 路由处理，不要按 Agent 下行消息解析。
+
+`RelayMessageTest` 明确验证了 Jackson round-trip、`type="relay"` 判别字段、`routingKeys` 的 null/empty 行为和 `toCloudControl(...)` factory。来源：`src/test/java/com/opencode/cui/gateway/model/RelayMessageTest.java:24-175`。
 
 ## REST DTO：不要再返回裸 `Map`
 

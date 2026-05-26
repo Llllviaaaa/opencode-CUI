@@ -555,6 +555,28 @@ public class SkillRelayService {
         }
     }
 
+    /**
+     * Handles a cloud-control relay from another GW instance.
+     * Used for abort_session when the receiving GW is the owner of the local cloud stream.
+     *
+     * @param payload the GatewayMessage JSON payload to process through business cloud routing
+     */
+    public void handleCloudControlRelay(String payload) {
+        InvokeRouteStrategy strategy = routeStrategyMap.get("business");
+        if (strategy == null) {
+            log.warn("[CLOUD_CONTROL_RX] Business route strategy missing, dropping control relay");
+            return;
+        }
+        try {
+            GatewayMessage message = objectMapper.readValue(payload, GatewayMessage.class).ensureTraceId();
+            log.info("[CLOUD_CONTROL_RX] Routing cloud control relay locally: action={}, toolSessionId={}, traceId={}",
+                    message.getAction(), resolveRoutingKey(message), message.getTraceId());
+            strategy.route(message, this::relayToSkill);
+        } catch (Exception e) {
+            log.error("[CLOUD_CONTROL_RX] Failed to handle cloud-control relay", e);
+        }
+    }
+
     // ==================== 下行 invoke 处理 ====================
 
     /**

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.gateway.config.CloudTimeoutProperties;
 import com.opencode.cui.gateway.model.AssistantInstanceInfo;
 import com.opencode.cui.gateway.model.GatewayMessage;
+import com.opencode.cui.gateway.model.RelayMessage;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionContext;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionHandle;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionLifecycle;
@@ -20,6 +21,7 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Duration;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -60,6 +62,8 @@ class CloudAgentServiceTest {
     @Mock
     private CloudTimeoutProperties cloudTimeoutProperties;
     @Mock
+    private RedisMessageBroker redisMessageBroker;
+    @Mock
     private Consumer<GatewayMessage> onRelay;
 
     @Captor
@@ -83,7 +87,8 @@ class CloudAgentServiceTest {
 
         cloudAgentService = new CloudAgentService(
                 sysConfigRouteProvider, cloudRouteSwitchService, assistantInstanceInfoService,
-                cloudProtocolClient, webHookExecutor, cloudTimeoutProperties);
+                cloudProtocolClient, webHookExecutor, cloudTimeoutProperties,
+                redisMessageBroker, objectMapper, "gw-local");
     }
 
     // ---------------------------------------------------------------------
@@ -228,6 +233,37 @@ class CloudAgentServiceTest {
         void handleInvoke_abortSessionActionIsNormalized() {
             cloudAgentService.handleInvoke(buildInvoke(" abort_session ", TEST_AK), onRelay);
 
+            verifyNoInteractions(sysConfigRouteProvider, assistantInstanceInfoService,
+                    cloudProtocolClient, webHookExecutor, onRelay);
+        }
+
+        @Test
+        @DisplayName("streaming chat registers and removes the cloud stream owner route")
+        void handleInvoke_streamingChatRegistersCloudStreamOwnerRoute() {
+            when(sysConfigRouteProvider.load(TEST_AK, CHAT_SCOPE, "biz-tag"))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
+
+            cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
+
+            verify(redisMessageBroker).setCloudStreamRoute(
+                    "tool-session-001", "gw-local", Duration.ofSeconds(660));
+            verify(redisMessageBroker).removeCloudStreamRoute("tool-session-001", "gw-local");
+        }
+
+        @Test
+        @DisplayName("abort_session without local active stream relays to the owning GW")
+        void handleInvoke_abortSessionNoLocalActiveStreamRelaysToOwnerGateway() throws Exception {
+            when(redisMessageBroker.getCloudStreamRoute("tool-session-001")).thenReturn("gw-owner");
+            ArgumentCaptor<String> relayCaptor = ArgumentCaptor.forClass(String.class);
+
+            cloudAgentService.handleInvoke(buildInvoke("abort_session", TEST_AK), onRelay);
+
+            verify(redisMessageBroker).publishToGwRelay(eq("gw-owner"), relayCaptor.capture());
+            RelayMessage relay = objectMapper.readValue(relayCaptor.getValue(), RelayMessage.class);
+            assertEquals(RelayMessage.RELAY_TO_CLOUD_CONTROL, relay.relayType());
+            GatewayMessage relayedMessage = objectMapper.readValue(relay.originalMessage(), GatewayMessage.class);
+            assertEquals("abort_session", relayedMessage.getAction());
+            assertEquals("tool-session-001", relayedMessage.getPayload().path("toolSessionId").asText());
             verifyNoInteractions(sysConfigRouteProvider, assistantInstanceInfoService,
                     cloudProtocolClient, webHookExecutor, onRelay);
         }

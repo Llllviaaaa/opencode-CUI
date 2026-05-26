@@ -34,6 +34,7 @@ import java.util.function.Consumer;
  *   <li>{@code gw:source-conn:{sourceType}:{sourceInstanceId}} — Source 连接注册 HASH（gwInstanceId → timestamp）</li>
  *   <li>{@code gw:route:{toolSessionId}} — Session 路由映射（sourceType:sourceInstanceId）</li>
  *   <li>{@code gw:route:w:{welinkSessionId}} — WeLink Session 路由映射（sourceType:sourceInstanceId）</li>
+ *   <li>{@code gw:cloud-stream:{toolSessionId}} — 云端流持有者（gatewayInstanceId）</li>
  *   <li>{@code gw:agent:user:{ak}} — AK→userId 绑定（保留）</li>
  *   <li>{@code auth:nonce:{nonce}} — 认证防重放（保留，由 AkSkAuthService 管理）</li>
  * </ul>
@@ -55,6 +56,9 @@ public class RedisMessageBroker {
 
     /** Key prefix for GW-internal agent registry: gw:internal:agent:{ak} → instanceId */
     private static final String INTERNAL_AGENT_KEY_PREFIX = "gw:internal:agent:";
+
+    /** Key prefix for active cloud stream owner: gw:cloud-stream:{toolSessionId} → gatewayInstanceId */
+    private static final String CLOUD_STREAM_KEY_PREFIX = "gw:cloud-stream:";
 
     // ==================== 保留的 Key/Channel 前缀 ====================
 
@@ -198,6 +202,57 @@ public class RedisMessageBroker {
         }
         redisTemplate.execute(CONDITIONAL_DELETE_SCRIPT,
                 java.util.List.of(connAkKey(ak)), expectedInstanceId);
+    }
+
+    // ==================== 云端流持有者路由表 ====================
+
+    /**
+     * Records the GW instance that currently owns a cloud streaming connection.
+     *
+     * <p>Abort control frames may arrive at a different GW instance than the one holding the
+     * SSE/WebSocket connection. This short-lived key lets that receiver relay the abort to the owner.</p>
+     *
+     * @param toolSessionId     tool session ID of the active cloud stream
+     * @param gatewayInstanceId GW instance ID holding the stream
+     * @param ttl               expiry for the ownership key
+     */
+    public void setCloudStreamRoute(String toolSessionId, String gatewayInstanceId, Duration ttl) {
+        if (toolSessionId == null || toolSessionId.isBlank()
+                || gatewayInstanceId == null || gatewayInstanceId.isBlank()
+                || ttl == null) {
+            return;
+        }
+        redisTemplate.opsForValue().set(cloudStreamKey(toolSessionId), gatewayInstanceId, ttl);
+        log.info("RedisMessageBroker.setCloudStreamRoute: toolSessionId={}, gatewayInstanceId={}",
+                toolSessionId, gatewayInstanceId);
+    }
+
+    /**
+     * Looks up the GW instance that owns the cloud streaming connection for a tool session.
+     *
+     * @param toolSessionId tool session ID
+     * @return gatewayInstanceId, or null if absent
+     */
+    public String getCloudStreamRoute(String toolSessionId) {
+        if (toolSessionId == null || toolSessionId.isBlank()) {
+            return null;
+        }
+        return redisTemplate.opsForValue().get(cloudStreamKey(toolSessionId));
+    }
+
+    /**
+     * Removes a cloud stream owner key only if it is still owned by the expected GW instance.
+     *
+     * @param toolSessionId              tool session ID
+     * @param expectedGatewayInstanceId  expected owner instance ID
+     */
+    public void removeCloudStreamRoute(String toolSessionId, String expectedGatewayInstanceId) {
+        if (toolSessionId == null || toolSessionId.isBlank()
+                || expectedGatewayInstanceId == null || expectedGatewayInstanceId.isBlank()) {
+            return;
+        }
+        redisTemplate.execute(CONDITIONAL_DELETE_SCRIPT,
+                java.util.List.of(cloudStreamKey(toolSessionId)), expectedGatewayInstanceId);
     }
 
     /**
@@ -793,6 +848,10 @@ public class RedisMessageBroker {
 
     private String internalAgentKey(String ak) {
         return INTERNAL_AGENT_KEY_PREFIX + ak;
+    }
+
+    private String cloudStreamKey(String toolSessionId) {
+        return CLOUD_STREAM_KEY_PREFIX + toolSessionId;
     }
 
     private String agentUserKey(String ak) {
