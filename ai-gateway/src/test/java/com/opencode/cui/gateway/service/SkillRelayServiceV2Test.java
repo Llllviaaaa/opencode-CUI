@@ -66,7 +66,7 @@ class SkillRelayServiceV2Test {
 
     /** Wait for AsyncSessionSender background thread to flush the send queue. */
     private static void awaitSend() throws InterruptedException {
-        Thread.sleep(200);
+        Thread.sleep(1000);
     }
 
     private static Map<String, Object> mutableAttrs(String source, String instanceId) {

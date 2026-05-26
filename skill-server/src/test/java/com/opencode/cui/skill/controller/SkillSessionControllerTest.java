@@ -506,8 +506,8 @@ class SkillSessionControllerTest {
     }
 
     @Test
-    @DisplayName("PR3 D7: abortSession 命中默认助手规则 → 不发 ABORT_SESSION invoke")
-    void abortSessionDefaultAssistantSkipsGatewayInvoke() {
+    @DisplayName("abortSession 命中默认助手规则 → 发 ABORT_SESSION invoke")
+    void abortSessionDefaultAssistantSendsGatewayInvoke() {
         SkillSession session = new SkillSession();
         session.setId(42L);
         session.setAk("AK_V");
@@ -517,13 +517,14 @@ class SkillSessionControllerTest {
         session.setBusinessSessionType("direct");
         session.setStatus(SkillSession.Status.ACTIVE);
         when(accessControlService.requireSessionAccess(42L, "1")).thenReturn(session);
-        when(ruleService.lookup("helpdesk", "direct"))
-                .thenReturn(Optional.of(new DefaultAssistantRule("AK_V", "ACC_V", "assistant_square")));
 
         var response = controller.abortSession("1", "42");
         assertEquals(HttpStatus.OK, response.getStatusCode());
-        // 不发 invoke
-        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+        ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
+        verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
+        assertEquals("AK_V", cmdCaptor.getValue().ak());
+        assertEquals("abort_session", cmdCaptor.getValue().action());
+        assertTrue(cmdCaptor.getValue().payload().contains("ts-1"));
     }
 
     @Test
@@ -559,7 +560,6 @@ class SkillSessionControllerTest {
         session.setBusinessSessionDomain("miniapp");
         session.setStatus(SkillSession.Status.ACTIVE);
         when(accessControlService.requireSessionAccess(42L, "1")).thenReturn(session);
-        when(ruleService.lookup(any(), any())).thenReturn(Optional.empty());
 
         controller.abortSession("1", "42");
         ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);

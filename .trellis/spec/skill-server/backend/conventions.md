@@ -809,6 +809,86 @@ try {
 
 Registry 必须 in-memory TTL cache（5min 量级），SysConfig 不要进热路径。跨服务（SS↔GW）只共享 profile name 字符串。参考：`CloudRequestProfileRegistry`、`BusinessScopeStrategy.buildInvoke` 调用点。
 
+## 云端 abort_session 是控制帧，不构造 cloudRequest
+
+### 1. Scope / Trigger
+
+适用于 `BusinessScopeStrategy.buildInvoke(...)` 与
+`DefaultAssistantScopeStrategy.buildInvoke(...)` 处理
+`GatewayActions.ABORT_SESSION`。`abort_session` 用来通知 GW 取消已有 SSE/WebSocket
+流，不是一次新的云端请求，因此不能进入 `CloudRequestStrategy.build(...)`。
+
+### 2. Signatures
+
+- 入口：`GatewayRelayService.sendInvokeToGateway(InvokeCommand)`。
+- business scope：`BusinessScopeStrategy.buildInvoke(InvokeCommand, AssistantInfo)`。
+- default assistant scope：`DefaultAssistantScopeStrategy.buildInvoke(InvokeCommand, AssistantInfo)`。
+- GW 取消键：`payload.toolSessionId`，profile hint：`payload.cloudProfile` 或顶层 `businessTag`。
+
+### 3. Contracts
+
+当 `action == abort_session` 时，SS 只发送控制 payload：
+
+- `type=invoke`
+- `action=abort_session`
+- `assistantScope=business`
+- `payload.toolSessionId=<current toolSessionId>`
+- `payload.cloudProfile=<resolved profile name>`
+- 可选顶层 `assistantAccount`、`businessTag`、`userId`
+
+`payload.cloudRequest` 必须缺失。`abort_session` 不需要 `content`、
+`assistantAccount`、`sendUserAccount` 组成 `CloudRequestContext`，也不得触发
+`DefaultCloudRequestStrategy` / `AssistantSquareCloudRequestStrategy` 的账号 fast-fail。
+chat / question_reply / permission_reply 仍按原逻辑构造 `cloudRequest`，保持
+`sendUserAccount` 强校验。
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+| --- | --- |
+| Business cloud session abort, payload only has `toolSessionId` | Build control invoke; do not call `CloudRequestStrategy.build`. |
+| Default-assistant session abort | Inject rule `assistantAccount` for top-level routing; still omit `cloudRequest`. |
+| chat / reply missing `sendUserAccount` | Preserve existing fast-fail; do not borrow abort's relaxed behavior. |
+| `toolSessionId` missing | Emit control invoke without `payload.toolSessionId`; GW logs no connection key/no active connection. |
+
+### 5. Good / Base / Bad Cases
+
+Good:
+
+```java
+if (GatewayActions.ABORT_SESSION.equals(action)) {
+    return buildAbortInvoke(command, toolSessionId, assistantAccount, businessTag, profile);
+}
+```
+
+Base:
+
+```java
+payload.put("cloudProfile", profile.name());
+payload.put("toolSessionId", toolSessionId);
+```
+
+Bad:
+
+```java
+CloudRequestContext context = CloudRequestContext.builder()
+        .sendUserAccount(extractField(command.payload(), "sendUserAccount"))
+        .build();
+return strategy.build(context); // wrong for abort_session
+```
+
+### 6. Tests Required
+
+- `BusinessScopeStrategyTest`: `abort_session` has no `payload.cloudRequest` and never calls `CloudRequestStrategy.build`.
+- `DefaultAssistantScopeStrategyTest`: default-assistant abort does not require `sendUserAccount`.
+- `DefaultAssistantRuleE2EIntegrationTest`: rule-injected abort wire payload contains `payload.toolSessionId` and omits `payload.cloudRequest`.
+
+### 7. Wrong vs Correct
+
+Wrong: fixing abort by adding fake `sendUserAccount` / fake `content` only to satisfy cloud request validation.
+
+Correct: treat abort as a GW control frame and keep the cloud request builders reserved for real cloud callback actions.
+
 ## JSON wire format 与 Java 字段名解耦
 
 `StreamMessage` / `SendMessageRequest` / 类似跨服务 DTO 序列化 JSON 时，**wire format（JSON 字段名）是契约，Java 字段名只是内部代号**——两者绝不能耦合。
@@ -1122,3 +1202,94 @@ Wrong: treating each assistant upstream `messageId` as a persisted bubble bounda
 
 Correct: use the persisted canonical assistant message as the turn identity, and use the latest
 user `seq` as the only guard that permits an upstream id switch to start a new assistant turn.
+
+### 8. Overlapping External / IM Streaming Guard
+
+When an external or IM client sends a second user message before the first assistant reply has
+fully drained, late events from reply 1 may arrive after reply 2 has become the active assistant
+turn. SS must route those late events by the upstream reply identity they already carry, not by
+the currently active reply.
+
+#### Scope / Trigger
+
+- Trigger: `GatewayMessageRouter.handleToolEvent(...)` / `handleToolDone(...)` receives
+  overlapping assistant events for the same `welinkSessionId`.
+- Trigger: `MessagePersistenceService.prepareMessageContext(...)` or `persistIfFinal(...)`
+  sees `msg.messageId` / `msg.sourceMessageId` for an older persisted assistant message while
+  a newer assistant message is active.
+- Default cloud protocol note: cloud events may omit `partId`; `step.start` / `step.done` may
+  carry `messageId` without `partId`. SS must not repair this by using the user request
+  `messageId` as the assistant reply id.
+
+#### Signatures
+
+- `ActiveMessageTracker.resolveActiveMessage(Long sessionId, StreamMessage msg)`
+- `SkillMessageService.findBySessionIdAndMessageId(Long sessionId, String messageId)`
+- `GatewayMessageRouter.accumulateCloudImText(String sessionId, StreamMessage msg, SkillSession session, String traceId)`
+- `GatewayMessageRouter.flushAccumulatedCloudImTextDone(String sessionId, String userId, SkillSession session, String traceId)`
+
+#### Contracts
+
+- If `requestedMessageId` exists in DB and `existing.seq < active.seq`, apply that existing
+  message context to the current `StreamMessage` and return it, but do not replace
+  `activeMessages[sessionId]`.
+- `StreamMessage.messageId` is the delivery / canonical bubble id. `sourceMessageId` remains
+  the upstream event's original id and must not be overwritten when older events are rebound to
+  their old persisted message.
+- IM fallback text accumulation is scoped by `sourceMessageId || messageId`; when both are
+  missing, use the top-level Gateway `traceId`; only then use a missing-id bucket.
+- A real upstream `text.done` removes only the matching bucket. It must not clear all
+  `text.delta` content for the session.
+- A synthesized fallback `text.done` must include the accumulator's `messageId`,
+  `sourceMessageId`, and last known `partId` so `StreamMessageEmitter` and external WS delivery
+  cannot enrich it onto the newer active reply.
+- `tool_done` with a `traceId` flushes only the matching trace bucket. If there is no trace and
+  multiple buckets exist, flush the oldest bucket instead of merging all buckets into one
+  `text.done`.
+
+#### Validation & Error Matrix
+
+| Case | Required behavior |
+| --- | --- |
+| reply 1 event arrives while reply 2 is active | Emit and persist under reply 1 `messageId`; keep reply 2 active. |
+| reply 1 and reply 2 both have buffered IM `text.delta` | `tool_done(traceId=reply1)` emits only reply 1 fallback `text.done`. |
+| upstream sends real `text.done` for reply 1 | Remove reply 1 bucket only; leave reply 2 bucket intact. |
+| event has no `messageId` but has `traceId` | Use `trace:{traceId}` as the temporary accumulator key. |
+| event has no `messageId` and no `traceId` | Use the missing-id bucket; do not borrow the inbound request message id. |
+
+#### Good / Base / Bad Cases
+
+Good:
+
+```java
+SkillMessage existing = messageService.findBySessionIdAndMessageId(sessionId, requestedMessageId);
+if (existing != null && existing.getSeq() < active.messageSeq()) {
+    applyMessageContext(msg, toActiveMessageRef(existing), role);
+    return existingRef; // activeMessages keeps the newer reply
+}
+```
+
+Base:
+
+```java
+String key = firstNonBlank(msg.getSourceMessageId(), msg.getMessageId());
+if (key == null) {
+    key = firstNonBlank(traceId, "__missing_message_id__");
+}
+```
+
+Bad:
+
+```java
+cloudImTextBuffer.computeIfAbsent(sessionId, k -> new StringBuilder()).append(delta);
+cloudImTextBuffer.remove(sessionId); // clears unrelated overlapping reply content
+```
+
+#### Tests Required
+
+- `MessagePersistenceServiceTest`: late older upstream `messageId` keeps its original message
+  context while a newer turn remains active.
+- `GatewayMessageRouterTest`: IM fallback `text.done` flushes only the matching `traceId` /
+  message bucket and does not emit the other reply's buffered text.
+- Any future Gateway fallback change must assert assistant reply ids are generated reply ids,
+  never the inbound user request `messageId`.

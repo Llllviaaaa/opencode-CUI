@@ -44,3 +44,58 @@ Compared GW cloud route config from SysConfig and assistant instance API, fixed 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: Fix miniapp cloud abort stream cancellation
+
+**Date**: 2026-05-27
+**Task**: Fix miniapp cloud abort stream cancellation
+**Branch**: `codex/fix-externalws-overlap-messageid`
+
+### Summary
+
+Fixed miniapp cloud/default-assistant abort by routing abort_session to GW, cancelling local SSE/WS streams, and relaying cross-GW abort to the cloud stream owner.
+
+### Main Changes
+
+Implemented miniapp cloud/default-assistant abort cancellation across SS and GW.
+
+Work commits:
+- c8bccaf fix miniapp default assistant abort cancellation
+- c82f8dd fix cloud abort control invoke payload
+- e9dea02 fix gateway cloud abort owner relay
+
+Validation:
+- ai-gateway targeted clean tests: CloudAgentServiceTest, RedisMessageBrokerTest, EventRelayServiceTest, SkillRelayServiceTest passed 75/75.
+- ai-gateway affected tests with RelayMessageTest passed 86/86.
+- ai-gateway full mvn test passed 399/399.
+- Earlier SS/GW targeted tests for abort payload and default assistant lifecycle passed 75/75.
+- GitNexus detect_changes reviewed GW relay and cloud stream impacts; npx.cmd gitnexus analyze refreshed the index.
+
+Notes:
+- The final issue was cross-GW ownership: abort_session could hit a GW without the local active cloud stream. GW now registers gw:cloud-stream:{toolSessionId} owner and relays no-local abort to the owner using RelayMessage relayType=to-cloud-control.
+- Spec docs were updated for cloud stream abort cancellation, Redis key ownership, and RelayMessage type-safety.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c8bccaf` | (see git log) |
+| `c82f8dd` | (see git log) |
+| `e9dea02` | (see git log) |
+
+### Testing
+
+- [OK] `mvn clean "-Dtest=CloudAgentServiceTest,RedisMessageBrokerTest,EventRelayServiceTest,SkillRelayServiceTest" test` in `ai-gateway` passed 75/75.
+- [OK] `mvn "-Dtest=RelayMessageTest,CloudAgentServiceTest,RedisMessageBrokerTest,EventRelayServiceTest,SkillRelayServiceTest" test` in `ai-gateway` passed 86/86.
+- [OK] `mvn test` in `ai-gateway` passed 399/399.
+- [OK] GitNexus impact analysis and `detect_changes` reviewed the GW relay/cloud-stream impact.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

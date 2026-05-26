@@ -45,6 +45,7 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
     @Override
     public void connect(CloudConnectionContext context, CloudConnectionLifecycle lifecycle,
                         Consumer<GatewayMessage> onEvent, Consumer<Throwable> onError) {
+        CloudConnectionHandle connectionHandle = context.getConnectionHandle();
         CountDownLatch closeLatch = new CountDownLatch(1);
         ScheduledExecutorService pingScheduler = null;
 
@@ -53,7 +54,7 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
                     .connectTimeout(Duration.ofSeconds(timeoutProperties.getConnectTimeoutSeconds()))
                     .build();
 
-            WebSocket.Listener listener = createListener(lifecycle, onEvent, onError, closeLatch);
+            WebSocket.Listener listener = createListener(lifecycle, onEvent, onError, closeLatch, connectionHandle);
 
             WebSocket.Builder wsBuilder = httpClient.newWebSocketBuilder();
             applyHeaders(wsBuilder, context);
@@ -64,10 +65,21 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
             WebSocket ws = wsBuilder
                     .buildAsync(URI.create(context.getChannelAddress()), listener)
                     .get(timeoutProperties.getConnectTimeoutSeconds(), TimeUnit.SECONDS);
+            connectionHandleOnCancel(connectionHandle, () -> {
+                ws.abort();
+                closeLatch.countDown();
+            });
+            if (isCancelled(connectionHandle)) {
+                ws.abort();
+                return;
+            }
 
             if (lifecycle != null) lifecycle.onConnected();
 
             String requestBody = objectMapper.writeValueAsString(context.getCloudRequest());
+            if (isCancelled(connectionHandle)) {
+                return;
+            }
             ws.sendText(requestBody, true).get(10, TimeUnit.SECONDS);
 
             // Start ping scheduler
@@ -78,6 +90,9 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
                 return t;
             });
             pingScheduler.scheduleAtFixedRate(() -> {
+                if (isCancelled(connectionHandle)) {
+                    return;
+                }
                 try {
                     ws.sendPing(ByteBuffer.allocate(0)).get(5, TimeUnit.SECONDS);
                 } catch (Exception e) {
@@ -89,10 +104,20 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
             closeLatch.await(timeoutProperties.getMaxDurationSeconds() + 30, TimeUnit.SECONDS);
 
         } catch (TimeoutException e) {
+            if (isCancelled(connectionHandle)) {
+                log.info("[WS] Connection cancelled: endpoint={}, traceId={}",
+                        context.getChannelAddress(), context.getTraceId());
+                return;
+            }
             log.error("[WS] Connect timeout: endpoint={}, traceId={}",
                     context.getChannelAddress(), context.getTraceId());
             onError.accept(new RuntimeException("WebSocket connect timeout"));
         } catch (Exception e) {
+            if (isCancelled(connectionHandle)) {
+                log.info("[WS] Connection cancelled: endpoint={}, traceId={}",
+                        context.getChannelAddress(), context.getTraceId());
+                return;
+            }
             log.error("[WS] Connection error: endpoint={}, traceId={}, error={}",
                     context.getChannelAddress(), context.getTraceId(), e.getMessage());
             onError.accept(e);
@@ -109,7 +134,7 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
     WebSocket.Listener createListener(CloudConnectionLifecycle lifecycle,
                                        Consumer<GatewayMessage> onEvent,
                                        Consumer<Throwable> onError) {
-        return createListener(lifecycle, onEvent, onError, null);
+        return createListener(lifecycle, onEvent, onError, null, null);
     }
 
     /**
@@ -119,17 +144,29 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
                                        Consumer<GatewayMessage> onEvent,
                                        Consumer<Throwable> onError,
                                        CountDownLatch closeLatch) {
+        return createListener(lifecycle, onEvent, onError, closeLatch, null);
+    }
+
+    WebSocket.Listener createListener(CloudConnectionLifecycle lifecycle,
+                                       Consumer<GatewayMessage> onEvent,
+                                       Consumer<Throwable> onError,
+                                       CountDownLatch closeLatch,
+                                       CloudConnectionHandle connectionHandle) {
         return new WebSocket.Listener() {
 
             private final StringBuilder textBuffer = new StringBuilder();
 
             @Override
             public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
+                if (isCancelled(connectionHandle)) {
+                    webSocket.request(1);
+                    return CompletableFuture.completedFuture(null);
+                }
                 textBuffer.append(data);
                 if (last) {
                     String json = textBuffer.toString();
                     textBuffer.setLength(0);
-                    processMessage(json, lifecycle, onEvent, onError);
+                    processMessage(json, lifecycle, onEvent, onError, connectionHandle);
                 }
                 webSocket.request(1);
                 return CompletableFuture.completedFuture(null);
@@ -137,6 +174,10 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
 
             @Override
             public CompletionStage<?> onPong(WebSocket webSocket, ByteBuffer message) {
+                if (isCancelled(connectionHandle)) {
+                    webSocket.request(1);
+                    return CompletableFuture.completedFuture(null);
+                }
                 if (lifecycle != null) lifecycle.onHeartbeat();
                 webSocket.request(1);
                 return CompletableFuture.completedFuture(null);
@@ -151,6 +192,11 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
 
             @Override
             public void onError(WebSocket webSocket, Throwable error) {
+                if (isCancelled(connectionHandle)) {
+                    log.info("[WS] Cancelled connection closed with error: {}", error.getMessage());
+                    if (closeLatch != null) closeLatch.countDown();
+                    return;
+                }
                 log.error("[WS] Error: {}", error.getMessage());
                 onError.accept(error);
                 if (closeLatch != null) closeLatch.countDown();
@@ -159,9 +205,16 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
     }
 
     private void processMessage(String json, CloudConnectionLifecycle lifecycle,
-                                Consumer<GatewayMessage> onEvent, Consumer<Throwable> onError) {
+                                Consumer<GatewayMessage> onEvent, Consumer<Throwable> onError,
+                                CloudConnectionHandle connectionHandle) {
+        if (isCancelled(connectionHandle)) {
+            return;
+        }
         try {
             GatewayMessage message = objectMapper.readValue(json, GatewayMessage.class);
+            if (isCancelled(connectionHandle)) {
+                return;
+            }
             // T13: 根据事件类型派发 pause/resume idle timer（必须在 onEventReceived 之前）
             dispatchIdleTimerByEventType(lifecycle, message);
             if (lifecycle != null) lifecycle.onEventReceived();
@@ -206,5 +259,15 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
     void applyHeaders(WebSocket.Builder wsBuilder, CloudConnectionContext context) {
         wsBuilder.header("X-Trace-Id", context.getTraceId() != null ? context.getTraceId() : "");
         cloudAuthService.applyAuth(wsBuilder, context.getAppId(), context.getAuthType());
+    }
+
+    private static boolean isCancelled(CloudConnectionHandle connectionHandle) {
+        return connectionHandle != null && connectionHandle.isCancelled();
+    }
+
+    private static void connectionHandleOnCancel(CloudConnectionHandle connectionHandle, Runnable action) {
+        if (connectionHandle != null) {
+            connectionHandle.onCancel(action);
+        }
     }
 }

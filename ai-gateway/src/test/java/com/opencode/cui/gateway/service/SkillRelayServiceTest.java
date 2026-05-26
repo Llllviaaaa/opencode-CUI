@@ -1,13 +1,16 @@
 package com.opencode.cui.gateway.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.gateway.model.GatewayMessage;
+import com.opencode.cui.gateway.service.cloud.InvokeRouteStrategy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -17,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -25,6 +29,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /** SkillRelayService 单元测试：验证 V2 路由表 + 一致性哈希环路由、广播降级、连接管理。 */
 @ExtendWith(MockitoExtension.class)
@@ -89,6 +94,58 @@ class SkillRelayServiceTest {
     }
 
     // ==================== V2 路由表直推 ====================
+
+    @Test
+    @DisplayName("cloud abort with cloudProfile routes to business strategy even without assistantScope")
+    void handleInvokeFromSkill_cloudAbortWithoutScopeRoutesBusiness() {
+        InvokeRouteStrategy businessStrategy = mock(InvokeRouteStrategy.class);
+        when(businessStrategy.getScope()).thenReturn("business");
+        SkillRelayService serviceWithBusinessRoute = new SkillRelayService(
+                redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, List.of(businessStrategy));
+
+        lenient().when(ss1Session.getId()).thenReturn("ss1-link");
+        when(ss1Session.getAttributes()).thenReturn(mutableAttrs(SOURCE_TYPE_SKILL, "ss-1"));
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("toolSessionId", "ts-1");
+        payload.put("cloudProfile", "assistant_square");
+        GatewayMessage msg = GatewayMessage.builder()
+                .type(GatewayMessage.Type.INVOKE)
+                .ak("ak1")
+                .userId("user1")
+                .source(SOURCE_TYPE_SKILL)
+                .action("abort_session")
+                .payload(payload)
+                .build();
+
+        serviceWithBusinessRoute.handleInvokeFromSkill(ss1Session, msg);
+
+        verify(businessStrategy).route(any(GatewayMessage.class), any());
+        verify(redisMessageBroker).setSessionRoute("ts-1", SOURCE_TYPE_SKILL, "ss-1");
+        verify(redisMessageBroker, never()).getAgentUser(anyString());
+    }
+
+    @Test
+    @DisplayName("cloud-control relay routes through business strategy locally")
+    void handleCloudControlRelayRoutesThroughBusinessStrategy() throws Exception {
+        InvokeRouteStrategy businessStrategy = mock(InvokeRouteStrategy.class);
+        when(businessStrategy.getScope()).thenReturn("business");
+        SkillRelayService serviceWithBusinessRoute = new SkillRelayService(
+                redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, List.of(businessStrategy));
+        GatewayMessage abort = GatewayMessage.builder()
+                .type(GatewayMessage.Type.INVOKE)
+                .action("abort_session")
+                .toolSessionId("tool-001")
+                .traceId("trace-001")
+                .build();
+        ArgumentCaptor<GatewayMessage> messageCaptor = ArgumentCaptor.forClass(GatewayMessage.class);
+
+        serviceWithBusinessRoute.handleCloudControlRelay(objectMapper.writeValueAsString(abort));
+
+        verify(businessStrategy).route(messageCaptor.capture(), any());
+        assertEquals("abort_session", messageCaptor.getValue().getAction());
+        assertEquals("tool-001", messageCaptor.getValue().getToolSessionId());
+        verify(redisMessageBroker, never()).setSessionRoute(anyString(), anyString(), anyString());
+    }
 
     @Nested
     @DisplayName("V2 路由表直推")

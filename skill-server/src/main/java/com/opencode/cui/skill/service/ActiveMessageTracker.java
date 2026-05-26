@@ -215,6 +215,17 @@ public class ActiveMessageTracker {
                 }
             }
 
+            if (existing == null) {
+                existing = messageService.findBySessionIdAndMessageId(sessionId, requestedMessageId);
+            }
+            if (isOlderExistingMessage(existing, active)) {
+                ActiveMessageRef existingRef = toActiveMessageRef(existing);
+                applyMessageContext(msg, existingRef, role);
+                log.debug("Applied older upstream message context without replacing active: sessionId={}, activeProtocolId={}, requestedProtocolId={}",
+                        sessionId, active.protocolMessageId(), requestedMessageId);
+                return existingRef;
+            }
+
             if (shouldKeepCurrentAssistantTurn(sessionId, active, msg, role)) {
                 applyMessageContext(msg, active, role);
                 log.debug("Kept active assistant turn despite upstream message id switch: sessionId={}, dbId={}, activeProtocolId={}, requestedProtocolId={}",
@@ -222,9 +233,6 @@ public class ActiveMessageTracker {
                 return active;
             }
 
-            if (existing == null) {
-                existing = messageService.findBySessionIdAndMessageId(sessionId, requestedMessageId);
-            }
             finalizeActiveMessage(sessionId, active, "message_id_changed");
         }
 
@@ -232,10 +240,7 @@ public class ActiveMessageTracker {
             existing = messageService.findBySessionIdAndMessageId(sessionId, requestedMessageId);
         }
         if (existing != null) {
-            ActiveMessageRef existingRef = new ActiveMessageRef(
-                    existing.getId(),
-                    existing.getMessageId(),
-                    existing.getSeq());
+            ActiveMessageRef existingRef = toActiveMessageRef(existing);
             activeMessages.put(sessionId, existingRef);
             applyMessageContext(msg, existingRef, role);
             return existingRef;
@@ -315,6 +320,14 @@ public class ActiveMessageTracker {
         return lastUser != null
                 && lastUser.getSeq() != null
                 && lastUser.getSeq() > active.messageSeq();
+    }
+
+    private boolean isOlderExistingMessage(SkillMessage existing, ActiveMessageRef active) {
+        return existing != null
+                && existing.getSeq() != null
+                && active != null
+                && active.messageSeq() != null
+                && existing.getSeq() < active.messageSeq();
     }
 
     /**
@@ -404,6 +417,13 @@ public class ActiveMessageTracker {
         msg.setMessageId(active.protocolMessageId());
         msg.setMessageSeq(active.messageSeq());
         msg.setRole(role);
+    }
+
+    private ActiveMessageRef toActiveMessageRef(SkillMessage message) {
+        return new ActiveMessageRef(
+                message.getId(),
+                message.getMessageId(),
+                message.getSeq());
     }
 
     private void finalizeActiveMessage(Long sessionId, ActiveMessageRef active, String reason) {

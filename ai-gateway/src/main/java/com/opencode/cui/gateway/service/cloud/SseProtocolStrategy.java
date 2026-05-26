@@ -13,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URI;
@@ -76,6 +77,7 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
     @Override
     public void connect(CloudConnectionContext context, CloudConnectionLifecycle lifecycle,
                         Consumer<GatewayMessage> onEvent, Consumer<Throwable> onError) {
+        CloudConnectionHandle connectionHandle = context.getConnectionHandle();
         // 通过 Registry 拼装 profile（查 cloud_protocol_profile_def:<name>，缺失则约定 fallback profile==decoder）
         CloudResponseProfile profile = profileRegistry.resolve(context.getCloudProfile());
         SseEventDecoder decoder = decoderFactory.resolveDecoder(profile.responseDecoderName());
@@ -106,10 +108,20 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                     profile.name(), profile.responseDecoderName());
 
             HttpResponse<InputStream> response = sendRequest(request);
+            InputStream responseBody = response.body();
+            if (responseBody != null) {
+                connectionHandleOnCancel(connectionHandle,
+                        () -> closeQuietly(responseBody, context.getTraceId()));
+            }
 
             if (response.statusCode() != 200) {
+                closeQuietly(responseBody, context.getTraceId());
                 onError.accept(new RuntimeException(
                         "SSE connection failed: HTTP " + response.statusCode()));
+                return;
+            }
+            if (isCancelled(connectionHandle)) {
+                closeQuietly(responseBody, context.getTraceId());
                 return;
             }
 
@@ -119,14 +131,23 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
             }
 
             // 5. 读取 SSE 流
-            readSseStream(response.body(), lifecycle, onEvent, onError,
-                    context.getTraceId(), decoder, session);
+            readSseStream(responseBody, lifecycle, onEvent, onError,
+                    context.getTraceId(), decoder, session, connectionHandle);
 
         } catch (Exception e) {
+            if (isCancelled(connectionHandle)) {
+                log.info("[SSE] Connection cancelled: endpoint={}, traceId={}",
+                        context.getChannelAddress(), context.getTraceId());
+                return;
+            }
             log.error("[SSE] Connection error: endpoint={}, traceId={}, error={}",
                     context.getChannelAddress(), context.getTraceId(), e.getMessage());
             onError.accept(e);
         } finally {
+            if (isCancelled(connectionHandle)) {
+                log.info("[SSE] Skip decoder flush after cancellation: traceId={}", context.getTraceId());
+                return;
+            }
             // 流终止 / 异常 / 超时三路径都补 flush
             try {
                 List<GatewayMessage> tail = decoder.flush(session);
@@ -158,23 +179,32 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                                Consumer<Throwable> onError,
                                String traceId,
                                SseEventDecoder decoder,
-                               DecoderSession session) {
+                               DecoderSession session,
+                               CloudConnectionHandle connectionHandle) {
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
             String line;
-            while ((line = reader.readLine()) != null) {
+            while (!isCancelled(connectionHandle) && (line = reader.readLine()) != null) {
                 if (line.startsWith(":")) {
                     // SSE 注释行（心跳）
                     notifyLifecycle(lifecycle, CloudConnectionLifecycle::onHeartbeat);
                     continue;
                 }
                 if (line.startsWith("data:")
-                        && handleDataLine(line, lifecycle, onEvent, traceId, decoder, session)) {
+                        && handleDataLine(line, lifecycle, onEvent, traceId, decoder, session, connectionHandle)) {
                     return;
                 }
             }
+            if (isCancelled(connectionHandle)) {
+                log.info("[SSE] Stream cancelled: traceId={}", traceId);
+                return;
+            }
             log.info("[SSE] Stream completed: traceId={}", traceId);
         } catch (Exception e) {
+            if (isCancelled(connectionHandle)) {
+                log.info("[SSE] Stream read cancelled: traceId={}", traceId);
+                return;
+            }
             log.error("[SSE] Stream read error: traceId={}, error={}", traceId, e.getMessage());
             onError.accept(e);
         }
@@ -187,7 +217,8 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
      */
     private boolean handleDataLine(String line, CloudConnectionLifecycle lifecycle,
                                    Consumer<GatewayMessage> onEvent, String traceId,
-                                   SseEventDecoder decoder, DecoderSession session) {
+                                   SseEventDecoder decoder, DecoderSession session,
+                                   CloudConnectionHandle connectionHandle) {
         String jsonData = line.substring(5).trim();
         if (jsonData.isEmpty()) {
             return false;
@@ -210,6 +241,9 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
             }
             boolean terminal = false;
             for (GatewayMessage message : messages) {
+                if (isCancelled(connectionHandle)) {
+                    return true;
+                }
                 dispatchIdleTimerByEventType(lifecycle, message);
                 notifyLifecycle(lifecycle, CloudConnectionLifecycle::onEventReceived);
                 onEvent.accept(message);
@@ -242,6 +276,27 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
                                         Consumer<CloudConnectionLifecycle> action) {
         if (lifecycle != null) {
             action.accept(lifecycle);
+        }
+    }
+
+    private static boolean isCancelled(CloudConnectionHandle connectionHandle) {
+        return connectionHandle != null && connectionHandle.isCancelled();
+    }
+
+    private static void connectionHandleOnCancel(CloudConnectionHandle connectionHandle, Runnable action) {
+        if (connectionHandle != null) {
+            connectionHandle.onCancel(action);
+        }
+    }
+
+    private static void closeQuietly(InputStream inputStream, String traceId) {
+        if (inputStream == null) {
+            return;
+        }
+        try {
+            inputStream.close();
+        } catch (IOException e) {
+            log.debug("[SSE] Close stream failed: traceId={}, error={}", traceId, e.getMessage());
         }
     }
 

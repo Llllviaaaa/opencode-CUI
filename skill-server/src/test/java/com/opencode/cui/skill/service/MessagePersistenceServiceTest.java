@@ -226,6 +226,64 @@ class MessagePersistenceServiceTest {
     }
 
     @Test
+    @DisplayName("late older upstream message keeps its own message context while a newer turn is active")
+    void lateOlderUpstreamMessageKeepsOriginalMessageContext() {
+        SkillMessage oldMessage = SkillMessage.builder()
+                .id(11L).messageId("msg_old").sessionId(1L).seq(2).build();
+        SkillMessage newMessage = SkillMessage.builder()
+                .id(22L).messageId("msg_new").sessionId(1L).seq(4).build();
+        when(messageService.saveMessage(any(com.opencode.cui.skill.model.SaveMessageCommand.class)))
+                .thenReturn(oldMessage)
+                .thenReturn(newMessage);
+        when(partRepository.findConcatenatedTextByMessageId(11L))
+                .thenReturn("old")
+                .thenReturn("old")
+                .thenReturn("old-tail");
+        when(partRepository.findConcatenatedTextByMessageId(22L)).thenReturn("new");
+
+        service.persistIfFinal(1L, StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DONE)
+                .messageId("msg_old")
+                .sourceMessageId("msg_old")
+                .partId("part-old-1")
+                .content("old")
+                .build());
+
+        when(messageService.findLastUserMessage(1L)).thenReturn(SkillMessage.builder()
+                .id(99L).messageId("user-after-old").sessionId(1L).seq(3)
+                .role(SkillMessage.Role.USER).build());
+
+        service.persistIfFinal(1L, StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DONE)
+                .messageId("msg_new")
+                .sourceMessageId("msg_new")
+                .partId("part-new-1")
+                .content("new")
+                .build());
+
+        when(messageService.findBySessionIdAndMessageId(1L, "msg_old")).thenReturn(oldMessage);
+
+        StreamMessage lateOld = StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DONE)
+                .messageId("msg_old")
+                .sourceMessageId("msg_old")
+                .partId("part-old-2")
+                .content("tail")
+                .build();
+        service.persistIfFinal(1L, lateOld);
+
+        assertThat(lateOld.getMessageId()).isEqualTo("msg_old");
+        assertThat(lateOld.getSourceMessageId()).isEqualTo("msg_old");
+        assertThat(activeMessageTracker.getActiveMessage(1L).protocolMessageId()).isEqualTo("msg_new");
+
+        ArgumentCaptor<SkillMessagePart> captor = ArgumentCaptor.forClass(SkillMessagePart.class);
+        verify(partRepository, times(3)).upsert(captor.capture());
+        assertThat(captor.getAllValues())
+                .extracting(SkillMessagePart::getMessageId)
+                .containsExactly(11L, 22L, 11L);
+    }
+
+    @Test
     @DisplayName("tool/text upstream messageId switches stay in the same assistant turn")
     void upstreamMessageIdSwitchInsideAssistantTurnKeepsCanonicalActiveMessage() {
         when(messageService.saveMessage(any(com.opencode.cui.skill.model.SaveMessageCommand.class)))

@@ -174,6 +174,23 @@ class GatewayMessageRouterTest {
         return node;
     }
 
+    private ObjectNode buildTextToolEvent(String messageId, String traceId, String content, String partId) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("type", "tool_event");
+        node.put("welinkSessionId", WELINK_SESSION_ID);
+        node.put("ak", "AK_V");
+        node.put("traceId", traceId);
+        ObjectNode event = objectMapper.createObjectNode();
+        event.put("type", StreamMessage.Types.TEXT_DELTA);
+        ObjectNode properties = objectMapper.createObjectNode();
+        properties.put("messageId", messageId);
+        properties.put("partId", partId);
+        properties.put("content", content);
+        event.set("properties", properties);
+        node.set("event", event);
+        return node;
+    }
+
     @Test
     @DisplayName("default assistant tool_event uses session domain/type to translate cloud text")
     void toolEvent_defaultAssistantSession_usesSessionAwareScope() {
@@ -253,6 +270,60 @@ class GatewayMessageRouterTest {
         order.verify(persistenceService).prepareMessageContext(Long.parseLong(WELINK_SESSION_ID), translated);
         order.verify(emitter).emitToSession(session, WELINK_SESSION_ID, "user-1", translated);
         order.verify(bufferService).accumulate(WELINK_SESSION_ID, translated);
+    }
+
+    @Test
+    @DisplayName("IM text.done flush uses the matching upstream trace instead of the whole session buffer")
+    void toolDone_imSessionFlushesOnlyMatchingTextBuffer() {
+        router = buildRouter(true);
+        SkillSession session = SkillSession.builder()
+                .id(Long.parseLong(WELINK_SESSION_ID))
+                .userId("user-1")
+                .ak("AK_V")
+                .businessSessionDomain(SkillSession.DOMAIN_IM)
+                .businessSessionType(SkillSession.SESSION_TYPE_DIRECT)
+                .build();
+        when(sessionService.findByIdSafe(Long.parseLong(WELINK_SESSION_ID))).thenReturn(session);
+        when(scopeStrategy.translateEvent(any(), eq(WELINK_SESSION_ID))).thenAnswer(inv -> {
+            com.fasterxml.jackson.databind.JsonNode event = inv.getArgument(0);
+            com.fasterxml.jackson.databind.JsonNode props = event.path("properties");
+            String messageId = props.path("messageId").asText(null);
+            return StreamMessage.builder()
+                    .type(event.path("type").asText())
+                    .messageId(messageId)
+                    .sourceMessageId(messageId)
+                    .partId(props.path("partId").asText(null))
+                    .content(props.path("content").asText(null))
+                    .role("assistant")
+                    .build();
+        });
+
+        router.route("tool_event", "AK_V", "user-1",
+                buildTextToolEvent("msg-old", "trace-old", "old-", "part-old"));
+        router.route("tool_event", "AK_V", "user-1",
+                buildTextToolEvent("msg-new", "trace-new", "new-", "part-new"));
+
+        ObjectNode done = objectMapper.createObjectNode();
+        done.put("type", "tool_done");
+        done.put("welinkSessionId", WELINK_SESSION_ID);
+        done.put("traceId", "trace-old");
+        router.route("tool_done", "AK_V", "user-1", done);
+
+        org.mockito.ArgumentCaptor<StreamMessage> captor =
+                org.mockito.ArgumentCaptor.forClass(StreamMessage.class);
+        verify(emitter, org.mockito.Mockito.atLeastOnce())
+                .emitToSession(eq(session), eq(WELINK_SESSION_ID), eq("user-1"), captor.capture());
+
+        java.util.List<StreamMessage> flushedDone = captor.getAllValues().stream()
+                .filter(msg -> StreamMessage.Types.TEXT_DONE.equals(msg.getType()))
+                .toList();
+        assertEquals(1, flushedDone.size());
+        assertEquals("msg-old", flushedDone.get(0).getMessageId());
+        assertEquals("msg-old", flushedDone.get(0).getSourceMessageId());
+        assertEquals("old-", flushedDone.get(0).getContent());
+        assertFalse(captor.getAllValues().stream()
+                .anyMatch(msg -> StreamMessage.Types.TEXT_DONE.equals(msg.getType())
+                        && "new-".equals(msg.getContent())));
     }
 
     @Test

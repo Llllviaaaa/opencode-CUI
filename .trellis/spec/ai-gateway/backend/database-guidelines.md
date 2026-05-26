@@ -96,12 +96,15 @@ public void checkTimeouts() { ... }
 | `gw:source-conn:{sourceType}:{sourceInstanceId}` | Hash + TTL | Source 连接注册表 |
 | `gw:route:{toolSessionId}` | KV + TTL | `toolSessionId -> sourceType:sourceInstanceId` |
 | `gw:route:w:{welinkSessionId}` | KV + TTL | `welinkSessionId -> sourceType:sourceInstanceId` |
+| `gw:cloud-stream:{toolSessionId}` | KV + TTL | 云端 SSE/WebSocket 流 owner：`toolSessionId -> gatewayInstanceId` |
 | `gw:agent:user:{ak}` | KV | Agent AK → userId 绑定 |
 | `agent:{ak}` | pub/sub channel | Agent 本地投递通道 |
 | `gw:relay:{instanceId}` | pub/sub channel | GW→GW 新版中继 |
 | `gw:legacy-relay:{instanceId}` | pub/sub channel | 旧版 GW→GW 兼容中继 |
 
-来源：`ai-gateway/src/main/java/com/opencode/cui/gateway/service/RedisMessageBroker.java:56-99,158-282,700-781`。
+来源：`ai-gateway/src/main/java/com/opencode/cui/gateway/service/RedisMessageBroker.java:56-99,158-282,700-850`。
+
+`gw:cloud-stream:{toolSessionId}` 只用于云端流取消的 GW owner 查找；它不能替代 `gw:route:{toolSessionId}`，后者记录的是 source service 路由。删除云端流 owner 必须走条件删除，避免非 owner GW 清掉仍在使用的流 owner。
 
 ## Pending Queue 模式
 

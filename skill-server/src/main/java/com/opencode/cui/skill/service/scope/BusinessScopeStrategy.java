@@ -73,6 +73,16 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
         // 从 command payload 提取 toolSessionId 作为 topicId
         String toolSessionId = extractField(command.payload(), "toolSessionId");
 
+        String assistantAccount = firstNonBlank(
+                extractField(command.payload(), "assistantAccount"),
+                command.assistantAccount(),
+                command.partnerAccount());
+
+        CloudRequestProfile profile = profileRegistry.resolve(businessTag);
+        if (GatewayActions.ABORT_SESSION.equals(action)) {
+            return buildAbortInvoke(command, toolSessionId, assistantAccount, businessTag, profile);
+        }
+
         // 取业务方扩展参数（缺省 / 非 object → null，由下方兜底为 {}）
         JsonNode businessExtParam = extractObjectField(command.payload(), "businessExtParam");
 
@@ -99,11 +109,6 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
                         command.domain(), command.domainType(), command.businessSessionId(),
                         businessTag, null));
 
-        String assistantAccount = firstNonBlank(
-                extractField(command.payload(), "assistantAccount"),
-                command.assistantAccount(),
-                command.partnerAccount());
-
         CloudRequestContext context = CloudRequestContext.builder()
                 .content(content)
                 .contentType("text")
@@ -120,7 +125,6 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
                 .replyResponse(replyResponse)
                 .build();
 
-        CloudRequestProfile profile = profileRegistry.resolve(businessTag);
         CloudRequestStrategy strategy = profile.requestStrategy();
         ObjectNode cloudRequest = strategy.build(context);
 
@@ -159,6 +163,46 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
             return objectMapper.writeValueAsString(message);
         } catch (JsonProcessingException e) {
             log.error("Failed to serialize business invoke message: ak={}, businessTag={}",
+                    command.ak(), businessTag, e);
+            return null;
+        }
+    }
+
+    private String buildAbortInvoke(InvokeCommand command,
+                                    String toolSessionId,
+                                    String assistantAccount,
+                                    String businessTag,
+                                    CloudRequestProfile profile) {
+        ObjectNode payload = objectMapper.createObjectNode();
+        if (toolSessionId != null && !toolSessionId.isBlank()) {
+            payload.put("toolSessionId", toolSessionId);
+        }
+        payload.put("cloudProfile", profile.name());
+
+        ObjectNode message = objectMapper.createObjectNode();
+        message.put("type", "invoke");
+        message.put("ak", command.ak());
+        message.put("source", "skill-server");
+        message.put("action", command.action());
+        message.put("assistantScope", "business");
+        if (assistantAccount != null && !assistantAccount.isBlank()) {
+            message.put("assistantAccount", assistantAccount);
+        }
+        if (businessTag != null && !businessTag.isBlank()) {
+            message.put("businessTag", businessTag);
+        }
+        if (command.userId() != null && !command.userId().isBlank()) {
+            message.put("userId", command.userId());
+        }
+
+        String traceId = MdcHelper.ensureTraceId();
+        message.put("traceId", traceId);
+        message.set("payload", payload);
+
+        try {
+            return objectMapper.writeValueAsString(message);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to serialize business abort invoke message: ak={}, businessTag={}",
                     command.ak(), businessTag, e);
             return null;
         }

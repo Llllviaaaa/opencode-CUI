@@ -59,4 +59,27 @@ class GatewayWSClientTest {
 
         assertFalse(client.sendToGateway("test-message"));
     }
+
+    @Test
+    @DisplayName("messages with same toolSessionId are routed to the same pool slot")
+    void startIndexForMessageUsesToolSessionIdStickyRouting() {
+        GatewayWSClient client = createClient();
+        String chat = "{\"type\":\"invoke\",\"action\":\"chat\",\"payload\":{\"toolSessionId\":\"ts-123\"}}";
+        String abort = "{\"type\":\"invoke\",\"action\":\"abort_session\",\"payload\":{\"toolSessionId\":\"ts-123\"}}";
+
+        int chatIndex = client.startIndexForMessage(chat, 5);
+        int abortIndex = client.startIndexForMessage(abort, 5);
+
+        assertEquals(chatIndex, abortIndex);
+        assertEquals(Math.floorMod("ts-123".hashCode(), 5), chatIndex);
+    }
+
+    @Test
+    @DisplayName("messages without session key still use round-robin")
+    void startIndexForMessageFallsBackToRoundRobinWithoutRouteKey() {
+        GatewayWSClient client = createClient();
+
+        assertEquals(0, client.startIndexForMessage("not-json", 3));
+        assertEquals(1, client.startIndexForMessage("not-json", 3));
+    }
 }

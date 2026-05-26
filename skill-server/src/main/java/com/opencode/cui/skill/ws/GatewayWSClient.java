@@ -1,5 +1,6 @@
 package com.opencode.cui.skill.ws;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.cui.skill.service.GatewayRelayService;
 import com.opencode.cui.skill.service.SessionRouteService;
@@ -30,7 +31,8 @@ import java.util.concurrent.atomic.AtomicReferenceArray;
  * Gateway WebSocket connection pool manager.
  *
  * <p>Maintains N WebSocket connections to the Gateway ALB endpoint.
- * Messages are dispatched via round-robin across available connections.
+ * Messages carrying a session key are dispatched sticky by that key; messages
+ * without a session key are dispatched via round-robin across available connections.
  * Each connection has independent reconnect logic with exponential backoff.</p>
  *
  * <h3>Configuration</h3>
@@ -158,7 +160,7 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget {
         }
 
         int count = snapshot.length();
-        int start = (roundRobinCounter.getAndIncrement() & Integer.MAX_VALUE) % count;
+        int start = startIndexForMessage(message, count);
 
         // Try round-robin starting from the selected slot, wrapping around
         for (int i = 0; i < count; i++) {
@@ -190,6 +192,53 @@ public class GatewayWSClient implements GatewayRelayService.GatewayRelayTarget {
             }
         }
         return false;
+    }
+
+    int startIndexForMessage(String message, int count) {
+        String routeKey = extractRouteKey(message);
+        if (routeKey != null) {
+            return Math.floorMod(routeKey.hashCode(), count);
+        }
+        return (roundRobinCounter.getAndIncrement() & Integer.MAX_VALUE) % count;
+    }
+
+    private String extractRouteKey(String message) {
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(message);
+            JsonNode payload = node.path("payload");
+            return firstNonBlank(
+                    textAt(payload, "toolSessionId"),
+                    textAt(node, "toolSessionId"),
+                    textAt(node, "welinkSessionId"),
+                    textAt(payload, "welinkSessionId"));
+        } catch (Exception e) {
+            log.debug("Failed to parse gateway route key: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private static String textAt(JsonNode node, String fieldName) {
+        if (node == null || !node.isObject()) {
+            return null;
+        }
+        JsonNode value = node.path(fieldName);
+        if (value.isMissingNode() || value.isNull()) {
+            return null;
+        }
+        String text = value.asText(null);
+        return (text == null || text.isBlank()) ? null : text;
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     // ==================== Connection management ====================

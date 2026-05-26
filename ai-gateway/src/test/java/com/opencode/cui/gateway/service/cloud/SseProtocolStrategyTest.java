@@ -339,6 +339,26 @@ class SseProtocolStrategyTest {
         assertEquals(1, receivedEvents.size());
     }
 
+    @Test
+    @DisplayName("abort cancellation closes SSE without decoder flush")
+    void sse_cancelledConnectionSkipsDecoderFlush() throws Exception {
+        HttpResponse<InputStream> response = mockResponse(200,
+                "data: {\"type\":\"tool_event\",\"toolSessionId\":\"s1\",\"event\":{\"text\":\"late\"}}\n");
+        doReturn(response).when(strategy).sendRequest(any(HttpRequest.class));
+
+        CloudConnectionHandle handle = new CloudConnectionHandle();
+        handle.cancel();
+        CloudConnectionContext context = buildContext();
+        context.setCloudProfile("assistant_square");
+        context.setConnectionHandle(handle);
+
+        strategy.connect(context, lifecycle, onEvent, onError);
+
+        assertTrue(receivedEvents.isEmpty());
+        assertTrue(receivedErrors.isEmpty());
+        verify(assistantSquareStub, never()).flush(any());
+    }
+
     // ==================== G32: tool_done 触发 lifecycle.onTerminalEvent() ====================
 
     @Test

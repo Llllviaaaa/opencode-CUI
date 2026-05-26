@@ -13,11 +13,12 @@ import java.util.List;
  * GW-A publishes a {@code RelayMessage} to {@code gw:relay:{gwB-instanceId}}.
  * GW-B receives it, extracts {@code originalMessage}, and delivers to the local Agent.
  *
- * <p>Supports two relay types:
+ * <p>Supports relay types:
  * <ul>
  *   <li><b>to-agent</b> (default): delivers {@code originalMessage} to a local Agent session.</li>
  *   <li><b>to-source</b>: delivers {@code originalMessage} to a local Source WebSocket connection
  *       identified by {@code targetSourceType} and {@code targetSourceInstanceId}.</li>
+ *   <li><b>to-cloud-control</b>: delivers a cloud control frame to local GW cloud routing logic.</li>
  * </ul>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -71,6 +72,9 @@ public record RelayMessage(
     /** Relay type: broadcast to all local Source connections (L3 fallback). */
     public static final String RELAY_TO_SOURCE_BROADCAST = "to-source-broadcast";
 
+    /** Relay type: deliver a cloud control frame to the local GW cloud routing logic. */
+    public static final String RELAY_TO_CLOUD_CONTROL = "to-cloud-control";
+
     /**
      * Factory: creates a minimal relay message (no routing-learning metadata).
      *
@@ -114,5 +118,16 @@ public record RelayMessage(
      */
     public static RelayMessage toSourceBroadcast(String payload) {
         return new RelayMessage(TYPE, null, null, payload, RELAY_TO_SOURCE_BROADCAST, null, null);
+    }
+
+    /**
+     * Factory: creates a cloud-control relay message.
+     * The receiving GW should route the payload through its local cloud invoke strategy.
+     *
+     * @param payload the GatewayMessage JSON payload to process locally
+     * @return a new RelayMessage with {@code relayType="to-cloud-control"}
+     */
+    public static RelayMessage toCloudControl(String payload) {
+        return new RelayMessage(TYPE, null, null, payload, RELAY_TO_CLOUD_CONTROL, null, null);
     }
 }
