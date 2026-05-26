@@ -104,7 +104,7 @@ public class SkillSessionFlowService {
     }
 
     public void abortSession(SkillSession session) {
-        if (shouldSendLifecycleInvoke(session)) {
+        if (shouldSendAbortInvoke(session)) {
             gatewayRelayService.sendInvokeToGateway(lifecycleCommand(session, GatewayActions.ABORT_SESSION));
         }
     }
@@ -169,6 +169,11 @@ public class SkillSessionFlowService {
                 session.getBusinessSessionDomain(), session.getBusinessSessionType()).isPresent();
         return !isDefaultAssistant
                 && hasAssistantIdentity(session.getAk(), session.getAssistantAccount())
+                && session.getToolSessionId() != null;
+    }
+
+    private boolean shouldSendAbortInvoke(SkillSession session) {
+        return hasAssistantIdentity(session.getAk(), session.getAssistantAccount())
                 && session.getToolSessionId() != null;
     }
 

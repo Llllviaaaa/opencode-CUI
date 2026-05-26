@@ -1,7 +1,9 @@
 package com.opencode.cui.gateway.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.gateway.model.GatewayMessage;
+import com.opencode.cui.gateway.service.cloud.InvokeRouteStrategy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -25,6 +27,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /** SkillRelayService 单元测试：验证 V2 路由表 + 一致性哈希环路由、广播降级、连接管理。 */
 @ExtendWith(MockitoExtension.class)
@@ -89,6 +92,35 @@ class SkillRelayServiceTest {
     }
 
     // ==================== V2 路由表直推 ====================
+
+    @Test
+    @DisplayName("cloud abort with cloudProfile routes to business strategy even without assistantScope")
+    void handleInvokeFromSkill_cloudAbortWithoutScopeRoutesBusiness() {
+        InvokeRouteStrategy businessStrategy = mock(InvokeRouteStrategy.class);
+        when(businessStrategy.getScope()).thenReturn("business");
+        SkillRelayService serviceWithBusinessRoute = new SkillRelayService(
+                redisMessageBroker, objectMapper, INSTANCE_ID, routingTable, List.of(businessStrategy));
+
+        lenient().when(ss1Session.getId()).thenReturn("ss1-link");
+        when(ss1Session.getAttributes()).thenReturn(mutableAttrs(SOURCE_TYPE_SKILL, "ss-1"));
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("toolSessionId", "ts-1");
+        payload.put("cloudProfile", "assistant_square");
+        GatewayMessage msg = GatewayMessage.builder()
+                .type(GatewayMessage.Type.INVOKE)
+                .ak("ak1")
+                .userId("user1")
+                .source(SOURCE_TYPE_SKILL)
+                .action("abort_session")
+                .payload(payload)
+                .build();
+
+        serviceWithBusinessRoute.handleInvokeFromSkill(ss1Session, msg);
+
+        verify(businessStrategy).route(any(GatewayMessage.class), any());
+        verify(redisMessageBroker).setSessionRoute("ts-1", SOURCE_TYPE_SKILL, "ss-1");
+        verify(redisMessageBroker, never()).getAgentUser(anyString());
+    }
 
     @Nested
     @DisplayName("V2 路由表直推")

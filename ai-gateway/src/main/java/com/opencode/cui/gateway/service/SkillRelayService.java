@@ -43,6 +43,7 @@ public class SkillRelayService {
     public static final String INSTANCE_ID_ATTR = "instanceId";
     public static final String ERROR_SOURCE_NOT_ALLOWED = "source_not_allowed";
     public static final String ERROR_SOURCE_MISMATCH = "source_mismatch";
+    private static final String ACTION_ABORT_SESSION = "abort_session";
 
     private final RedisMessageBroker redisMessageBroker;
     private final ObjectMapper objectMapper;
@@ -570,7 +571,7 @@ public class SkillRelayService {
     public void handleInvokeFromSkill(WebSocketSession session, GatewayMessage message) {
         // 业务助手走云端路由策略，个人助手保持现有逻辑
         String scope = Optional.ofNullable(message.getAssistantScope()).orElse("personal");
-        if ("business".equals(scope) && routeBusinessInvoke(session, message)) {
+        if (shouldRouteBusinessInvoke(message, scope) && routeBusinessInvoke(session, message)) {
             return;
         }
 
@@ -620,6 +621,43 @@ public class SkillRelayService {
      *
      * @return true 表示校验通过
      */
+    private boolean shouldRouteBusinessInvoke(GatewayMessage message, String scope) {
+        if ("business".equals(scope)) {
+            return true;
+        }
+        if (message == null) {
+            return false;
+        }
+        return ACTION_ABORT_SESSION.equals(normalizeAction(message.getAction()))
+                && hasCloudRoutingHint(message);
+    }
+
+    private boolean hasCloudRoutingHint(GatewayMessage message) {
+        if (message == null) {
+            return false;
+        }
+        if (message.getBusinessTag() != null && !message.getBusinessTag().isBlank()) {
+            return true;
+        }
+        return textAt(message.getPayload(), "cloudProfile") != null;
+    }
+
+    private static String normalizeAction(String action) {
+        return action == null ? null : action.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private static String textAt(com.fasterxml.jackson.databind.JsonNode node, String fieldName) {
+        if (node == null || !node.isObject()) {
+            return null;
+        }
+        com.fasterxml.jackson.databind.JsonNode value = node.path(fieldName);
+        if (value.isMissingNode() || value.isNull()) {
+            return null;
+        }
+        String text = value.asText(null);
+        return (text == null || text.isBlank()) ? null : text;
+    }
+
     private boolean validateInvokeMessage(WebSocketSession session, GatewayMessage tracedMessage) {
         // Validate source
         String boundSource = resolveBoundSource(session);

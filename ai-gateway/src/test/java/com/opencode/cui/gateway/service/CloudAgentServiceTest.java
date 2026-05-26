@@ -6,6 +6,7 @@ import com.opencode.cui.gateway.config.CloudTimeoutProperties;
 import com.opencode.cui.gateway.model.AssistantInstanceInfo;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionContext;
+import com.opencode.cui.gateway.service.cloud.CloudConnectionHandle;
 import com.opencode.cui.gateway.service.cloud.CloudConnectionLifecycle;
 import com.opencode.cui.gateway.service.cloud.CloudProtocolClient;
 import com.opencode.cui.gateway.service.cloud.WebHookExecutor;
@@ -157,6 +158,79 @@ class CloudAgentServiceTest {
         header.setCustomKey("X-Bot-Token");
         header.setCustomValue("secret-token");
         return header;
+    }
+
+    // ---------------------------------------------------------------------
+    // abort_session cancels current cloud stream
+    // ---------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("abort_session 取消云端流")
+    class AbortSessionTests {
+
+        @Test
+        @DisplayName("abort_session cancels the active streaming connection by toolSessionId")
+        void handleInvoke_abortSessionCancelsActiveStreamingConnection() {
+            when(sysConfigRouteProvider.load(TEST_AK, CHAT_SCOPE, "biz-tag"))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
+
+            doAnswer(invocation -> {
+                CloudConnectionContext context = invocation.getArgument(1);
+                CloudConnectionHandle handle = context.getConnectionHandle();
+                assertNotNull(handle);
+                assertFalse(handle.isCancelled());
+
+                cloudAgentService.handleInvoke(buildInvoke("abort_session", TEST_AK), onRelay);
+
+                assertTrue(handle.isCancelled());
+                return null;
+            }).when(cloudProtocolClient).connect(eq("sse"), any(), any(), any(), any());
+
+            cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
+
+            verifyNoInteractions(onRelay);
+        }
+
+        @Test
+        @DisplayName("cancelled stream suppresses late connection errors")
+        void handleInvoke_cancelledStreamSuppressesLateErrors() {
+            when(sysConfigRouteProvider.load(TEST_AK, CHAT_SCOPE, "biz-tag"))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
+
+            doAnswer(invocation -> {
+                CloudConnectionContext context = invocation.getArgument(1);
+                CloudConnectionHandle handle = context.getConnectionHandle();
+                Consumer<Throwable> onErrorCallback = invocation.getArgument(4);
+
+                cloudAgentService.handleInvoke(buildInvoke("abort_session", TEST_AK), onRelay);
+                assertTrue(handle.isCancelled());
+
+                onErrorCallback.accept(new RuntimeException("stream closed"));
+                return null;
+            }).when(cloudProtocolClient).connect(eq("sse"), any(), any(), any(), any());
+
+            cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
+
+            verifyNoInteractions(onRelay);
+        }
+
+        @Test
+        @DisplayName("abort_session without active stream is a no-op")
+        void handleInvoke_abortSessionWithoutActiveStreamIsNoOp() {
+            cloudAgentService.handleInvoke(buildInvoke("abort_session", TEST_AK), onRelay);
+
+            verifyNoInteractions(sysConfigRouteProvider, assistantInstanceInfoService,
+                    cloudProtocolClient, webHookExecutor, onRelay);
+        }
+
+        @Test
+        @DisplayName("abort_session action is normalized before action validation")
+        void handleInvoke_abortSessionActionIsNormalized() {
+            cloudAgentService.handleInvoke(buildInvoke(" abort_session ", TEST_AK), onRelay);
+
+            verifyNoInteractions(sysConfigRouteProvider, assistantInstanceInfoService,
+                    cloudProtocolClient, webHookExecutor, onRelay);
+        }
     }
 
     // ---------------------------------------------------------------------

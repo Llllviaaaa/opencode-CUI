@@ -63,6 +63,7 @@ ai-gateway/src/main/java/com/opencode/cui/gateway/
 │       ├── CloudAuthService.java           # 云端鉴权策略选择器
 │       ├── CloudAuthStrategy.java          # 鉴权策略接口
 │       ├── CloudConnectionContext.java     # 云端连接上下文
+│       ├── CloudConnectionHandle.java      # 可取消的云端流连接句柄
 │       ├── CloudConnectionLifecycle.java   # 云端连接生命周期与超时回调
 │       ├── CloudProtocolClient.java        # 云端协议客户端接口
 │       ├── CloudProtocolStrategy.java      # 协议策略接口

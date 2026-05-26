@@ -481,7 +481,7 @@ class DefaultAssistantRuleE2EIntegrationTest {
     }
 
     // ===================================================================
-    // AC §B-7: DELETE close + POST abort → DB CLOSED + 不发 GW invoke (D7)
+    // AC §B-7: DELETE close keeps skipping GW; POST abort sends GW invoke for stream cancellation.
     // ===================================================================
 
     @Test
@@ -511,8 +511,8 @@ class DefaultAssistantRuleE2EIntegrationTest {
     }
 
     @Test
-    @DisplayName("AC §B abortSession: rule-injected session → no GW invoke (D7)")
-    void abortSession_ruleInjected_noGwInvoke() {
+    @DisplayName("AC §B abortSession: rule-injected session → sends GW abort invoke")
+    void abortSession_ruleInjected_sendsGwAbortInvoke() throws Exception {
         insertRule();
         SkillSession created = sessionController.createSession(TEST_USER_ID, createReq("abort1"))
                 .getBody().getData();
@@ -526,8 +526,11 @@ class DefaultAssistantRuleE2EIntegrationTest {
         assertNotNull(resp.getBody());
         assertEquals(0, resp.getBody().getCode());
 
-        // D7: 默认助手会话跳过发 GW abort invoke
-        verify(gatewayRelayTarget, never()).sendToGateway(anyString());
+        ArgumentCaptor<String> wireCaptor = ArgumentCaptor.forClass(String.class);
+        verify(gatewayRelayTarget, times(1)).sendToGateway(wireCaptor.capture());
+        JsonNode wireNode = objectMapper.readTree(wireCaptor.getValue());
+        assertEquals("abort_session", wireNode.path("action").asText());
+        assertEquals(created.getToolSessionId(), wireNode.path("payload").path("toolSessionId").asText());
     }
 
     // ===================================================================

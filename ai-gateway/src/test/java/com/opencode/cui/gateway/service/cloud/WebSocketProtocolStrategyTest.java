@@ -119,6 +119,27 @@ class WebSocketProtocolStrategyTest {
         assertTrue(receivedErrors.get(0).getMessage().contains("ws error"));
     }
 
+    @Test
+    @DisplayName("createListener: cancelled handle suppresses late messages and errors")
+    void shouldSuppressCallbacksAfterCancellation() {
+        WebSocketProtocolStrategy strategy = new WebSocketProtocolStrategy(
+                cloudAuthService, objectMapper, timeoutProperties);
+        CloudConnectionHandle handle = new CloudConnectionHandle();
+        handle.cancel();
+        WebSocket.Listener listener = strategy.createListener(lifecycle, onEvent, onError, null, handle);
+        WebSocket ws = mock(WebSocket.class);
+
+        String json = "{\"type\":\"tool_event\",\"toolSessionId\":\"s1\",\"event\":{\"text\":\"late\"}}";
+        listener.onText(ws, json, true);
+        listener.onPong(ws, ByteBuffer.allocate(0));
+        listener.onError(ws, new RuntimeException("closed"));
+
+        verify(lifecycle, never()).onEventReceived();
+        verify(lifecycle, never()).onHeartbeat();
+        assertTrue(receivedEvents.isEmpty());
+        assertTrue(receivedErrors.isEmpty());
+    }
+
     // ==================== T13: question/permission 事件保活 ====================
 
     @Test

@@ -32,4 +32,7 @@ public class CloudConnectionContext {
 
     /** Protocol profile name used for cloud response decoding. */
     private String cloudProfile;
+
+    /** Optional handle used by abort_session to close the active stream. */
+    private CloudConnectionHandle connectionHandle;
 }
