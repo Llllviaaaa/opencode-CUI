@@ -1,6 +1,7 @@
 package com.opencode.cui.gateway.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.gateway.logging.GatewayStreamEventLogHelper;
 import com.opencode.cui.gateway.model.ApiResponse;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.model.ImPushRequest;
@@ -13,13 +14,17 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
+import org.mockito.MockedStatic;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.slf4j.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -90,6 +95,33 @@ class CloudPushControllerTest {
 
         verify(skillRelayService).relayToSkill(messageCaptor.capture());
         assertEquals("session_xyz_789", messageCaptor.getValue().getToolSessionId());
+    }
+
+    @Test
+    @DisplayName("G24: cloud IM push logs gw.cloud_agent inbound event")
+    void shouldLogCloudAgentInboundEvent() {
+        ImPushRequest request = new ImPushRequest();
+        request.setAssistantAccount("bot_005");
+        request.setUserAccount("creator_005");
+        request.setTopicId("topic_005");
+        request.setContent("cloud reply");
+
+        when(assistantAccountResolver.resolve("bot_005"))
+                .thenReturn(createResult("ak_005", "creator_005"));
+        when(skillRelayService.relayToSkill(any(GatewayMessage.class))).thenReturn(true);
+
+        try (MockedStatic<GatewayStreamEventLogHelper> eventLogs =
+                     mockStatic(GatewayStreamEventLogHelper.class)) {
+            ResponseEntity<ApiResponse<?>> response = controller.imPush(request);
+
+            assertEquals(HttpStatus.OK, response.getStatusCode());
+            eventLogs.verify(() -> GatewayStreamEventLogHelper.inbound(
+                    any(Logger.class),
+                    eq("gw.cloud_agent"),
+                    eq("received"),
+                    argThat(payload -> payload.contains("\"assistantAccount\":\"bot_005\"")
+                            && payload.contains("\"content\":\"cloud reply\""))));
+        }
     }
 
     @Test

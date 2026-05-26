@@ -55,11 +55,7 @@ public class WebHookExecutor {
             }
             // X-App-Id 由 cloudAuthService.applyAuth 内部 strategy（Soa/Apig）按需写入；
             // NoAuthStrategy 不写。这里不再重复写入避免出现两个同名 header。
-            if (ctx.getRemoteHeaders() == null || ctx.getRemoteHeaders().isEmpty()) {
-                cloudAuthService.applyAuth(builder, ctx.getAppId(), ctx.getAuthType());
-            } else {
-                cloudAuthService.applyAuth(builder, ctx.getAppId(), ctx.getAuthType(), ctx.getRemoteHeaders());
-            }
+            cloudAuthService.applyAuth(builder, ctx.getAppId(), ctx.getAuthType());
 
             HttpResponse<String> resp = sendRequest(builder.build());
             if (resp.statusCode() / 100 == 2) {

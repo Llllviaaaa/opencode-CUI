@@ -1,6 +1,9 @@
 package com.opencode.cui.gateway.controller;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.cui.gateway.logging.GatewayStreamEventLogHelper;
+import com.opencode.cui.gateway.logging.MdcHelper;
 import com.opencode.cui.gateway.model.ApiResponse;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.model.ImPushRequest;
@@ -14,8 +17,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-
-import java.util.UUID;
 
 /**
  * 云端推送控制器。
@@ -85,12 +86,22 @@ public class CloudPushController {
         }
 
         // 4. 校验通过，转发
-        GatewayMessage msg = new GatewayMessage();
-        msg.setType(GatewayMessage.Type.IM_PUSH);
-        msg.setToolSessionId(request.getTopicId()); // 用于路由到持有该 session 的 SS 实例
-        msg.setPayload(objectMapper.valueToTree(request));
-        msg.setTraceId(UUID.randomUUID().toString());
-        skillRelayService.relayToSkill(msg);
+        JsonNode payload = objectMapper.valueToTree(request);
+        var previousMdc = MdcHelper.snapshot();
+        try {
+            GatewayMessage msg = new GatewayMessage();
+            msg.setType(GatewayMessage.Type.IM_PUSH);
+            msg.setToolSessionId(request.getTopicId()); // 用于路由到持有该 session 的 SS 实例
+            msg.setPayload(payload);
+            msg.setTraceId(MdcHelper.ensureTraceId());
+
+            MdcHelper.fromGatewayMessage(msg);
+            MdcHelper.putScenario("cloud-im-push-rx");
+            GatewayStreamEventLogHelper.inbound(log, "gw.cloud_agent", "received", payload.toString());
+            skillRelayService.relayToSkill(msg);
+        } finally {
+            MdcHelper.restore(previousMdc);
+        }
         return ResponseEntity.ok(ApiResponse.ok("success"));
     }
 
