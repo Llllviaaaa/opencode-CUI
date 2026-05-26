@@ -378,7 +378,19 @@ public class CloudEventTranslator {
     // ==================== Session Handlers ====================
 
     private StreamMessage handleSessionStatus(JsonNode event) {
-        return StreamMessage.sessionStatus(event.path("sessionStatus").asText(null));
+        return StreamMessage.sessionStatus(extractSessionStatus(event));
+    }
+
+    private static String extractSessionStatus(JsonNode event) {
+        if (event == null) {
+            return null;
+        }
+        String status = event.path("status").asText(null);
+        if (status != null && !status.isBlank()) {
+            return status;
+        }
+        String sessionStatus = event.path("sessionStatus").asText(null);
+        return sessionStatus != null && !sessionStatus.isBlank() ? sessionStatus : null;
     }
 
     private StreamMessage handleSessionTitle(JsonNode event) {

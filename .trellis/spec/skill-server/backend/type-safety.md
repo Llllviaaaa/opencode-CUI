@@ -379,6 +379,7 @@ if (!SESSION_LEVEL_TYPES.contains(eventType)) {
 
 - `protocol` 只接受 `cloud` / `opencode` / 缺失，未知值只能 fallback，不要扩散魔法字符串。
 - cloud event 要带稳定的 `messageId` / `partId`；SS 只负责补 `sourceMessageId` / `partSeq` / 默认 role。
+- cloud `session.status` 入站兼容两种字段名：优先读取 `status`，其次读取 `sessionStatus`；但 SS 对 miniapp 的出站字段仍统一为 `sessionStatus`。这是为了兼容云端部分 profile 发送 `properties.status` 的场景，避免 `StreamMessage.sessionStatus=null` 后被 `@JsonInclude(NON_NULL)` 省略。
 
 ---
 

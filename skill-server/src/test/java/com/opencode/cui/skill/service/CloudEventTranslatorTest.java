@@ -253,6 +253,34 @@ class CloudEventTranslatorTest {
         assertEquals("busy", msg.getSessionStatus());
     }
 
+    @Test
+    @DisplayName("session.status accepts status alias")
+    void sessionStatus_acceptsStatusAlias() {
+        ObjectNode e = event("session.status");
+        e.put("status", "busy");
+
+        StreamMessage msg = translator.translate(e);
+
+        assertNotNull(msg);
+        assertEquals(StreamMessage.Types.SESSION_STATUS, msg.getType());
+        assertEquals("busy", msg.getSessionStatus());
+    }
+
+    @Test
+    @DisplayName("session.status accepts properties.status alias")
+    void sessionStatus_acceptsPropertiesStatusAlias() {
+        ObjectNode e = event("session.status");
+        ObjectNode props = om.createObjectNode();
+        props.put("status", "idle");
+        e.set("properties", props);
+
+        StreamMessage msg = translator.translate(e);
+
+        assertNotNull(msg);
+        assertEquals(StreamMessage.Types.SESSION_STATUS, msg.getType());
+        assertEquals("idle", msg.getSessionStatus());
+    }
+
     // ==================== session.title ====================
 
     @Test
