@@ -108,6 +108,7 @@ class SessionCreationScopeTest {
 
         // should NOT request tool session from Gateway (any overload)
         verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(PendingChatRequest.class));
+        verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(PendingChatRequest.class), any());
         verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(String.class));
     }
 
@@ -135,7 +136,7 @@ class SessionCreationScopeTest {
         // PR3: personal 分支调 rebuildToolSession 新签名 PendingChatRequest 重载,
         // 入队完整 6 字段（含 sender/assistantAccount/imGroupId/businessExtParam）
         ArgumentCaptor<PendingChatRequest> reqCaptor = ArgumentCaptor.forClass(PendingChatRequest.class);
-        verify(gatewayRelayService).rebuildToolSession(eq("200"), eq(created), reqCaptor.capture());
+        verify(gatewayRelayService).rebuildToolSession(eq("200"), eq(created), reqCaptor.capture(), eq("owner-002"));
         PendingChatRequest captured = reqCaptor.getValue();
         assertNotNull(captured, "PR3: 应入队完整 PendingChatRequest");
         org.junit.jupiter.api.Assertions.assertEquals("hello", captured.text());

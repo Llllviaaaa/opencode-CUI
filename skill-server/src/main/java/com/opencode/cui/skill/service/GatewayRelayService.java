@@ -513,9 +513,14 @@ public class GatewayRelayService {
      */
     public void rebuildToolSession(String sessionId, SkillSession session,
             com.opencode.cui.skill.model.PendingChatRequest pendingRequest) {
+        rebuildToolSession(sessionId, session, pendingRequest, null);
+    }
+
+    public void rebuildToolSession(String sessionId, SkillSession session,
+            com.opencode.cui.skill.model.PendingChatRequest pendingRequest, String routeUserId) {
         log.info("Initiating toolSession rebuild (PendingChatRequest API): sessionId={}, ak={}, hasPendingRequest={}",
                 sessionId, session != null ? session.getAk() : null, pendingRequest != null);
-        rebuildService.rebuildToolSession(sessionId, session, pendingRequest,
+        rebuildService.rebuildToolSession(sessionId, session, pendingRequest, routeUserId,
                 new SessionRebuildService.RebuildCallback() {
                     @Override
                     public void broadcast(String sid, String uid, StreamMessage msg) {

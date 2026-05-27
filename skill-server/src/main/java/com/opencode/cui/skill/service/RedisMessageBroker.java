@@ -237,8 +237,9 @@ public class RedisMessageBroker {
             BaseRedisAsyncCommands<byte[], byte[]> async =
                     (BaseRedisAsyncCommands<byte[], byte[]>) base;
             byte[] channelBytes = channel.getBytes(StandardCharsets.UTF_8);
+            byte[][] channels = new byte[][] {channelBytes};
             try {
-                Map<byte[], Long> result = async.pubsubNumsub(channelBytes)
+                Map<byte[], Long> result = async.pubsubNumsub(channels)
                         .get(2, TimeUnit.SECONDS);
                 // PUBSUB NUMSUB 协议保证 [name, count] 成对返回；0 订阅时
                 // entry 仍存在 (channel, 0L)，不会 missing。

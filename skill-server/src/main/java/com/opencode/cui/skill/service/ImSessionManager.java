@@ -201,7 +201,8 @@ public class ImSessionManager {
         requestToolSession(session, buildPendingRequest(
                 businessDomain, sessionType, sessionId,
                 identity.assistantAccount(), senderUserAccount, pendingMessage, businessExtParam,
-                session.getId(), info != null ? info.getBusinessTag() : null));
+                session.getId(), info != null ? info.getBusinessTag() : null),
+                identity.gatewayUserId());
     }
 
     private String ensureBusinessToolSessionId(SkillSession session, String generatedToolSessionId) {
@@ -279,8 +280,12 @@ public class ImSessionManager {
     }
 
     public void requestToolSession(SkillSession session, PendingChatRequest pendingRequest) {
+        requestToolSession(session, pendingRequest, null);
+    }
+
+    public void requestToolSession(SkillSession session, PendingChatRequest pendingRequest, String routeUserId) {
         String sessionIdStr = String.valueOf(session.getId());
-        gatewayRelayService.rebuildToolSession(sessionIdStr, session, pendingRequest);
+        gatewayRelayService.rebuildToolSession(sessionIdStr, session, pendingRequest, routeUserId);
         log.info("Requested tool session creation for welinkSession={}, ak={}, hasPendingRequest={}",
                 sessionIdStr, session.getAk(), pendingRequest != null);
     }
@@ -316,7 +321,7 @@ public class ImSessionManager {
                 businessDomain, sessionType, sessionId, ak, assistantAccount);
         if (existing != null) {
             sessionService.touchSession(existing.getId());
-            return ensureToolSession(existing, false);
+            return ensureToolSession(existing, false, ownerWelinkId);
         }
 
         String lockKey = buildCreateLockKey(businessDomain, sessionType, sessionId, ak, assistantAccount);
@@ -333,7 +338,7 @@ public class ImSessionManager {
                             businessDomain, sessionType, sessionId, ak, assistantAccount);
                     if (latest != null) {
                         sessionService.touchSession(latest.getId());
-                        return ensureToolSession(latest, false);
+                        return ensureToolSession(latest, false, ownerWelinkId);
                     }
 
                     SkillSession created = sessionService.createSession(
@@ -344,14 +349,14 @@ public class ImSessionManager {
                             sessionType,
                             sessionId,
                             assistantAccount);
-                    return ensureToolSession(created, true);
+                    return ensureToolSession(created, true, ownerWelinkId);
                 }
 
                 SkillSession concurrent = sessionService.findByBusinessSession(
                         businessDomain, sessionType, sessionId, ak, assistantAccount);
                 if (concurrent != null) {
                     sessionService.touchSession(concurrent.getId());
-                    return ensureToolSession(concurrent, false);
+                    return ensureToolSession(concurrent, false, ownerWelinkId);
                 }
 
                 sleepQuietly(CREATE_LOCK_RETRY_MILLIS);
@@ -371,6 +376,10 @@ public class ImSessionManager {
      * 最终阻塞等待 toolSessionId 就绪。
      */
     private SkillSession ensureToolSession(SkillSession session, boolean newlyCreated) {
+        return ensureToolSession(session, newlyCreated, null);
+    }
+
+    private SkillSession ensureToolSession(SkillSession session, boolean newlyCreated, String routeUserId) {
         if (session.getToolSessionId() != null && !session.getToolSessionId().isBlank()) {
             log.debug("Tool session already exists: skillSessionId={}, toolSessionId={}",
                     session.getId(), session.getToolSessionId());
@@ -394,7 +403,7 @@ public class ImSessionManager {
                     session.getId(), session.getAk());
             gatewayRelayService.sendInvokeToGateway(new InvokeCommand(
                     session.getAk(),
-                    session.getUserId(),
+                    ProtocolUtils.firstNonBlank(routeUserId, session.getUserId()),
                     String.valueOf(session.getId()),
                     GatewayActions.CREATE_SESSION,
                     PayloadBuilder.buildPayload(objectMapper, Map.of("title", session.getTitle())),
@@ -411,7 +420,7 @@ public class ImSessionManager {
                     session.getId(), session.getAk());
             // 显式强转 null 到 PendingChatRequest，避免 String/PendingChatRequest 重载歧义
             gatewayRelayService.rebuildToolSession(String.valueOf(session.getId()),
-                    session, (PendingChatRequest) null);
+                    session, (PendingChatRequest) null, routeUserId);
         }
 
         return waitForToolSession(session.getId()); // 阻塞等待 Gateway 回填 toolSessionId

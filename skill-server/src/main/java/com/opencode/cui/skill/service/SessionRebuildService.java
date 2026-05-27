@@ -120,6 +120,11 @@ public class SessionRebuildService {
      */
     public void rebuildToolSession(String sessionId, SkillSession session,
             PendingChatRequest pendingRequest, RebuildCallback callback) {
+        rebuildToolSession(sessionId, session, pendingRequest, null, callback);
+    }
+
+    public void rebuildToolSession(String sessionId, SkillSession session,
+            PendingChatRequest pendingRequest, String routeUserId, RebuildCallback callback) {
         // --- 重建计数器检查（Redis 全局共享，多实例一致） ---
         int attempts = incrementRebuildCounter(sessionId);
 
@@ -172,7 +177,7 @@ public class SessionRebuildService {
 
         callback.sendInvoke(new InvokeCommand(
                 session.getAk(),
-                session.getUserId(),
+                ProtocolUtils.firstNonBlank(routeUserId, session.getUserId()),
                 sessionId,
                 GatewayActions.CREATE_SESSION,
                 payloadStr,
@@ -202,6 +207,11 @@ public class SessionRebuildService {
     @Deprecated
     public void rebuildToolSession(String sessionId, SkillSession session,
             String pendingMessage, RebuildCallback callback) {
+        rebuildToolSession(sessionId, session, pendingMessage, null, callback);
+    }
+
+    public void rebuildToolSession(String sessionId, SkillSession session,
+            String pendingMessage, String routeUserId, RebuildCallback callback) {
         PendingChatRequest pendingRequest = null;
         if (pendingMessage != null && !pendingMessage.isBlank()) {
             // v3 allowed-slash-commands: personal scope gating
@@ -243,7 +253,7 @@ public class SessionRebuildService {
                         null, null);
             }
         }
-        rebuildToolSession(sessionId, session, pendingRequest, callback);
+        rebuildToolSession(sessionId, session, pendingRequest, routeUserId, callback);
     }
 
     // ==================== 新签名（PR2） ====================
