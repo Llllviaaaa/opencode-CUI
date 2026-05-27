@@ -1038,7 +1038,9 @@ The assistant instance API is now the shared source for assistant metadata, and 
 
 ### 3. Contracts
 
-`AssistantInstanceInfo.businessRoutableAssistant()` means `isRemote == true` or `remoteProperty` is non-empty.
+`AssistantInstanceInfo.remoteType` is authoritative when present: `0` means local/non-remote, `1` means assistant-square protocol/profile, and `2` means default protocol/profile. When `remoteType` is absent, keep the legacy check for compatibility.
+`AssistantInstanceInfo.businessRoutableAssistant()` means `remoteType` is `1` or `2`; if `remoteType` is absent, fall back to legacy `isRemote == true` or non-empty `remoteProperty`.
+For cloud profile selection, prefer the direct instance hint (`remoteType=1 -> assistant_square`, `remoteType=2 -> default`) and only use SysConfig businessTag-to-profile mapping when the instance API did not provide a protocol profile.
 Blank `appKey` alone must not imply remote/cloud. A no-AK assistant is routable only when `businessRoutableAssistant()` is true.
 For local assistants, blank `appKey` or blank owner identity is upstream incomplete data and must remain `UNKNOWN`, not `NOT_EXISTS`.
 The owner identity for local assistants comes from instance API `createdBy`; do not synthesize it from `partnerAccount` or `assistantAccount`.
@@ -1065,9 +1067,10 @@ For local assistants, Gateway `InvokeCommand.userId` may carry the `createdBy` o
 | Case | Required behavior |
 | --- | --- |
 | Instance lookup returns NOT_EXISTS or empty data | Return `NOT_EXISTS`; cache with NOT_EXISTS TTL. |
-| Instance data has `isRemote=true` and no `appKey` | Return `EXISTS`; no online AK check; route as business. |
-| Instance data has non-empty `remoteProperty` and no `appKey` | Return `EXISTS`; route as business. |
-| Instance data has `isRemote=false`, empty `remoteProperty`, and no `appKey` | Return `UNKNOWN`; do not write status cache. |
+| Instance data has `remoteType=1` and no `appKey` | Return `EXISTS`; no online AK check; route as business with `cloudProfile=assistant_square`. |
+| Instance data has `remoteType=2` and no `appKey` | Return `EXISTS`; no online AK check; route as business with `cloudProfile=default`. |
+| Instance data has `remoteType=0`, even with legacy `remoteProperty`, and no `appKey` | Return `UNKNOWN`; do not write status cache. |
+| Instance data omits `remoteType` but has legacy `isRemote=true` or non-empty `remoteProperty` and no `appKey` | Return `EXISTS`; route as business for backward compatibility. |
 | Instance lookup is non-2xx, body code is not 200, parse fails, or times out | Return `UNKNOWN`; do not write status cache. |
 
 ### 5. Good / Base / Bad Cases
@@ -1098,8 +1101,8 @@ The bad case blocks real remote assistants that intentionally do not expose an `
 
 ### 6. Tests Required
 
-- `AssistantAccountResolverServiceTest`: no-AK remote instance returns `EXISTS`; no-AK local instance returns `UNKNOWN`.
-- `AssistantInfoServiceTest`: no-AK remote instance returns business `AssistantInfo`; no-AK local instance returns `null`.
+- `AssistantAccountResolverServiceTest`: no-AK `remoteType=1/2` instance returns `EXISTS`; no-AK `remoteType=0` local instance returns `UNKNOWN` even if legacy `remoteProperty` is present.
+- `AssistantInfoServiceTest`: no-AK `remoteType=1/2` instance returns business `AssistantInfo` with the matching `cloudProfile`; no-AK local instance returns `null`.
 - `InboundProcessingServiceTest`: no-AK remote inbound chat is not blocked by `assistant_check_unknown` and creates or uses a business session.
 - `InboundProcessingServiceTest`: local/default/remote routes assert the expected session lookup keys; no-AK remote rebuild uses `assistantAccount` and business local toolSessionId regeneration.
 - `ImSessionManagerTest`: no-AK remote existing business session found during async creation does not call legacy rebuild and sends the chat invoke with generated `cloud-*` toolSessionId.
@@ -1109,7 +1112,7 @@ The bad case blocks real remote assistants that intentionally do not expose an `
 
 Wrong: treating `appKey` absence as "assistant does not exist" or as "cloud assistant".
 
-Correct: first decide existence from the instance API result, then decide routability from `isRemote || remoteProperty.nonEmpty`, and only then allow `ak` to be optional.
+Correct: first decide existence from the instance API result, then decide routability from `remoteType` (`1/2` remote, `0` local) with legacy fallback only when `remoteType` is absent, and only then allow `ak` to be optional.
 
 Wrong: scattering `ak == null` checks at individual session lookup / rebuild call sites.
 

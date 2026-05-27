@@ -69,7 +69,7 @@ class AssistantInstanceInfoServiceTest {
         ObjectNode data = body.putObject("data");
         data.put("partnerAccount", "assist-001");
         data.put("ownerWelinkId", "owner-001");
-        data.put("isRemote", true);
+        data.put("remoteType", AssistantInstanceInfo.REMOTE_TYPE_ASSISTANT_SQUARE);
         ObjectNode remote = data.putArray("remoteProperty").addObject();
         remote.put("type", "chat");
         remote.put("commProtocol", "sse");
@@ -85,6 +85,7 @@ class AssistantInstanceInfoServiceTest {
 
         assertEquals(ExistenceStatus.EXISTS, result.status());
         assertTrue(result.info().remoteAssistant());
+        assertEquals("assistant_square", result.info().protocolProfile());
         assertEquals("chat", result.info().getRemoteProperty().get(0).getType());
         verify(valueOps).set(eq("ss:assistant:instance:assist-001"), anyString(), eq(Duration.ofSeconds(300)));
     }

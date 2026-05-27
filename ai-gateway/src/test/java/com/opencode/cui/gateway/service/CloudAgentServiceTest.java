@@ -22,6 +22,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -151,7 +153,7 @@ class CloudAgentServiceTest {
 
         AssistantInstanceInfo info = new AssistantInstanceInfo();
         info.setPartnerAccount("bot-001");
-        info.setIsRemote(true);
+        info.setRemoteType(AssistantInstanceInfo.REMOTE_TYPE_ASSISTANT_SQUARE);
         info.setBizRobotTag("assistant_square");
         info.setRemoteProperty(java.util.List.of(property));
         return info;
@@ -317,6 +319,37 @@ class CloudAgentServiceTest {
             verify(cloudProtocolClient).connect(eq("sse"), contextCaptor.capture(), any(), any(), any());
             assertEquals("integration_token", contextCaptor.getValue().getAuthType());
             verifyNoInteractions(sysConfigRouteProvider, webHookExecutor);
+        }
+
+        @Test
+        @DisplayName("remoteType=2 overrides bizRobotTag for cloudProfile")
+        void handleInvoke_remoteTypeDefaultProtocol_setsDefaultCloudProfile() {
+            AssistantInstanceInfo info = buildInstance("chat", "sse", "https://remote.example.com/chat");
+            info.setRemoteType(AssistantInstanceInfo.REMOTE_TYPE_DEFAULT);
+            info.setBizRobotTag("assistant_square");
+            when(assistantInstanceInfoService.getInstanceInfo("bot-001")).thenReturn(info);
+
+            cloudAgentService.handleInvoke(buildRemoteInvoke("chat"), onRelay);
+
+            verify(cloudProtocolClient).connect(eq("sse"), contextCaptor.capture(), any(), any(), any());
+            assertEquals("default", contextCaptor.getValue().getCloudProfile());
+            verifyNoInteractions(sysConfigRouteProvider, webHookExecutor);
+        }
+
+        @Test
+        @DisplayName("remoteType=0 ignores legacy remoteProperty and falls back to SysConfig")
+        void handleInvoke_localRemoteTypeIgnoresRemoteProperty() {
+            AssistantInstanceInfo info = buildInstance("chat", "sse", "https://remote.example.com/chat");
+            info.setRemoteType(AssistantInstanceInfo.REMOTE_TYPE_LOCAL);
+            when(assistantInstanceInfoService.getInstanceInfo("bot-001")).thenReturn(info);
+            when(sysConfigRouteProvider.load(null, CHAT_SCOPE, "biz-tag"))
+                    .thenReturn(buildCfg("sse", "https://sysconfig.example.com/chat", "soa", "app-1"));
+
+            cloudAgentService.handleInvoke(buildRemoteInvoke("chat"), onRelay);
+
+            verify(cloudProtocolClient).connect(eq("sse"), contextCaptor.capture(), any(), any(), any());
+            assertEquals("https://sysconfig.example.com/chat", contextCaptor.getValue().getChannelAddress());
+            verifyNoInteractions(webHookExecutor);
         }
 
         @Test
@@ -732,6 +765,49 @@ class CloudAgentServiceTest {
             GatewayMessage err = messageCaptor.getValue();
             assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
             assertTrue(err.getError().contains("idle_timeout"));
+            assertNull(err.getReason());
+        }
+
+        @Test
+        @DisplayName("云端生命周期超时时取消 active stream handle 并只回流一次 tool_error")
+        void shouldCancelActiveStreamHandleOnLifecycleTimeout() throws Exception {
+            when(cloudTimeoutProperties.getFirstEventTimeoutSeconds()).thenReturn(1);
+            when(sysConfigRouteProvider.load(TEST_AK, CHAT_SCOPE, "biz-tag"))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
+            CountDownLatch timeoutRelayed = new CountDownLatch(1);
+            CountDownLatch transportCancelled = new CountDownLatch(1);
+
+            doAnswer(invocation -> {
+                timeoutRelayed.countDown();
+                return null;
+            }).when(onRelay).accept(any(GatewayMessage.class));
+
+            doAnswer(invocation -> {
+                CloudConnectionContext context = invocation.getArgument(1);
+                CloudConnectionLifecycle lifecycle = invocation.getArgument(2);
+                Consumer<Throwable> onErrorCallback = invocation.getArgument(4);
+                CloudConnectionHandle handle = context.getConnectionHandle();
+                assertNotNull(handle);
+                handle.onCancel(transportCancelled::countDown);
+
+                lifecycle.onConnected();
+
+                assertTrue(timeoutRelayed.await(3, TimeUnit.SECONDS),
+                        "timeout should relay tool_error");
+                assertTrue(transportCancelled.await(1, TimeUnit.SECONDS),
+                        "timeout should cancel transport close action");
+                assertTrue(handle.isCancelled(), "timeout should mark active handle cancelled");
+
+                onErrorCallback.accept(new RuntimeException("stream closed after timeout"));
+                return null;
+            }).when(cloudProtocolClient).connect(eq("sse"), any(), any(), any(), any());
+
+            cloudAgentService.handleInvoke(buildInvoke("chat", TEST_AK), onRelay);
+
+            verify(onRelay, times(1)).accept(messageCaptor.capture());
+            GatewayMessage err = messageCaptor.getValue();
+            assertEquals(GatewayMessage.Type.TOOL_ERROR, err.getType());
+            assertTrue(err.getError().contains("first_event_timeout"));
             assertNull(err.getReason());
         }
     }

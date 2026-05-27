@@ -291,7 +291,7 @@ class AssistantInfoServiceTest {
         AssistantInstanceInfo instance = new AssistantInstanceInfo();
         instance.setPartnerAccount("assist-001");
         instance.setOwnerWelinkId("owner-001");
-        instance.setIsRemote(true);
+        instance.setRemoteType(AssistantInstanceInfo.REMOTE_TYPE_ASSISTANT_SQUARE);
         instance.setBizRobotTag("tag-001");
         when(assistantInstanceInfoService.getInstanceInfo("assist-001")).thenReturn(instance);
 
@@ -303,6 +303,28 @@ class AssistantInfoServiceTest {
         assertNotNull(info);
         assertEquals("business", info.getAssistantScope());
         assertEquals("tag-001", info.getBusinessTag());
+        assertEquals("assistant_square", info.getCloudProfile());
+        verify(redisTemplate, never()).opsForValue();
+    }
+
+    @Test
+    @DisplayName("getAssistantInfo(ak, account): remoteType=2 routes as business with default profile")
+    void getAssistantInfo_defaultProtocolRemoteInstance_returnsBusinessWithDefaultProfile() {
+        AssistantInstanceInfo instance = new AssistantInstanceInfo();
+        instance.setPartnerAccount("assist-001");
+        instance.setRemoteType(AssistantInstanceInfo.REMOTE_TYPE_DEFAULT);
+        instance.setBizRobotTag("tag-001");
+        when(assistantInstanceInfoService.getInstanceInfo("assist-001")).thenReturn(instance);
+
+        AssistantInfoService instanceAwareService = new AssistantInfoService(
+                properties, redisTemplate, assistantInstanceInfoService);
+
+        AssistantInfo info = instanceAwareService.getAssistantInfo(null, "assist-001");
+
+        assertNotNull(info);
+        assertEquals("business", info.getAssistantScope());
+        assertEquals("tag-001", info.getBusinessTag());
+        assertEquals("default", info.getCloudProfile());
         verify(redisTemplate, never()).opsForValue();
     }
 
@@ -313,7 +335,7 @@ class AssistantInfoServiceTest {
         instance.setPartnerAccount("assist-local");
         instance.setOwnerWelinkId("owner-local");
         instance.setAppKey("ak-local");
-        instance.setIsRemote(false);
+        instance.setRemoteType(AssistantInstanceInfo.REMOTE_TYPE_LOCAL);
         instance.setBizRobotTag("robot-local");
         when(assistantInstanceInfoService.getInstanceInfo("assist-local")).thenReturn(instance);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
@@ -339,7 +361,7 @@ class AssistantInfoServiceTest {
         AssistantInstanceInfo instance = new AssistantInstanceInfo();
         instance.setPartnerAccount("assist-001");
         instance.setOwnerWelinkId("owner-001");
-        instance.setIsRemote(false);
+        instance.setRemoteType(AssistantInstanceInfo.REMOTE_TYPE_LOCAL);
         when(assistantInstanceInfoService.getInstanceInfo("assist-001")).thenReturn(instance);
 
         AssistantInfoService instanceAwareService = new AssistantInfoService(

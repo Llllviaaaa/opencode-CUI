@@ -146,6 +146,28 @@ class BusinessScopeStrategyTest {
     }
 
     @Test
+    @DisplayName("buildInvoke() uses AssistantInfo.cloudProfile directly when remoteType supplied it")
+    void buildInvoke_usesCloudProfileHintBeforeBusinessTagMapping() throws Exception {
+        when(profileRegistry.resolveProfile(eq("assistant_square")))
+                .thenReturn(new CloudRequestProfile("assistant_square", defaultStrategy));
+
+        InvokeCommand command = new InvokeCommand("ak-1", "user-1", "session-1", "chat", "{\"content\":\"hello\"}");
+        AssistantInfo info = new AssistantInfo();
+        info.setAssistantScope("business");
+        info.setBusinessTag("app-123");
+        info.setCloudProfile("assistant_square");
+
+        String result = strategy.buildInvoke(command, info);
+
+        assertNotNull(result);
+        verify(profileRegistry).resolveProfile(eq("assistant_square"));
+        verify(profileRegistry, never()).resolve(eq("app-123"));
+        JsonNode root = objectMapper.readTree(result);
+        assertThat(root.path("businessTag").asText()).isEqualTo("app-123");
+        assertThat(root.path("payload").path("cloudProfile").asText()).isEqualTo("assistant_square");
+    }
+
+    @Test
     @DisplayName("buildInvoke(chat) extracts sendUserAccount from command.payload to CloudRequestContext")
     void buildInvoke_chat_extractsSendUserAccount() throws Exception {
         String payload = "{\"content\":\"hello\",\"sendUserAccount\":\"user-001\","

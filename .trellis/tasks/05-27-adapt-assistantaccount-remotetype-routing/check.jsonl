@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "Verify assistant instance lookup and cloud routing behavior after changes."}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "Verify assistantAccount status cache remains compatible."}
+{"file": ".trellis/spec/ai-gateway/backend/conventions.md", "reason": "Verify GW remote route and cloudProfile behavior after changes."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify SS and GW profile propagation remains aligned."}

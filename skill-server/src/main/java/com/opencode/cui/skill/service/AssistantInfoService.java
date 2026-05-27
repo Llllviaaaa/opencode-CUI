@@ -134,6 +134,7 @@ public class AssistantInfoService {
             AssistantInfo info = new AssistantInfo();
             info.setAssistantScope("business");
             info.setBusinessTag(instance.getBizRobotTag());
+            info.setCloudProfile(instance.protocolProfile());
             return info;
         }
         String effectiveAk = instance.effectiveAk();

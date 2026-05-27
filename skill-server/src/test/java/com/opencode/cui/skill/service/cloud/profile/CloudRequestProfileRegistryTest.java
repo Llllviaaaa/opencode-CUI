@@ -14,6 +14,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -85,6 +86,22 @@ class CloudRequestProfileRegistryTest {
 
         assertThat(profile.name()).isEqualTo("assistant_square");
         assertThat(profile.requestStrategy()).isSameAs(asq);
+    }
+
+    @Test
+    void resolveProfile_directProfileNameSkipsBusinessTagMapping() {
+        CloudRequestStrategy def = new FakeStrategy(DefaultCloudRequestStrategy.STRATEGY_NAME);
+        CloudRequestStrategy asq = new FakeStrategy("assistant_square");
+        CloudRequestProfileRegistry registry = newRegistry(300_000L, def, asq);
+
+        when(sysConfigService.getValue(eq("cloud_protocol_profile_def"), eq("assistant_square")))
+                .thenReturn(null);
+
+        CloudRequestProfile profile = registry.resolveProfile("assistant_square");
+
+        assertThat(profile.name()).isEqualTo("assistant_square");
+        assertThat(profile.requestStrategy()).isSameAs(asq);
+        verify(sysConfigService, never()).getValue(eq("cloud_protocol_profile"), eq("assistant_square"));
     }
 
     @Test

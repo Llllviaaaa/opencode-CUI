@@ -16,19 +16,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * SS 端 CloudRequestProfile 注册表。
- *
- * <p>运行时按 SysConfig 拼装套餐：</p>
- * <ol>
- *   <li>{@code cloud_protocol_profile:<businessTag>} → profile name（缺失 → {@code "default"}）</li>
- *   <li>{@code cloud_protocol_profile_def:<profileName>} → JSON 定义；
- *       从中读 {@code request_strategy} 字段</li>
- *   <li>profile_def 缺失时按"profile name == strategy name"约定 fallback</li>
- *   <li>strategy 未注册 → fallback "default" strategy</li>
- * </ol>
- *
- * <p>带 in-memory cache（配置项 {@code skill-server.cloud-protocol-profile.cache-ttl-ms}，
- * 默认 300000ms / 5 分钟）。</p>
+ * Runtime registry for cloud request protocol profiles.
  */
 @Slf4j
 @Service
@@ -57,10 +45,10 @@ public class CloudRequestProfileRegistry {
     }
 
     /**
-     * 按 businessTag 解析 profile（profile name + strategy 实例）。
+     * Resolve profile by business tag through SysConfig mapping.
      */
     public CloudRequestProfile resolve(String businessTag) {
-        String cacheKey = businessTag == null ? "" : businessTag;
+        String cacheKey = "business:" + (businessTag == null ? "" : businessTag);
         long now = System.currentTimeMillis();
         CacheEntry cached = cache.get(cacheKey);
         if (cached != null && (now - cached.timestampMs) < cacheTtlMs) {
@@ -71,8 +59,23 @@ public class CloudRequestProfileRegistry {
         return profile;
     }
 
+    /**
+     * Resolve an already-known protocol profile name without a businessTag mapping.
+     */
+    public CloudRequestProfile resolveProfile(String profileName) {
+        String name = (profileName == null || profileName.isBlank()) ? DEFAULT_PROFILE : profileName;
+        String cacheKey = "profile:" + name;
+        long now = System.currentTimeMillis();
+        CacheEntry cached = cache.get(cacheKey);
+        if (cached != null && (now - cached.timestampMs) < cacheTtlMs) {
+            return cached.profile;
+        }
+        CloudRequestProfile profile = loadProfile(name);
+        cache.put(cacheKey, new CacheEntry(profile, now));
+        return profile;
+    }
+
     private CloudRequestProfile loadFromSysConfig(String businessTag) {
-        // 1. businessTag → profile name
         String profileName = null;
         if (businessTag != null && !businessTag.isBlank()) {
             try {
@@ -86,7 +89,10 @@ public class CloudRequestProfileRegistry {
             profileName = DEFAULT_PROFILE;
         }
 
-        // 2. profile name → strategy name（按 profile_def JSON 或约定 fallback）
+        return loadProfile(profileName);
+    }
+
+    private CloudRequestProfile loadProfile(String profileName) {
         String strategyName = profileName;
         try {
             String defJson = sysConfigService.getValue(CONFIG_TYPE_PROFILE_DEF, profileName);
@@ -99,7 +105,6 @@ public class CloudRequestProfileRegistry {
                     profileName, e.getMessage());
         }
 
-        // 3. strategy name → strategy bean（缺失 fallback default）
         CloudRequestStrategy strategy = strategyMap.get(strategyName);
         if (strategy == null) {
             log.warn("[PROFILE_REG] strategy not registered: name={}, falling back to default", strategyName);

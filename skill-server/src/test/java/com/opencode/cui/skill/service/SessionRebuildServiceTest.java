@@ -93,7 +93,7 @@ class SessionRebuildServiceTest {
     }
 
     /**
-     * 构建完整 IM 群聊 session, 用于 fromSessionFallback 路径。
+     * 构建完整 IM 群聊 session, 用于显式群聊语义测试。
      */
     private SkillSession buildImGroupSession(Long id, String owner, String assistantAccount, String businessSessionId) {
         SkillSession s = new SkillSession();
@@ -102,6 +102,20 @@ class SessionRebuildServiceTest {
         s.setAssistantAccount(assistantAccount);
         s.setBusinessSessionDomain(SkillSession.DOMAIN_IM);
         s.setBusinessSessionType(SkillSession.SESSION_TYPE_GROUP);
+        s.setBusinessSessionId(businessSessionId);
+        return s;
+    }
+
+    /**
+     * 构建完整 IM 单聊 session, 用于 fromSessionFallback 成功路径。
+     */
+    private SkillSession buildImDirectSession(Long id, String owner, String assistantAccount, String businessSessionId) {
+        SkillSession s = new SkillSession();
+        s.setId(id);
+        s.setUserId(owner);
+        s.setAssistantAccount(assistantAccount);
+        s.setBusinessSessionDomain(SkillSession.DOMAIN_IM);
+        s.setBusinessSessionType(SkillSession.SESSION_TYPE_DIRECT);
         s.setBusinessSessionId(businessSessionId);
         return s;
     }
@@ -318,7 +332,7 @@ class SessionRebuildServiceTest {
 
         when(listOperations.range(eq(key), eq(0L), eq(-1L))).thenReturn(List.of(adversarial));
         when(sessionService.findByIdSafe(5101L)).thenReturn(
-                buildImGroupSession(5101L, "owner-x", "assist-x", "biz-group-1"));
+                buildImDirectSession(5101L, "owner-x", "assist-x", "biz-group-1"));
 
         List<PendingChatRequest> consumed = service.consumePendingRequests(sessionId);
 
@@ -328,7 +342,7 @@ class SessionRebuildServiceTest {
         // 其他字段由 fromSessionFallback 反查
         assertEquals("assist-x", consumed.get(0).assistantAccount());
         assertEquals("owner-x", consumed.get(0).sendUserAccount());
-        assertEquals("biz-group-1", consumed.get(0).imGroupId());
+        assertNull(consumed.get(0).imGroupId());
         assertNotNull(consumed.get(0).messageId());
         assertNull(consumed.get(0).businessExtParam());
     }
@@ -342,14 +356,14 @@ class SessionRebuildServiceTest {
 
         when(listOperations.range(eq(key), eq(0L), eq(-1L))).thenReturn(List.of(legacyPlain));
         when(sessionService.findByIdSafe(5102L)).thenReturn(
-                buildImGroupSession(5102L, "owner-y", "assist-y", "biz-group-2"));
+                buildImDirectSession(5102L, "owner-y", "assist-y", "biz-group-2"));
 
         List<PendingChatRequest> consumed = service.consumePendingRequests(sessionId);
 
         assertEquals(1, consumed.size());
         assertEquals(legacyPlain, consumed.get(0).text());
         assertEquals("assist-y", consumed.get(0).assistantAccount());
-        assertEquals("biz-group-2", consumed.get(0).imGroupId());
+        assertNull(consumed.get(0).imGroupId());
     }
 
     @Test
@@ -361,7 +375,7 @@ class SessionRebuildServiceTest {
 
         when(listOperations.range(eq(key), eq(0L), eq(-1L))).thenReturn(List.of(legalJsonString));
         when(sessionService.findByIdSafe(5103L)).thenReturn(
-                buildImGroupSession(5103L, "owner-z", "assist-z", "biz-group-3"));
+                buildImDirectSession(5103L, "owner-z", "assist-z", "biz-group-3"));
 
         List<PendingChatRequest> consumed = service.consumePendingRequests(sessionId);
 
@@ -433,7 +447,7 @@ class SessionRebuildServiceTest {
         when(listOperations.range(eq(key), eq(0L), eq(-1L)))
                 .thenReturn(Arrays.asList(newFormatJson, legacyPlain));
         when(sessionService.findByIdSafe(5106L)).thenReturn(
-                buildImGroupSession(5106L, "owner-mix", "assist-mix", "biz-mix"));
+                buildImDirectSession(5106L, "owner-mix", "assist-mix", "biz-mix"));
 
         List<PendingChatRequest> consumed = service.consumePendingRequests(sessionId);
 
@@ -447,7 +461,7 @@ class SessionRebuildServiceTest {
         assertEquals("legacy-msg", consumed.get(1).text());
         assertEquals("assist-mix", consumed.get(1).assistantAccount());
         assertEquals("owner-mix", consumed.get(1).sendUserAccount());
-        assertEquals("biz-mix", consumed.get(1).imGroupId());
+        assertNull(consumed.get(1).imGroupId());
     }
 
     // ==================== @Deprecated 老签名：仅保留 peekPendingMessages（PR3 已删 append/consume String 重载） ====================
@@ -511,8 +525,8 @@ class SessionRebuildServiceTest {
         when(valueOperations.setIfAbsent(eq("ss:rebuild-lock:" + sessionId), anyString(), any()))
                 .thenReturn(true);
 
-        // session 反查：群聊场景，字段齐全
-        SkillSession dbSession = buildImGroupSession(sessionIdLong, "owner-1", "assist-1", "biz-group-1");
+        // session 反查：单聊场景，字段齐全
+        SkillSession dbSession = buildImDirectSession(sessionIdLong, "owner-1", "assist-1", "biz-group-1");
         dbSession.setAk("ak-1");
         when(sessionService.getSession(sessionIdLong)).thenReturn(dbSession);
 
@@ -538,9 +552,9 @@ class SessionRebuildServiceTest {
             assertEquals("assist-1", req.assistantAccount(),
                     "PR3: rebuild_from_db 反查 session.assistantAccount");
             assertEquals("owner-1", req.sendUserAccount(),
-                    "PR3: rebuild_from_db 反查 session.userId（owner，群聊语义降级）");
-            assertEquals("biz-group-1", req.imGroupId(),
-                    "PR3: rebuild_from_db 反查 session.businessSessionId（群聊）");
+                    "PR3: rebuild_from_db 反查 session.userId（owner）");
+            assertNull(req.imGroupId(),
+                    "PR3: direct session fallback 不反查 imGroupId");
             // businessExtParam fields_degraded — Java null 经 Jackson 反序列化变 NullNode（PR1 边界）
             assertTrue(req.businessExtParam() == null || req.businessExtParam().isNull(),
                     "PR3: businessExtParam fields_degraded（Java null 或 NullNode 均接受）");
@@ -629,7 +643,7 @@ class SessionRebuildServiceTest {
         String key = "ss:pending-rebuild:" + sessionId;
         stubRedisCounter(sessionId);
 
-        SkillSession fullSession = buildImGroupSession(7001L, "owner-7", "assist-7", "biz-group-7");
+        SkillSession fullSession = buildImDirectSession(7001L, "owner-7", "assist-7", "biz-group-7");
         fullSession.setAk("ak-7");
 
         CapturingCallback cb = new CapturingCallback();
@@ -644,7 +658,7 @@ class SessionRebuildServiceTest {
             assertEquals("降级文本", req.text());
             assertEquals("assist-7", req.assistantAccount());
             assertEquals("owner-7", req.sendUserAccount());
-            assertEquals("biz-group-7", req.imGroupId());
+            assertNull(req.imGroupId());
             // businessExtParam fields_degraded（Java null 反序列化变 NullNode）
             assertTrue(req.businessExtParam() == null || req.businessExtParam().isNull());
         } catch (Exception e) {
@@ -763,10 +777,10 @@ class SessionRebuildServiceTest {
         String key = "ss:pending-rebuild:" + sessionId;
         stubRedisCounter(sessionId);
 
-        SkillSession session = buildImGroupSession(8001L, "owner-v3-1", "assist-v3-1", "biz-v3-1");
+        SkillSession session = buildImDirectSession(8001L, "owner-v3-1", "assist-v3-1", "biz-v3-1");
         session.setAk("ak-v3-1");
         // sysconfig 命中：personal scope strategy.generateToolSessionId() == null + resolver 返 list
-        lenient().when(allowedSlashCommandsResolver.resolve("im", "group"))
+        lenient().when(allowedSlashCommandsResolver.resolve("im", "direct"))
                 .thenReturn(java.util.List.of("plan", "ask"));
 
         CapturingCallback cb = new CapturingCallback();
@@ -789,7 +803,7 @@ class SessionRebuildServiceTest {
         String key = "ss:pending-rebuild:" + sessionId;
         stubRedisCounter(sessionId);
 
-        SkillSession session = buildImGroupSession(8002L, "owner-v3-2", "assist-v3-2", "biz-v3-2");
+        SkillSession session = buildImDirectSession(8002L, "owner-v3-2", "assist-v3-2", "biz-v3-2");
         session.setAk("ak-v3-2");
 
         // business scope: strategy.generateToolSessionId() != null
@@ -817,7 +831,7 @@ class SessionRebuildServiceTest {
         String key = "ss:pending-rebuild:" + sessionId;
         stubRedisCounter(sessionId);
 
-        SkillSession session = buildImGroupSession(8003L, "owner-v3-3", "assist-v3-3", "biz-v3-3");
+        SkillSession session = buildImDirectSession(8003L, "owner-v3-3", "assist-v3-3", "biz-v3-3");
         session.setAk("ak-v3-3");
         // resolver 默认返 null（与 setUp 一致），不需 stub
 
@@ -838,7 +852,7 @@ class SessionRebuildServiceTest {
         String key = "ss:pending-rebuild:" + sessionId;
         stubRedisCounter(sessionId);
 
-        SkillSession session = buildImGroupSession(8004L, "owner-v3-4", "assist-v3-4", "biz-v3-4");
+        SkillSession session = buildImDirectSession(8004L, "owner-v3-4", "assist-v3-4", "biz-v3-4");
         session.setAk("ak-v3-4");
 
         // scopeDispatcher 抛异常（模拟下游 service 故障）
