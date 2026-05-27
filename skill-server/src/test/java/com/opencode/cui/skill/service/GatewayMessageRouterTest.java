@@ -175,17 +175,27 @@ class GatewayMessageRouterTest {
     }
 
     private ObjectNode buildTextToolEvent(String messageId, String traceId, String content, String partId) {
+        return buildTextToolEvent(StreamMessage.Types.TEXT_DELTA, messageId, traceId, content, partId);
+    }
+
+    private ObjectNode buildTextToolEvent(String type, String messageId, String traceId, String content, String partId) {
         ObjectNode node = objectMapper.createObjectNode();
         node.put("type", "tool_event");
         node.put("welinkSessionId", WELINK_SESSION_ID);
         node.put("ak", "AK_V");
         node.put("traceId", traceId);
         ObjectNode event = objectMapper.createObjectNode();
-        event.put("type", StreamMessage.Types.TEXT_DELTA);
+        event.put("type", type);
         ObjectNode properties = objectMapper.createObjectNode();
-        properties.put("messageId", messageId);
-        properties.put("partId", partId);
-        properties.put("content", content);
+        if (messageId != null) {
+            properties.put("messageId", messageId);
+        }
+        if (partId != null) {
+            properties.put("partId", partId);
+        }
+        if (content != null) {
+            properties.put("content", content);
+        }
         event.set("properties", properties);
         node.set("event", event);
         return node;
@@ -324,6 +334,71 @@ class GatewayMessageRouterTest {
         assertFalse(captor.getAllValues().stream()
                 .anyMatch(msg -> StreamMessage.Types.TEXT_DONE.equals(msg.getType())
                         && "new-".equals(msg.getContent())));
+    }
+
+    @Test
+    @DisplayName("IM overlapping turns keep each trace isolated when the later turn finishes first")
+    void toolDone_imSessionDoesNotFlushOrSuppressDifferentTraceBuffer() {
+        router = buildRouter(true);
+        SkillSession session = SkillSession.builder()
+                .id(Long.parseLong(WELINK_SESSION_ID))
+                .userId("user-1")
+                .ak("AK_V")
+                .businessSessionDomain(SkillSession.DOMAIN_IM)
+                .businessSessionType(SkillSession.SESSION_TYPE_DIRECT)
+                .build();
+        when(sessionService.findByIdSafe(Long.parseLong(WELINK_SESSION_ID))).thenReturn(session);
+        when(scopeStrategy.translateEvent(any(), eq(WELINK_SESSION_ID))).thenAnswer(inv -> {
+            com.fasterxml.jackson.databind.JsonNode event = inv.getArgument(0);
+            com.fasterxml.jackson.databind.JsonNode props = event.path("properties");
+            String messageId = props.path("messageId").asText(null);
+            return StreamMessage.builder()
+                    .type(event.path("type").asText())
+                    .messageId(messageId)
+                    .sourceMessageId(messageId)
+                    .partId(props.path("partId").asText(null))
+                    .content(props.path("content").asText(null))
+                    .role("assistant")
+                    .build();
+        });
+
+        router.route("tool_event", "AK_V", "user-1",
+                buildTextToolEvent("msg-m1", "trace-m1", "m1-head", "part-m1"));
+        router.route("tool_event", "AK_V", "user-1",
+                buildTextToolEvent("msg-m2", "trace-m2", "m2-", "part-m2"));
+        router.route("tool_event", "AK_V", "user-1",
+                buildTextToolEvent(StreamMessage.Types.TEXT_DONE, "msg-m2", "trace-m2", "m2-full", "part-m2"));
+
+        ObjectNode doneM2 = objectMapper.createObjectNode();
+        doneM2.put("type", "tool_done");
+        doneM2.put("welinkSessionId", WELINK_SESSION_ID);
+        doneM2.put("traceId", "trace-m2");
+        router.route("tool_done", "AK_V", "user-1", doneM2);
+
+        org.mockito.ArgumentCaptor<StreamMessage> firstCaptor =
+                org.mockito.ArgumentCaptor.forClass(StreamMessage.class);
+        verify(emitter, org.mockito.Mockito.atLeastOnce())
+                .emitToSession(eq(session), eq(WELINK_SESSION_ID), eq("user-1"), firstCaptor.capture());
+        assertFalse(firstCaptor.getAllValues().stream()
+                .anyMatch(msg -> StreamMessage.Types.TEXT_DONE.equals(msg.getType())
+                        && "m1-head".equals(msg.getContent())));
+
+        org.mockito.Mockito.clearInvocations(emitter);
+        router.route("tool_event", "AK_V", "user-1",
+                buildTextToolEvent("msg-m1", "trace-m1", "m1-tail", "part-m1"));
+        router.route("tool_event", "AK_V", "user-1",
+                buildTextToolEvent(StreamMessage.Types.TEXT_DONE, "msg-m1", "trace-m1", "m1-full", "part-m1"));
+
+        org.mockito.ArgumentCaptor<StreamMessage> secondCaptor =
+                org.mockito.ArgumentCaptor.forClass(StreamMessage.class);
+        verify(emitter, org.mockito.Mockito.atLeastOnce())
+                .emitToSession(eq(session), eq(WELINK_SESSION_ID), eq("user-1"), secondCaptor.capture());
+        assertTrue(secondCaptor.getAllValues().stream()
+                .anyMatch(msg -> StreamMessage.Types.TEXT_DELTA.equals(msg.getType())
+                        && "m1-tail".equals(msg.getContent())));
+        assertTrue(secondCaptor.getAllValues().stream()
+                .anyMatch(msg -> StreamMessage.Types.TEXT_DONE.equals(msg.getType())
+                        && "m1-full".equals(msg.getContent())));
     }
 
     @Test

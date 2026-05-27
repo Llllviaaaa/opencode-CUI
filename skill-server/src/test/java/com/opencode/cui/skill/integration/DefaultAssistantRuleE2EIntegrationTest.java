@@ -530,6 +530,7 @@ class DefaultAssistantRuleE2EIntegrationTest {
         verify(gatewayRelayTarget, times(1)).sendToGateway(wireCaptor.capture());
         JsonNode wireNode = objectMapper.readTree(wireCaptor.getValue());
         assertEquals("abort_session", wireNode.path("action").asText());
+        assertEquals(created.getId().toString(), wireNode.path("welinkSessionId").asText());
         assertEquals(created.getToolSessionId(), wireNode.path("payload").path("toolSessionId").asText());
         assertFalse(wireNode.path("payload").has("cloudRequest"));
     }

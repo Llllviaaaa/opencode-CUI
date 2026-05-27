@@ -162,6 +162,7 @@ class BusinessScopeStrategyTest {
         assertEquals("asst-1", ctx.getAssistantAccount());
         assertEquals("asst-1", objectMapper.readTree(result).path("assistantAccount").asText());
         assertEquals("app-123", objectMapper.readTree(result).path("businessTag").asText());
+        assertEquals("session-1", objectMapper.readTree(result).path("welinkSessionId").asText());
     }
 
     @Test
@@ -480,6 +481,7 @@ class BusinessScopeStrategyTest {
         assertEquals("business", root.path("assistantScope").asText());
         assertEquals("asst-1", root.path("assistantAccount").asText());
         assertEquals("app-001", root.path("businessTag").asText());
+        assertEquals("1", root.path("welinkSessionId").asText());
         assertEquals("cloud-001", root.path("payload").path("toolSessionId").asText());
         assertEquals("assistant_square", root.path("payload").path("cloudProfile").asText());
         assertFalse(root.path("payload").has("cloudRequest"));

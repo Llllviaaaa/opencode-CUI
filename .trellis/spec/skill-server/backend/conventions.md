@@ -1243,9 +1243,12 @@ the currently active reply.
 - A synthesized fallback `text.done` must include the accumulator's `messageId`,
   `sourceMessageId`, and last known `partId` so `StreamMessageEmitter` and external WS delivery
   cannot enrich it onto the newer active reply.
-- `tool_done` with a `traceId` flushes only the matching trace bucket. If there is no trace and
-  multiple buckets exist, flush the oldest bucket instead of merging all buckets into one
-  `text.done`.
+- `tool_done` with a `traceId` flushes only the matching trace bucket. If no bucket matches that
+  trace, do not synthesize `text.done` from another bucket.
+- `tool_done` completion marks are trace-scoped when `traceId` exists. A later reply finishing
+  first must not suppress residual `tool_event` / real `text.done` events from an earlier reply.
+- If there is no trace and multiple buckets exist, do not guess by oldest bucket. Only the
+  single-bucket no-trace fallback may synthesize `text.done`.
 
 #### Validation & Error Matrix
 
@@ -1253,9 +1256,10 @@ the currently active reply.
 | --- | --- |
 | reply 1 event arrives while reply 2 is active | Emit and persist under reply 1 `messageId`; keep reply 2 active. |
 | reply 1 and reply 2 both have buffered IM `text.delta` | `tool_done(traceId=reply1)` emits only reply 1 fallback `text.done`. |
+| reply 2 sends real `text.done`, then `tool_done(traceId=reply2)` while reply 1 is still streaming | Do not emit reply 1 buffered text as reply 2 fallback; reply 1 later events are still accepted. |
 | upstream sends real `text.done` for reply 1 | Remove reply 1 bucket only; leave reply 2 bucket intact. |
 | event has no `messageId` but has `traceId` | Use `trace:{traceId}` as the temporary accumulator key. |
-| event has no `messageId` and no `traceId` | Use the missing-id bucket; do not borrow the inbound request message id. |
+| event has no `messageId` and no `traceId` | Use the missing-id bucket; do not borrow the inbound request message id. Multiple no-trace buckets must not be guessed. |
 
 #### Good / Base / Bad Cases
 
@@ -1291,5 +1295,7 @@ cloudImTextBuffer.remove(sessionId); // clears unrelated overlapping reply conte
   context while a newer turn remains active.
 - `GatewayMessageRouterTest`: IM fallback `text.done` flushes only the matching `traceId` /
   message bucket and does not emit the other reply's buffered text.
+- `GatewayMessageRouterTest`: when reply 2 completes before a long reply 1, reply 2 `tool_done`
+  neither flushes reply 1's buffer nor suppresses reply 1's later `text.delta` / `text.done`.
 - Any future Gateway fallback change must assert assistant reply ids are generated reply ids,
   never the inbound user request `messageId`.
