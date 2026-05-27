@@ -16,18 +16,41 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class AssistantInstanceInfo {
 
+    public static final int REMOTE_TYPE_LOCAL = 0;
+    public static final int REMOTE_TYPE_ASSISTANT_SQUARE = 1;
+    public static final int REMOTE_TYPE_DEFAULT = 2;
+    public static final String PROFILE_ASSISTANT_SQUARE = "assistant_square";
+    public static final String PROFILE_DEFAULT = "default";
+
     private String partnerAccount;
     private String ownerWelinkId;
     private String appKey;
     private Boolean isRemote;
+    private Integer remoteType;
     private String bizRobotTag;
     private Integer userType;
     private List<RemoteProperty> remoteProperty;
 
     @JsonIgnore
     public boolean remoteAssistant() {
+        if (remoteType != null) {
+            return remoteType == REMOTE_TYPE_ASSISTANT_SQUARE
+                    || remoteType == REMOTE_TYPE_DEFAULT;
+        }
         return Boolean.TRUE.equals(isRemote)
                 || (remoteProperty != null && !remoteProperty.isEmpty());
+    }
+
+    @JsonIgnore
+    public String protocolProfile() {
+        if (remoteType == null) {
+            return null;
+        }
+        return switch (remoteType) {
+            case REMOTE_TYPE_ASSISTANT_SQUARE -> PROFILE_ASSISTANT_SQUARE;
+            case REMOTE_TYPE_DEFAULT -> PROFILE_DEFAULT;
+            default -> null;
+        };
     }
 
     @JsonIgnore

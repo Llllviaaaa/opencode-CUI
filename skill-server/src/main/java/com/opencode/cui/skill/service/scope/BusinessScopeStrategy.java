@@ -78,7 +78,7 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
                 command.assistantAccount(),
                 command.partnerAccount());
 
-        CloudRequestProfile profile = profileRegistry.resolve(businessTag);
+        CloudRequestProfile profile = resolveProfile(info, businessTag);
         if (GatewayActions.ABORT_SESSION.equals(action)) {
             return buildAbortInvoke(command, toolSessionId, assistantAccount, businessTag, profile);
         }
@@ -236,6 +236,14 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
     }
 
     // ------------------------------------------------------------------ package-private (testable)
+
+    CloudRequestProfile resolveProfile(AssistantInfo info, String businessTag) {
+        String profileHint = info == null ? null : firstNonBlank(info.getCloudProfile());
+        if (profileHint != null) {
+            return profileRegistry.resolveProfile(profileHint);
+        }
+        return profileRegistry.resolve(businessTag);
+    }
 
     /**
      * 将 question_reply 的 raw answer 字符串规整为云端协议要求的 List&lt;List&lt;String&gt;&gt;。

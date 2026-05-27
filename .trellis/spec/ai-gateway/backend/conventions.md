@@ -154,13 +154,16 @@ Remote cloud routing must prefer the assistant instance API over legacy callback
 `AssistantInstanceInfo.remoteProperty[]` is selected by action (`chat`, `question_reply`, `permission_reply`, etc.) and supplies protocol, endpoint, and auth type.
 `remoteProperty.headers` is an array, but GW uses only the first `header.type` to derive `CloudConnectionContext.authType`; protocol executors must then call `CloudAuthService.applyAuth(..., authType)`.
 `remoteProperty.headers[].customKey` and `customValue` are not raw outbound cloud request headers in this flow and must not be replayed by GW.
-`CloudConnectionContext.cloudProfile` comes from `AssistantInstanceInfo.bizRobotTag` when present, otherwise the SS-provided business tag / legacy `cloudProfile`; never use `remoteProperty.dataProtocol` as the profile override.
+`AssistantInstanceInfo.remoteType` is authoritative when present: `0` means local/non-remote, `1` means assistant-square cloud profile, and `2` means default cloud profile. When `remoteType` is absent, keep the legacy remote check for compatibility.
+`CloudConnectionContext.cloudProfile` comes from `AssistantInstanceInfo.remoteType` first (`1 -> assistant_square`, `2 -> default`), then `bizRobotTag` when present, then the SS-provided business tag / legacy `cloudProfile`; never use `remoteProperty.dataProtocol` as the profile override.
 
 ### 4. Validation & Error Matrix
 
 | Case | Required behavior |
 | --- | --- |
-| Instance API returns a matching `remoteProperty` for action | Use endpoint/protocol from instance data, derive `authType` from `remoteProperty.headers[0].type`, and derive `cloudProfile` from `bizRobotTag` or SS fallback. |
+| Instance API returns `remoteType=1` with a matching `remoteProperty` for action | Use endpoint/protocol from instance data, derive `authType` from `remoteProperty.headers[0].type`, and derive `cloudProfile=assistant_square` without reading SysConfig package mapping. |
+| Instance API returns `remoteType=2` with a matching `remoteProperty` for action | Use endpoint/protocol from instance data, derive `authType` from `remoteProperty.headers[0].type`, and derive `cloudProfile=default` without reading SysConfig package mapping. |
+| Instance API returns `remoteType=0` even with legacy `remoteProperty` | Treat it as local/non-remote and use the legacy fallback path when configured. |
 | Instance API succeeds but action property is missing | Emit remote-property-missing failure; do not invent a legacy endpoint. |
 | Instance API fails or no partner account is present | Preserve legacy fallback path when configured. |
 | `remoteProperty.headers` is empty | Use `authType="none"` so no auth headers are written. |
@@ -176,7 +179,7 @@ AssistantInstanceInfo info = assistantInstanceInfoService.getInstanceInfo(partne
 RemoteRoute route = resolveRemoteRouteFromInstance(info, action);
 CloudConnectionContext ctx = CloudConnectionContext.builder()
         .authType(route.authType())       // from remoteProperty.headers[0].type
-        .cloudProfile(route.cloudProfile()) // from bizRobotTag or SS fallback
+        .cloudProfile(route.cloudProfile()) // from remoteType profile, bizRobotTag, or SS fallback
         .build();
 cloudAuthService.applyAuth(builder, ctx.getAppId(), ctx.getAuthType());
 ```
@@ -199,14 +202,14 @@ The bad case cannot route no-AK remote assistants and causes skill-server to blo
 ### 6. Tests Required
 
 - `AssistantInstanceInfoServiceTest`: success, not-exists/empty data, upstream failure, and cache behavior.
-- `CloudAgentServiceTest`: action-specific `remoteProperty` selection, no-AK remote invocation, first `headers[0].type` auth mapping, `bizRobotTag` cloudProfile mapping, and legacy fallback.
+- `CloudAgentServiceTest`: action-specific `remoteProperty` selection, no-AK remote invocation, first `headers[0].type` auth mapping, `remoteType` cloudProfile mapping, `remoteType=0` local override, and legacy fallback.
 - `CloudAuthServiceTest`: HTTP and WebSocket authType strategy dispatch, including unknown authType failure.
 
 ### 7. Wrong vs Correct
 
 Wrong: use AK as the only route key for cloud assistants, map `remoteProperty.dataProtocol` into `cloudProfile`, or replay `remoteProperty.headers[].customKey/customValue` as raw outbound headers.
 
-Correct: use `assistantAccount` / `partnerAccount` to load instance metadata, select `remoteProperty` by action, derive `authType` from the first `header.type`, keep `cloudProfile` from `bizRobotTag` or SS fallback, and treat AK as optional context.
+Correct: use `assistantAccount` / `partnerAccount` to load instance metadata, require a remote assistant before selecting `remoteProperty`, derive `authType` from the first `header.type`, keep `cloudProfile` from `remoteType` before `bizRobotTag` or SS fallback, and treat AK as optional context.
 
 ## Cloud stream abort cancellation
 
@@ -259,6 +262,9 @@ instances.
 SSE cancellation closes the response `InputStream`, exits the read loop, and
 skips decoder tail flush after cancellation. WebSocket cancellation calls
 `WebSocket.abort()` and releases the thread waiting on the close latch.
+Lifecycle timeouts (`first_event_timeout`, `idle_timeout`, `max_duration`)
+must reuse the same cancellation path: the timeout callback cancels the active
+`CloudConnectionHandle` and then emits at most one `tool_error`.
 
 ### 4. Validation & Error Matrix
 

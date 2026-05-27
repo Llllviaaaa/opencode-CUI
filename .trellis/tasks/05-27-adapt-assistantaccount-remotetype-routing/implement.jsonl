@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "Assistant instance lookup, no-AK remote routing, scope strategy selection, and cloud request profile contracts."}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "Model/DTO field compatibility for assistant instance API and AssistantInfo changes."}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "Redis assistantAccount status cache shape and compatibility constraints."}
+{"file": ".trellis/spec/ai-gateway/backend/conventions.md", "reason": "GW remoteProperty routing and cloudProfile behavior."}
+{"file": ".trellis/spec/ai-gateway/backend/type-safety.md", "reason": "GW model/Jackson compatibility for assistant instance API fields."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer SS-to-GW payload/profile propagation."}

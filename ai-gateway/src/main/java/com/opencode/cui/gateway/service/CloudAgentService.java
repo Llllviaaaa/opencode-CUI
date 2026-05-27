@@ -266,7 +266,8 @@ public class CloudAgentService {
             return null;
         }
         AssistantInstanceInfo info = assistantInstanceInfoService.getInstanceInfo(assistantAccount);
-        if (info == null || info.getRemoteProperty() == null || info.getRemoteProperty().isEmpty()) {
+        if (info == null || !info.remoteAssistant()
+                || info.getRemoteProperty() == null || info.getRemoteProperty().isEmpty()) {
             return null;
         }
         String abilityType = abilityType(action);
@@ -281,7 +282,7 @@ public class CloudAgentService {
             }
             String authType = resolveAuthType(property.getHeaders());
             return new RemoteRoute(channelAddress, channelType, null,
-                    firstNonBlank(info.getBizRobotTag(), fallbackBusinessTag),
+                    firstNonBlank(info.protocolProfile(), info.getBizRobotTag(), fallbackBusinessTag),
                     authType);
         }
         return null;
@@ -361,16 +362,8 @@ public class CloudAgentService {
                 timeoutProperties.getEffectiveIdleTimeoutSeconds(protocol),
                 timeoutProperties.getMaxDurationSeconds(),
                 (timeoutType, elapsedSeconds) -> {
-                    if (connectionHandle.isCancelled()) {
-                        log.info("[CLOUD_AGENT] Ignore timeout after cancellation: ak={}, traceId={}, type={}",
-                                ak, invokeMessage.getTraceId(), timeoutType);
-                        return;
-                    }
-                    log.warn("[CLOUD_AGENT] Connection timeout: ak={}, traceId={}, type={}, elapsed={}s",
-                            ak, invokeMessage.getTraceId(), timeoutType, elapsedSeconds);
-                    GatewayMessage errorMsg = buildCloudError(invokeMessage, toolSessionId,
-                            new RuntimeException(timeoutType + " (elapsed: " + elapsedSeconds + "s)"), null);
-                    if (errorSent.compareAndSet(false, true)) { onRelay.accept(errorMsg); }
+                    handleStreamingTimeout(invokeMessage, onRelay, ak, toolSessionId,
+                            connectionHandle, errorSent, timeoutType, elapsedSeconds);
                 },
                 () -> log.info("[CLOUD_AGENT] Connection closed by lifecycle: ak={}, traceId={}",
                         ak, invokeMessage.getTraceId())
@@ -459,6 +452,29 @@ public class CloudAgentService {
             removeActiveConnection(activeConnection);
             removeCloudStreamRoute(toolSessionId);
             lifecycle.close();
+        }
+    }
+
+    private void handleStreamingTimeout(GatewayMessage invokeMessage,
+                                        Consumer<GatewayMessage> onRelay,
+                                        String ak,
+                                        String toolSessionId,
+                                        CloudConnectionHandle connectionHandle,
+                                        AtomicBoolean errorSent,
+                                        String timeoutType,
+                                        long elapsedSeconds) {
+        if (connectionHandle.isCancelled()) {
+            log.info("[CLOUD_AGENT] Ignore timeout after cancellation: ak={}, traceId={}, type={}",
+                    ak, invokeMessage.getTraceId(), timeoutType);
+            return;
+        }
+        log.warn("[CLOUD_AGENT] Connection timeout: ak={}, traceId={}, type={}, elapsed={}s",
+                ak, invokeMessage.getTraceId(), timeoutType, elapsedSeconds);
+        connectionHandle.cancel();
+        GatewayMessage errorMsg = buildCloudError(invokeMessage, toolSessionId,
+                new RuntimeException(timeoutType + " (elapsed: " + elapsedSeconds + "s)"), null);
+        if (errorSent.compareAndSet(false, true)) {
+            onRelay.accept(errorMsg);
         }
     }
 

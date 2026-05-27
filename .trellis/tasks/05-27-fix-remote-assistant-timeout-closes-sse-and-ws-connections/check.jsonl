@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/ai-gateway/backend/index.md", "reason": "ai-gateway backend verification checklist"}
+{"file": ".trellis/spec/ai-gateway/backend/conventions.md", "reason": "verify cloud stream timeout cleanup follows existing cancel contract"}
+{"file": ".trellis/spec/ai-gateway/backend/error-handling.md", "reason": "verify timeout error semantics remain stable"}
+{"file": ".trellis/spec/ai-gateway/backend/logging-guidelines.md", "reason": "verify lifecycle logging stays within gateway conventions"}
+{"file": ".trellis/spec/ai-gateway/backend/type-safety.md", "reason": "verify no unexpected protocol field changes"}
+{"file": ".trellis/spec/guides/index.md", "reason": "verify cross-layer scope stayed narrow"}

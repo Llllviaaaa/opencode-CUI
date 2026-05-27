@@ -130,7 +130,7 @@ class AssistantAccountResolverServiceTest {
         when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
                 eq(com.fasterxml.jackson.databind.JsonNode.class)))
                 .thenReturn(ResponseEntity.ok(new ObjectMapper().readTree(
-                        "{\"code\":200,\"data\":{\"isRemote\":true}}")));
+                        "{\"code\":200,\"data\":{\"remoteType\":1}}")));
 
         ResolveOutcome outcome = service.resolveWithStatus("assist-001");
 
@@ -139,6 +139,24 @@ class AssistantAccountResolverServiceTest {
         assertNull(outcome.ownerWelinkId());
         verify(valueOperations).set(eq(STATUS_KEY), anyString(), eq(Duration.ofSeconds(EXISTS_TTL)));
     }
+
+    @Test
+    @DisplayName("remote: body.code=200 + data.remoteType=2 + appKey missing -> EXISTS")
+    void defaultProtocolRemoteAppKeyMissingReturnsExists() throws Exception {
+        when(valueOperations.get(STATUS_KEY)).thenReturn(null);
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
+                eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                .thenReturn(ResponseEntity.ok(new ObjectMapper().readTree(
+                        "{\"code\":200,\"data\":{\"remoteType\":2}}")));
+
+        ResolveOutcome outcome = service.resolveWithStatus("assist-001");
+
+        assertEquals(ExistenceStatus.EXISTS, outcome.status());
+        assertNull(outcome.ak());
+        assertNull(outcome.ownerWelinkId());
+        verify(valueOperations).set(eq(STATUS_KEY), anyString(), eq(Duration.ofSeconds(EXISTS_TTL)));
+    }
+
     @Test
     @DisplayName("local: body.code=200 + appKey missing + isRemote=false -> UNKNOWN")
     void localAssistantWithoutAkReturnsUnknown() throws Exception {
@@ -146,7 +164,26 @@ class AssistantAccountResolverServiceTest {
         when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
                 eq(com.fasterxml.jackson.databind.JsonNode.class)))
                 .thenReturn(ResponseEntity.ok(new ObjectMapper().readTree(
-                        "{\"code\":200,\"data\":{\"createdBy\":\"owner-only\",\"isRemote\":false}}")));
+                        "{\"code\":200,\"data\":{\"createdBy\":\"owner-only\",\"remoteType\":0}}")));
+
+        ResolveOutcome outcome = service.resolveWithStatus("assist-001");
+
+        assertEquals(ExistenceStatus.UNKNOWN, outcome.status());
+        assertNull(outcome.ak());
+        assertNull(outcome.ownerWelinkId());
+        verify(valueOperations, never()).set(eq(STATUS_KEY), anyString(), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("local: remoteType=0 overrides legacy remoteProperty")
+    void localRemoteTypeOverridesRemoteProperty() throws Exception {
+        when(valueOperations.get(STATUS_KEY)).thenReturn(null);
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
+                eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                .thenReturn(ResponseEntity.ok(new ObjectMapper().readTree(
+                        "{\"code\":200,\"data\":{\"remoteType\":0,"
+                                + "\"remoteProperty\":[{\"type\":\"chat\",\"commProtocol\":\"sse\","
+                                + "\"url\":\"https://remote.example.com/chat\"}]}}")));
 
         ResolveOutcome outcome = service.resolveWithStatus("assist-001");
 
@@ -180,7 +217,7 @@ class AssistantAccountResolverServiceTest {
         when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
                 eq(com.fasterxml.jackson.databind.JsonNode.class)))
                 .thenReturn(ResponseEntity.ok(new ObjectMapper().readTree(
-                        "{\"code\":200,\"data\":{\"isRemote\":true}}")));
+                        "{\"code\":200,\"data\":{\"remoteType\":1}}")));
 
         ResolveOutcome outcome = service.resolveWithStatus("assist-001");
 

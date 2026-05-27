@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/ai-gateway/backend/conventions.md", "reason": "CloudAgentService cloud routing, streaming, logging, and fallback behavior conventions."}
+{"file": ".trellis/spec/ai-gateway/backend/type-safety.md", "reason": "GatewayMessage and Jackson payload mutation conventions for event enrichment."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Refactor by extracting cohesive helpers without duplicating stream logic."}
