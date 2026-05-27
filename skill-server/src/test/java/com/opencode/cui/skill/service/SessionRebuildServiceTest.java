@@ -750,6 +750,33 @@ class SessionRebuildServiceTest {
     }
 
     @Test
+    @DisplayName("personal create_session 下发复用 PendingChatRequest.allowedSlashCommands")
+    void rebuildToolSession_newOverload_createSessionCarriesAllowedSlashCommands() {
+        String sessionId = "7007";
+        stubRedisCounter(sessionId);
+
+        SkillSession session = buildImDirectSession(7007L, "owner-13", "assist-13", "biz-direct-13");
+        session.setAk("ak-13");
+
+        List<String> allowedSlashCommands = List.of("new", "sessions", "session", "models");
+        PendingChatRequest req = new PendingChatRequest(
+                "首条消息", "assist-13", "sender-13",
+                null, "msg-13", null, "im", "direct",
+                null, allowedSlashCommands);
+
+        CapturingCallback cb = new CapturingCallback();
+        service.rebuildToolSession(sessionId, session, req, cb);
+
+        assertEquals(1, cb.invokes.size());
+        InvokeCommand command = cb.invokes.get(0);
+        assertEquals(GatewayActions.CREATE_SESSION, command.action());
+        assertEquals("im", command.domain());
+        assertEquals("direct", command.domainType());
+        assertEquals("biz-direct-13", command.businessSessionId());
+        assertEquals(allowedSlashCommands, command.allowedSlashCommands());
+    }
+
+    @Test
     @DisplayName("PR3: rebuildToolSession 新重载 pendingRequest=null → 不调用 appendPendingMessage")
     void rebuildToolSession_newOverload_nullPendingRequest_skipsAppend() {
         String sessionId = "7005";
@@ -766,6 +793,25 @@ class SessionRebuildServiceTest {
         // 但 create_session 仍要发
         assertEquals(1, cb.invokes.size());
         assertEquals(GatewayActions.CREATE_SESSION, cb.invokes.get(0).action());
+    }
+
+    @Test
+    @DisplayName("create_session uses routeUserId when group session.userId is null")
+    void rebuildToolSession_routeUserIdOverridesNullSessionUserId() {
+        String sessionId = "7006";
+        String key = "ss:pending-rebuild:" + sessionId;
+        stubRedisCounter(sessionId);
+
+        SkillSession session = buildImGroupSession(7006L, null, "assist-12", "biz-group-12");
+        session.setAk("ak-12");
+
+        CapturingCallback cb = new CapturingCallback();
+        service.rebuildToolSession(sessionId, session, (PendingChatRequest) null, "owner-route-12", cb);
+
+        verify(listOperations, never()).rightPush(eq(key), anyString());
+        assertEquals(1, cb.invokes.size());
+        assertEquals(GatewayActions.CREATE_SESSION, cb.invokes.get(0).action());
+        assertEquals("owner-route-12", cb.invokes.get(0).userId());
     }
 
     // ==================== v3 allowed-slash-commands: legacy String overload personal scope gating ====================

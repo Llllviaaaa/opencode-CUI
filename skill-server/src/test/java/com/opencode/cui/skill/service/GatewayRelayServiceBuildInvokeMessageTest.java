@@ -175,6 +175,31 @@ class GatewayRelayServiceBuildInvokeMessageTest {
     }
 
     @Test
+    @DisplayName("personal create_session：allowedSlashCommands 写入 platformExtParam")
+    void personal_createSession_injectsAllowedSlashCommands() throws Exception {
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("title", "im-direct-biz-3");
+
+        InvokeCommand cmd = new InvokeCommand(
+                "ak-3", "owner-3", "1003", "create_session", objectMapper.writeValueAsString(payload),
+                null, "im", "direct", "biz-direct-3",
+                java.util.List.of("new", "sessions", "session", "models"));
+
+        JsonNode message = captureSentMessage(cmd);
+        JsonNode platform = message.path("payload").path("extParameters").path("platformExtParam");
+
+        assertEquals("im", platform.path("businessSessionDomain").asText());
+        assertEquals("direct", platform.path("businessSessionType").asText());
+        assertEquals("biz-direct-3", platform.path("businessSessionId").asText());
+        assertTrue(platform.path("allowedSlashCommands").isArray());
+        assertEquals(4, platform.path("allowedSlashCommands").size());
+        assertEquals("new", platform.path("allowedSlashCommands").get(0).asText());
+        assertEquals("sessions", platform.path("allowedSlashCommands").get(1).asText());
+        assertEquals("session", platform.path("allowedSlashCommands").get(2).asText());
+        assertEquals("models", platform.path("allowedSlashCommands").get(3).asText());
+    }
+
+    @Test
     @DisplayName("幂等保护：payload 已有 extParameters → 不二次注入 / 不覆盖")
     void idempotency_existingExtParameters_notOverwritten() throws Exception {
         // 模拟 retryPendingMessages 提前构造 extParameters 的场景

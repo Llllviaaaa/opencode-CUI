@@ -133,7 +133,7 @@ class ImSessionManagerTest {
         verify(sessionService).createSession(eq("user-real-1"), eq("ak-personal"), anyString(),
                 eq("im"), eq("direct"), eq("dm-001"), eq("assist-001"));
         ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
-        verify(gatewayRelayService).rebuildToolSession(eq("1001"), eq(created), captor.capture());
+        verify(gatewayRelayService).rebuildToolSession(eq("1001"), eq(created), captor.capture(), eq("owner-001"));
         PendingChatRequest req = captor.getValue();
         assertNotNull(req);
         assertEquals("你好", req.text());
@@ -156,7 +156,7 @@ class ImSessionManagerTest {
         verify(sessionService).createSession(isNull(), eq("ak-personal"), anyString(),
                 eq("im"), eq("group"), eq("grp-555"), eq("assist-002"));
         ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
-        verify(gatewayRelayService).rebuildToolSession(eq("1002"), eq(created), captor.capture());
+        verify(gatewayRelayService).rebuildToolSession(eq("1002"), eq(created), captor.capture(), eq("owner-002"));
         PendingChatRequest req = captor.getValue();
         assertNotNull(req);
         assertEquals("群消息", req.text());
@@ -177,7 +177,7 @@ class ImSessionManagerTest {
         verify(sessionService).createSession(eq("user-non-owner"), eq("ak-personal"), anyString(),
                 eq("im"), eq("direct"), eq("dm-003"), eq("assist-003"));
         ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
-        verify(gatewayRelayService).rebuildToolSession(eq("1003"), eq(created), captor.capture());
+        verify(gatewayRelayService).rebuildToolSession(eq("1003"), eq(created), captor.capture(), eq("owner-003"));
         PendingChatRequest req = captor.getValue();
         assertEquals("user-non-owner", req.sendUserAccount(),
                 "direct: 非 owner 的真实 senderUserAccount 必须直接透传");
@@ -196,7 +196,7 @@ class ImSessionManagerTest {
                 "owner-004", "assist-004", "user-004", "带 ext 的消息", ext);
 
         ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
-        verify(gatewayRelayService).rebuildToolSession(eq("1004"), eq(created), captor.capture());
+        verify(gatewayRelayService).rebuildToolSession(eq("1004"), eq(created), captor.capture(), eq("owner-004"));
         PendingChatRequest req = captor.getValue();
         assertNotNull(req.businessExtParam());
         assertEquals(42, req.businessExtParam().get("topicId").asInt());
@@ -213,7 +213,7 @@ class ImSessionManagerTest {
                 "owner-005", "assist-005", "user-005", "  ", null);
 
         ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
-        verify(gatewayRelayService).rebuildToolSession(eq("1005"), eq(created), captor.capture());
+        verify(gatewayRelayService).rebuildToolSession(eq("1005"), eq(created), captor.capture(), eq("owner-005"));
         assertNull(captor.getValue(), "pendingMessage blank 时应传 null");
     }
 
@@ -227,7 +227,7 @@ class ImSessionManagerTest {
                 "owner-006", "assist-006", "user-006", null, null);
 
         ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
-        verify(gatewayRelayService).rebuildToolSession(eq("1006"), eq(created), captor.capture());
+        verify(gatewayRelayService).rebuildToolSession(eq("1006"), eq(created), captor.capture(), eq("owner-006"));
         assertNull(captor.getValue());
     }
 
@@ -245,6 +245,7 @@ class ImSessionManagerTest {
         // 关键：business 路径不应调任何 rebuildToolSession 重载
         verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(String.class));
         verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(PendingChatRequest.class));
+        verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(PendingChatRequest.class), any());
 
         // toolSessionId 已被本地更新
         verify(sessionService).updateToolSessionId(eq(2001L), eq("cloud-fresh-uuid"));
@@ -288,6 +289,7 @@ class ImSessionManagerTest {
         verify(assistantInfoService, never()).getAssistantInfo(any(), any());
         verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(String.class));
         verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(PendingChatRequest.class));
+        verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(PendingChatRequest.class), any());
         verify(sessionService).updateToolSessionId(eq(3001L), eq("cloud-default"));
 
         ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
@@ -331,6 +333,7 @@ class ImSessionManagerTest {
         verify(sessionService).updateToolSessionId(4001L, "cloud-remote");
         verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(String.class));
         verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(PendingChatRequest.class));
+        verify(gatewayRelayService, never()).rebuildToolSession(any(), any(), any(PendingChatRequest.class), any());
 
         ArgumentCaptor<InvokeCommand> cmdCaptor = ArgumentCaptor.forClass(InvokeCommand.class);
         verify(gatewayRelayService).sendInvokeToGateway(cmdCaptor.capture());
