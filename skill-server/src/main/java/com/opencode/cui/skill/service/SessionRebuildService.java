@@ -184,8 +184,7 @@ public class SessionRebuildService {
                 null,
                 session.getBusinessSessionDomain(),
                 session.getBusinessSessionType(),
-                session.getBusinessSessionId(),
-                pendingRequest != null ? pendingRequest.allowedSlashCommands() : null));
+                session.getBusinessSessionId()));
         log.info("Rebuild create_session sent for welinkSession={}, ak={}", sessionId, session.getAk());
     }
 

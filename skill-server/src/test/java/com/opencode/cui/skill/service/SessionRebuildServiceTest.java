@@ -750,8 +750,8 @@ class SessionRebuildServiceTest {
     }
 
     @Test
-    @DisplayName("personal create_session 下发复用 PendingChatRequest.allowedSlashCommands")
-    void rebuildToolSession_newOverload_createSessionCarriesAllowedSlashCommands() {
+    @DisplayName("personal create_session 不下发 PendingChatRequest.allowedSlashCommands")
+    void rebuildToolSession_newOverload_createSessionDoesNotCarryAllowedSlashCommands() {
         String sessionId = "7007";
         stubRedisCounter(sessionId);
 
@@ -773,7 +773,7 @@ class SessionRebuildServiceTest {
         assertEquals("im", command.domain());
         assertEquals("direct", command.domainType());
         assertEquals("biz-direct-13", command.businessSessionId());
-        assertEquals(allowedSlashCommands, command.allowedSlashCommands());
+        assertNull(command.allowedSlashCommands(), "allowedSlashCommands 只属于后续 CHAT，不随 CREATE_SESSION 下发");
     }
 
     @Test
