@@ -80,7 +80,7 @@ public class GatewayMessageRouter {
     private final AssistantScopeDispatcher scopeDispatcher;
     private final ChannelLookupService channelLookupService;
     private final ChannelSuppressReplyWhitelistService channelSuppressReplyWhitelistService;
-    /** 已完成会话的短期缓存，用于抑制 tool_done 后的残余事件 */
+    /** 已完成轮次的短期缓存，用于抑制同一 trace 在 tool_done 后的残余事件 */
     private final Cache<String, Instant> completedSessions = Caffeine.newBuilder()
             .expireAfterWrite(Duration.ofSeconds(5))
             .maximumSize(1_000)
@@ -394,7 +394,7 @@ public class GatewayMessageRouter {
     /** 清除会话的完成标记，使其可以再次接收事件。 */
     public void clearCompletionMark(String sessionId) {
         if (sessionId != null) {
-            completedSessions.invalidate(sessionId);
+            completedSessions.invalidate(completionKey(sessionId, null));
         }
     }
 
@@ -640,7 +640,8 @@ public class GatewayMessageRouter {
             msg.setSubagentSessionId(subagentNode.asText());
             msg.setSubagentName(node.path("subagentName").asText(null));
         }
-        if (completedSessions.getIfPresent(sessionId) != null
+        String traceId = node.path("traceId").asText(null);
+        if (isTurnCompleted(sessionId, traceId)
                 && !StreamMessage.Types.QUESTION.equals(msg.getType())
                 && !StreamMessage.Types.PERMISSION_ASK.equals(msg.getType())
                 && !StreamMessage.Types.PERMISSION_REPLY.equals(msg.getType())
@@ -661,7 +662,7 @@ public class GatewayMessageRouter {
         if ("user".equals(ProtocolUtils.normalizeRole(msg.getRole()))) {
             return;
         }
-        handleAssistantToolEvent(sessionId, userId, msg, session, node.path("traceId").asText(null));
+        handleAssistantToolEvent(sessionId, userId, msg, session, traceId);
     }
 
     private SkillSession resolveToolEventSession(String sessionId, JsonNode node) {
@@ -750,7 +751,7 @@ public class GatewayMessageRouter {
             String response = permissionReply.getPermission() != null
                     ? permissionReply.getPermission().getResponse()
                     : null;
-            if (numericId != null && completedSessions.getIfPresent(sessionId) != null) {
+            if (numericId != null && isTurnCompleted(sessionId, traceId)) {
                 try {
                     persistenceService.finalizeActiveAssistantTurn(numericId);
                 } catch (Exception e) {
@@ -891,12 +892,22 @@ public class GatewayMessageRouter {
             return;
         }
 
-        CloudImTextAccumulator accumulated = removeCloudImTextAccumulatorByTrace(buffers, traceId);
-        if (accumulated == null && buffers.size() == 1) {
+        CloudImTextAccumulator accumulated;
+        String normalizedTraceId = ProtocolUtils.firstNonBlank(traceId, null);
+        if (normalizedTraceId != null) {
+            accumulated = removeCloudImTextAccumulatorByTrace(buffers, normalizedTraceId);
+            if (accumulated == null) {
+                log.debug("Skip flushing cloud IM text buffer for unmatched tool_done trace: sessionId={}, traceId={}, remainingBuffers={}",
+                        sessionId, normalizedTraceId, buffers.size());
+                cleanupCloudImTextBuffer(sessionId, buffers);
+                return;
+            }
+        } else if (buffers.size() == 1) {
             accumulated = removeSingleCloudImTextAccumulator(buffers);
-        }
-        if (accumulated == null) {
-            accumulated = removeOldestCloudImTextAccumulator(buffers);
+        } else {
+            log.debug("Skip flushing cloud IM text buffer without trace: sessionId={}, remainingBuffers={}",
+                    sessionId, buffers.size());
+            return;
         }
         cleanupCloudImTextBuffer(sessionId, buffers);
 
@@ -923,23 +934,6 @@ public class GatewayMessageRouter {
             if (buffers.remove(entry.getKey(), accumulator)) {
                 return accumulator;
             }
-        }
-        return null;
-    }
-
-    private CloudImTextAccumulator removeOldestCloudImTextAccumulator(
-            java.util.concurrent.ConcurrentHashMap<String, CloudImTextAccumulator> buffers) {
-        String oldestKey = null;
-        CloudImTextAccumulator oldest = null;
-        for (var entry : buffers.entrySet()) {
-            CloudImTextAccumulator candidate = entry.getValue();
-            if (oldest == null || candidate.order < oldest.order) {
-                oldestKey = entry.getKey();
-                oldest = candidate;
-            }
-        }
-        if (oldestKey != null && buffers.remove(oldestKey, oldest)) {
-            return oldest;
         }
         return null;
     }
@@ -973,11 +967,12 @@ public class GatewayMessageRouter {
         }
 
         log.info("handleToolDone: sessionId={}", sessionId);
-        completedSessions.put(sessionId, Instant.now());
+        String traceId = node.path("traceId").asText(null);
+        completedSessions.put(completionKey(sessionId, traceId), Instant.now());
 
         // 刷出累积的 text.delta 内容（上游未发 text.done 时，用累积内容合成 text.done）
         SkillSession session = resolveSession(sessionId);
-        flushAccumulatedCloudImTextDone(sessionId, userId, session, node.path("traceId").asText(null));
+        flushAccumulatedCloudImTextDone(sessionId, userId, session, traceId);
 
         StreamMessage msg = StreamMessage.sessionStatus("idle");
         Long numericId = ProtocolUtils.parseSessionId(sessionId);
@@ -998,6 +993,27 @@ public class GatewayMessageRouter {
 
         // 清理该 session 的预缓存消息，防止累积
         rebuildService.clearPendingMessages(sessionId);
+    }
+
+    private boolean isTurnCompleted(String sessionId, String traceId) {
+        String key = completionKey(sessionId, traceId);
+        if (completedSessions.getIfPresent(key) != null) {
+            return true;
+        }
+        String sessionKey = completionKey(sessionId, null);
+        return !sessionKey.equals(key) && completedSessions.getIfPresent(sessionKey) != null;
+    }
+
+    private String completionKey(String sessionId, String traceId) {
+        String normalizedSessionId = ProtocolUtils.firstNonBlank(sessionId, null);
+        String normalizedTraceId = ProtocolUtils.firstNonBlank(traceId, null);
+        if (normalizedSessionId == null) {
+            return "";
+        }
+        if (normalizedTraceId == null) {
+            return normalizedSessionId;
+        }
+        return normalizedSessionId + ":trace:" + normalizedTraceId;
     }
 
     /** 处理 tool_error：会话重建/统一投递错误消息/持久化。 */

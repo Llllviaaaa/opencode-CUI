@@ -152,6 +152,9 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
         if (command.userId() != null && !command.userId().isBlank()) {
             message.put("userId", command.userId());
         }
+        if (command.sessionId() != null && !command.sessionId().isBlank()) {
+            message.put("welinkSessionId", command.sessionId());
+        }
 
         // 注入 traceId：从 MDC 获取或自动生成，确保跨服务链路可追踪
         String traceId = MdcHelper.ensureTraceId();
@@ -193,6 +196,9 @@ public class BusinessScopeStrategy implements AssistantScopeStrategy {
         }
         if (command.userId() != null && !command.userId().isBlank()) {
             message.put("userId", command.userId());
+        }
+        if (command.sessionId() != null && !command.sessionId().isBlank()) {
+            message.put("welinkSessionId", command.sessionId());
         }
 
         String traceId = MdcHelper.ensureTraceId();

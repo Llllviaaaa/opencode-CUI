@@ -192,6 +192,9 @@ public class DefaultAssistantScopeStrategy implements AssistantScopeStrategy {
         if (command.userId() != null && !command.userId().isBlank()) {
             message.put("userId", command.userId());
         }
+        if (command.sessionId() != null && !command.sessionId().isBlank()) {
+            message.put("welinkSessionId", command.sessionId());
+        }
 
         String traceId = MdcHelper.ensureTraceId();
         message.put("traceId", traceId);
@@ -232,6 +235,9 @@ public class DefaultAssistantScopeStrategy implements AssistantScopeStrategy {
         }
         if (command.userId() != null && !command.userId().isBlank()) {
             message.put("userId", command.userId());
+        }
+        if (command.sessionId() != null && !command.sessionId().isBlank()) {
+            message.put("welinkSessionId", command.sessionId());
         }
 
         String traceId = MdcHelper.ensureTraceId();

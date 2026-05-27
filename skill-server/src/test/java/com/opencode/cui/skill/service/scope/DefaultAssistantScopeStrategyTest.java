@@ -151,6 +151,7 @@ class DefaultAssistantScopeStrategyTest {
         assertEquals("assistant_square", root.path("businessTag").asText());
         assertEquals(GatewayActions.CHAT, root.path("action").asText());
         assertEquals("AK_V", root.path("ak").asText());
+        assertEquals("session-1", root.path("welinkSessionId").asText());
         // payload.cloudProfile == profile.name()
         assertEquals("assistant_square", root.path("payload").path("cloudProfile").asText());
         assertEquals("ts-1", root.path("payload").path("toolSessionId").asText());
@@ -285,6 +286,7 @@ class DefaultAssistantScopeStrategyTest {
         assertEquals("business", root.path("assistantScope").asText());
         assertEquals("ACC_V", root.path("assistantAccount").asText());
         assertEquals("assistant_square", root.path("businessTag").asText());
+        assertEquals("session-1", root.path("welinkSessionId").asText());
         assertEquals("ts-1", root.path("payload").path("toolSessionId").asText());
         assertEquals("assistant_square", root.path("payload").path("cloudProfile").asText());
         assertFalse(root.path("payload").has("cloudRequest"));

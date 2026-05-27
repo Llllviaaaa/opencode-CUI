@@ -11,6 +11,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
@@ -42,7 +44,7 @@ class InvokeRouteStrategyTest {
     @BeforeEach
     void setUp() {
         personalStrategy = new PersonalInvokeRouteStrategy();
-        businessStrategy = new BusinessInvokeRouteStrategy(cloudAgentService);
+        businessStrategy = new BusinessInvokeRouteStrategy(cloudAgentService, Runnable::run);
     }
 
     @Nested
@@ -90,6 +92,54 @@ class InvokeRouteStrategyTest {
             businessStrategy.route(msg, onRelay);
 
             verify(cloudAgentService).handleInvoke(msg, onRelay);
+        }
+
+        @Test
+        @DisplayName("route 异步调度非 abort 业务 invoke，避免阻塞 GW WS 读线程")
+        void shouldScheduleNonAbortBusinessInvoke() {
+            List<Runnable> tasks = new ArrayList<>();
+            BusinessInvokeRouteStrategy asyncStrategy = new BusinessInvokeRouteStrategy(cloudAgentService, tasks::add);
+            GatewayMessage msg = GatewayMessage.builder()
+                    .type(GatewayMessage.Type.INVOKE)
+                    .ak("ak-biz-001")
+                    .action("chat")
+                    .assistantScope("business")
+                    .build();
+
+            asyncStrategy.route(msg, onRelay);
+
+            assertEquals(1, tasks.size());
+            verify(cloudAgentService, never()).handleInvoke(any(), any());
+
+            tasks.get(0).run();
+
+            verify(cloudAgentService).handleInvoke(msg, onRelay);
+        }
+
+        @Test
+        @DisplayName("route 对 abort_session 保持同步处理，不被排队的 chat 阻塞")
+        void shouldHandleAbortSessionInline() {
+            List<Runnable> tasks = new ArrayList<>();
+            BusinessInvokeRouteStrategy asyncStrategy = new BusinessInvokeRouteStrategy(cloudAgentService, tasks::add);
+            GatewayMessage chat = GatewayMessage.builder()
+                    .type(GatewayMessage.Type.INVOKE)
+                    .ak("ak-biz-001")
+                    .action("chat")
+                    .assistantScope("business")
+                    .build();
+            GatewayMessage abort = GatewayMessage.builder()
+                    .type(GatewayMessage.Type.INVOKE)
+                    .ak("ak-biz-001")
+                    .action("abort_session")
+                    .assistantScope("business")
+                    .build();
+
+            asyncStrategy.route(chat, onRelay);
+            asyncStrategy.route(abort, onRelay);
+
+            assertEquals(1, tasks.size());
+            verify(cloudAgentService).handleInvoke(abort, onRelay);
+            verify(cloudAgentService, never()).handleInvoke(chat, onRelay);
         }
     }
 
