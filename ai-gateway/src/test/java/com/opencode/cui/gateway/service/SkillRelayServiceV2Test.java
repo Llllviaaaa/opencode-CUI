@@ -288,6 +288,50 @@ class SkillRelayServiceV2Test {
             verify(redisMessageBroker, never()).getInternalAgentInstance(anyString());
             verify(redisMessageBroker, never()).enqueuePending(anyString(), anyString(), any(Duration.class));
         }
+
+        @Test
+        @DisplayName("handleInvokeFromSkill should deliver locally when userId is blank")
+        void handleInvokeFromSkill_missingUserId_shouldDeliverLocally() throws Exception {
+            registerSs1();
+
+            when(eventRelayService.sendToLocalAgentIfPresent(eq("ak1"), any())).thenReturn(true);
+
+            GatewayMessage msg = GatewayMessage.builder()
+                    .type(GatewayMessage.Type.INVOKE)
+                    .ak("ak1")
+                    .source(SOURCE_TYPE_SKILL)
+                    .build();
+
+            service.handleInvokeFromSkill(ss1Session, msg);
+
+            verify(eventRelayService).sendToLocalAgentIfPresent(eq("ak1"), any());
+            verify(redisMessageBroker, never()).getAgentUser(anyString());
+            verify(redisMessageBroker, never()).getInternalAgentInstance(anyString());
+            verify(redisMessageBroker, never()).enqueuePending(anyString(), anyString(), any(Duration.class));
+        }
+
+        @Test
+        @DisplayName("handleInvokeFromSkill should deliver locally when userId does not match AK owner")
+        void handleInvokeFromSkill_mismatchedUserId_shouldDeliverLocally() throws Exception {
+            registerSs1();
+
+            when(redisMessageBroker.getAgentUser("ak1")).thenReturn("owner1");
+            when(eventRelayService.sendToLocalAgentIfPresent(eq("ak1"), any())).thenReturn(true);
+
+            GatewayMessage msg = GatewayMessage.builder()
+                    .type(GatewayMessage.Type.INVOKE)
+                    .ak("ak1")
+                    .userId("sender1")
+                    .source(SOURCE_TYPE_SKILL)
+                    .build();
+
+            service.handleInvokeFromSkill(ss1Session, msg);
+
+            verify(redisMessageBroker).getAgentUser("ak1");
+            verify(eventRelayService).sendToLocalAgentIfPresent(eq("ak1"), any());
+            verify(redisMessageBroker, never()).getInternalAgentInstance(anyString());
+            verify(redisMessageBroker, never()).enqueuePending(anyString(), anyString(), any(Duration.class));
+        }
     }
 
     // ==================== handleInvokeFromSkill remote relay ====================
