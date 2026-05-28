@@ -1,6 +1,7 @@
 package com.opencode.cui.gateway.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.model.RelayMessage;
 import org.junit.jupiter.api.BeforeEach;
@@ -106,6 +107,25 @@ class EventRelayServiceTest {
                         && "user-1".equals(m.getUserId())
                         && m.getTraceId() != null
                         && "tool_event".equals(m.getType())));
+    }
+
+    @Test
+    @DisplayName("relayToSkillServer marks routed agent events as skill-server source")
+    void relayToSkillServerPayloadToolSessionMarksSkillSource() {
+        when(skillRelayService.relayToSkill(any())).thenReturn(true);
+        when(redisMessageBroker.getAgentUser("ak_test_001")).thenReturn("user-1");
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("toolSessionId", "tool-payload-1");
+        GatewayMessage msg = GatewayMessage.builder()
+                .type(GatewayMessage.Type.TOOL_EVENT)
+                .payload(payload)
+                .build();
+
+        service.relayToSkillServer("ak_test_001", msg);
+
+        verify(skillRelayService)
+                .relayToSkill(argThat(m -> "skill-server".equals(m.getSource())
+                        && "tool-payload-1".equals(m.getPayload().path("toolSessionId").asText())));
     }
 
     @Test

@@ -328,17 +328,25 @@ public class SkillRelayService {
      */
     private boolean l2RedisRoute(GatewayMessage message, String routingKey) {
         String toolSessionId = message.getToolSessionId();
+        String payloadToolSessionId = extractToolSessionIdFromPayload(message);
         String welinkSessionId = message.getWelinkSessionId();
 
         // Query Redis route table
-        String routeValue = redisMessageBroker.getSessionRoute(toolSessionId);
+        String routeValue = null;
+        if (toolSessionId != null && !toolSessionId.isBlank()) {
+            routeValue = redisMessageBroker.getSessionRoute(toolSessionId);
+        }
+        if (routeValue == null && payloadToolSessionId != null && !payloadToolSessionId.isBlank()
+                && !payloadToolSessionId.equals(toolSessionId)) {
+            routeValue = redisMessageBroker.getSessionRoute(payloadToolSessionId);
+        }
         if (routeValue == null) {
             routeValue = redisMessageBroker.getWelinkSessionRoute(welinkSessionId);
         }
 
         if (routeValue == null) {
-            log.debug("[V2-L2] No Redis route found: toolSessionId={}, welinkSessionId={}",
-                    toolSessionId, welinkSessionId);
+            log.debug("[V2-L2] No Redis route found: toolSessionId={}, payloadToolSessionId={}, welinkSessionId={}",
+                    toolSessionId, payloadToolSessionId, welinkSessionId);
             return false;
         }
 
@@ -450,7 +458,7 @@ public class SkillRelayService {
 
     /**
      * Resolves the routing key for consistent hash selection.
-     * Priority: welinkSessionId > toolSessionId.
+     * Priority: welinkSessionId > toolSessionId > payload.toolSessionId.
      */
     private String resolveRoutingKey(GatewayMessage message) {
         String welinkSessionId = message.getWelinkSessionId();
@@ -460,6 +468,10 @@ public class SkillRelayService {
         String toolSessionId = message.getToolSessionId();
         if (toolSessionId != null && !toolSessionId.isBlank()) {
             return toolSessionId;
+        }
+        String payloadToolSessionId = extractToolSessionIdFromPayload(message);
+        if (payloadToolSessionId != null && !payloadToolSessionId.isBlank()) {
+            return payloadToolSessionId;
         }
         return null;
     }

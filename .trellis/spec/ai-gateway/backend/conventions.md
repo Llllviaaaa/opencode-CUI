@@ -335,3 +335,25 @@ Correct: treat `abort_session` as a GW-side transport cancellation keyed by the
 current `toolSessionId`/`welinkSessionId`; first close a local active stream,
 otherwise relay to the GW recorded in `gw:cloud-stream:{toolSessionId}`, and
 allow the next chat to create a new active handle.
+
+---
+
+## Agent-to-SS 回源路由键
+
+Agent/cloud 事件回 SS 时，`toolSessionId` 可能在 `GatewayMessage.toolSessionId`
+顶层字段，也可能只存在于 `payload.toolSessionId`。GW 的回源路由必须把这两种形态视为同一类
+SS-owned session key。
+
+规则：
+
+- `EventRelayService.relayToSkillServer(...)` 在消息含 `welinkSessionId`、顶层
+  `toolSessionId` 或 `payload.toolSessionId` 时，必须为转发消息补
+  `source=skill-server`，表示这是回 SS 的源服务消息，不是 Agent-origin L3 广播。
+- `UpstreamRoutingTable.resolveSourceType(...)`、`SkillRelayService.resolveRoutingKey(...)`
+  和 `SkillRelayService.l2RedisRoute(...)` 都必须支持 `payload.toolSessionId`。
+  优先级是顶层 `toolSessionId` / `payload.toolSessionId` / `welinkSessionId`，不要让
+  payload-only 事件落到 L3 broadcast。
+- L2 查 Redis route 时不能调用 `getSessionRoute(null)`；缺少顶层 `toolSessionId` 时应直接使用
+  `payload.toolSessionId` 查询 `gw:route:{toolSessionId}`。
+- 回归测试必须覆盖：payload-only `toolSessionId` 能命中 `UpstreamRoutingTable`、
+  L2 能发到 route owner、且不会触发 L3 broadcast。

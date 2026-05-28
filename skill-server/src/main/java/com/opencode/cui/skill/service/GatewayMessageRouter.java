@@ -434,25 +434,22 @@ public class GatewayMessageRouter {
             return;
         }
 
-        // Case 2: Remote owner exists → try relay
-        boolean publishReturnedZero = false;
+        // Case 2: Remote owner exists -> try relay
         if (ownerInstance != null) {
             String rawMessage = serializeRelayMessage(type, sessionId, ak, userId, node);
-            long subscribers = redisMessageBroker.publishToSsRelay(ownerInstance, rawMessage);
-            if (subscribers > 0) {
+            boolean published = redisMessageBroker.publishToSsRelayBestEffort(ownerInstance, rawMessage);
+            if (published) {
                 routeRelayCount.incrementAndGet();
                 logRouteInfo(type, "[EXIT] GatewayMessageRouter.route: type={}, sessionId={}, strategy=relay_to_{}",
                         type, sessionId, ownerInstance);
                 return; // relay succeeded
             }
-            // subscribers == 0: owner is likely dead (half-dead pod) → fall through to takeover
-            publishReturnedZero = true;
-            log.warn("Relay returned 0 subscribers, owner may be dead: sessionId={}, owner={}",
+            log.warn("Relay publish failed, probing owner liveness before takeover: sessionId={}, owner={}",
                     sessionId, ownerInstance);
         }
 
         // Case 3 & 4: No owner, or owner is dead → attempt takeover / auto-claim
-        if (shouldTakeover(ownerInstance, sessionId, publishReturnedZero)) {
+        if (shouldTakeover(ownerInstance, sessionId)) {
             if (ownerInstance == null) {
                 // No route record → auto-claim via ensureRouteOwnership
                 boolean claimed = sessionRouteService.ensureRouteOwnership(sessionId, ak, userId);
@@ -481,7 +478,7 @@ public class GatewayMessageRouter {
             String winner = sessionRouteService.getOwnerInstance(sessionId);
             if (winner != null && !instanceId.equals(winner)) {
                 String rawMessage = serializeRelayMessage(type, sessionId, ak, userId, node);
-                redisMessageBroker.publishToSsRelay(winner, rawMessage);
+                redisMessageBroker.publishToSsRelayBestEffort(winner, rawMessage);
                 logRouteInfo(type, "[EXIT] GatewayMessageRouter.route: type={}, sessionId={}, strategy=forward_to_winner_{}",
                         type, sessionId, winner);
                 return;
@@ -497,9 +494,9 @@ public class GatewayMessageRouter {
             }
         }
 
-        // Fallback: cannot determine owner, drop message
-        log.warn("[SKIP] GatewayMessageRouter.route: no owner resolved, dropping message. type={}, sessionId={}",
-                type, sessionId);
+        // Fallback: no local action completed, drop message
+        log.warn("[SKIP] GatewayMessageRouter.route: no route action completed, dropping message. type={}, sessionId={}, owner={}",
+                type, sessionId, ownerInstance);
     }
 
     /**
@@ -532,25 +529,12 @@ public class GatewayMessageRouter {
      *
      * <ol>
      *   <li>No owner → always takeover (auto-claim)</li>
-     *   <li>{@code publishReturnedZero=true} → 硬信号：publish 时 Redis 端无订阅者，
-     *       owner 半死（heartbeat 还在但 pub/sub 长连接已断）→ takeover</li>
      *   <li>Redis heartbeat missing → takeover</li>
      * </ol>
-     *
-     * @param publishReturnedZero true 表示前置 {@code publishToSsRelay} 返回 0 subscribers，
-     *                            是 owner 半死的硬信号，优先于 heartbeat 判活
      */
-    private boolean shouldTakeover(String ownerInstance, String sessionId, boolean publishReturnedZero) {
+    private boolean shouldTakeover(String ownerInstance, String sessionId) {
         if (ownerInstance == null) {
             return true; // no owner, auto-claim
-        }
-
-        // 硬信号优先：publish 0 订阅者表明 pub/sub 长连接已断（owner 半死）
-        if (publishReturnedZero) {
-            ownerProbeDeadCount.incrementAndGet();
-            log.warn("shouldTakeover: 0 subscribers, treating owner as half-dead: owner={}, sessionId={}",
-                    ownerInstance, sessionId);
-            return true;
         }
 
         // Tier 1: check Redis heartbeat

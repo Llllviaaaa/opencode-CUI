@@ -528,6 +528,28 @@ External WS 出站由 `ExternalWsDeliveryStrategy` 分两层处理：
 
 ---
 
+## SS relay 投递与 takeover 判定
+
+`ss:relay:{instanceId}` 是 SS 实例间回源投递通道。`GatewayMessageRouter.route(...)`
+发现会话 owner 在远端实例时，先调用
+`RedisMessageBroker.publishToSsRelayBestEffort(targetInstanceId, message)`。
+
+规则：
+
+- `publishToSsRelayBestEffort` 的成功条件是 `RedisTemplate.convertAndSend(...)`
+  没有抛异常；返回的 subscriber count 只允许写诊断日志，不表示端到端投递 ACK。
+- accepted publish 后，当前实例必须直接返回，不能因为 subscriber count 为 0 继续执行
+  takeover。Redis Cluster / 云 Redis 代理场景下这个 count 可能只是 same-node 视图。
+- 只有 publish 抛异常或 owner 缺失时才进入 takeover 判定；`shouldTakeover(...)` 只能依据
+  owner 是否为空、`SkillInstanceRegistry.isInstanceAlive(owner)` / heartbeat 租约判断，不得读取
+  `PUBSUB NUMSUB` 或 publish count。
+- publish 异常但 owner heartbeat 仍存活时，必须放弃本次处理并等待 owner 消费或后续事件重试；
+  不要本地持久化同一条 gateway 事件，也不要向 external WS 再发一份。
+- 回归测试必须覆盖：same-node subscriber count 为 0 仍不 takeover、publish 异常但
+  heartbeat alive 不 takeover、publish 异常且 heartbeat missing 才 takeover。
+
+---
+
 ## MyBatis 调用风格
 
 service 层直接调用 `Repository` 接口；参数命名与 XML 保持一致，不做“二次包装 Mapper”。
