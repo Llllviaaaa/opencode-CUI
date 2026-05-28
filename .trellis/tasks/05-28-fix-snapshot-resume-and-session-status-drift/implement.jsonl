@@ -1,0 +1,8 @@
+{"file":".trellis/spec/skill-server/backend/index.md","reason":"skill-server backend pre-development checklist"}
+{"file":".trellis/spec/skill-server/backend/conventions.md","reason":"miniapp stream lifecycle, StreamMessageEmitter, streaming persistence contracts"}
+{"file":".trellis/spec/skill-server/backend/database-guidelines.md","reason":"Redis live-buffer and persistence boundary"}
+{"file":".trellis/spec/skill-server/backend/type-safety.md","reason":"StreamMessage and session.status field contracts"}
+{"file":".trellis/spec/skill-server/backend/error-handling.md","reason":"streaming error event semantics"}
+{"file":".trellis/spec/skill-server/backend/logging-guidelines.md","reason":"stream websocket logging boundary when touched"}
+{"file":".trellis/spec/guides/index.md","reason":"shared thinking guide index"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"ai-gateway to skill-server to miniapp stream/snapshot data flow"}

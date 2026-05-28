@@ -1,0 +1,4 @@
+{"file":".trellis/spec/skill-server/backend/conventions.md","reason":"verify stream lifecycle and persistence behavior remains consistent"}
+{"file":".trellis/spec/skill-server/backend/database-guidelines.md","reason":"verify Redis buffer cleanup and MySQL history boundary"}
+{"file":".trellis/spec/skill-server/backend/type-safety.md","reason":"verify session.status and StreamMessage fields remain protocol-safe"}
+{"file":".trellis/spec/skill-server/backend/error-handling.md","reason":"verify streaming errors stay stream messages, not HTTP errors"}
