@@ -1081,6 +1081,7 @@ Newly-created `SkillSession.userId` is a session owner/current-user field, not a
 `direct` IM/external sessions use the current sender identity (`senderUserAccount`), miniapp uses cookie `userId`, and IM `group` sessions must store `NULL`.
 Do not use `SkillSession.userId` to infer local assistant owner or group sender; group replay/fallback paths must use the structured pending request sender or fail loudly.
 For local assistants, Gateway `InvokeCommand.userId` may carry the `createdBy` owner as an internal route hint, while payload `sendUserAccount` always stays the per-message sender.
+When an existing personal IM session has blank `toolSessionId` or `processRebuild(...)` recreates a tool session, `InboundProcessingService` must call the route-user-aware `ImSessionManager.requestToolSession(...)` overload with `ownerWelinkId` as the optional route hint. This must not repopulate `SkillSession.userId` for group sessions; group sender identity remains in `PendingChatRequest.sendUserAccount`.
 
 `ImSessionManager#createSessionAsync(..., AssistantSessionIdentity, ...)` must reuse the same identity inside the create lock. If the lock-internal second lookup finds an existing business session, it must initialize the tool session via `AssistantScopeStrategy.generateToolSessionId()` and send the pending chat immediately. Do not fall back to the legacy `requestToolSession(session, String)` overload for remote/default business sessions.
 

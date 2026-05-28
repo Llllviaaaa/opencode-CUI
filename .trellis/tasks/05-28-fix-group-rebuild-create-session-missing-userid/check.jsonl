@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server backend verification checklist"}
+{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "verify inbound result and sender contracts stay intact"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "verify route user and sender remain separate"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "verify SS create_session payload reaches GW with required route field"}

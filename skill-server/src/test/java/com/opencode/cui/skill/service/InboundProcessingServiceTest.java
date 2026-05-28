@@ -801,8 +801,8 @@ class InboundProcessingServiceTest {
                 "im", "direct", "dm-001", "assist-001", "user-001");
 
         assertTrue(result.success());
-        // PR3: processRebuild personal 分支调新签名 requestToolSession(session, (PendingChatRequest) null)
-        verify(sessionManager).requestToolSession(eq(session), (PendingChatRequest) isNull());
+        // PR3: processRebuild personal 分支调 route-user-aware requestToolSession
+        verify(sessionManager).requestToolSession(eq(session), (PendingChatRequest) isNull(), eq("owner-001"));
         verify(sessionManager, never()).createSessionAsync(
                 any(), any(), any(), any(AssistantSessionIdentity.class), any(), any(), any());
     }
@@ -956,8 +956,8 @@ class InboundProcessingServiceTest {
     }
 
     @Test
-    @DisplayName("processChat: personal group session missing toolSessionId -> rebuild keeps sender in pending request")
-    void processChatPersonalGroupSessionMissingToolSessionId_rebuildKeepsSender() {
+    @DisplayName("processChat: personal group session missing toolSessionId -> rebuild keeps sender and route user")
+    void processChatPersonalGroupSessionMissingToolSessionId_rebuildKeepsSenderAndRouteUser() {
         when(resolverService.resolveWithStatus("assist-001"))
                 .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
         SkillSession session = buildSessionWithoutToolSession();
@@ -975,7 +975,7 @@ class InboundProcessingServiceTest {
 
         assertTrue(result.success());
         ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
-        verify(sessionManager).requestToolSession(eq(session), captor.capture(), isNull());
+        verify(sessionManager).requestToolSession(eq(session), captor.capture(), eq("owner-001"));
         PendingChatRequest pending = captor.getValue();
         assertEquals("@assist hello", pending.text());
         assertEquals("assist-001", pending.assistantAccount());
@@ -1116,8 +1116,29 @@ class InboundProcessingServiceTest {
                 "im", "direct", "dm-001", "assist-001", "user-001");
 
         assertTrue(result.success());
-        // PR3: processRebuild personal 分支调新签名 requestToolSession(session, (PendingChatRequest) null)
-        verify(sessionManager).requestToolSession(eq(session), (PendingChatRequest) isNull());
+        // PR3: processRebuild personal 分支调 route-user-aware requestToolSession
+        verify(sessionManager).requestToolSession(eq(session), (PendingChatRequest) isNull(), eq("owner-001"));
+        verify(sessionService, never()).updateToolSessionId(any(), any());
+    }
+
+    @Test
+    @DisplayName("processRebuild: group personal session passes owner route user while keeping session.userId null")
+    void processRebuildGroupPersonalSessionPassesOwnerRouteUser() {
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
+        SkillSession session = buildReadySession();
+        session.setUserId(null);
+        session.setBusinessSessionType("group");
+        session.setBusinessSessionId("group-001");
+        when(sessionManager.findSession("im", "group", "group-001", "ak-001", "assist-001"))
+                .thenReturn(session);
+
+        InboundResult result = service.processRebuild(
+                "im", "group", "group-001", "assist-001", "sender-001");
+
+        assertTrue(result.success());
+        verify(sessionManager).requestToolSession(eq(session), (PendingChatRequest) isNull(), eq("owner-001"));
+        assertNull(session.getUserId(), "group session must keep null userId");
         verify(sessionService, never()).updateToolSessionId(any(), any());
     }
 

@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/ai-gateway/backend/index.md", "reason": "confirm package checklist was followed"}
+{"file": ".trellis/spec/ai-gateway/backend/error-handling.md", "reason": "verify only intended validation changed from hard reject to observation"}
+{"file": ".trellis/spec/ai-gateway/backend/logging-guidelines.md", "reason": "verify missing userId does not produce noisy WARN skips"}
+{"file": ".trellis/spec/ai-gateway/backend/type-safety.md", "reason": "verify routing context is still stripped before local agent delivery"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "verify route identity and sender identity stay separated across SS/GW"}

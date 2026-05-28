@@ -207,8 +207,7 @@ public class InboundProcessingService {
                             businessDomain, sessionType, sessionId, assistantAccount,
                             senderUserAccount, prompt, businessExtParam, false,
                             info != null ? info.getBusinessTag() : null);
-                    sessionManager.requestToolSession(session, pendingRequest,
-                            rebuildRouteUserId(sessionType, ownerWelinkId));
+                    sessionManager.requestToolSession(session, pendingRequest, ownerWelinkId);
                     writeInvokeSource(session, inboundSource);
                     return InboundResult.ok(sessionId, String.valueOf(session.getId()));
                 }
@@ -253,8 +252,7 @@ public class InboundProcessingService {
                     businessDomain, sessionType, sessionId, assistantAccount,
                     senderUserAccount, prompt, businessExtParam, true,
                     info != null ? info.getBusinessTag() : null);
-            sessionManager.requestToolSession(session, pendingRequest,
-                    rebuildRouteUserId(sessionType, ownerWelinkId));
+            sessionManager.requestToolSession(session, pendingRequest, ownerWelinkId);
             writeInvokeSource(session, inboundSource);
             return InboundResult.ok(sessionId, String.valueOf(session.getId()));
         }
@@ -275,10 +273,6 @@ public class InboundProcessingService {
 
     private boolean hasReadyToolSession(SkillSession session) {
         return session.getToolSessionId() != null && !session.getToolSessionId().isBlank();
-    }
-
-    private String rebuildRouteUserId(String sessionType, String ownerWelinkId) {
-        return SkillSession.SESSION_TYPE_GROUP.equalsIgnoreCase(sessionType) ? null : ownerWelinkId;
     }
 
     private PendingChatRequest buildPendingRequestForRebuild(String businessDomain, String sessionType,
@@ -704,7 +698,7 @@ public class InboundProcessingService {
             }
             // personal / scope 识别降级：保持现行 rebuild 路径
             // 显式强转 null 到 PendingChatRequest，避免 String/PendingChatRequest 重载歧义
-            sessionManager.requestToolSession(session, (PendingChatRequest) null);
+            sessionManager.requestToolSession(session, (PendingChatRequest) null, ownerWelinkId);
             return InboundResult.ok(sessionId, String.valueOf(session.getId()));
         } else {
             sessionManager.createSessionAsync(businessDomain, sessionType, sessionId,

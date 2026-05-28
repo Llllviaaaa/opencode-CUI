@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/ai-gateway/backend/index.md", "reason": "ai-gateway backend spec index and required checklist"}
+{"file": ".trellis/spec/ai-gateway/backend/conventions.md", "reason": "service boundaries, WebSocket source handling, routing conventions"}
+{"file": ".trellis/spec/ai-gateway/backend/error-handling.md", "reason": "WebSocket validation and skip/reject behavior"}
+{"file": ".trellis/spec/ai-gateway/backend/logging-guidelines.md", "reason": "relay logging levels and observable context"}
+{"file": ".trellis/spec/ai-gateway/backend/type-safety.md", "reason": "GatewayMessage routing context and withoutRoutingContext contract"}
+{"file": ".trellis/spec/ai-gateway/backend/database-guidelines.md", "reason": "Redis agent user and AK routing key semantics"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "SS to GW invoke boundary and validation responsibility"}

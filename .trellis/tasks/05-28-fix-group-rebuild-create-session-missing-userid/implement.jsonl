@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server backend pre-development checklist"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "service-layer conventions and existing routing patterns"}
+{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "inbound processing and senderUserAccount contract"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "InvokeCommand and PendingChatRequest field semantics"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "existing log semantics for rebuild and skip paths"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "SS to GW route-user boundary analysis"}

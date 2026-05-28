@@ -717,18 +717,24 @@ public class SkillRelayService {
             return false;
         }
 
-        // Validate userId
-        String expectedUserId = redisMessageBroker.getAgentUser(tracedMessage.getAk());
-        if (tracedMessage.getUserId() == null || tracedMessage.getUserId().isBlank()) {
-            log.warn("[SKIP] SkillRelayService.handleInvokeFromSkill: reason=missing_userId, linkId={}, ak={}",
+        // userId is attribution context for SS-origin invokes; ak is the delivery key.
+        String actualUserId = tracedMessage.getUserId();
+        if (actualUserId == null || actualUserId.isBlank()) {
+            log.debug("[OBSERVE] SkillRelayService.handleInvokeFromSkill: reason=missing_userId, linkId={}, ak={}",
                     session.getId(), tracedMessage.getAk());
-            return false;
+            return true;
         }
-        if (expectedUserId == null || !tracedMessage.getUserId().equals(expectedUserId)) {
+        String expectedUserId = redisMessageBroker.getAgentUser(tracedMessage.getAk());
+        if (expectedUserId == null || expectedUserId.isBlank()) {
+            log.debug(
+                    "[OBSERVE] SkillRelayService.handleInvokeFromSkill: reason=agent_user_unavailable, actual={}, ak={}",
+                    actualUserId, tracedMessage.getAk());
+            return true;
+        }
+        if (!actualUserId.equals(expectedUserId)) {
             log.warn(
-                    "[SKIP] SkillRelayService.handleInvokeFromSkill: reason=userId_mismatch, expected={}, actual={}, ak={}",
-                    expectedUserId, tracedMessage.getUserId(), tracedMessage.getAk());
-            return false;
+                    "[OBSERVE] SkillRelayService.handleInvokeFromSkill: reason=userId_mismatch, expected={}, actual={}, ak={}",
+                    expectedUserId, actualUserId, tracedMessage.getAk());
         }
         return true;
     }
