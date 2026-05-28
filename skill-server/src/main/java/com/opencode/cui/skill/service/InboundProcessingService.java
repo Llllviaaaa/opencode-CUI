@@ -203,12 +203,12 @@ public class InboundProcessingService {
                 if (!tryHealBusinessToolSessionId(session, strategy)) {
                     log.warn("[WARN] business self-heal timeout, falling back to rebuild path: welinkSessionId={}, ak={}",
                             session.getId(), ak);
-                    // TODO follow-up: migrate to PendingChatRequest API (this is the business
-                    // self-heal timeout fallback path that only has prompt text without
-                    // sender/ext context — needs session reverse-lookup similar to
-                    // rebuildFromStoredUserMessage to populate assistantAccount /
-                    // senderUserAccount / imGroupId / businessExtParam).
-                    sessionManager.requestToolSession(session, prompt);
+                    PendingChatRequest pendingRequest = buildPendingRequestForRebuild(
+                            businessDomain, sessionType, sessionId, assistantAccount,
+                            senderUserAccount, prompt, businessExtParam, false,
+                            info != null ? info.getBusinessTag() : null);
+                    sessionManager.requestToolSession(session, pendingRequest,
+                            rebuildRouteUserId(sessionType, ownerWelinkId));
                     writeInvokeSource(session, inboundSource);
                     return InboundResult.ok(sessionId, String.valueOf(session.getId()));
                 }
@@ -248,11 +248,13 @@ public class InboundProcessingService {
             // personal / scope 识别降级：保持现行 rebuild 路径
             log.info("Session exists but toolSessionId not ready, requesting rebuild: skillSessionId={}",
                     session.getId());
-            // TODO follow-up: migrate to PendingChatRequest API (this is the personal-rebuild
-            // fallback path that only has prompt text without sender/ext context — needs
-            // session reverse-lookup similar to rebuildFromStoredUserMessage to populate
-            // assistantAccount / senderUserAccount / imGroupId / businessExtParam).
-            sessionManager.requestToolSession(session, prompt);
+            // Preserve full sender context for rebuild; group sessions cannot infer sender from session.userId.
+            PendingChatRequest pendingRequest = buildPendingRequestForRebuild(
+                    businessDomain, sessionType, sessionId, assistantAccount,
+                    senderUserAccount, prompt, businessExtParam, true,
+                    info != null ? info.getBusinessTag() : null);
+            sessionManager.requestToolSession(session, pendingRequest,
+                    rebuildRouteUserId(sessionType, ownerWelinkId));
             writeInvokeSource(session, inboundSource);
             return InboundResult.ok(sessionId, String.valueOf(session.getId()));
         }
@@ -273,6 +275,32 @@ public class InboundProcessingService {
 
     private boolean hasReadyToolSession(SkillSession session) {
         return session.getToolSessionId() != null && !session.getToolSessionId().isBlank();
+    }
+
+    private String rebuildRouteUserId(String sessionType, String ownerWelinkId) {
+        return SkillSession.SESSION_TYPE_GROUP.equalsIgnoreCase(sessionType) ? null : ownerWelinkId;
+    }
+
+    private PendingChatRequest buildPendingRequestForRebuild(String businessDomain, String sessionType,
+            String sessionId, String assistantAccount, String senderUserAccount, String prompt,
+            JsonNode businessExtParam, boolean includeAllowedSlashCommands, String bizRobotTag) {
+        if (prompt == null || prompt.isBlank()) {
+            return null;
+        }
+        List<String> allowedSlashCommands = includeAllowedSlashCommands
+                ? allowedSlashCommandsResolver.resolve(businessDomain, sessionType)
+                : null;
+        return new PendingChatRequest(
+                prompt,
+                assistantAccount,
+                senderUserAccount,
+                SkillSession.SESSION_TYPE_GROUP.equalsIgnoreCase(sessionType) ? sessionId : null,
+                String.valueOf(System.currentTimeMillis()),
+                businessExtParam,
+                businessDomain,
+                sessionType,
+                bizRobotTag,
+                allowedSlashCommands);
     }
 
     /**

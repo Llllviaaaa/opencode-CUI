@@ -940,10 +940,52 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                null, "hello", "text", null, null, "IM", null);
+                "sender-001", "hello", "text", null, null, "IM", null);
 
         assertTrue(result.success());
-        verify(sessionManager).requestToolSession(session, "hello");
+        ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
+        verify(sessionManager).requestToolSession(eq(session), captor.capture(), eq("owner-001"));
+        PendingChatRequest pending = captor.getValue();
+        assertEquals("hello", pending.text());
+        assertEquals("assist-001", pending.assistantAccount());
+        assertEquals("sender-001", pending.sendUserAccount());
+        assertNull(pending.imGroupId());
+        verify(sessionService, never()).updateToolSessionId(any(), any());
+        verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+        verify(sessionManager, never()).requestToolSession(any(), any(String.class));
+    }
+
+    @Test
+    @DisplayName("processChat: personal group session missing toolSessionId -> rebuild keeps sender in pending request")
+    void processChatPersonalGroupSessionMissingToolSessionId_rebuildKeepsSender() {
+        when(resolverService.resolveWithStatus("assist-001"))
+                .thenReturn(new ResolveOutcome(ExistenceStatus.EXISTS, "ak-001", "owner-001"));
+        SkillSession session = buildSessionWithoutToolSession();
+        session.setUserId(null);
+        session.setAssistantAccount("assist-001");
+        session.setBusinessSessionType("group");
+        session.setBusinessSessionId("group-001");
+        when(sessionManager.findSession("im", "group", "group-001", "ak-001", "assist-001")).thenReturn(session);
+        when(contextInjectionService.resolvePrompt("group", "@assist hello", null)).thenReturn("@assist hello");
+        JsonNode businessExtParam = objectMapper.createObjectNode().put("businessMessageId", "msg-001");
+
+        InboundResult result = service.processChat(
+                "im", "group", "group-001", "assist-001",
+                "sender-001", "@assist hello", "text", null, null, "IM", businessExtParam);
+
+        assertTrue(result.success());
+        ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
+        verify(sessionManager).requestToolSession(eq(session), captor.capture(), isNull());
+        PendingChatRequest pending = captor.getValue();
+        assertEquals("@assist hello", pending.text());
+        assertEquals("assist-001", pending.assistantAccount());
+        assertEquals("sender-001", pending.sendUserAccount());
+        assertEquals("group-001", pending.imGroupId());
+        assertEquals("im", pending.businessSessionDomain());
+        assertEquals("group", pending.businessSessionType());
+        assertSame(businessExtParam, pending.businessExtParam());
+        assertNull(session.getUserId(), "group session must keep null userId");
+        verify(sessionManager, never()).requestToolSession(any(), any(String.class));
         verify(sessionService, never()).updateToolSessionId(any(), any());
         verify(gatewayRelayService, never()).sendInvokeToGateway(any());
     }
@@ -964,12 +1006,15 @@ class InboundProcessingServiceTest {
 
         InboundResult result = service.processChat(
                 "im", "direct", "dm-001", "assist-001",
-                null, "hello", "text", null, null, "IM", null);
+                "sender-001", "hello", "text", null, null, "IM", null);
 
         assertTrue(result.success());
-        verify(sessionManager).requestToolSession(session, "hello");
+        ArgumentCaptor<PendingChatRequest> captor = ArgumentCaptor.forClass(PendingChatRequest.class);
+        verify(sessionManager).requestToolSession(eq(session), captor.capture(), eq("owner-001"));
+        assertEquals("sender-001", captor.getValue().sendUserAccount());
         verify(sessionService, never()).updateToolSessionId(any(), any());
         verify(gatewayRelayService, never()).sendInvokeToGateway(any());
+        verify(sessionManager, never()).requestToolSession(any(), any(String.class));
     }
 
     // ==================== business rebuild (R2) ====================
