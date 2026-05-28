@@ -1176,6 +1176,13 @@ already started the next turn.
   assistant message whenever `toolCallId` or upstream `messageId` changes.
 - Snapshot payloads must be safe to merge back into history by stable part identity:
   `partId` first, then `toolCallId` for tool parts.
+- Redis stream snapshots are live replay state, not durable history. `busy` / `retry`
+  `session.status` marks the session as streaming; `idle` / `completed` and stream-level
+  `error` / `session.error` are terminal and must clear live replay state. Once terminal
+  content is persisted, resume/refresh must recover it from history, not from snapshot parts.
+- Router-level `tool_error` does not pass through the normal `routeAssistantMessage(...)`
+  buffer accumulation path; miniapp sessions must clear `StreamBufferService` explicitly after
+  the real-time error event is emitted.
 
 ### 4. Validation & Error Matrix
 
@@ -1186,6 +1193,9 @@ already started the next turn.
 | new user message after active assistant seq, then new assistant id | Finalize previous active row and create the next assistant row. |
 | tool error arrives after text | Keep tool error as a part of the same assistant message unless a newer user turn exists. |
 | snapshot contains parts already present in history shells | Frontend restore may remove duplicate parts by stable part id/tool call id. |
+| `busy` / `retry` status arrives before parts | Snapshot reports streaming/busy even if no parts have been buffered yet. |
+| `idle` / `completed` / `error` / `session.error` arrives | Clear live replay state so resume falls back to DB history. |
+| router emits `tool_error` directly | Emit the real-time error, persist it, then clear miniapp live replay state. |
 
 ### 5. Good / Base / Bad Cases
 
@@ -1221,6 +1231,8 @@ if (!Objects.equals(active.messageId(), upstreamMessageId)) {
   create a new assistant message.
 - Snapshot / stream tests must include at least one tool error or tool done part when changing
   assistant turn reconstruction.
+- `StreamBufferServiceTest` / `SnapshotServiceTest` / router tests must cover busy before
+  parts, terminal error clear, and direct `tool_error` buffer clear.
 
 ### 7. Wrong vs Correct
 

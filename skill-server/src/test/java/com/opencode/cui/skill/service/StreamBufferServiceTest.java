@@ -47,6 +47,57 @@ class StreamBufferServiceTest {
     }
 
     @Test
+    @DisplayName("session.status=busy marks session streaming for resume snapshot")
+    void sessionStatusBusyMarksSessionStreaming() {
+        service.accumulate("42", StreamMessage.sessionStatus("busy"));
+
+        verify(valueOps).set("stream:42:status", "{\"status\":\"busy\"}", 1L, TimeUnit.HOURS);
+    }
+
+    @Test
+    @DisplayName("session.status=retry keeps session streaming for resume snapshot")
+    void sessionStatusRetryKeepsSessionStreaming() {
+        service.accumulate("42", StreamMessage.sessionStatus("retry"));
+
+        verify(valueOps).set("stream:42:status", "{\"status\":\"busy\"}", 1L, TimeUnit.HOURS);
+    }
+
+    @Test
+    @DisplayName("error clears completed live parts from resume snapshot")
+    void errorClearsCompletedLiveParts() {
+        when(listOps.range("stream:42:parts_order", 0, -1)).thenReturn(List.of("part-1"));
+
+        service.accumulate("42", StreamMessage.error("timeout"));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> keysCaptor = ArgumentCaptor.forClass(List.class);
+        verify(redis).delete(keysCaptor.capture());
+        assertThat(keysCaptor.getValue()).containsExactly(
+                "stream:42:parts_order",
+                "stream:42:status",
+                "stream:42:part:part-1",
+                "stream:42:part:part-1:registered");
+    }
+
+    @Test
+    @DisplayName("session.error clears live replay state")
+    void sessionErrorClearsLiveReplayState() {
+        when(listOps.range("stream:42:parts_order", 0, -1)).thenReturn(List.of());
+
+        service.accumulate("42", StreamMessage.builder()
+                .type(StreamMessage.Types.SESSION_ERROR)
+                .error("cloud timeout")
+                .build());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> keysCaptor = ArgumentCaptor.forClass(List.class);
+        verify(redis).delete(keysCaptor.capture());
+        assertThat(keysCaptor.getValue()).containsExactly(
+                "stream:42:parts_order",
+                "stream:42:status");
+    }
+
+    @Test
     @DisplayName("text.done keeps completed content in Redis until session idle")
     void textDoneKeepsCompletedPartUntilIdle() throws Exception {
         String partKey = "stream:42:part:part-1";

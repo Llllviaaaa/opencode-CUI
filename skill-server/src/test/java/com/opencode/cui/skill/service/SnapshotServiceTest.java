@@ -36,6 +36,18 @@ class SnapshotServiceTest {
     }
 
     @Test
+    @DisplayName("streaming snapshot reports busy even before parts arrive")
+    void streamingSnapshotReportsBusyWithoutParts() {
+        when(bufferService.isSessionStreaming("42")).thenReturn(true);
+        when(bufferService.getStreamingParts("42")).thenReturn(List.of());
+
+        StreamMessage snapshot = service.buildStreamingState("42", 7L);
+
+        assertThat(snapshot.getSessionStatus()).isEqualTo("busy");
+        assertThat(snapshot.getParts()).isEmpty();
+    }
+
+    @Test
     @DisplayName("streaming snapshot chooses upstream message id over generated tool part id")
     void streamingSnapshotPrefersUpstreamMessageId() {
         when(bufferService.isSessionStreaming("42")).thenReturn(true);

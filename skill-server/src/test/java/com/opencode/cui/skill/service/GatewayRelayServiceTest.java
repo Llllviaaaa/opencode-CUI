@@ -293,6 +293,11 @@ class GatewayRelayServiceTest {
                 verify(emitter).emitToClient(eq("123"), eq("user-1"), busyCaptor.capture());
                 assertEquals("session.status", busyCaptor.getValue().getType());
                 assertEquals("busy", busyCaptor.getValue().getSessionStatus());
+                ArgumentCaptor<StreamMessage> bufferCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+                verify(bufferService, times(2)).accumulate(eq("123"), bufferCaptor.capture());
+                assertTrue(bufferCaptor.getAllValues().stream()
+                                .anyMatch(m -> StreamMessage.Types.SESSION_STATUS.equals(m.getType())
+                                                && "busy".equals(m.getSessionStatus())));
                 // text.delta delivered via dispatcher
                 verify(emitter).emitToSession(any(), eq("123"), eq("user-1"), any(StreamMessage.class));
         }
@@ -318,6 +323,7 @@ class GatewayRelayServiceTest {
                 verify(emitter).emitToSession(any(), eq("42"), eq("user-42"), msgCaptor.capture());
                 assertEquals(StreamMessage.Types.ERROR, msgCaptor.getValue().getType());
                 assertTrue(msgCaptor.getValue().getError().contains("timeout"));
+                verify(bufferService).clearSession("42");
         }
 
         @Test

@@ -590,7 +590,7 @@ public class GatewayMessageRouter {
         }
 
         log.info("handleToolEvent: sessionId={}", sessionId);
-        activateIdleSession(sessionId, userId);
+        activateIdleSession(sessionId, userId, session);
 
         // 根据助手类型（scope）选择事件翻译策略
         String resolvedAk = ak != null ? ak : node.path("ak").asText(node.path("agentId").asText(null));
@@ -702,13 +702,17 @@ public class GatewayMessageRouter {
     }
 
     /** 尝试激活 IDLE 会话，激活后广播 busy 状态。 */
-    private void activateIdleSession(String sessionId, String userId) {
+    private void activateIdleSession(String sessionId, String userId, SkillSession session) {
         Long numericId = ProtocolUtils.parseSessionId(sessionId);
         if (numericId == null) {
             return;
         }
         if (sessionService.activateSession(numericId)) {
-            emitter.emitToClient(sessionId, userId, StreamMessage.sessionStatus("busy"));
+            StreamMessage busy = StreamMessage.sessionStatus("busy");
+            emitter.emitToClient(sessionId, userId, busy);
+            if (isMiniappSession(session)) {
+                bufferService.accumulate(sessionId, busy);
+            }
         }
     }
 
@@ -1038,6 +1042,9 @@ public class GatewayMessageRouter {
                 .error(error)
                 .build();
         emitter.emitToSession(session, sessionId, userId, errorMsg);
+        if (isMiniappSession(session)) {
+            bufferService.clearSession(sessionId);
+        }
 
         if (numericId != null) {
             try {

@@ -55,8 +55,9 @@ public class StreamBufferService {
                         StreamMessage.Types.PERMISSION_REPLY ->
                     accumulatePermission(sessionId, msg);
                 case StreamMessage.Types.SESSION_STATUS -> handleSessionStatus(sessionId, msg);
+                case StreamMessage.Types.ERROR, StreamMessage.Types.SESSION_ERROR -> clearSession(sessionId);
                 default -> {
-                    /* step.start, agent.online/offline, error: no live replay state */
+                    /* step.start, agent.online/offline: no live replay state */
                 }
             }
         } catch (Exception e) {
@@ -77,8 +78,13 @@ public class StreamBufferService {
     }
 
     private void handleSessionStatus(String sessionId, StreamMessage msg) {
-        if ("idle".equals(msg.getSessionStatus()) || "completed".equals(msg.getSessionStatus())) {
+        String status = msg.getSessionStatus();
+        if ("idle".equals(status) || "completed".equals(status)) {
             clearSession(sessionId);
+            return;
+        }
+        if ("busy".equals(status) || "retry".equals(status)) {
+            setSessionStreaming(sessionId, true);
         }
     }
 
