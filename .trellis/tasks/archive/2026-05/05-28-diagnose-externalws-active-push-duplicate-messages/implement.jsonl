@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "Redis pub/sub and external WS relay semantics; subscriber count is diagnostic-only in Redis Cluster/cloud proxy deployments."}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "Redis coordination and ownership cache conventions."}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "Preserve existing skill-server logging/MDC style around relay paths."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "The bug crosses ai-gateway source mesh, skill-server ownership, and externalws delivery boundaries."}

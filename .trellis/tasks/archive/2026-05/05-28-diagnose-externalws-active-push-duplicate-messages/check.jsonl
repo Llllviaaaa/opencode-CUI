@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "Verify SS relay publish semantics match the documented Redis Cluster constraint."}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "Check Redis ownership and pub/sub behavior remains scoped."}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "Check relay log shape does not add noisy or misleading INFO logs."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Check the fix addresses the end-to-end duplicate path, not only a helper-level symptom."}
+{"command": "mvn.cmd clean test '-Dtest=SsRelayAndTakeoverTest,RedisMessageBrokerDeliveryTest'", "cwd": "skill-server", "result": "passed: 28 tests, 0 failures, 0 errors"}
+{"command": "git diff --check", "result": "passed"}
+{"tool": "gitnexus_detect_changes", "scope": "all", "result": "low risk, 4 changed files, no affected processes reported"}
