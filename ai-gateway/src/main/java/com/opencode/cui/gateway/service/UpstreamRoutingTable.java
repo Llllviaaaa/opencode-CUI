@@ -118,6 +118,7 @@ public class UpstreamRoutingTable {
      * <p>Lookup priority:</p>
      * <ol>
      * <li>Top-level {@code toolSessionId} field</li>
+     * <li>{@code payload.toolSessionId} field</li>
      * <li>Top-level {@code welinkSessionId} field (with {@code "w:"} prefix lookup)</li>
      * </ol>
      *
@@ -140,7 +141,19 @@ public class UpstreamRoutingTable {
             }
         }
 
-        // Priority 2: fallback to welinkSessionId
+        // Priority 2: fallback to payload.toolSessionId
+        String payloadToolSessionId = extractToolSessionIdFromPayload(message);
+        if (payloadToolSessionId != null && !payloadToolSessionId.isBlank()
+                && !payloadToolSessionId.equals(toolSessionId)) {
+            String sourceType = routingTable.getIfPresent(payloadToolSessionId);
+            if (sourceType != null) {
+                log.debug("[EXIT] UpstreamRoutingTable.resolveSourceType: resolved via payload.toolSessionId={} -> sourceType={}",
+                        payloadToolSessionId, sourceType);
+                return sourceType;
+            }
+        }
+
+        // Priority 3: fallback to welinkSessionId
         String welinkSessionId = message.getWelinkSessionId();
         if (welinkSessionId != null && !welinkSessionId.isBlank()) {
             String key = WELINK_KEY_PREFIX + welinkSessionId;
@@ -152,8 +165,8 @@ public class UpstreamRoutingTable {
             }
         }
 
-        log.debug("[EXIT] UpstreamRoutingTable.resolveSourceType: no route found for toolSessionId={}, welinkSessionId={}",
-                toolSessionId, welinkSessionId);
+        log.debug("[EXIT] UpstreamRoutingTable.resolveSourceType: no route found for toolSessionId={}, payloadToolSessionId={}, welinkSessionId={}",
+                toolSessionId, payloadToolSessionId, welinkSessionId);
         return null;
     }
 

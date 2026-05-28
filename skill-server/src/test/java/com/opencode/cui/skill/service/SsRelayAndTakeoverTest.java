@@ -27,7 +27,7 @@ import static org.mockito.Mockito.when;
  *
  * Verifies the GatewayMessageRouter route() method handles:
  * - Local owner processing
- * - Remote owner relay via Redis pub/sub
+ * - Remote owner relay via Redis pub/sub best-effort publish
  * - Dead owner takeover (heartbeat missing)
  * - Takeover conflict forwarding to winner
  * - Auto-claim when no owner exists
@@ -127,32 +127,33 @@ class SsRelayAndTakeoverTest {
         router.route("tool_done", AK, USER_ID, node);
 
         // Should NOT relay to any remote instance
-        verify(redisMessageBroker, never()).publishToSsRelay(anyString(), anyString());
+        verify(redisMessageBroker, never()).publishToSsRelayBestEffort(anyString(), anyString());
     }
 
     @Test
     @DisplayName("route: owner is remote instance -> should relay via pub/sub")
     void route_ownerIsRemote_shouldRelay() {
         when(sessionRouteService.getOwnerInstance(SESSION_ID)).thenReturn(REMOTE_INSTANCE);
-        when(redisMessageBroker.publishToSsRelay(eq(REMOTE_INSTANCE), anyString())).thenReturn(1L);
+        when(redisMessageBroker.publishToSsRelayBestEffort(eq(REMOTE_INSTANCE), anyString())).thenReturn(true);
 
         JsonNode node = buildToolDoneNode(SESSION_ID);
         router.route("tool_done", AK, USER_ID, node);
 
         // Should relay to remote instance
-        verify(redisMessageBroker).publishToSsRelay(eq(REMOTE_INSTANCE), anyString());
+        verify(redisMessageBroker).publishToSsRelayBestEffort(eq(REMOTE_INSTANCE), anyString());
         // Should NOT do local processing (no session resolving for tool_done)
         verify(sessionRouteService, never()).tryTakeover(anyString(), anyString(), anyString());
+        verify(skillInstanceRegistry, never()).isInstanceAlive(REMOTE_INSTANCE);
     }
 
     @Test
     @DisplayName("route: owner dead (heartbeat missing) -> should takeover")
     void route_ownerDead_heartbeatMissing_shouldTakeover() {
-        // Remote owner exists but relay returns 0 subscribers
+        // Remote owner exists but relay publish fails
         when(sessionRouteService.getOwnerInstance(SESSION_ID)).thenReturn(REMOTE_INSTANCE);
-        when(redisMessageBroker.publishToSsRelay(eq(REMOTE_INSTANCE), anyString())).thenReturn(0L);
-        // Heartbeat is missing (lenient: 0-subs hard signal short-circuits before heartbeat check)
-        lenient().when(skillInstanceRegistry.isInstanceAlive(REMOTE_INSTANCE)).thenReturn(false);
+        when(redisMessageBroker.publishToSsRelayBestEffort(eq(REMOTE_INSTANCE), anyString())).thenReturn(false);
+        // Heartbeat is missing
+        when(skillInstanceRegistry.isInstanceAlive(REMOTE_INSTANCE)).thenReturn(false);
         // Takeover succeeds
         when(sessionRouteService.tryTakeover(SESSION_ID, REMOTE_INSTANCE, LOCAL_INSTANCE)).thenReturn(true);
 
@@ -166,9 +167,8 @@ class SsRelayAndTakeoverTest {
     @DisplayName("route: takeover succeeds -> should process locally")
     void route_takeoverSuccess_shouldProcessLocally() {
         when(sessionRouteService.getOwnerInstance(SESSION_ID)).thenReturn(REMOTE_INSTANCE);
-        when(redisMessageBroker.publishToSsRelay(eq(REMOTE_INSTANCE), anyString())).thenReturn(0L);
-        // lenient: 0-subs hard signal short-circuits before heartbeat check
-        lenient().when(skillInstanceRegistry.isInstanceAlive(REMOTE_INSTANCE)).thenReturn(false);
+        when(redisMessageBroker.publishToSsRelayBestEffort(eq(REMOTE_INSTANCE), anyString())).thenReturn(false);
+        when(skillInstanceRegistry.isInstanceAlive(REMOTE_INSTANCE)).thenReturn(false);
         when(sessionRouteService.tryTakeover(SESSION_ID, REMOTE_INSTANCE, LOCAL_INSTANCE)).thenReturn(true);
 
         JsonNode node = buildToolDoneNode(SESSION_ID);
@@ -177,7 +177,7 @@ class SsRelayAndTakeoverTest {
         // Takeover succeeded → should process locally (tool_done marks completion)
         verify(sessionRouteService).tryTakeover(SESSION_ID, REMOTE_INSTANCE, LOCAL_INSTANCE);
         // Should NOT relay after takeover
-        verify(redisMessageBroker).publishToSsRelay(eq(REMOTE_INSTANCE), anyString()); // only the first relay attempt
+        verify(redisMessageBroker).publishToSsRelayBestEffort(eq(REMOTE_INSTANCE), anyString()); // only the first relay attempt
     }
 
     @Test
@@ -187,9 +187,8 @@ class SsRelayAndTakeoverTest {
         when(sessionRouteService.getOwnerInstance(SESSION_ID))
                 .thenReturn(REMOTE_INSTANCE)    // first call: original owner
                 .thenReturn(winnerInstance);     // second call: after takeover conflict
-        when(redisMessageBroker.publishToSsRelay(eq(REMOTE_INSTANCE), anyString())).thenReturn(0L);
-        // lenient: 0-subs hard signal short-circuits before heartbeat check
-        lenient().when(skillInstanceRegistry.isInstanceAlive(REMOTE_INSTANCE)).thenReturn(false);
+        when(redisMessageBroker.publishToSsRelayBestEffort(eq(REMOTE_INSTANCE), anyString())).thenReturn(false);
+        when(skillInstanceRegistry.isInstanceAlive(REMOTE_INSTANCE)).thenReturn(false);
         // Takeover fails — someone else won
         when(sessionRouteService.tryTakeover(SESSION_ID, REMOTE_INSTANCE, LOCAL_INSTANCE)).thenReturn(false);
 
@@ -197,45 +196,34 @@ class SsRelayAndTakeoverTest {
         router.route("tool_done", AK, USER_ID, node);
 
         // Should forward to the winner
-        verify(redisMessageBroker).publishToSsRelay(eq(winnerInstance), anyString());
+        verify(redisMessageBroker).publishToSsRelayBestEffort(eq(winnerInstance), anyString());
     }
 
     @Test
-    @DisplayName("route: half-dead owner (publish=0 + heartbeat alive) -> should takeover, not drop")
-    void route_halfDeadOwner_publishZeroButHeartbeatAlive_shouldTakeover() {
-        // Half-dead scenario: pub/sub long-connection silently failed, but heartbeat key still alive
+    @DisplayName("route: best-effort relay accepted -> should not takeover even if subscriber count is unknown")
+    void route_bestEffortRelayAccepted_shouldNotTakeover() {
         when(sessionRouteService.getOwnerInstance(SESSION_ID)).thenReturn(REMOTE_INSTANCE);
-        when(redisMessageBroker.publishToSsRelay(eq(REMOTE_INSTANCE), anyString())).thenReturn(0L);
-        // Heartbeat is still alive (the bug we are fixing)
-        lenient().when(skillInstanceRegistry.isInstanceAlive(REMOTE_INSTANCE)).thenReturn(true);
-        // Takeover succeeds
-        when(sessionRouteService.tryTakeover(SESSION_ID, REMOTE_INSTANCE, LOCAL_INSTANCE)).thenReturn(true);
+        when(redisMessageBroker.publishToSsRelayBestEffort(eq(REMOTE_INSTANCE), anyString())).thenReturn(true);
 
         JsonNode node = buildToolDoneNode(SESSION_ID);
         router.route("tool_done", AK, USER_ID, node);
 
-        // 0-subs is a hard signal — must takeover even when heartbeat says alive
-        verify(sessionRouteService).tryTakeover(SESSION_ID, REMOTE_INSTANCE, LOCAL_INSTANCE);
+        verify(redisMessageBroker).publishToSsRelayBestEffort(eq(REMOTE_INSTANCE), anyString());
+        verify(skillInstanceRegistry, never()).isInstanceAlive(REMOTE_INSTANCE);
+        verify(sessionRouteService, never()).tryTakeover(anyString(), anyString(), anyString());
     }
 
     @Test
-    @DisplayName("route: half-dead owner takeover CAS conflict -> should forward to winner")
-    void route_halfDeadOwner_takeoverConflict_shouldForwardToWinner() {
-        String winnerInstance = "ss-winner-3";
-        when(sessionRouteService.getOwnerInstance(SESSION_ID))
-                .thenReturn(REMOTE_INSTANCE)    // first call: original owner
-                .thenReturn(winnerInstance);     // second call: after CAS conflict
-        when(redisMessageBroker.publishToSsRelay(eq(REMOTE_INSTANCE), anyString())).thenReturn(0L);
-        // Heartbeat alive (half-dead pod)
-        lenient().when(skillInstanceRegistry.isInstanceAlive(REMOTE_INSTANCE)).thenReturn(true);
-        // CAS takeover loses to another instance
-        when(sessionRouteService.tryTakeover(SESSION_ID, REMOTE_INSTANCE, LOCAL_INSTANCE)).thenReturn(false);
+    @DisplayName("route: relay publish fails but heartbeat alive -> should not takeover")
+    void route_publishFailsButHeartbeatAlive_shouldNotTakeover() {
+        when(sessionRouteService.getOwnerInstance(SESSION_ID)).thenReturn(REMOTE_INSTANCE);
+        when(redisMessageBroker.publishToSsRelayBestEffort(eq(REMOTE_INSTANCE), anyString())).thenReturn(false);
+        when(skillInstanceRegistry.isInstanceAlive(REMOTE_INSTANCE)).thenReturn(true);
 
         JsonNode node = buildToolDoneNode(SESSION_ID);
         router.route("tool_done", AK, USER_ID, node);
 
-        // Should forward to the winner of the CAS race
-        verify(redisMessageBroker).publishToSsRelay(eq(winnerInstance), anyString());
+        verify(sessionRouteService, never()).tryTakeover(anyString(), anyString(), anyString());
     }
 
     @Test
@@ -251,6 +239,6 @@ class SsRelayAndTakeoverTest {
 
         verify(sessionRouteService).ensureRouteOwnership(SESSION_ID, AK, USER_ID);
         // Should NOT relay
-        verify(redisMessageBroker, never()).publishToSsRelay(anyString(), anyString());
+        verify(redisMessageBroker, never()).publishToSsRelayBestEffort(anyString(), anyString());
     }
 }

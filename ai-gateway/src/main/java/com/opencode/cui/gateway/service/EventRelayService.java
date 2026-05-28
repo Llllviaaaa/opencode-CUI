@@ -37,6 +37,7 @@ public class EventRelayService {
     private static final Duration AGENT_TRACE_TTL = Duration.ofMinutes(30);
     private static final String TRACE_TOOL_PREFIX = "tool:";
     private static final String TRACE_WELINK_PREFIX = "welink:";
+    private static final String DEFAULT_SOURCE_TYPE = "skill-server";
 
     /** 已连接 Agent 的 WebSocket 会话映射：ak → session */
     private final Map<String, WebSocketSession> agentSessions = new ConcurrentHashMap<>();
@@ -300,6 +301,9 @@ public class EventRelayService {
         String userId = redisMessageBroker.getAgentUser(ak);
         GatewayMessage forwarded = tracedMessage.withAk(ak)
                 .withUserId(userId);
+        if (hasUpstreamRoutingKey(forwarded)) {
+            forwarded = forwarded.withSource(DEFAULT_SOURCE_TYPE);
+        }
 
         // 保存调用方的 MDC 上下文，方法结束后恢复（避免清除调用方已设置的 traceId/ak）
         var previousMdc = MdcHelper.snapshot();
@@ -438,6 +442,12 @@ public class EventRelayService {
         if (hasText(value)) {
             keys.add(prefix + value);
         }
+    }
+
+    private static boolean hasUpstreamRoutingKey(GatewayMessage message) {
+        return hasText(message.getWelinkSessionId())
+                || hasText(message.getToolSessionId())
+                || hasText(payloadText(message, "toolSessionId"));
     }
 
     private static String payloadText(GatewayMessage message, String fieldName) {

@@ -164,6 +164,29 @@ class RedisMessageBrokerDeliveryTest {
     }
 
     @Test
+    @DisplayName("publishToSsRelayBestEffort: same-node zero still means publish accepted")
+    void publishToSsRelayBestEffort_zeroSameNodeReceiversStillReturnsTrue() {
+        when(redisTemplate.convertAndSend("ss:relay:ss-pod-2", "{}")).thenReturn(0L);
+
+        boolean accepted = broker.publishToSsRelayBestEffort("ss-pod-2", "{}");
+
+        assertTrue(accepted);
+        verify(redisTemplate).convertAndSend("ss:relay:ss-pod-2", "{}");
+    }
+
+    @Test
+    @DisplayName("publishToSsRelayBestEffort: publish exception returns false")
+    void publishToSsRelayBestEffort_publishExceptionReturnsFalse() {
+        when(redisTemplate.convertAndSend("ss:relay:ss-pod-2", "{}"))
+                .thenThrow(new RuntimeException("redis down"));
+
+        boolean accepted = broker.publishToSsRelayBestEffort("ss-pod-2", "{}");
+
+        assertFalse(accepted);
+        verify(redisTemplate).convertAndSend("ss:relay:ss-pod-2", "{}");
+    }
+
+    @Test
     @DisplayName("publishToExternalRelayBestEffort: same-node zero still means publish accepted")
     void publishToExternalRelayBestEffort_zeroSameNodeReceiversStillReturnsTrue() {
         when(redisTemplate.convertAndSend("ss:external-relay:ss-pod-2", "{}")).thenReturn(0L);

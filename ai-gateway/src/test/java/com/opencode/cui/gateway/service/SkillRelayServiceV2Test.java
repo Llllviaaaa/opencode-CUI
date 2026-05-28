@@ -1,6 +1,7 @@
 package com.opencode.cui.gateway.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -149,6 +150,34 @@ class SkillRelayServiceV2Test {
             } catch (AssertionError ignored) {
             }
             assertTrue(sendCount >= 1, "At least one session should receive the message");
+        }
+
+        @Test
+        @DisplayName("relayToSkill resolves payload.toolSessionId from routing table")
+        void relayToSkill_payloadToolSessionRoute_shouldHashToSkillOnly() throws Exception {
+            registerSs1();
+            registerBp();
+            ObjectNode payload = objectMapper.createObjectNode();
+            payload.put("toolSessionId", "T-payload");
+
+            routingTable.learnRoute(GatewayMessage.builder()
+                    .type(GatewayMessage.Type.INVOKE)
+                    .source(SOURCE_TYPE_SKILL)
+                    .payload(payload)
+                    .build(), SOURCE_TYPE_SKILL);
+
+            GatewayMessage upstreamMsg = GatewayMessage.builder()
+                    .type(GatewayMessage.Type.TOOL_EVENT)
+                    .payload(payload)
+                    .build();
+
+            boolean result = service.relayToSkill(upstreamMsg);
+
+            assertTrue(result);
+            awaitSend();
+            verify(ss1Session).sendMessage(any(TextMessage.class));
+            verify(bpSession, never()).sendMessage(any(TextMessage.class));
+            verify(redisMessageBroker, never()).discoverAllSourceGwInstances();
         }
     }
 
@@ -499,6 +528,32 @@ class SkillRelayServiceV2Test {
             assertTrue(result);
             verify(redisMessageBroker).publishToSourceRelay(
                     eq("gw-remote"), eq("skill-server"), eq("ss-pod-0"), anyString());
+        }
+
+        @Test
+        @DisplayName("L2 should use payload.toolSessionId when top-level toolSessionId is absent")
+        void l2Routing_payloadToolSessionIdRelaysToRouteOwner() throws Exception {
+            ObjectNode payload = objectMapper.createObjectNode();
+            payload.put("toolSessionId", "T-payload-l2");
+            when(redisMessageBroker.getSessionRoute("T-payload-l2")).thenReturn("skill-server:ss-pod-9");
+
+            Map<String, Long> gwMap = Map.of("gw-remote#sess-a1", 100L);
+            when(redisMessageBroker.getSourceConnections("skill-server", "ss-pod-9")).thenReturn(gwMap);
+            when(redisMessageBroker.extractUniqueGwInstances(gwMap)).thenReturn(Set.of("gw-remote"));
+
+            GatewayMessage msg = GatewayMessage.builder()
+                    .type(GatewayMessage.Type.TOOL_EVENT)
+                    .source(SOURCE_TYPE_SKILL)
+                    .payload(payload)
+                    .build();
+
+            boolean result = service.relayToSkill(msg);
+
+            assertTrue(result);
+            verify(redisMessageBroker).getSessionRoute("T-payload-l2");
+            verify(redisMessageBroker).publishToSourceRelay(
+                    eq("gw-remote"), eq("skill-server"), eq("ss-pod-9"), anyString());
+            verify(redisMessageBroker, never()).discoverAllSourceGwInstances();
         }
     }
 

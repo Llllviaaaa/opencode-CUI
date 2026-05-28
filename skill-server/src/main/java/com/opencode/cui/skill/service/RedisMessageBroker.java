@@ -440,6 +440,32 @@ public class RedisMessageBroker {
     }
 
     /**
+     * Publish an SS relay message and treat Redis PUBLISH as best-effort.
+     *
+     * <p>In Redis Cluster, {@code convertAndSend} returns subscribers connected to
+     * the same Redis node as the publisher, not a cluster-wide delivery ACK. A
+     * zero count can still be delivered to a subscriber on another node, so this
+     * method returns false only when the publish command itself fails.</p>
+     *
+     * @param targetInstanceId the target SS instance ID
+     * @param message          serialized relay envelope
+     * @return true if the Redis PUBLISH command completed without exception
+     */
+    public boolean publishToSsRelayBestEffort(String targetInstanceId, String message) {
+        String channel = SS_RELAY_CHANNEL_PREFIX + targetInstanceId;
+        try {
+            Long sameNodeReceivers = redisTemplate.convertAndSend(channel, message);
+            log.debug("Published to SS relay channel: target={}, sameNodeReceivers={}",
+                    targetInstanceId, sameNodeReceivers);
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to publish to SS relay channel: target={}, error={}",
+                    targetInstanceId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
      * Unsubscribe from this instance's SS relay channel.
      *
      * @param instanceId the local SS instance ID

@@ -104,6 +104,19 @@ class UpstreamRoutingTableTest {
     }
 
     @Test
+    @DisplayName("resolveSourceType_withPayloadToolSessionId_shouldReturnLearned")
+    void resolveSourceType_withPayloadToolSessionId_shouldReturnLearned() {
+        table.learnFromRelay(List.of("ts-payload-reply"), SOURCE_SKILL);
+        ObjectNode payload = MAPPER.createObjectNode();
+        payload.put("toolSessionId", "ts-payload-reply");
+
+        String result = table.resolveSourceType(
+                GatewayMessage.builder().payload(payload).build());
+
+        assertEquals(SOURCE_SKILL, result);
+    }
+
+    @Test
     @DisplayName("resolveSourceType_withWelinkSessionId_shouldReturnLearned")
     void resolveSourceType_withWelinkSessionId_shouldReturnLearned() {
         table.learnRoute(GatewayMessage.builder().welinkSessionId("session-7").build(), SOURCE_BOT);
