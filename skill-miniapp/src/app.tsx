@@ -39,6 +39,8 @@ const App: React.FC = () => {
     agentStatus,
     socketReady,
     sendMessage,
+    aborting,
+    abortSession,
     replyPermission,
     error: streamError,
   } = useSkillStream(activeSessionId, {
@@ -189,7 +191,10 @@ const App: React.FC = () => {
           />
           <MessageInput
             onSend={handleSendMessage}
+            onAbort={() => void abortSession()}
             disabled={inputDisabled}
+            abortDisabled={!activeSessionId || !isStreaming}
+            aborting={aborting}
             placeholder={
               !selectedAgent
                 ? '请先选择 Agent...'

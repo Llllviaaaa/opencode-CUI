@@ -2,13 +2,19 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 
 interface MessageInputProps {
   onSend: (text: string) => void;
+  onAbort?: () => void;
   disabled?: boolean;
+  abortDisabled?: boolean;
+  aborting?: boolean;
   placeholder?: string;
 }
 
 export const MessageInput: React.FC<MessageInputProps> = ({
   onSend,
+  onAbort,
   disabled = false,
+  abortDisabled = true,
+  aborting = false,
   placeholder = '输入消息... (Enter 发送, Shift+Enter 换行)',
 }) => {
   const [text, setText] = useState('');
@@ -70,6 +76,17 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       >
         发送
       </button>
+      {onAbort && (
+        <button
+          type="button"
+          className="abort-btn"
+          onClick={onAbort}
+          disabled={abortDisabled || aborting}
+          title="中断当前会话生成"
+        >
+          {aborting ? '中断中...' : '中断'}
+        </button>
+      )}
     </div>
   );
 };

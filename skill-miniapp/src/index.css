@@ -681,6 +681,32 @@ body {
     opacity: 1;
 }
 
+.abort-btn {
+    padding: 8px 16px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--danger);
+    background: transparent;
+    color: var(--danger);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    height: 40px;
+    transition: background-color 0.15s, color 0.15s, opacity 0.15s;
+}
+
+.abort-btn:hover:not(:disabled) {
+    background: rgba(248, 81, 73, 0.12);
+}
+
+.abort-btn:disabled {
+    border-color: var(--border-primary);
+    color: var(--text-muted);
+    cursor: not-allowed;
+    opacity: 1;
+}
+
 /* ===============================================================
    Error Banner
    =============================================================== */

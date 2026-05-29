@@ -280,6 +280,16 @@ export function closeSession(id: string | number): Promise<void> {
   return request<void>(`/api/skill/sessions/${id}`, { method: 'DELETE' });
 }
 
+/** POST /api/skill/sessions/{id}/abort */
+export function abortSession(
+  id: string | number,
+): Promise<{ status: string; welinkSessionId: string }> {
+  return request<{ status: string; welinkSessionId: string }>(
+    `/api/skill/sessions/${id}/abort`,
+    { method: 'POST' },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------

@@ -26,6 +26,8 @@ export interface UseSkillStreamReturn {
   agentStatus: AgentStatus;
   socketReady: boolean;
   sendMessage: (text: string, options?: { toolCallId?: string; questionId?: string }) => Promise<void>;
+  aborting: boolean;
+  abortSession: () => Promise<void>;
   replyPermission: (permissionId: string, response: 'once' | 'always' | 'reject', subagentSessionId?: string) => Promise<void>;
   error: string | null;
 }
@@ -480,6 +482,7 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
   const [isStreaming, setIsStreaming] = useState(false);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>('unknown');
   const [socketReady, setSocketReady] = useState(false);
+  const [aborting, setAborting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -1354,12 +1357,32 @@ export function useSkillStream(sessionId: string | null, options?: UseSkillStrea
     [sessionId],
   );
 
+  const abortSessionFn = useCallback(async () => {
+    if (!sessionId || aborting) {
+      return;
+    }
+
+    setError(null);
+    setAborting(true);
+    try {
+      await api.abortSession(sessionId);
+      finalizeAllStreamingMessages();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to abort session';
+      setError(message);
+    } finally {
+      setAborting(false);
+    }
+  }, [aborting, finalizeAllStreamingMessages, sessionId]);
+
   return {
     messages,
     isStreaming,
     agentStatus,
     socketReady,
     sendMessage: sendMessageFn,
+    aborting,
+    abortSession: abortSessionFn,
     replyPermission: replyPermissionFn,
     error,
   };
