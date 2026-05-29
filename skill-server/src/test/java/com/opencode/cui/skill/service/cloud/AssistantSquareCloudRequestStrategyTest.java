@@ -30,8 +30,8 @@ class AssistantSquareCloudRequestStrategyTest {
         businessExtParam.set("knowledgeId", objectMapper.createArrayNode().add("kb-1"));
         ObjectNode platformExtParam = objectMapper.createObjectNode();
         platformExtParam.put("businessSessionId", "sid-1");
-        ext.put("businessExtParam", businessExtParam);
-        ext.put("platformExtParam", platformExtParam);
+        ext.put("businessExtParam", businessExtParam.toString());
+        ext.put("platformExtParam", platformExtParam.toString());
         CloudRequestContext ctx = CloudRequestContext.builder()
                 .content("hello")
                 .assistantAccount("dig_30051824")
