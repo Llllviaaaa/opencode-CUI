@@ -1,6 +1,9 @@
 package com.opencode.cui.skill.service.cloud;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -74,13 +77,7 @@ public class AssistantSquareCloudRequestStrategy implements CloudRequestStrategy
             }
         }
 
-        // extParameters 透传：null/empty 时填空对象；非空时序列化为 JsonNode
-        Map<String, Object> ext = context.getExtParameters();
-        if (ext == null || ext.isEmpty()) {
-            node.set("extParameters", objectMapper.createObjectNode());
-        } else {
-            node.set("extParameters", objectMapper.valueToTree(ext));
-        }
+        node.set("extParameters", buildExtParameters(context.getExtParameters()));
 
         boolean isQuestionReply = context.getReplyToolCallId() != null;
         boolean isPermissionReply = context.getReplyPermissionId() != null;
@@ -99,6 +96,45 @@ public class AssistantSquareCloudRequestStrategy implements CloudRequestStrategy
         }
 
         return node;
+    }
+
+    private ObjectNode buildExtParameters(Map<String, Object> ext) {
+        ObjectNode extNode = objectMapper.createObjectNode();
+        if (ext == null || ext.isEmpty()) {
+            return extNode;
+        }
+        ext.forEach((key, value) -> extNode.set(key, normalizeExtParameter(key, value)));
+        return extNode;
+    }
+
+    private JsonNode normalizeExtParameter(String key, Object value) {
+        if (value == null) {
+            return NullNode.instance;
+        }
+        if (!shouldParseJsonExtParameter(key)) {
+            return objectMapper.valueToTree(value);
+        }
+        if (value instanceof JsonNode node && node.isTextual()) {
+            return parseJsonExtParameter(key, node.asText());
+        }
+        if (value instanceof String text) {
+            return parseJsonExtParameter(key, text);
+        }
+        return objectMapper.valueToTree(value);
+    }
+
+    private boolean shouldParseJsonExtParameter(String key) {
+        return "businessExtParam".equals(key) || "platformExtParam".equals(key);
+    }
+
+    private JsonNode parseJsonExtParameter(String key, String value) {
+        try {
+            return objectMapper.readTree(value);
+        } catch (JsonProcessingException e) {
+            log.error("[ERROR] AssistantSquareCloudRequestStrategy.build: invalid JSON extParameters.{}",
+                    key, e);
+            throw new IllegalArgumentException("Invalid JSON extParameters." + key, e);
+        }
     }
 
     private void validateAccountFields(CloudRequestContext context) {
