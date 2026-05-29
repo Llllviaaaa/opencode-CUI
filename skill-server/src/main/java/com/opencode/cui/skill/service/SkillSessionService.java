@@ -265,7 +265,20 @@ public class SkillSessionService {
         return session;
     }
 
-    /** 当会话标题发生变化时，更新为 AI 生成的新标题。 */
+    /** Mark an open session as IDLE after its current assistant turn is terminal. */
+    @Transactional
+    public boolean markSessionIdle(Long sessionId) {
+        if (sessionId == null) {
+            return false;
+        }
+        int updated = sessionRepository.markIdle(sessionId);
+        if (updated > 0) {
+            log.info("Marked session IDLE: id={}", sessionId);
+            return true;
+        }
+        return false;
+    }
+
     @Transactional
     public boolean updateTitle(Long sessionId, String title) {
         if (sessionId == null || title == null || title.isBlank()) {

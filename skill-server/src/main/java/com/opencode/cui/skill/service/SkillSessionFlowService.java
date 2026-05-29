@@ -7,12 +7,14 @@ import com.opencode.cui.skill.model.DefaultAssistantRule;
 import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
+import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.AssistantScopeStrategy;
 import com.opencode.cui.skill.service.scope.DefaultAssistantScopeStrategy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -31,6 +33,8 @@ public class SkillSessionFlowService {
     private final AssistantAccountResolverService assistantAccountResolverService;
     private final DefaultAssistantRuleService ruleService;
     private final DefaultAssistantScopeStrategy defaultAssistantScopeStrategy;
+    private final MessagePersistenceService persistenceService;
+    private final StreamBufferService bufferService;
 
     public SkillSessionFlowService(SkillSessionService sessionService,
                                    GatewayRelayService gatewayRelayService,
@@ -39,7 +43,9 @@ public class SkillSessionFlowService {
                                    AssistantScopeDispatcher scopeDispatcher,
                                    AssistantAccountResolverService assistantAccountResolverService,
                                    DefaultAssistantRuleService ruleService,
-                                   DefaultAssistantScopeStrategy defaultAssistantScopeStrategy) {
+                                   DefaultAssistantScopeStrategy defaultAssistantScopeStrategy,
+                                   MessagePersistenceService persistenceService,
+                                   StreamBufferService bufferService) {
         this.sessionService = sessionService;
         this.gatewayRelayService = gatewayRelayService;
         this.objectMapper = objectMapper;
@@ -48,6 +54,8 @@ public class SkillSessionFlowService {
         this.assistantAccountResolverService = assistantAccountResolverService;
         this.ruleService = ruleService;
         this.defaultAssistantScopeStrategy = defaultAssistantScopeStrategy;
+        this.persistenceService = persistenceService;
+        this.bufferService = bufferService;
     }
 
     public ApiResponse<SkillSession> createSession(String resolvedUserId,
@@ -107,6 +115,59 @@ public class SkillSessionFlowService {
         if (shouldSendAbortInvoke(session)) {
             gatewayRelayService.sendInvokeToGateway(lifecycleCommand(session, GatewayActions.ABORT_SESSION));
         }
+        finalizeAbortedSession(session);
+    }
+
+    private void finalizeAbortedSession(SkillSession session) {
+        if (session == null || session.getId() == null) {
+            return;
+        }
+        Long sessionId = session.getId();
+        String sessionIdText = sessionId.toString();
+        persistBufferedAbortParts(sessionId, sessionIdText);
+        StreamMessage idle = StreamMessage.sessionStatus("idle");
+        persistenceService.persistIfFinal(sessionId, idle);
+        boolean markedIdle = sessionService.markSessionIdle(sessionId);
+        bufferService.clearSession(sessionIdText);
+        log.info("[EXIT] abortSession.localFinalize: sessionId={}, markedIdle={}", sessionId, markedIdle);
+    }
+
+    private void persistBufferedAbortParts(Long sessionId, String sessionIdText) {
+        List<StreamMessage> parts = bufferService.getStreamingParts(sessionIdText);
+        if (parts == null || parts.isEmpty()) {
+            return;
+        }
+        for (StreamMessage part : parts) {
+            StreamMessage finalPart = toAbortFinalPart(part);
+            if (finalPart != null) {
+                persistenceService.persistIfFinal(sessionId, finalPart);
+            }
+        }
+    }
+
+    private StreamMessage toAbortFinalPart(StreamMessage part) {
+        if (part == null || part.getType() == null) {
+            return null;
+        }
+        return switch (part.getType()) {
+            case StreamMessage.Types.TEXT_DELTA -> withType(part, StreamMessage.Types.TEXT_DONE);
+            case StreamMessage.Types.THINKING_DELTA -> withType(part, StreamMessage.Types.THINKING_DONE);
+            case StreamMessage.Types.TEXT_DONE,
+                    StreamMessage.Types.THINKING_DONE,
+                    StreamMessage.Types.TOOL_UPDATE,
+                    StreamMessage.Types.QUESTION,
+                    StreamMessage.Types.FILE,
+                    StreamMessage.Types.PERMISSION_ASK,
+                    StreamMessage.Types.PERMISSION_REPLY,
+                    StreamMessage.Types.STEP_DONE ->
+                part;
+            default -> null;
+        };
+    }
+
+    private StreamMessage withType(StreamMessage msg, String type) {
+        msg.setType(type);
+        return msg;
     }
 
     private void routeCreateSession(String resolvedUserId, SkillSession session, CreateSessionCommand request) {

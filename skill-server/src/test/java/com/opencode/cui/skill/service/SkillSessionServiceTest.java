@@ -86,6 +86,15 @@ class SkillSessionServiceTest {
     }
 
     @Test
+    @DisplayName("markSessionIdle updates open session to IDLE")
+    void markSessionIdleUpdatesOpenSession() {
+        when(sessionRepository.markIdle(42L)).thenReturn(1);
+
+        assertTrue(service.markSessionIdle(42L));
+        verify(sessionRepository).markIdle(42L);
+    }
+
+    @Test
     @DisplayName("touchSession updates last_active_at")
     void touchSessionUpdatesTimestamp() {
         service.touchSession(42L);

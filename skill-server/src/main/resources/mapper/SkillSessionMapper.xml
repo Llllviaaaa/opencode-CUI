@@ -194,6 +194,13 @@
         WHERE id = #{id}
     </update>
 
+    <update id="markIdle">
+        UPDATE skill_session
+        SET status = 'IDLE', last_active_at = NOW()
+        WHERE id = #{id}
+          AND status != 'CLOSED'
+    </update>
+
     <update id="updateLastActiveAt">
         UPDATE skill_session
         SET last_active_at = #{lastActiveAt}
