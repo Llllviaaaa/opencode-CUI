@@ -1,5 +1,6 @@
 package com.opencode.cui.skill.service.cloud;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
@@ -24,6 +25,13 @@ class AssistantSquareCloudRequestStrategyTest {
     void build_mapsAssistantSquareFields() {
         Map<String, Object> ext = new LinkedHashMap<>();
         ext.put("foo", "bar");
+        ObjectNode businessExtParam = objectMapper.createObjectNode();
+        businessExtParam.put("isHwEmployee", false);
+        businessExtParam.set("knowledgeId", objectMapper.createArrayNode().add("kb-1"));
+        ObjectNode platformExtParam = objectMapper.createObjectNode();
+        platformExtParam.put("businessSessionId", "sid-1");
+        ext.put("businessExtParam", businessExtParam);
+        ext.put("platformExtParam", platformExtParam);
         CloudRequestContext ctx = CloudRequestContext.builder()
                 .content("hello")
                 .assistantAccount("dig_30051824")
@@ -47,6 +55,15 @@ class AssistantSquareCloudRequestStrategyTest {
         assertThat(out.path("topicId").asLong()).isEqualTo(1234567890123456789L);
         // extParameters 透传
         assertThat(out.path("extParameters").path("foo").asText()).isEqualTo("bar");
+        JsonNode businessExt = out.path("extParameters").path("businessExtParam");
+        assertThat(businessExt.isObject()).isTrue();
+        assertThat(businessExt.path("isHwEmployee").asBoolean()).isFalse();
+        assertThat(businessExt.path("knowledgeId").isArray()).isTrue();
+        assertThat(businessExt.path("knowledgeId").get(0).asText()).isEqualTo("kb-1");
+
+        JsonNode platformExt = out.path("extParameters").path("platformExtParam");
+        assertThat(platformExt.isObject()).isTrue();
+        assertThat(platformExt.path("businessSessionId").asText()).isEqualTo("sid-1");
     }
 
     @Test
