@@ -97,6 +97,9 @@ public interface SkillSessionRepository {
         /** 更新会话状态 */
         int updateStatus(@Param("id") Long id, @Param("status") String status);
 
+        /** Mark non-closed session as IDLE. */
+        int markIdle(@Param("id") Long id);
+
         /** 更新最后活跃时间 */
         int updateLastActiveAt(@Param("id") Long id, @Param("lastActiveAt") LocalDateTime lastActiveAt);
 

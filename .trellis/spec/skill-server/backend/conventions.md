@@ -1202,6 +1202,10 @@ already started the next turn.
   `session.status` marks the session as streaming; `idle` / `completed` and stream-level
   `error` / `session.error` are terminal and must clear live replay state. Once terminal
   content is persisted, resume/refresh must recover it from history, not from snapshot parts.
+- REST abort is also a local terminal boundary. `SkillSessionFlowService.abortSession(...)`
+  must send `abort_session` when needed, persist buffered live replay parts as terminal parts,
+  persist `session.status=idle`, mark the DB session `IDLE`, and only then clear
+  `StreamBufferService`.
 - Router-level `tool_error` does not pass through the normal `routeAssistantMessage(...)`
   buffer accumulation path; miniapp sessions must clear `StreamBufferService` explicitly after
   the real-time error event is emitted.
@@ -1217,6 +1221,7 @@ already started the next turn.
 | snapshot contains parts already present in history shells | Frontend restore may remove duplicate parts by stable part id/tool call id. |
 | `busy` / `retry` status arrives before parts | Snapshot reports streaming/busy even if no parts have been buffered yet. |
 | `idle` / `completed` / `error` / `session.error` arrives | Clear live replay state so resume falls back to DB history. |
+| user aborts while live replay has `text.delta` / `thinking.delta` but no done event | Convert the buffered delta to `text.done` / `thinking.done`, persist it, persist idle, mark session `IDLE`, then clear live replay state. |
 | router emits `tool_error` directly | Emit the real-time error, persist it, then clear miniapp live replay state. |
 
 ### 5. Good / Base / Bad Cases
@@ -1255,6 +1260,9 @@ if (!Objects.equals(active.messageId(), upstreamMessageId)) {
   assistant turn reconstruction.
 - `StreamBufferServiceTest` / `SnapshotServiceTest` / router tests must cover busy before
   parts, terminal error clear, and direct `tool_error` buffer clear.
+- `SkillSessionControllerTest` / flow tests must cover abort finalization: buffered delta is
+  persisted before idle, `StreamBufferService.clearSession(...)` is called, and
+  `SkillSessionService.markSessionIdle(...)` runs.
 
 ### 7. Wrong vs Correct
 

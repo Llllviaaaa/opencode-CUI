@@ -8,10 +8,12 @@ import com.opencode.cui.skill.service.AssistantAccountResolverService;
 import com.opencode.cui.skill.service.AssistantInfoService;
 import com.opencode.cui.skill.service.DefaultAssistantRuleService;
 import com.opencode.cui.skill.service.GatewayRelayService;
+import com.opencode.cui.skill.service.MessagePersistenceService;
 import com.opencode.cui.skill.service.ProtocolUtils;
 import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillSessionFlowService;
 import com.opencode.cui.skill.service.SkillSessionService;
+import com.opencode.cui.skill.service.StreamBufferService;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.DefaultAssistantScopeStrategy;
 import lombok.Data;
@@ -61,11 +63,13 @@ public class SkillSessionController {
             AssistantScopeDispatcher scopeDispatcher,
             AssistantAccountResolverService assistantAccountResolverService,
             DefaultAssistantRuleService ruleService,
-            DefaultAssistantScopeStrategy defaultAssistantScopeStrategy) {
+            DefaultAssistantScopeStrategy defaultAssistantScopeStrategy,
+            MessagePersistenceService persistenceService,
+            StreamBufferService bufferService) {
         this(sessionService, accessControlService,
                 new SkillSessionFlowService(sessionService, gatewayRelayService, objectMapper,
                         assistantInfoService, scopeDispatcher, assistantAccountResolverService,
-                        ruleService, defaultAssistantScopeStrategy));
+                        ruleService, defaultAssistantScopeStrategy, persistenceService, bufferService));
     }
 
     /**

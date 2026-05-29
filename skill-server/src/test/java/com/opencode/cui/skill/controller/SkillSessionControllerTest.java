@@ -6,16 +6,20 @@ import com.opencode.cui.skill.model.DefaultAssistantRule;
 import com.opencode.cui.skill.model.ExistenceStatus;
 import com.opencode.cui.skill.model.InvokeCommand;
 import com.opencode.cui.skill.model.SkillSession;
+import com.opencode.cui.skill.model.StreamMessage;
 import com.opencode.cui.skill.service.AssistantAccountResolverService;
 import com.opencode.cui.skill.service.AssistantInfoService;
 import com.opencode.cui.skill.service.DefaultAssistantRuleService;
 import com.opencode.cui.skill.service.GatewayRelayService;
+import com.opencode.cui.skill.service.MessagePersistenceService;
 import com.opencode.cui.skill.service.ProtocolException;
 import com.opencode.cui.skill.service.SessionAccessControlService;
 import com.opencode.cui.skill.service.SkillSessionService;
+import com.opencode.cui.skill.service.StreamBufferService;
 import com.opencode.cui.skill.service.scope.AssistantScopeDispatcher;
 import com.opencode.cui.skill.service.scope.DefaultAssistantScopeStrategy;
 
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -52,6 +56,10 @@ class SkillSessionControllerTest {
     private DefaultAssistantRuleService ruleService;
     @Mock
     private DefaultAssistantScopeStrategy defaultAssistantScopeStrategy;
+    @Mock
+    private MessagePersistenceService persistenceService;
+    @Mock
+    private StreamBufferService bufferService;
 
     private SkillSessionController controller;
 
@@ -78,7 +86,7 @@ class SkillSessionControllerTest {
 
         controller = new SkillSessionController(sessionService, gatewayRelayService, accessControlService,
                 new ObjectMapper(), assistantInfoService, scopeDispatcher, assistantAccountResolverService,
-                ruleService, defaultAssistantScopeStrategy);
+                ruleService, defaultAssistantScopeStrategy, persistenceService, bufferService);
     }
 
     @Test
@@ -238,6 +246,37 @@ class SkillSessionControllerTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> controller.abortSession("1", "999"));
+    }
+
+    @Test
+    @DisplayName("abortSession persists buffered delta, clears resume state, and idles session")
+    void abortSessionFinalizesLocalState() {
+        SkillSession session = new SkillSession();
+        session.setId(42L);
+        session.setAk("99");
+        session.setUserId("1");
+        session.setToolSessionId("ts-abc");
+        session.setStatus(SkillSession.Status.ACTIVE);
+        when(accessControlService.requireSessionAccess(42L, "1")).thenReturn(session);
+        when(bufferService.getStreamingParts("42")).thenReturn(List.of(StreamMessage.builder()
+                .type(StreamMessage.Types.TEXT_DELTA)
+                .messageId("msg-1")
+                .partId("part-1")
+                .content("partial reply")
+                .role("assistant")
+                .build()));
+
+        controller.abortSession("1", "42");
+
+        ArgumentCaptor<StreamMessage> msgCaptor = ArgumentCaptor.forClass(StreamMessage.class);
+        verify(persistenceService, times(2)).persistIfFinal(eq(42L), msgCaptor.capture());
+        List<StreamMessage> persisted = msgCaptor.getAllValues();
+        assertEquals(StreamMessage.Types.TEXT_DONE, persisted.get(0).getType());
+        assertEquals("partial reply", persisted.get(0).getContent());
+        assertEquals(StreamMessage.Types.SESSION_STATUS, persisted.get(1).getType());
+        assertEquals("idle", persisted.get(1).getSessionStatus());
+        verify(sessionService).markSessionIdle(42L);
+        verify(bufferService).clearSession("42");
     }
 
     // ==================== 助理删除校验 ====================

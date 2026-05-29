@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server backend pre-development checklist and stream snapshot contract pointers"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "constructor injection, StreamMessageEmitter, WebSocket and service conventions"}
+{"file": ".trellis/spec/skill-server/backend/database-guidelines.md", "reason": "session state update, MyBatis mapper, Redis live replay and terminal persistence transaction rules"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "StreamMessage session.status and SkillSession.Status enum contracts"}
+{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "REST abort response and streaming terminal error/status semantics"}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "controller/service log shape and non-secret logging constraints"}
