@@ -31,7 +31,7 @@ import java.time.Duration;
  * <p>响应判定：
  * <ul>
  *   <li>HTTP 200 + body.code=200 + data 为空 → NOT_EXISTS</li>
- *   <li>HTTP 200 + body.code=200 + data 为远端助手（isRemote=true 或 remoteProperty 非空）→ EXISTS，允许 appKey 为空</li>
+ *   <li>HTTP 200 + body.code=200 + data.remoteType=1/2 → EXISTS，允许 appKey 为空</li>
  *   <li>HTTP 200 + body.code=200 + data 为本地助手且 appKey / ownerWelinkId 缺失 → UNKNOWN（上游数据残缺）</li>
  *   <li>body.code != 200 / HTTP 非 200 / 超时 / 异常 → UNKNOWN</li>
  * </ul>

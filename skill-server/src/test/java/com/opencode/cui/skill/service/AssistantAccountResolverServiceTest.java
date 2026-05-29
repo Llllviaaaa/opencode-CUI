@@ -124,7 +124,7 @@ class AssistantAccountResolverServiceTest {
     }
 
     @Test
-    @DisplayName("remote: body.code=200 + data.isRemote=true + appKey 缺 → EXISTS")
+    @DisplayName("remote: body.code=200 + data.remoteType=1 + appKey missing -> EXISTS")
     void remoteAppKeyMissingReturnsExists() throws Exception {
         when(valueOperations.get(STATUS_KEY)).thenReturn(null);
         when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
@@ -158,7 +158,7 @@ class AssistantAccountResolverServiceTest {
     }
 
     @Test
-    @DisplayName("local: body.code=200 + appKey missing + isRemote=false -> UNKNOWN")
+    @DisplayName("local: body.code=200 + remoteType=0 + appKey missing -> UNKNOWN")
     void localAssistantWithoutAkReturnsUnknown() throws Exception {
         when(valueOperations.get(STATUS_KEY)).thenReturn(null);
         when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
@@ -184,6 +184,24 @@ class AssistantAccountResolverServiceTest {
                         "{\"code\":200,\"data\":{\"remoteType\":0,"
                                 + "\"remoteProperty\":[{\"type\":\"chat\",\"commProtocol\":\"sse\","
                                 + "\"url\":\"https://remote.example.com/chat\"}]}}")));
+
+        ResolveOutcome outcome = service.resolveWithStatus("assist-001");
+
+        assertEquals(ExistenceStatus.UNKNOWN, outcome.status());
+        assertNull(outcome.ak());
+        assertNull(outcome.ownerWelinkId());
+        verify(valueOperations, never()).set(eq(STATUS_KEY), anyString(), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("local: remoteProperty without remoteType no longer implies remote")
+    void remotePropertyWithoutRemoteTypeReturnsUnknown() throws Exception {
+        when(valueOperations.get(STATUS_KEY)).thenReturn(null);
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class),
+                eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                .thenReturn(ResponseEntity.ok(new ObjectMapper().readTree(
+                        "{\"code\":200,\"data\":{\"remoteProperty\":[{\"type\":\"chat\","
+                                + "\"commProtocol\":\"sse\",\"url\":\"https://remote.example.com/chat\"}]}}")));
 
         ResolveOutcome outcome = service.resolveWithStatus("assist-001");
 

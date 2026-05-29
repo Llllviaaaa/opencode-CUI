@@ -60,7 +60,7 @@ public class CloudRequestProfileRegistry {
     }
 
     /**
-     * Resolve an already-known protocol profile name without a businessTag mapping.
+     * Resolve an already-known protocol profile name without SysConfig mapping.
      */
     public CloudRequestProfile resolveProfile(String profileName) {
         String name = (profileName == null || profileName.isBlank()) ? DEFAULT_PROFILE : profileName;
@@ -70,7 +70,7 @@ public class CloudRequestProfileRegistry {
         if (cached != null && (now - cached.timestampMs) < cacheTtlMs) {
             return cached.profile;
         }
-        CloudRequestProfile profile = loadProfile(name);
+        CloudRequestProfile profile = loadDirectProfile(name);
         cache.put(cacheKey, new CacheEntry(profile, now));
         return profile;
     }
@@ -90,6 +90,16 @@ public class CloudRequestProfileRegistry {
         }
 
         return loadProfile(profileName);
+    }
+
+    private CloudRequestProfile loadDirectProfile(String profileName) {
+        CloudRequestStrategy strategy = strategyMap.get(profileName);
+        if (strategy == null) {
+            log.warn("[PROFILE_REG] direct profile strategy not registered: name={}, falling back to default",
+                    profileName);
+            strategy = strategyMap.get(DefaultCloudRequestStrategy.STRATEGY_NAME);
+        }
+        return new CloudRequestProfile(profileName, strategy);
     }
 
     private CloudRequestProfile loadProfile(String profileName) {

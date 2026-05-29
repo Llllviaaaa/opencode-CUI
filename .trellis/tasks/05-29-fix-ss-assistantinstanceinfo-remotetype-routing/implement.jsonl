@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "SS backend routing and assistant-instance remoteType contract"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "model and DTO type-safety conventions"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "shared constants and profile selection consistency"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "SS to GW cloud profile boundary"}
