@@ -208,6 +208,28 @@ log.error("send failed", e);
 
 来源：`telemetry/client/WelinkTelemetryClient.java:72-87`
 
+### 6) Chat 埋码字段契约
+
+`ChatTelemetryEventListener` 统一组装 `skill_chat_request` / `skill_chat_response` 的 `extendData`。当前固定字段为：
+
+```text
+businessSessionDomain, businessSessionType, businessSessionId,
+senderUserAccount, assistantAccount, businessTag, robotId
+```
+
+字段来源约束：
+
+- `robotId` 来源于 assistant info / assistant instance 接口返回的 `data.id`，在代码中落到 `AssistantInfo.id`。
+- request 路径复用 `SkillMessageFlowService.routeToGateway(...)` 已解析出的 `scopeInfo`，发布 `ChatRequestTelemetryEvent(..., robotId)`，不要为了埋码再查一次上游。
+- reply 路径没有 controller 局部 `scopeInfo`，由 listener 按 session 的 `ak + assistantAccount` 反查 `AssistantInfo`。
+- 上游缺失或异常时 `robotId` 转空串，埋码仍继续上报；异常只打 WARN，不抛回主链路。
+- 不上报群聊 `groupId`；如需群聊维度，使用现有 `businessSessionDomain/type/id` 组合判断。
+
+测试要求：
+
+- `ChatTelemetryEventListenerTest` 覆盖 request / reply 两个事件的 `robotId` 映射。
+- `AssistantInfoServiceTest` 覆盖 `data.id` 解析与 instance fallback 透传。
+
 ### 规则速查
 
 - 新增旁路上报模块**必须**有独立 executor、独立 `@ConditionalOnProperty` 守门、4 层 try-catch 兜底。

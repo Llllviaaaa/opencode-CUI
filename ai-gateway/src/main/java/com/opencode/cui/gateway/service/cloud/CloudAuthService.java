@@ -42,11 +42,14 @@ public class CloudAuthService {
     }
 
     public void applyAuth(WebSocket.Builder builder, String appId, String authType) {
+        resolveAuthHeaders(appId, authType).forEach((name, values) ->
+                values.forEach(value -> builder.header(name, value)));
+    }
+
+    public Map<String, List<String>> resolveAuthHeaders(String appId, String authType) {
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(URI.create("http://localhost"));
         resolveStrategy(authType).applyAuth(requestBuilder, appId);
-        HttpRequest request = requestBuilder.build();
-        request.headers().map().forEach((name, values) ->
-                values.forEach(value -> builder.header(name, value)));
+        return requestBuilder.build().headers().map();
     }
 
     private CloudAuthStrategy resolveStrategy(String authType) {

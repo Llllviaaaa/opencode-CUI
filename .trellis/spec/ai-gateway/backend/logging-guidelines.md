@@ -108,6 +108,29 @@ LogTimer.timedRun(log, "CloudRoute.refresh", () -> refreshRoute(...));
 
 输出固定以 `[EXT_CALL]` 开头，便于检索。
 
+## 云端远程调用入参日志
+
+GW 调用远程助手接口前必须打印一次请求入参，用于定位远程链路的 header/body 差异。
+
+触发范围：
+
+- SSE：`SseProtocolStrategy.connect(...)`，`HttpRequest` build 后、`sendRequest(...)` 前。
+- WebHook：`WebHookExecutor.execute(...)`，`HttpRequest` build 后、`sendRequest(...)` 前。
+- WebSocket：`WebSocketProtocolStrategy.connect(...)`，握手 header 写入后、`buildAsync(...)` 前，同时记录随后 `sendText(...)` 的 request body。
+
+日志契约：
+
+```text
+[EXT_CALL] CloudRemote.invoke request: protocol={}, endpoint={}, scope={}, appId={}, authType={}, cloudProfile={}, traceId={}, headers={}, body={}
+```
+
+实现约束：
+
+- 统一走 `CloudRemoteRequestLogHelper.logRequest(...)`，不要在三条协议分支里各自拼一套字段。
+- `Authorization`、`*token*`、`*secret*`、`*signature*` 等 header value 必须脱敏；`X-Trace-Id`、`X-App-Id`、`X-Auth-Type` 可原样打印。
+- WebSocket builder 无法反读 header，必须通过 `CloudAuthService.resolveAuthHeaders(...)` 先拿到认证 header map，再写入 `WebSocket.Builder` 并用于日志。
+- 该日志只增加可观测性，不改变 cloud request body、auth header 写入、发送顺序和错误处理语义。
+
 ## 敏感信息脱敏
 
 对 MAC 地址、token 等敏感值统一走 `SensitiveDataMasker`：

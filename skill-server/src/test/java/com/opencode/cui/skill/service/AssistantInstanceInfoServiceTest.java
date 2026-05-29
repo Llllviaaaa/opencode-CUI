@@ -67,6 +67,7 @@ class AssistantInstanceInfoServiceTest {
         ObjectNode body = objectMapper.createObjectNode();
         body.put("code", 200);
         ObjectNode data = body.putObject("data");
+        data.put("id", "robot-001");
         data.put("partnerAccount", "assist-001");
         data.put("ownerWelinkId", "owner-001");
         data.put("remoteType", AssistantInstanceInfo.REMOTE_TYPE_ASSISTANT_SQUARE);
@@ -85,6 +86,7 @@ class AssistantInstanceInfoServiceTest {
 
         assertEquals(ExistenceStatus.EXISTS, result.status());
         assertTrue(result.info().remoteAssistant());
+        assertEquals("robot-001", result.info().getId());
         assertEquals("assistant_square", result.info().protocolProfile());
         assertEquals("chat", result.info().getRemoteProperty().get(0).getType());
         verify(valueOps).set(eq("ss:assistant:instance:assist-001"), anyString(), eq(Duration.ofSeconds(300)));

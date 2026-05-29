@@ -11,6 +11,9 @@ import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.nio.ByteBuffer;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
 
@@ -57,7 +60,10 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
             WebSocket.Listener listener = createListener(lifecycle, onEvent, onError, closeLatch, connectionHandle);
 
             WebSocket.Builder wsBuilder = httpClient.newWebSocketBuilder();
-            applyHeaders(wsBuilder, context);
+            Map<String, List<String>> requestHeaders = applyHeaders(wsBuilder, context);
+            String requestBody = objectMapper.writeValueAsString(context.getCloudRequest());
+            CloudRemoteRequestLogHelper.logRequest(log, getProtocol(), context.getChannelAddress(),
+                    requestHeaders, requestBody, context);
 
             log.info("[WS] Connecting: endpoint={}, appId={}, traceId={}",
                     context.getChannelAddress(), context.getAppId(), context.getTraceId());
@@ -76,7 +82,6 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
 
             if (lifecycle != null) lifecycle.onConnected();
 
-            String requestBody = objectMapper.writeValueAsString(context.getCloudRequest());
             if (isCancelled(connectionHandle)) {
                 return;
             }
@@ -256,9 +261,23 @@ public class WebSocketProtocolStrategy implements CloudProtocolStrategy {
      *
      * <p>X-App-Id 仅在 appId 非空时写入（v2 模式 appId=null 时跳过，避免空串 header）。</p>
      */
-    void applyHeaders(WebSocket.Builder wsBuilder, CloudConnectionContext context) {
-        wsBuilder.header("X-Trace-Id", context.getTraceId() != null ? context.getTraceId() : "");
-        cloudAuthService.applyAuth(wsBuilder, context.getAppId(), context.getAuthType());
+    Map<String, List<String>> applyHeaders(WebSocket.Builder wsBuilder, CloudConnectionContext context) {
+        Map<String, List<String>> headers = new LinkedHashMap<>();
+        putHeader(wsBuilder, headers, "X-Trace-Id", context.getTraceId() != null ? context.getTraceId() : "");
+        cloudAuthService.resolveAuthHeaders(context.getAppId(), context.getAuthType())
+                .forEach((name, values) -> {
+                    headers.put(name, values);
+                    values.forEach(value -> wsBuilder.header(name, value));
+                });
+        return headers;
+    }
+
+    private static void putHeader(WebSocket.Builder wsBuilder,
+                                  Map<String, List<String>> headers,
+                                  String name,
+                                  String value) {
+        wsBuilder.header(name, value);
+        headers.put(name, List.of(value));
     }
 
     private static boolean isCancelled(CloudConnectionHandle connectionHandle) {

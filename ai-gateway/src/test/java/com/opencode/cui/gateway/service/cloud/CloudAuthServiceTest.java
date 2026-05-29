@@ -9,6 +9,7 @@ import java.net.URI;
 import java.net.http.HttpRequest;
 import java.net.http.WebSocket;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -89,6 +90,15 @@ class CloudAuthServiceTest {
 
             HttpRequest request = builder.GET().build();
             assertEquals(List.of("app_only_once"), request.headers().allValues("X-App-Id"));
+        }
+
+        @Test
+        @DisplayName("resolveAuthHeaders exposes generated auth headers for request logging")
+        void resolveAuthHeaders_returnsGeneratedHeaders() {
+            Map<String, List<String>> headers = cloudAuthService.resolveAuthHeaders("app_for_log", "soa");
+
+            assertEquals(List.of("soa"), headers.get("X-Auth-Type"));
+            assertEquals(List.of("app_for_log"), headers.get("X-App-Id"));
         }
 
         @Test

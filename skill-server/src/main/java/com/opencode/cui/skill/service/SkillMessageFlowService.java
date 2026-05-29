@@ -262,7 +262,10 @@ public class SkillMessageFlowService {
 
         try {
             eventPublisher.publishEvent(new ChatRequestTelemetryEvent(
-                    session, effectiveUserId, scopeInfo == null ? null : scopeInfo.getBusinessTag()));
+                    session,
+                    effectiveUserId,
+                    scopeInfo == null ? null : scopeInfo.getBusinessTag(),
+                    scopeInfo == null ? null : scopeInfo.getId()));
         } catch (Throwable t) {
             log.warn("[WelinkTelemetry] publish ChatRequestTelemetryEvent failed: sessionId={}, error={}",
                     sessionId, t.getMessage());
