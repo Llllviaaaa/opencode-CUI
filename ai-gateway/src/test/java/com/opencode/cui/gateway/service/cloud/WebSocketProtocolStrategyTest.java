@@ -14,6 +14,7 @@ import java.net.http.WebSocket;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
@@ -220,12 +221,17 @@ class WebSocketProtocolStrategyTest {
                 .authType("soa")
                 .traceId("trace_null_app")
                 .build();
+        when(cloudAuthService.resolveAuthHeaders(null, "soa"))
+                .thenReturn(Map.of("X-Auth-Type", List.of("soa")));
 
-        strategy.applyHeaders(builder, context);
+        Map<String, List<String>> headers = strategy.applyHeaders(builder, context);
 
         verify(builder).header("X-Trace-Id", "trace_null_app");
-        verify(cloudAuthService).applyAuth(builder, null, "soa");
+        verify(builder).header("X-Auth-Type", "soa");
+        verify(cloudAuthService).resolveAuthHeaders(null, "soa");
         verify(builder, never()).header(eq("X-App-Id"), anyString());
+        assertEquals(List.of("trace_null_app"), headers.get("X-Trace-Id"));
+        assertEquals(List.of("soa"), headers.get("X-Auth-Type"));
     }
 
     @Test
@@ -242,11 +248,16 @@ class WebSocketProtocolStrategyTest {
                 .authType("soa")
                 .traceId("trace_001")
                 .build();
+        when(cloudAuthService.resolveAuthHeaders("app_test", "soa"))
+                .thenReturn(Map.of("X-Auth-Type", List.of("soa"), "X-App-Id", List.of("app_test")));
 
-        strategy.applyHeaders(builder, context);
+        Map<String, List<String>> headers = strategy.applyHeaders(builder, context);
 
         verify(builder).header("X-Trace-Id", "trace_001");
-        verify(cloudAuthService).applyAuth(builder, "app_test", "soa");
-        verify(builder, never()).header(eq("X-App-Id"), anyString());
+        verify(builder).header("X-Auth-Type", "soa");
+        verify(builder).header("X-App-Id", "app_test");
+        verify(cloudAuthService).resolveAuthHeaders("app_test", "soa");
+        assertEquals(List.of("trace_001"), headers.get("X-Trace-Id"));
+        assertEquals(List.of("app_test"), headers.get("X-App-Id"));
     }
 }

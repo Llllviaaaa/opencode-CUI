@@ -35,7 +35,7 @@ class ChatTelemetryEventListenerTest {
     }
 
     @Test
-    @DisplayName("onChatRequest: eventId=skill_chat_request, userId=senderUserAccount, extendData 含 6 字段")
+    @DisplayName("onChatRequest: eventId=skill_chat_request, userId=senderUserAccount, extendData 含业务维度")
     void chatRequestMapping() {
         SkillSession session = SkillSession.builder()
                 .id(123L)
@@ -47,7 +47,7 @@ class ChatTelemetryEventListenerTest {
                 .businessSessionId("biz-99")
                 .build();
 
-        listener.onChatRequest(new ChatRequestTelemetryEvent(session, "user-real", "tag-Z"));
+        listener.onChatRequest(new ChatRequestTelemetryEvent(session, "user-real", "tag-Z", "robot-101"));
 
         ArgumentCaptor<TelemetryEvent> cap = ArgumentCaptor.forClass(TelemetryEvent.class);
         verify(reporter).report(cap.capture());
@@ -63,15 +63,16 @@ class ChatTelemetryEventListenerTest {
         assertEquals("user-real", ext.get("senderUserAccount"));
         assertEquals("assist-X", ext.get("assistantAccount"));
         assertEquals("tag-Z", ext.get("businessTag"));
+        assertEquals("robot-101", ext.get("robotId"));
     }
 
     @Test
     @DisplayName("onChatRequest: senderUserAccount 空 → skip, reporter 不调")
     void chatRequestBlankSenderSkipped() {
         SkillSession session = SkillSession.builder().id(1L).build();
-        listener.onChatRequest(new ChatRequestTelemetryEvent(session, "", "tag"));
+        listener.onChatRequest(new ChatRequestTelemetryEvent(session, "", "tag", "robot"));
         verify(reporter, never()).report(org.mockito.ArgumentMatchers.any());
-        listener.onChatRequest(new ChatRequestTelemetryEvent(session, null, "tag"));
+        listener.onChatRequest(new ChatRequestTelemetryEvent(session, null, "tag", "robot"));
         verify(reporter, never()).report(org.mockito.ArgumentMatchers.any());
     }
 
@@ -90,9 +91,10 @@ class ChatTelemetryEventListenerTest {
         when(sessionRepository.findById(7L)).thenReturn(session);
 
         AssistantInfo info = new AssistantInfo();
+        info.setId("robot-9");
         info.setAssistantScope("business");
         info.setBusinessTag("tag-from-info");
-        when(assistantInfoService.getAssistantInfo("AK-9")).thenReturn(info);
+        when(assistantInfoService.getAssistantInfo("AK-9", "assist-Y")).thenReturn(info);
 
         listener.onChatReply(new ChatReplyTelemetryEvent(7L));
 
@@ -110,6 +112,7 @@ class ChatTelemetryEventListenerTest {
         assertEquals("creator-A", ext.get("senderUserAccount"));
         assertEquals("assist-Y", ext.get("assistantAccount"));
         assertEquals("tag-from-info", ext.get("businessTag"));
+        assertEquals("robot-9", ext.get("robotId"));
     }
 
     @Test
@@ -140,12 +143,13 @@ class ChatTelemetryEventListenerTest {
                 .businessSessionId("biz-9")
                 .build();
         when(sessionRepository.findById(9L)).thenReturn(session);
-        when(assistantInfoService.getAssistantInfo("AK")).thenThrow(new RuntimeException("upstream down"));
+        when(assistantInfoService.getAssistantInfo("AK", "assist-Z")).thenThrow(new RuntimeException("upstream down"));
 
         listener.onChatReply(new ChatReplyTelemetryEvent(9L));
 
         ArgumentCaptor<TelemetryEvent> cap = ArgumentCaptor.forClass(TelemetryEvent.class);
         verify(reporter).report(cap.capture());
         assertEquals("", cap.getValue().extendData().get("businessTag"));
+        assertEquals("", cap.getValue().extendData().get("robotId"));
     }
 }

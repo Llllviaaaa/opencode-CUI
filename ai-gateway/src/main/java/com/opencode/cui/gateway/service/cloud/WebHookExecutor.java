@@ -57,7 +57,10 @@ public class WebHookExecutor {
             // NoAuthStrategy 不写。这里不再重复写入避免出现两个同名 header。
             cloudAuthService.applyAuth(builder, ctx.getAppId(), ctx.getAuthType());
 
-            HttpResponse<String> resp = sendRequest(builder.build());
+            HttpRequest request = builder.build();
+            CloudRemoteRequestLogHelper.logRequest(log, "webhook", ctx.getChannelAddress(),
+                    request.headers().map(), body, ctx);
+            HttpResponse<String> resp = sendRequest(request);
             if (resp.statusCode() / 100 == 2) {
                 log.info("[WEBHOOK] success: scope={}, status={}, traceId={}",
                         ctx.getScope(), resp.statusCode(), ctx.getTraceId());

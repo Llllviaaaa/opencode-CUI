@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "Welink telemetry is a fire-and-forget side path; preserve executor, conditional bean, soft-disable, and no-business-impact rules."}
+{"file": ".trellis/spec/skill-server/backend/logging-guidelines.md", "reason": "Use existing log prefixes and avoid printing secrets or full payloads on skill-server telemetry failures."}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "Follow existing DTO/Jackson null handling and model conventions when adding telemetry payload fields."}
+{"file": ".trellis/spec/ai-gateway/backend/conventions.md", "reason": "Cloud remote routing and assistant-instance contracts live in ai-gateway service/cloud conventions."}
+{"file": ".trellis/spec/ai-gateway/backend/logging-guidelines.md", "reason": "Remote call input logging must use existing EXT_CALL semantics and SensitiveDataMasker where needed."}
+{"file": ".trellis/spec/ai-gateway/backend/type-safety.md", "reason": "Preserve GatewayMessage/JsonNode conventions while logging remote invoke body and headers."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "The telemetry fields depend on session/chat metadata and assistant info across boundaries."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Search before adding helpers or duplicating existing assistant info and log masking behavior."}

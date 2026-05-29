@@ -26,9 +26,9 @@ import java.util.Map;
  * <p>字段映射（PRD §3）：
  * <ul>
  *   <li>request 事件：{@code eventId=skill_chat_request, eventLabel=用户发起 chat 对话,
- *       userId=senderUserAccount}，extendData 含 6 个业务字段</li>
+ *       userId=senderUserAccount}，extendData 含业务维度字段</li>
  *   <li>reply 事件：{@code eventId=skill_chat_response, eventLabel=助手回复 chat 对话,
- *       userId=assistantAccount}，extendData 同样含 6 个业务字段</li>
+ *       userId=assistantAccount}，extendData 同样含业务维度字段</li>
  * </ul>
  */
 @Slf4j
@@ -74,7 +74,8 @@ public class ChatTelemetryEventListener {
                     businessSessionId,
                     senderUserAccount,
                     assistantAccount,
-                    event.businessTag());
+                    event.businessTag(),
+                    event.robotId());
             reporter.report(simpleEvent(
                     EVENT_ID_REQUEST,
                     EVENT_LABEL_REQUEST,
@@ -105,14 +106,15 @@ public class ChatTelemetryEventListener {
                 return;
             }
             String businessSessionId = session.getBusinessSessionId();
-            String businessTag = resolveBusinessTag(session.getAk());
+            AssistantInfo assistantInfo = resolveAssistantInfo(session);
             Map<String, Object> extendData = buildExtendData(
                     session.getBusinessSessionDomain(),
                     session.getBusinessSessionType(),
                     businessSessionId,
                     session.getUserId(),
                     assistantAccount,
-                    businessTag);
+                    assistantInfo == null ? null : assistantInfo.getBusinessTag(),
+                    assistantInfo == null ? null : assistantInfo.getId());
             reporter.report(simpleEvent(
                     EVENT_ID_REPLY,
                     EVENT_LABEL_REPLY,
@@ -126,18 +128,24 @@ public class ChatTelemetryEventListener {
     }
 
     /**
-     * Reply 路径里 controller 局部变量 scopeInfo 不可见，需要按 ak 反查一次。
-     * 上游故障时 {@link AssistantInfoService#getAssistantInfo} 返 null，按字段缺失处理（返 null businessTag）。
+     * Reply 路径里 controller 局部变量 scopeInfo 不可见，需要按 session 身份反查一次。
+     * 上游故障时 {@link AssistantInfoService#getAssistantInfo} 返 null，按字段缺失处理。
      */
-    private String resolveBusinessTag(String ak) {
-        if (ak == null || ak.isBlank()) {
+    private AssistantInfo resolveAssistantInfo(SkillSession session) {
+        if (session == null) {
             return null;
         }
         try {
-            AssistantInfo info = assistantInfoService.getAssistantInfo(ak);
-            return info == null ? null : info.getBusinessTag();
+            if (session.getAssistantAccount() != null && !session.getAssistantAccount().isBlank()) {
+                return assistantInfoService.getAssistantInfo(session.getAk(), session.getAssistantAccount());
+            }
+            if (session.getAk() == null || session.getAk().isBlank()) {
+                return null;
+            }
+            return assistantInfoService.getAssistantInfo(session.getAk());
         } catch (Throwable t) {
-            log.warn("[WelinkTelemetry] resolveBusinessTag failed: ak={}, error={}", ak, t.getMessage());
+            log.warn("[WelinkTelemetry] resolveAssistantInfo failed: ak={}, assistantAccount={}, error={}",
+                    session.getAk(), session.getAssistantAccount(), t.getMessage());
             return null;
         }
     }
@@ -147,7 +155,8 @@ public class ChatTelemetryEventListener {
                                                 String businessSessionId,
                                                 String senderUserAccount,
                                                 String assistantAccount,
-                                                String businessTag) {
+                                                String businessTag,
+                                                String robotId) {
         Map<String, Object> extendData = new LinkedHashMap<>();
         extendData.put("businessSessionDomain", nullToEmpty(businessSessionDomain));
         extendData.put("businessSessionType", nullToEmpty(businessSessionType));
@@ -155,6 +164,7 @@ public class ChatTelemetryEventListener {
         extendData.put("senderUserAccount", nullToEmpty(senderUserAccount));
         extendData.put("assistantAccount", nullToEmpty(assistantAccount));
         extendData.put("businessTag", nullToEmpty(businessTag));
+        extendData.put("robotId", nullToEmpty(robotId));
         return extendData;
     }
 

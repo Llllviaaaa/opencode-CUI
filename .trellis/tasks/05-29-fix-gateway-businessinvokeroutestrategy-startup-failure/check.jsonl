@@ -1,0 +1,2 @@
+{"file":".trellis/spec/ai-gateway/backend/conventions.md","reason":"verify constructor injection style and narrow service change"}
+{"file":".trellis/spec/guides/index.md","reason":"check scope and avoid unrelated cross-layer changes"}

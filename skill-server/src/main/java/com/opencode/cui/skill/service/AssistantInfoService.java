@@ -132,6 +132,7 @@ public class AssistantInfoService {
         }
         if (instance.businessRoutableAssistant()) {
             AssistantInfo info = new AssistantInfo();
+            info.setId(instance.getId());
             info.setAssistantScope("business");
             info.setBusinessTag(instance.getBizRobotTag());
             info.setCloudProfile(instance.protocolProfile());
@@ -142,6 +143,7 @@ public class AssistantInfoService {
             AssistantInfo info = getAssistantInfo(effectiveAk);
             String bizRobotTag = firstNonBlank(instance.getBizRobotTag(), null);
             if (info != null) {
+                info.setId(firstNonBlank(instance.getId(), info.getId()));
                 if (info.isPersonal() && bizRobotTag != null) {
                     info.setBusinessTag(bizRobotTag);
                 }
@@ -149,6 +151,7 @@ public class AssistantInfoService {
             }
             if (bizRobotTag != null) {
                 AssistantInfo fallback = new AssistantInfo();
+                fallback.setId(instance.getId());
                 fallback.setAssistantScope("personal");
                 fallback.setBusinessTag(bizRobotTag);
                 return fallback;
@@ -254,6 +257,7 @@ public class AssistantInfoService {
             String scope = IDENTITY_TYPE_BUSINESS.equals(identityType) ? "business" : "personal";
 
             AssistantInfo info = new AssistantInfo();
+            info.setId(dataNode.path("id").asText(null));
             info.setAssistantScope(scope);
             info.setBusinessTag(dataNode.path("businessTag").asText(null));
             info.setCloudEndpoint(dataNode.path("endpoint").asText(null));

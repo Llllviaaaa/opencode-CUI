@@ -97,6 +97,7 @@ class AssistantInfoServiceTest {
     void getAssistantInfo_cacheHit_returnsCachedValue() throws Exception {
         // 缓存中存有 JSON
         String cachedJson = "{\"assistantScope\":\"business\",\"businessTag\":\"app_001\"," +
+                "\"id\":\"robot-cache\"," +
                 "\"cloudEndpoint\":\"https://cloud.example.com/chat\"," +
                 "\"cloudProtocol\":\"sse\",\"authType\":\"soa\"}";
 
@@ -108,6 +109,7 @@ class AssistantInfoServiceTest {
         assertNotNull(result);
         assertEquals("business", result.getAssistantScope());
         assertEquals("app_001", result.getBusinessTag());
+        assertEquals("robot-cache", result.getId());
         assertTrue(result.isBusiness());
 
         // 缓存命中时不应写缓存（set 不应被调用）
@@ -126,6 +128,7 @@ class AssistantInfoServiceTest {
 
         AssistantInfo upstream = new AssistantInfo();
         upstream.setAssistantScope("business");
+        upstream.setId("robot-upstream");
         upstream.setBusinessTag("app_36209");
         upstream.setCloudEndpoint("https://cloud.example.com/chat");
         upstream.setCloudProtocol("sse");
@@ -136,6 +139,7 @@ class AssistantInfoServiceTest {
 
         assertNotNull(result);
         assertEquals("business", result.getAssistantScope());
+        assertEquals("robot-upstream", result.getId());
         // 应写入缓存
         verify(valueOperations).set(eq(CACHE_KEY), any(String.class),
                 eq(Duration.ofSeconds(300)));
@@ -171,7 +175,7 @@ class AssistantInfoServiceTest {
         // 为保持测试简洁，使用专用 stub service 验证解析逻辑
         String json = String.format(
                 "{\"code\":\"200\",\"data\":{\"identityType\":\"%s\"," +
-                        "\"businessTag\":\"app_test\",\"endpoint\":\"https://cloud.example.com\"," +
+                        "\"id\":\"robot-test\",\"businessTag\":\"app_test\",\"endpoint\":\"https://cloud.example.com\"," +
                         "\"protocol\":\"sse\",\"authType\":\"soa\"}}",
                 identityType);
 
@@ -261,6 +265,7 @@ class AssistantInfoServiceTest {
     void parseApiResponse_readsBusinessTag_notHisAppId() {
         String body = "{\"code\":\"200\",\"data\":{" +
                 "\"identityType\":\"3\"," +
+                "\"id\":\"robot-foo\"," +
                 "\"businessTag\":\"tag-foo\"," +
                 "\"endpoint\":\"https://cloud.example.com/chat\"," +
                 "\"protocol\":\"2\"," +
@@ -272,6 +277,7 @@ class AssistantInfoServiceTest {
         assertNotNull(info);
         assertEquals("business", info.getAssistantScope());
         assertEquals("tag-foo", info.getBusinessTag());
+        assertEquals("robot-foo", info.getId());
     }
 
     @Test
@@ -289,6 +295,7 @@ class AssistantInfoServiceTest {
     @DisplayName("getAssistantInfo(ak, account): no-AK remote instance routes as business")
     void getAssistantInfo_noAkRemoteInstance_returnsBusiness() {
         AssistantInstanceInfo instance = new AssistantInstanceInfo();
+        instance.setId("robot-remote");
         instance.setPartnerAccount("assist-001");
         instance.setOwnerWelinkId("owner-001");
         instance.setRemoteType(AssistantInstanceInfo.REMOTE_TYPE_ASSISTANT_SQUARE);
@@ -302,6 +309,7 @@ class AssistantInfoServiceTest {
 
         assertNotNull(info);
         assertEquals("business", info.getAssistantScope());
+        assertEquals("robot-remote", info.getId());
         assertEquals("tag-001", info.getBusinessTag());
         assertEquals("assistant_square", info.getCloudProfile());
         verify(redisTemplate, never()).opsForValue();
@@ -311,6 +319,7 @@ class AssistantInfoServiceTest {
     @DisplayName("getAssistantInfo(ak, account): remoteType=2 routes as business with default profile")
     void getAssistantInfo_defaultProtocolRemoteInstance_returnsBusinessWithDefaultProfile() {
         AssistantInstanceInfo instance = new AssistantInstanceInfo();
+        instance.setId("robot-default");
         instance.setPartnerAccount("assist-001");
         instance.setRemoteType(AssistantInstanceInfo.REMOTE_TYPE_DEFAULT);
         instance.setBizRobotTag("tag-001");
@@ -323,6 +332,7 @@ class AssistantInfoServiceTest {
 
         assertNotNull(info);
         assertEquals("business", info.getAssistantScope());
+        assertEquals("robot-default", info.getId());
         assertEquals("tag-001", info.getBusinessTag());
         assertEquals("default", info.getCloudProfile());
         verify(redisTemplate, never()).opsForValue();
@@ -332,6 +342,7 @@ class AssistantInfoServiceTest {
     @DisplayName("getAssistantInfo(ak, account): local personal instance keeps scope and injects bizRobotTag")
     void getAssistantInfo_localPersonalInstance_injectsBizRobotTag() {
         AssistantInstanceInfo instance = new AssistantInstanceInfo();
+        instance.setId("robot-local");
         instance.setPartnerAccount("assist-local");
         instance.setOwnerWelinkId("owner-local");
         instance.setAppKey("ak-local");
@@ -344,6 +355,7 @@ class AssistantInfoServiceTest {
         TestableAssistantInfoService instanceAwareService = new TestableAssistantInfoService(
                 properties, redisTemplate, assistantInstanceInfoService);
         AssistantInfo upstream = new AssistantInfo();
+        upstream.setId("robot-upstream");
         upstream.setAssistantScope("personal");
         upstream.setBusinessTag(null);
         instanceAwareService.stubFetch(upstream);
@@ -352,6 +364,7 @@ class AssistantInfoServiceTest {
 
         assertNotNull(info);
         assertEquals("personal", info.getAssistantScope());
+        assertEquals("robot-local", info.getId());
         assertEquals("robot-local", info.getBusinessTag());
     }
 

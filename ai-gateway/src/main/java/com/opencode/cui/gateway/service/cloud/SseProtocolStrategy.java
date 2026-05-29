@@ -103,6 +103,8 @@ public class SseProtocolStrategy implements CloudProtocolStrategy {
 
             // 4. 发送请求
             HttpRequest request = requestBuilder.build();
+            CloudRemoteRequestLogHelper.logRequest(log, getProtocol(), context.getChannelAddress(),
+                    request.headers().map(), requestBody, context);
             log.info("[SSE] Connecting: endpoint={}, appId={}, traceId={}, cloudProfile={}, decoder={}",
                     context.getChannelAddress(), context.getAppId(), context.getTraceId(),
                     profile.name(), profile.responseDecoderName());

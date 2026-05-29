@@ -5,6 +5,7 @@ import lombok.Data;
 
 @Data
 public class AssistantInfo {
+    private String id;               // assistantInfo/instance 接口返回的机器人 ID
     private String assistantScope;    // "business" | "personal"
     private String businessTag;       // upstream data.businessTag / bizRobotTag
     private String cloudProfile;      // protocol profile hint, e.g. "assistant_square" or "default"

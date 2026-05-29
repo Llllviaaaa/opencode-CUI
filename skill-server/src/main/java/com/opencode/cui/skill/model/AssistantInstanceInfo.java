@@ -22,6 +22,7 @@ public class AssistantInstanceInfo {
     public static final String PROFILE_ASSISTANT_SQUARE = "assistant_square";
     public static final String PROFILE_DEFAULT = "default";
 
+    private String id;
     private String partnerAccount;
     private String ownerWelinkId;
     private String createdBy;

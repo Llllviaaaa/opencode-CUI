@@ -14,5 +14,6 @@ import com.opencode.cui.skill.model.SkillSession;
 public record ChatRequestTelemetryEvent(
         SkillSession session,
         String senderUserAccount,
-        String businessTag) {
+        String businessTag,
+        String robotId) {
 }

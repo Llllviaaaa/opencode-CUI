@@ -49,7 +49,7 @@ flowchart TD
 2. personal scope 且开启 assistant online check 时，先调用 `AssistantAvailabilityService.resolve(ak)`；离线则发送错误消息并返回。
 3. 缺少 `toolSessionId` 时触发 rebuild，不上报 chat request。
 4. chat 分支构造 `InvokeCommand` 并发送到 Gateway。
-5. invoke 发送后发布 `ChatRequestTelemetryEvent(session, effectiveUserId, businessTag)`。
+5. invoke 发送后发布 `ChatRequestTelemetryEvent(session, effectiveUserId, businessTag, robotId)`。
 6. `ChatTelemetryEventListener.onChatRequest(...)` 校验 sender 非空，构建 `skill_chat_request` 事件。
 7. 助手回复持久化完成后，`ChatReplyAspect.afterFinalize(sessionId)` 发布 `ChatReplyTelemetryEvent`。
 8. `ChatTelemetryEventListener.onChatReply(...)` 反查 `SkillSession` 与 `AssistantInfo`，构建 `skill_chat_response` 事件。
@@ -65,7 +65,9 @@ flowchart TD
 - reply 事件在 assistant turn finalize 之后发布；找不到 session 或缺 assistantAccount 时跳过。
 - `skill_chat_request.userId = senderUserAccount`。
 - `skill_chat_response.userId = assistantAccount`。
-- `extendData` 固定包含 `businessSessionDomain`、`businessSessionType`、`businessSessionId`、`senderUserAccount`、`assistantAccount`、`businessTag`，缺失值转空串。
+- `extendData` 固定包含 `businessSessionDomain`、`businessSessionType`、`businessSessionId`、`senderUserAccount`、`assistantAccount`、`businessTag`、`robotId`，缺失值转空串。
+- `robotId` 来源于 assistant info / instance 接口返回的 `data.id`；request 路径复用发送前已解析的 `scopeInfo`，reply 路径按 session 反查 `AssistantInfo`。
+- 不上报独立 `groupId` 字段；群聊维度继续使用既有 `businessSessionDomain/type/id` 组合。
 - executor 队列满时按 `discard` 策略丢弃，保护主业务线程。
 
 #### 1.2.4 预期结果
@@ -345,6 +347,7 @@ flowchart LR
       "businessSessionDomain": "xxx",
       "businessSessionType": "xxx",
       "businessSessionId": "xxx",
+      "robotId": "assistant-info-data-id",
       "senderUserAccount": "u-001",
       "assistantAccount": "dig_xxx",
       "businessTag": "assistant_square"
@@ -405,8 +408,8 @@ erDiagram
 
 | 数据项 | 数据来源 | 统计维度 | 统计周期 | 使用场景 |
 |-------|---------|---------|---------|---------|
-| chat 请求数 | `skill_chat_request` | domain/type/businessTag/assistantAccount/senderUserAccount | 实时/日/周/月 | 业务活跃度 |
-| chat 回复数 | `skill_chat_response` | domain/type/businessTag/assistantAccount | 实时/日/周/月 | 助手响应量 |
+| chat 请求数 | `skill_chat_request` | domain/type/businessTag/robotId/assistantAccount/senderUserAccount | 实时/日/周/月 | 业务活跃度 |
+| chat 回复数 | `skill_chat_response` | domain/type/businessTag/robotId/assistantAccount | 实时/日/周/月 | 助手响应量 |
 | 请求回复比 | 两类事件聚合 | sessionId/assistantAccount/businessTag | 日/周/月 | 识别异常失败或回复缺失 |
 | 上报失败日志 | skill-server 日志 | eventId/httpCode/error | 实时 | 运维告警 |
 
