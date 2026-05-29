@@ -680,6 +680,21 @@ class GatewayMessageRouterTest {
         verify(rebuildService, never()).handleSessionNotFound(anyString(), any(), any());
     }
 
+    @Test
+    @DisplayName("tool_error parse failures do not trigger rebuild")
+    void toolError_parseFailures_doNotTriggerRebuild() {
+        router = buildRouter(true);
+
+        router.route("tool_error", null, null,
+                buildToolError(WELINK_SESSION_ID, "Json parse error: invalid payload", null));
+        router.route("tool_error", null, null,
+                buildToolError(WELINK_SESSION_ID, "Unexpected EOF while reading stream", null));
+
+        verify(rebuildService, never()).handleSessionNotFound(anyString(), any(), any());
+        verify(messageService, times(2)).saveSystemMessage(eq(42L), anyString());
+        verify(emitter, times(2)).emitToSession(any(), eq(WELINK_SESSION_ID), any(), any());
+    }
+
     // ==================== agent_online / agent_offline evict ====================
 
     private GatewayMessageRouter buildRouterWithAvailability(boolean dedupEnabled) {

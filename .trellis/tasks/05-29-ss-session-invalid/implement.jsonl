@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/skill-server/backend/index.md", "reason": "skill-server backend spec index and pre-development checklist"}
+{"file": ".trellis/spec/skill-server/backend/directory-structure.md", "reason": "service-layer placement conventions"}
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "general skill-server backend coding conventions"}
+{"file": ".trellis/spec/skill-server/backend/error-handling.md", "reason": "streaming and protocol error semantics"}
+{"file": ".trellis/spec/guides/index.md", "reason": "shared Trellis thinking guide index"}

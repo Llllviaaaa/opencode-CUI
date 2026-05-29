@@ -1529,9 +1529,7 @@ public class GatewayMessageRouter {
         // "config not found" 等配置缺失类错误误判为 session 失效，触发不必要的重建。
         return lower.contains("session not found")
                 || lower.contains("session_not_found")
-                || lower.contains("toolsession not found")
-                || lower.contains("json parse error")
-                || lower.contains("unexpected eof");
+                || lower.contains("toolsession not found");
     }
 
     /** 根据 sessionId 字符串安全查询会话对象。 */
