@@ -1,5 +1,6 @@
 package com.opencode.cui.skill.service.cloud;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.skill.service.SysConfigService;
@@ -264,15 +265,18 @@ class CloudRequestBuilderTest {
         }
 
         @Test
-        @DisplayName("extParameters 含 businessExtParam/platformExtParam 嵌套结构正确序列化")
-        void buildsNestedExtParametersStructure() {
+        @DisplayName("Default protocol serializes businessExtParam/platformExtParam as JSON strings")
+        void buildsStringifiedJsonExtParameters() throws Exception {
             ObjectNode bepNode = objectMapper.createObjectNode();
             bepNode.put("isHwEmployee", false);
             bepNode.set("knowledgeId", objectMapper.createArrayNode().add("kb-1"));
+            ObjectNode pepNode = objectMapper.createObjectNode();
+            pepNode.put("businessSessionId", "sid-1");
 
             java.util.Map<String, Object> ext = new java.util.LinkedHashMap<>();
             ext.put("businessExtParam", bepNode);
-            ext.put("platformExtParam", objectMapper.createObjectNode());
+            ext.put("platformExtParam", pepNode);
+            ext.put("plainKey", "plain-value");
 
             CloudRequestContext context = CloudRequestContext.builder()
                     .content("hi")
@@ -286,12 +290,19 @@ class CloudRequestBuilderTest {
 
             assertNotNull(result.get("extParameters"));
             assertTrue(result.get("extParameters").isObject());
-            assertTrue(result.get("extParameters").get("businessExtParam").isObject());
-            assertEquals(false, result.get("extParameters").get("businessExtParam").get("isHwEmployee").asBoolean());
-            assertTrue(result.get("extParameters").get("businessExtParam").get("knowledgeId").isArray());
-            assertEquals("kb-1", result.get("extParameters").get("businessExtParam").get("knowledgeId").get(0).asText());
-            assertTrue(result.get("extParameters").get("platformExtParam").isObject());
-            assertEquals(0, result.get("extParameters").get("platformExtParam").size());
+            assertTrue(result.get("extParameters").get("businessExtParam").isTextual());
+            assertTrue(result.get("extParameters").get("platformExtParam").isTextual());
+            assertEquals("plain-value", result.get("extParameters").get("plainKey").asText());
+
+            JsonNode businessExt = objectMapper.readTree(
+                    result.get("extParameters").get("businessExtParam").asText());
+            assertEquals(false, businessExt.get("isHwEmployee").asBoolean());
+            assertTrue(businessExt.get("knowledgeId").isArray());
+            assertEquals("kb-1", businessExt.get("knowledgeId").get(0).asText());
+
+            JsonNode platformExt = objectMapper.readTree(
+                    result.get("extParameters").get("platformExtParam").asText());
+            assertEquals("sid-1", platformExt.get("businessSessionId").asText());
         }
     }
 

@@ -94,15 +94,19 @@ class ExtParametersIntegrationTest {
         assertNotNull(ext);
         assertTrue(ext.isObject());
 
-        JsonNode bep = ext.get("businessExtParam");
-        assertNotNull(bep);
+        JsonNode bepText = ext.get("businessExtParam");
+        assertNotNull(bepText);
+        assertTrue(bepText.isTextual());
+        JsonNode bep = objectMapper.readTree(bepText.asText());
         assertTrue(bep.isObject());
         assertEquals(false, bep.get("isHwEmployee").asBoolean());
         assertTrue(bep.get("knowledgeId").isArray());
         assertEquals("kb-1", bep.get("knowledgeId").get(0).asText());
 
-        JsonNode pep = ext.get("platformExtParam");
-        assertNotNull(pep);
+        JsonNode pepText = ext.get("platformExtParam");
+        assertNotNull(pepText);
+        assertTrue(pepText.isTextual());
+        JsonNode pep = objectMapper.readTree(pepText.asText());
         assertTrue(pep.isObject());
         // platformExtParam 现在含三字段 key（PR1：domain/domainType/businessSessionId 均未传，
         // 序列化为 JSON null，key 保留）
@@ -135,15 +139,20 @@ class ExtParametersIntegrationTest {
         JsonNode cloudRequest = message.get("payload").get("cloudRequest");
         JsonNode ext = cloudRequest.get("extParameters");
 
-        assertTrue(ext.get("businessExtParam").isObject());
-        assertEquals(0, ext.get("businessExtParam").size());
-        assertTrue(ext.get("platformExtParam").isObject());
+        assertTrue(ext.get("businessExtParam").isTextual());
+        JsonNode businessExt = objectMapper.readTree(ext.get("businessExtParam").asText());
+        assertTrue(businessExt.isObject());
+        assertEquals(0, businessExt.size());
+
+        assertTrue(ext.get("platformExtParam").isTextual());
+        JsonNode platformExt = objectMapper.readTree(ext.get("platformExtParam").asText());
+        assertTrue(platformExt.isObject());
+        assertEquals(4, platformExt.size());
         // platformExtParam 现在含三字段 key（PR1：均未传 → JSON null）
-        assertEquals(4, ext.get("platformExtParam").size());
-        assertTrue(ext.get("platformExtParam").get("businessSessionDomain").isNull());
-        assertTrue(ext.get("platformExtParam").get("businessSessionType").isNull());
-        assertTrue(ext.get("platformExtParam").get("businessSessionId").isNull());
-        assertEquals("app-001", ext.get("platformExtParam").path("bizRobotTag").asText());
+        assertTrue(platformExt.get("businessSessionDomain").isNull());
+        assertTrue(platformExt.get("businessSessionType").isNull());
+        assertTrue(platformExt.get("businessSessionId").isNull());
+        assertEquals("app-001", platformExt.path("bizRobotTag").asText());
     }
 
     // =====================================================================
