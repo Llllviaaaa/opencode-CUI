@@ -49,7 +49,7 @@ class AssistantInstanceInfoServiceTest {
     void lookup_cacheHit_returnsExists() throws Exception {
         AssistantInstanceInfo cached = new AssistantInstanceInfo();
         cached.setPartnerAccount("assist-001");
-        cached.setIsRemote(true);
+        cached.setRemoteType(AssistantInstanceInfo.REMOTE_TYPE_ASSISTANT_SQUARE);
         when(valueOps.get("ss:assistant:instance:assist-001"))
                 .thenReturn(objectMapper.writeValueAsString(cached));
 

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/skill-server/backend/conventions.md", "reason": "verify remoteType contract and tests-required guidance"}
+{"file": ".trellis/spec/skill-server/backend/type-safety.md", "reason": "verify DTO/model changes remain type safe"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "verify no duplicated profile-selection logic"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "verify cross-service cloudProfile behavior"}

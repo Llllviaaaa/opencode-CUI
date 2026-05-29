@@ -1082,9 +1082,9 @@ The assistant instance API is now the shared source for assistant metadata, and 
 
 ### 3. Contracts
 
-`AssistantInstanceInfo.remoteType` is authoritative when present: `0` means local/non-remote, `1` means assistant-square protocol/profile, and `2` means default protocol/profile. When `remoteType` is absent, keep the legacy check for compatibility.
-`AssistantInstanceInfo.businessRoutableAssistant()` means `remoteType` is `1` or `2`; if `remoteType` is absent, fall back to legacy `isRemote == true` or non-empty `remoteProperty`.
-For cloud profile selection, prefer the direct instance hint (`remoteType=1 -> assistant_square`, `remoteType=2 -> default`) and only use SysConfig businessTag-to-profile mapping when the instance API did not provide a protocol profile.
+`AssistantInstanceInfo.remoteType` is authoritative: `0` means local/non-remote, `1` means assistant-square protocol/profile, and `2` means default protocol/profile. The upstream instance API no longer provides `isRemote`; do not infer remote routing from `isRemote` or `remoteProperty`.
+`AssistantInstanceInfo.businessRoutableAssistant()` means `remoteType` is `1` or `2`.
+For cloud profile selection, use the direct instance hint (`remoteType=1 -> assistant_square`, `remoteType=2 -> default`) and resolve that profile directly by name; do not read SysConfig businessTag-to-profile or profile-def mappings for assistant-instance-driven remoteType routes.
 Blank `appKey` alone must not imply remote/cloud. A no-AK assistant is routable only when `businessRoutableAssistant()` is true.
 For local assistants, blank `appKey` or blank owner identity is upstream incomplete data and must remain `UNKNOWN`, not `NOT_EXISTS`.
 The owner identity for local assistants comes from instance API `createdBy`; do not synthesize it from `partnerAccount` or `assistantAccount`.
@@ -1115,7 +1115,7 @@ When an existing personal IM session has blank `toolSessionId` or `processRebuil
 | Instance data has `remoteType=1` and no `appKey` | Return `EXISTS`; no online AK check; route as business with `cloudProfile=assistant_square`. |
 | Instance data has `remoteType=2` and no `appKey` | Return `EXISTS`; no online AK check; route as business with `cloudProfile=default`. |
 | Instance data has `remoteType=0`, even with legacy `remoteProperty`, and no `appKey` | Return `UNKNOWN`; do not write status cache. |
-| Instance data omits `remoteType` but has legacy `isRemote=true` or non-empty `remoteProperty` and no `appKey` | Return `EXISTS`; route as business for backward compatibility. |
+| Instance data omits `remoteType` but has legacy `isRemote=true` or non-empty `remoteProperty` and no `appKey` | Return `UNKNOWN`; do not write status cache. |
 | Instance lookup is non-2xx, body code is not 200, parse fails, or times out | Return `UNKNOWN`; do not write status cache. |
 
 ### 5. Good / Base / Bad Cases
@@ -1157,7 +1157,7 @@ The bad case blocks real remote assistants that intentionally do not expose an `
 
 Wrong: treating `appKey` absence as "assistant does not exist" or as "cloud assistant".
 
-Correct: first decide existence from the instance API result, then decide routability from `remoteType` (`1/2` remote, `0` local) with legacy fallback only when `remoteType` is absent, and only then allow `ak` to be optional.
+Correct: first decide existence from the instance API result, then decide routability from `remoteType` (`1/2` remote, `0` local). Missing `remoteType` is not remote, even if legacy `isRemote` or `remoteProperty` fields are present.
 
 Wrong: scattering `ak == null` checks at individual session lookup / rebuild call sites.
 

@@ -27,7 +27,6 @@ public class AssistantInstanceInfo {
     private String ownerWelinkId;
     private String createdBy;
     private String appKey;
-    private Boolean isRemote;
     private Integer remoteType;
     private String bizRobotTag;
     private Integer userType;
@@ -35,12 +34,9 @@ public class AssistantInstanceInfo {
 
     @JsonIgnore
     public boolean remoteAssistant() {
-        if (remoteType != null) {
-            return remoteType == REMOTE_TYPE_ASSISTANT_SQUARE
-                    || remoteType == REMOTE_TYPE_DEFAULT;
-        }
-        return Boolean.TRUE.equals(isRemote)
-                || (remoteProperty != null && !remoteProperty.isEmpty());
+        return remoteType != null
+                && (remoteType == REMOTE_TYPE_ASSISTANT_SQUARE
+                || remoteType == REMOTE_TYPE_DEFAULT);
     }
 
     @JsonIgnore
