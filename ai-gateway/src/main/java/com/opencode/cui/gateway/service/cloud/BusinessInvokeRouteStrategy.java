@@ -5,6 +5,7 @@ import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.CloudAgentService;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.Locale;
@@ -35,6 +36,7 @@ public class BusinessInvokeRouteStrategy implements InvokeRouteStrategy {
     private final Executor routeExecutor;
     private final ExecutorService ownedExecutor;
 
+    @Autowired
     public BusinessInvokeRouteStrategy(CloudAgentService cloudAgentService) {
         this(cloudAgentService, Executors.newVirtualThreadPerTaskExecutor(), true);
     }

@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -78,6 +79,19 @@ class InvokeRouteStrategyTest {
         @DisplayName("getScope 返回 business")
         void shouldReturnBusinessScope() {
             assertEquals("business", businessStrategy.getScope());
+        }
+
+        @Test
+        @DisplayName("Spring 能选择 CloudAgentService 构造器创建 business 策略")
+        void shouldCreateBusinessStrategyFromSpringContext() {
+            try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+                context.registerBean(CloudAgentService.class, () -> cloudAgentService);
+                context.registerBean(BusinessInvokeRouteStrategy.class);
+
+                context.refresh();
+
+                assertNotNull(context.getBean(BusinessInvokeRouteStrategy.class));
+            }
         }
 
         @Test
