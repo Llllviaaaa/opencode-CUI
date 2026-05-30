@@ -244,20 +244,24 @@ stream lives in GW.
 one turn prefer the same SS->GW WebSocket pool slot.
 
 `CloudAgentService` keeps an in-memory active connection table keyed by
-`tool:{toolSessionId}` and `welink:{welinkSessionId}`. A matching
-`abort_session` cancels the handle and returns without relaying `tool_error`.
+`tool:{toolSessionId}` and `welink:{welinkSessionId}`. Each key maps to a set
+of active handles, not a single handle: starting a second `chat` in the same
+session must append a new handle and must not cancel the first stream. A
+matching `abort_session` cancels all local handles found for the tool/welink
+keys and returns without relaying `tool_error`.
 
 Because miniapp/source WebSocket load balancing can put the original `chat`
 stream and the later `abort_session` on different GW instances, cloud stream
-ownership is also registered in Redis as
-`gw:cloud-stream:{toolSessionId} -> gatewayInstanceId` with a TTL based on the
-cloud max duration. If local memory has no active connection, GW must look up
-that owner and send a `RelayMessage` with `relayType=to-cloud-control` to
-`gw:relay:{ownerGatewayId}`. The receiving GW routes the payload through the
-local business cloud strategy so the owning `CloudAgentService` can cancel its
-local handle. This key is for GW stream ownership only; do not confuse it with
-`gw:route:{toolSessionId}`, which maps a session back to source service
-instances.
+ownership is also registered in Redis. `gw:cloud-stream:{toolSessionId}` keeps
+a latest-owner compatibility value, while
+`gw:cloud-stream:{toolSessionId}:owners` is the multi-owner set used for abort
+fan-out. If local memory has no active connection, or after cancelling local
+handles, GW must look up all remote owners and send a `RelayMessage` with
+`relayType=to-cloud-control` to each `gw:relay:{ownerGatewayId}` except itself.
+Relayed cloud-control payloads must be marked so the receiving GW cancels only
+its local handles and does not relay the same abort again. These keys are for
+GW stream ownership only; do not confuse them with `gw:route:{toolSessionId}`,
+which maps a session back to source service instances.
 
 SSE cancellation closes the response `InputStream`, exits the read loop, and
 skips decoder tail flush after cancellation. WebSocket cancellation calls
@@ -271,8 +275,8 @@ must reuse the same cancellation path: the timeout callback cancels the active
 | Case | Required behavior |
 | --- | --- |
 | Default-assistant session has `toolSessionId` and user aborts | SS sends `abort_session` to GW with that `toolSessionId`. |
-| Cloud stream is active under the same `toolSessionId` | GW cancels the active handle and closes the transport if registered. |
-| Abort reaches a different GW than the stream owner | Receiver relays a `to-cloud-control` message to the owner GW from `gw:cloud-stream:{toolSessionId}`. |
+| Multiple cloud streams are active under the same `toolSessionId`/`welinkSessionId` on one GW | GW cancels every matching local handle and closes each registered transport. |
+| Abort reaches a different GW than one or more stream owners | Receiver relays a `to-cloud-control` message to every remote owner from `gw:cloud-stream:{toolSessionId}:owners`, falling back to the latest-owner KV when needed. |
 | Abort reaches GW after stream already ended | Log `no_active_connection`; do not emit `tool_error`. |
 | Cancellation causes read/WS error | Suppress the error path and do not relay cancellation as a cloud failure. |
 | User sends the next chat after abort | Register a fresh `CloudConnectionHandle`; do not keep session-level suppress state. |
@@ -319,8 +323,8 @@ String route = redisMessageBroker.getSessionRoute(toolSessionId);
 - `SkillSessionControllerTest`: default-assistant abort sends `GatewayActions.ABORT_SESSION`.
 - `DefaultAssistantRuleE2EIntegrationTest`: rule-injected session abort emits wire payload with `payload.toolSessionId`.
 - `GatewayWSClientTest`: chat and abort with the same `toolSessionId` choose the same pool slot.
-- `CloudAgentServiceTest`: abort cancels the active connection, suppresses late errors, registers/removes `gw:cloud-stream:{toolSessionId}`, and relays no-local abort to the owner GW.
-- `RedisMessageBrokerTest`: cloud stream owner route set/get/remove uses TTL and conditional delete.
+- `CloudAgentServiceTest`: overlapping chats with the same session key do not cancel each other; abort cancels all local active streams; cancellation suppresses late errors; stream registration writes owner keys; no-local abort relays to every remote owner GW.
+- `RedisMessageBrokerTest`: cloud stream latest-owner route set/get/remove uses TTL and conditional delete; owner set add/members/remove supports multi-owner abort fan-out.
 - `EventRelayServiceTest`: `relayType=to-cloud-control` dispatches to local cloud-control handling instead of Agent delivery.
 - `SkillRelayServiceTest`: cloud-control relay routes through the business invoke strategy locally.
 - `SseProtocolStrategyTest`: cancellation closes the stream and skips decoder flush.
@@ -332,9 +336,10 @@ Wrong: treat `abort_session` as an unknown cloud action or block default
 assistant aborts in SS because default assistant close skips GW.
 
 Correct: treat `abort_session` as a GW-side transport cancellation keyed by the
-current `toolSessionId`/`welinkSessionId`; first close a local active stream,
-otherwise relay to the GW recorded in `gw:cloud-stream:{toolSessionId}`, and
-allow the next chat to create a new active handle.
+current `toolSessionId`/`welinkSessionId`; close all matching local active
+streams, relay once to every remote owner in
+`gw:cloud-stream:{toolSessionId}:owners`, and allow the next chat to create a
+new active handle.
 
 ---
 

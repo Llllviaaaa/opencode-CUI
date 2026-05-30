@@ -20,7 +20,8 @@ import java.util.List;
  *       {@code event:searching} / {@code event:searchResult} / {@code event:reference} /
  *       {@code event:askMore} → 单次性事件</li>
  *   <li>状态机：累积流式 part 内容；类型/messageId 切换或被单次性事件中断时补 {@code <type>.done}（带累积全文）</li>
- *   <li>补齐：首个事件前补 {@code step.start}；{@code flush} 时（part .done 之后）补 {@code step.done}（usage 留空）</li>
+ *   <li>补齐：首个事件前补 {@code session.status=busy}/{@code step.start}；
+ *       {@code flush} 时（part .done 之后）补 {@code step.done}/{@code session.status=idle}</li>
  *   <li>终态：{@code event:error} → 顶层 {@code TOOL_ERROR}</li>
  *   <li>不支持的 messageType（HTML/IMAGE-IM/卡片/processStep/TEXT_LIST 等）丢弃，不报错</li>
  * </ul>
@@ -55,7 +56,10 @@ public class StandardProtocolHandler implements AssistantSquareProtocolHandler {
 
         // 1) 顶层终态：error → TOOL_ERROR
         if ("error".equalsIgnoreCase(eventType)) {
-            String message = data.path("message").asText(data.path("error").asText("cloud error"));
+            String message = firstText(data, "message", "error", "messageEn", "errorEn");
+            if (message == null || message.isBlank()) {
+                message = "cloud error";
+            }
             out.add(GatewayMessage.builder()
                     .type(GatewayMessage.Type.TOOL_ERROR)
                     .error(message)
@@ -70,6 +74,7 @@ public class StandardProtocolHandler implements AssistantSquareProtocolHandler {
         // 3) 首事件前补 step.start（无论该事件本身是否支持都补，保证 step 边界对齐）
         if (!session.isStepStarted()) {
             session.setStepStarted(true);
+            out.add(buildSessionStatus("busy"));
             out.add(buildStepStart(messageId));
         }
 
@@ -133,6 +138,7 @@ public class StandardProtocolHandler implements AssistantSquareProtocolHandler {
                     .type(GatewayMessage.Type.TOOL_EVENT)
                     .event(event)
                     .build());
+            out.add(buildSessionStatus("idle"));
         }
         return out;
     }
@@ -154,6 +160,8 @@ public class StandardProtocolHandler implements AssistantSquareProtocolHandler {
                 }
                 return null;
             case "think":
+                return "thinking.delta";
+            case "processStep":
                 return "thinking.delta";
             case "message":
                 // 只接受 TEXT；HTML / IMAGE-IM / FILE-IM / 卡片 / TEXT_LIST / SLOT / processStep / WeLink-CARD 等丢弃
@@ -198,23 +206,29 @@ public class StandardProtocolHandler implements AssistantSquareProtocolHandler {
     private String extractStreamingContent(String typeOnly, JsonNode data) {
         // 多个候选字段按 type 优先级匹配
         String[] candidates;
+        String[] nestedCandidates;
         switch (typeOnly) {
             case PLANNING:
                 candidates = new String[]{"planning", "messageBody", "text"};
+                nestedCandidates = new String[]{"planning", "text", "content"};
                 break;
             case THINKING:
-                candidates = new String[]{"think", "thinking", "messageBody", "text"};
+                candidates = new String[]{"processStep", "think", "thinking", "messageBody", "text"};
+                nestedCandidates = new String[]{"message", "messageEn", "think", "thinking", "text", "content"};
                 break;
             case TEXT:
             default:
                 candidates = new String[]{"messageBody", "text", "content"};
+                nestedCandidates = new String[]{"text", "content", "message"};
                 break;
         }
         for (String key : candidates) {
             JsonNode n = data.path(key);
             if (n.isMissingNode() || n.isNull()) continue;
-            if (n.isTextual()) return n.asText();
-            if (n.isValueNode()) return n.asText();
+            String scalar = scalarText(n);
+            if (scalar != null) return scalar;
+            String nested = firstText(n, nestedCandidates);
+            if (nested != null) return nested;
             // 复杂结构（如 array / object）退化为 JSON 字符串
             return n.toString();
         }
@@ -271,7 +285,19 @@ public class StandardProtocolHandler implements AssistantSquareProtocolHandler {
                 .build();
     }
 
-    /** 单次性事件：searching / search_result / reference / ask_more —— 把 data 中的 payload 透传。 */
+    private GatewayMessage buildSessionStatus(String status) {
+        ObjectNode event = objectMapper.createObjectNode();
+        event.put("type", "session.status");
+        ObjectNode props = objectMapper.createObjectNode();
+        props.put("status", status);
+        props.put("sessionStatus", status);
+        event.set("properties", props);
+        return GatewayMessage.builder()
+                .type(GatewayMessage.Type.TOOL_EVENT)
+                .event(event)
+                .build();
+    }
+
     private GatewayMessage buildSingleEvent(String streamType, JsonNode data, String messageId) {
         ObjectNode event = objectMapper.createObjectNode();
         event.put("type", streamType);
@@ -316,7 +342,31 @@ public class StandardProtocolHandler implements AssistantSquareProtocolHandler {
             JsonNode n = data.path(f);
             if (!n.isMissingNode() && !n.isNull()) return n;
         }
+        JsonNode messageBody = data.path("messageBody");
+        if (messageBody.isObject()) {
+            for (String f : fields) {
+                JsonNode n = messageBody.path(f);
+                if (!n.isMissingNode() && !n.isNull()) return n;
+            }
+        }
         return null;
+    }
+
+    private static String firstText(JsonNode data, String... fields) {
+        for (String field : fields) {
+            String value = scalarText(data.path(field));
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static String scalarText(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull() || node.isContainerNode()) {
+            return null;
+        }
+        return node.asText();
     }
 
     private void resetOpenPart(AssistantSquareDecoderSession session) {

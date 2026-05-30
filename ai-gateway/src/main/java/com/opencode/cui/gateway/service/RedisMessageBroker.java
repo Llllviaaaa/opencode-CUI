@@ -59,6 +59,7 @@ public class RedisMessageBroker {
 
     /** Key prefix for active cloud stream owner: gw:cloud-stream:{toolSessionId} → gatewayInstanceId */
     private static final String CLOUD_STREAM_KEY_PREFIX = "gw:cloud-stream:";
+    private static final String CLOUD_STREAM_OWNERS_KEY_SUFFIX = ":owners";
 
     // ==================== 保留的 Key/Channel 前缀 ====================
 
@@ -223,6 +224,9 @@ public class RedisMessageBroker {
             return;
         }
         redisTemplate.opsForValue().set(cloudStreamKey(toolSessionId), gatewayInstanceId, ttl);
+        String ownersKey = cloudStreamOwnersKey(toolSessionId);
+        redisTemplate.opsForSet().add(ownersKey, gatewayInstanceId);
+        redisTemplate.expire(ownersKey, ttl);
         log.info("RedisMessageBroker.setCloudStreamRoute: toolSessionId={}, gatewayInstanceId={}",
                 toolSessionId, gatewayInstanceId);
     }
@@ -241,6 +245,20 @@ public class RedisMessageBroker {
     }
 
     /**
+     * Looks up all GW instances that currently own active cloud streams for a tool session.
+     *
+     * @param toolSessionId tool session ID
+     * @return owner gateway IDs, or an empty set when absent
+     */
+    public Set<String> getCloudStreamOwners(String toolSessionId) {
+        if (toolSessionId == null || toolSessionId.isBlank()) {
+            return Collections.emptySet();
+        }
+        Set<String> owners = redisTemplate.opsForSet().members(cloudStreamOwnersKey(toolSessionId));
+        return owners == null ? Collections.emptySet() : owners;
+    }
+
+    /**
      * Removes a cloud stream owner key only if it is still owned by the expected GW instance.
      *
      * @param toolSessionId              tool session ID
@@ -253,6 +271,7 @@ public class RedisMessageBroker {
         }
         redisTemplate.execute(CONDITIONAL_DELETE_SCRIPT,
                 java.util.List.of(cloudStreamKey(toolSessionId)), expectedGatewayInstanceId);
+        redisTemplate.opsForSet().remove(cloudStreamOwnersKey(toolSessionId), expectedGatewayInstanceId);
     }
 
     /**
@@ -852,6 +871,10 @@ public class RedisMessageBroker {
 
     private String cloudStreamKey(String toolSessionId) {
         return CLOUD_STREAM_KEY_PREFIX + toolSessionId;
+    }
+
+    private String cloudStreamOwnersKey(String toolSessionId) {
+        return cloudStreamKey(toolSessionId) + CLOUD_STREAM_OWNERS_KEY_SUFFIX;
     }
 
     private String agentUserKey(String ak) {

@@ -2,6 +2,7 @@ package com.opencode.cui.gateway.service.cloud.decoder.assistantsquare;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencode.cui.gateway.model.GatewayMessage;
 import com.opencode.cui.gateway.service.cloud.decoder.DecoderSession;
 import com.opencode.cui.gateway.service.cloud.decoder.SseEventDecoder;
@@ -34,6 +35,7 @@ import java.util.stream.Collectors;
 public class AssistantSquareSseEventDecoder implements SseEventDecoder {
 
     public static final String DECODER_NAME = "assistant_square";
+    private static final String STANDARD_PROTOCOL_CODE = "5";
 
     private final ObjectMapper objectMapper;
     private final Map<String, AssistantSquareProtocolHandler> handlerMap;
@@ -85,14 +87,12 @@ public class AssistantSquareSseEventDecoder implements SseEventDecoder {
         }
         try {
             JsonNode data = objectMapper.readTree(dataLineJson);
-            String protocolType = data.path("protocolType").asText("standard");
-            if (protocolType == null || protocolType.isBlank()) {
-                protocolType = "standard";
-            }
-            String eventType = data.path("eventType").asText(null);
+            JsonNode handlerData = normalizeHandlerData(data);
+            String protocolType = normalizeProtocolType(firstText(data, handlerData, "protocolType"));
+            String eventType = firstText(data, handlerData, "eventType");
 
             AssistantSquareProtocolHandler handler = handlerMap.getOrDefault(protocolType, unknownHandler);
-            return handler.handle(eventType, data, s);
+            return handler.handle(eventType, handlerData, s);
         } catch (Exception e) {
             log.warn("[SSE_DECODER] failed to parse assistant_square event: data={}, error={}",
                     dataLineJson, e.getMessage());
@@ -106,5 +106,51 @@ public class AssistantSquareSseEventDecoder implements SseEventDecoder {
             return Collections.emptyList();
         }
         return standardHandler.flush(s);
+    }
+
+    private JsonNode normalizeHandlerData(JsonNode root) {
+        JsonNode nested = root.path("data");
+        if (!nested.isObject()) {
+            return root;
+        }
+        ObjectNode normalized = ((ObjectNode) nested).deepCopy();
+        copyIfAbsent(root, normalized, "eventType");
+        copyIfAbsent(root, normalized, "protocolType");
+        copyIfAbsent(root, normalized, "code");
+        copyIfAbsent(root, normalized, "message");
+        copyIfAbsent(root, normalized, "messageEn");
+        copyIfAbsent(root, normalized, "error");
+        copyIfAbsent(root, normalized, "errorEn");
+        return normalized;
+    }
+
+    private static void copyIfAbsent(JsonNode source, ObjectNode target, String fieldName) {
+        if (target.has(fieldName)) {
+            return;
+        }
+        JsonNode value = source.path(fieldName);
+        if (!value.isMissingNode() && !value.isNull()) {
+            target.set(fieldName, value);
+        }
+    }
+
+    private static String normalizeProtocolType(String protocolType) {
+        if (protocolType == null || protocolType.isBlank()) {
+            return StandardProtocolHandler.PROTOCOL_TYPE;
+        }
+        String normalized = protocolType.trim();
+        if (StandardProtocolHandler.PROTOCOL_TYPE.equalsIgnoreCase(normalized)
+                || STANDARD_PROTOCOL_CODE.equals(normalized)) {
+            return StandardProtocolHandler.PROTOCOL_TYPE;
+        }
+        return normalized;
+    }
+
+    private static String firstText(JsonNode primary, JsonNode fallback, String fieldName) {
+        String value = primary.path(fieldName).asText(null);
+        if (value != null && !value.isBlank()) {
+            return value;
+        }
+        return fallback.path(fieldName).asText(null);
     }
 }

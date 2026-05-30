@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/ai-gateway/backend/conventions.md", "reason": "verify cloud stream behavior remains scoped to ai-gateway cloud protocol contracts"}
+{"file": ".trellis/spec/ai-gateway/backend/logging-guidelines.md", "reason": "verify no duplicate SSE boundary logging or high-frequency INFO route logs were introduced"}
+{"file": ".trellis/spec/ai-gateway/backend/type-safety.md", "reason": "verify decoder emits standard GatewayMessage tool_event payloads without introducing parallel DTOs"}
