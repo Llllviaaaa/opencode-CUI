@@ -1,8 +1,6 @@
 package com.opencode.cui.skill.service.cloud;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -55,7 +53,12 @@ public class DefaultCloudRequestStrategy implements CloudRequestStrategy {
         node.put("topicId", context.getTopicId());
         node.put("messageId", context.getMessageId());
 
-        node.set("extParameters", buildExtParameters(context.getExtParameters()));
+        Map<String, Object> ext = context.getExtParameters();
+        if (ext == null || ext.isEmpty()) {
+            node.set("extParameters", objectMapper.createObjectNode());
+        } else {
+            node.set("extParameters", objectMapper.valueToTree(ext));
+        }
 
         // 仅在 question_reply / permission_reply 时写入 replyContext 嵌套对象；chat 不写
         boolean isQR = context.getReplyToolCallId() != null;
@@ -75,37 +78,6 @@ public class DefaultCloudRequestStrategy implements CloudRequestStrategy {
         }
 
         return node;
-    }
-
-    private ObjectNode buildExtParameters(Map<String, Object> ext) {
-        ObjectNode extNode = objectMapper.createObjectNode();
-        if (ext == null || ext.isEmpty()) {
-            return extNode;
-        }
-        ext.forEach((key, value) -> {
-            if (shouldStringifyJsonExtParameter(key)) {
-                extNode.put(key, toJsonString(key, value));
-            } else if (value == null) {
-                extNode.set(key, NullNode.instance);
-            } else {
-                extNode.set(key, objectMapper.valueToTree(value));
-            }
-        });
-        return extNode;
-    }
-
-    private boolean shouldStringifyJsonExtParameter(String key) {
-        return "businessExtParam".equals(key) || "platformExtParam".equals(key);
-    }
-
-    private String toJsonString(String key, Object value) {
-        try {
-            return objectMapper.writeValueAsString(value);
-        } catch (JsonProcessingException e) {
-            log.error("[ERROR] DefaultCloudRequestStrategy.build: failed to stringify extParameters.{}",
-                    key, e);
-            throw new IllegalArgumentException("Failed to stringify extParameters." + key, e);
-        }
     }
 
     /**
