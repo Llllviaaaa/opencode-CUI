@@ -22,6 +22,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -98,16 +101,22 @@ class CloudAgentServiceTest {
     // ---------------------------------------------------------------------
 
     private GatewayMessage buildInvoke(String action, String ak) {
+        return buildInvoke(action, ak, "tool-session-001", "welink-session-001");
+    }
+
+    private GatewayMessage buildInvoke(String action, String ak, String toolSessionId, String welinkSessionId) {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.set("cloudRequest", objectMapper.createObjectNode().put("prompt", "hello"));
-        payload.put("toolSessionId", "tool-session-001");
+        if (toolSessionId != null) {
+            payload.put("toolSessionId", toolSessionId);
+        }
 
         return GatewayMessage.builder()
                 .type(GatewayMessage.Type.INVOKE)
                 .ak(ak)
                 .action(action)
                 .userId("user-001")
-                .welinkSessionId("welink-session-001")
+                .welinkSessionId(welinkSessionId)
                 .traceId("trace-001")
                 .businessTag("biz-tag")
                 .payload(payload)
@@ -250,6 +259,149 @@ class CloudAgentServiceTest {
             verify(redisMessageBroker).setCloudStreamRoute(
                     "tool-session-001", "gw-local", Duration.ofSeconds(660));
             verify(redisMessageBroker).removeCloudStreamRoute("tool-session-001", "gw-local");
+        }
+
+        @Test
+        @DisplayName("overlapping chats in the same welink session do not cancel each other")
+        void handleInvoke_overlappingChatsWithSameWelinkSessionDoNotCancelFirstStream() {
+            when(sysConfigRouteProvider.load(TEST_AK, CHAT_SCOPE, "biz-tag"))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
+
+            GatewayMessage first = buildInvoke("chat", TEST_AK, "tool-session-001", "welink-session-001");
+            GatewayMessage second = buildInvoke("chat", TEST_AK, "tool-session-002", "welink-session-001");
+            CloudConnectionHandle[] firstHandle = new CloudConnectionHandle[1];
+
+            doAnswer(invocation -> {
+                CloudConnectionContext context = invocation.getArgument(1);
+                CloudConnectionHandle handle = context.getConnectionHandle();
+                assertNotNull(handle);
+
+                if (firstHandle[0] == null) {
+                    firstHandle[0] = handle;
+                    cloudAgentService.handleInvoke(second, onRelay);
+                    assertFalse(firstHandle[0].isCancelled(),
+                            "second chat with a different toolSessionId must not cancel the first stream");
+                } else {
+                    assertFalse(handle.isCancelled());
+                }
+                return null;
+            }).when(cloudProtocolClient).connect(eq("sse"), any(), any(), any(), any());
+
+            cloudAgentService.handleInvoke(first, onRelay);
+
+            verify(cloudProtocolClient, times(2)).connect(eq("sse"), any(), any(), any(), any());
+            verify(redisMessageBroker).setCloudStreamRoute(
+                    "tool-session-001", "gw-local", Duration.ofSeconds(660));
+            verify(redisMessageBroker).setCloudStreamRoute(
+                    "tool-session-002", "gw-local", Duration.ofSeconds(660));
+            verify(redisMessageBroker).removeCloudStreamRoute("tool-session-001", "gw-local");
+            verify(redisMessageBroker).removeCloudStreamRoute("tool-session-002", "gw-local");
+            verifyNoInteractions(onRelay);
+        }
+
+        @Test
+        @DisplayName("overlapping chats with the same toolSessionId do not cancel each other")
+        void handleInvoke_overlappingChatsWithSameToolSessionDoNotCancelEachOther() {
+            when(sysConfigRouteProvider.load(TEST_AK, CHAT_SCOPE, "biz-tag"))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
+
+            GatewayMessage first = buildInvoke("chat", TEST_AK, "tool-session-001", "welink-session-001");
+            GatewayMessage second = buildInvoke("chat", TEST_AK, "tool-session-001", "welink-session-001");
+            List<CloudConnectionHandle> handles = new ArrayList<>();
+
+            doAnswer(invocation -> {
+                CloudConnectionContext context = invocation.getArgument(1);
+                CloudConnectionHandle handle = context.getConnectionHandle();
+                assertNotNull(handle);
+                handles.add(handle);
+
+                if (handles.size() == 1) {
+                    cloudAgentService.handleInvoke(second, onRelay);
+                    assertFalse(handles.get(0).isCancelled(),
+                            "second chat with the same toolSessionId must not cancel the first stream");
+                } else {
+                    assertFalse(handles.get(0).isCancelled());
+                    assertFalse(handles.get(1).isCancelled());
+                }
+                return null;
+            }).when(cloudProtocolClient).connect(eq("sse"), any(), any(), any(), any());
+
+            cloudAgentService.handleInvoke(first, onRelay);
+
+            verify(cloudProtocolClient, times(2)).connect(eq("sse"), any(), any(), any(), any());
+            verify(redisMessageBroker, times(2)).setCloudStreamRoute(
+                    "tool-session-001", "gw-local", Duration.ofSeconds(660));
+            verify(redisMessageBroker, times(1)).removeCloudStreamRoute("tool-session-001", "gw-local");
+            verifyNoInteractions(onRelay);
+        }
+
+        @Test
+        @DisplayName("abort_session cancels all local active streams for the same session")
+        void handleInvoke_abortSessionCancelsAllLocalActiveStreamsForSession() {
+            when(sysConfigRouteProvider.load(TEST_AK, CHAT_SCOPE, "biz-tag"))
+                    .thenReturn(buildCfg("sse", "https://cloud.example.com/chat", "soa", "app-1"));
+
+            GatewayMessage first = buildInvoke("chat", TEST_AK, "tool-session-001", "welink-session-001");
+            GatewayMessage second = buildInvoke("chat", TEST_AK, "tool-session-001", "welink-session-001");
+            List<CloudConnectionHandle> handles = new ArrayList<>();
+
+            doAnswer(invocation -> {
+                CloudConnectionContext context = invocation.getArgument(1);
+                CloudConnectionHandle handle = context.getConnectionHandle();
+                assertNotNull(handle);
+                handles.add(handle);
+
+                if (handles.size() == 1) {
+                    cloudAgentService.handleInvoke(second, onRelay);
+                } else {
+                    cloudAgentService.handleInvoke(buildInvoke("abort_session", TEST_AK), onRelay);
+                    assertEquals(2, handles.size());
+                    assertTrue(handles.get(0).isCancelled());
+                    assertTrue(handles.get(1).isCancelled());
+                }
+                return null;
+            }).when(cloudProtocolClient).connect(eq("sse"), any(), any(), any(), any());
+
+            cloudAgentService.handleInvoke(first, onRelay);
+
+            verify(cloudProtocolClient, times(2)).connect(eq("sse"), any(), any(), any(), any());
+            verify(redisMessageBroker, atLeastOnce()).removeCloudStreamRoute("tool-session-001", "gw-local");
+            verifyNoInteractions(onRelay);
+        }
+
+        @Test
+        @DisplayName("abort_session without local stream relays to all remote owner gateways")
+        void handleInvoke_abortSessionNoLocalActiveStreamRelaysToAllOwnerGateways() throws Exception {
+            when(redisMessageBroker.getCloudStreamOwners("tool-session-001"))
+                    .thenReturn(Set.of("gw-owner-a", "gw-local", "gw-owner-b"));
+            ArgumentCaptor<String> ownerCaptor = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<String> relayCaptor = ArgumentCaptor.forClass(String.class);
+
+            cloudAgentService.handleInvoke(buildInvoke("abort_session", TEST_AK), onRelay);
+
+            verify(redisMessageBroker, times(2)).publishToGwRelay(ownerCaptor.capture(), relayCaptor.capture());
+            assertEquals(Set.of("gw-owner-a", "gw-owner-b"), Set.copyOf(ownerCaptor.getAllValues()));
+            RelayMessage relay = objectMapper.readValue(relayCaptor.getAllValues().get(0), RelayMessage.class);
+            assertEquals(RelayMessage.RELAY_TO_CLOUD_CONTROL, relay.relayType());
+            GatewayMessage relayedMessage = objectMapper.readValue(relay.originalMessage(), GatewayMessage.class);
+            assertEquals("abort_session", relayedMessage.getAction());
+            assertEquals("tool-session-001", relayedMessage.getPayload().path("toolSessionId").asText());
+            assertTrue(relayedMessage.getPayload().path("_cloudControlRelayed").asBoolean());
+            verifyNoInteractions(sysConfigRouteProvider, assistantInstanceInfoService,
+                    cloudProtocolClient, webHookExecutor, onRelay);
+        }
+
+        @Test
+        @DisplayName("relayed abort_session cancels locally only and does not relay again")
+        void handleInvoke_relayedAbortSessionDoesNotRelayAgain() {
+            GatewayMessage abort = buildInvoke("abort_session", TEST_AK);
+            ((ObjectNode) abort.getPayload()).put("_cloudControlRelayed", true);
+
+            cloudAgentService.handleInvoke(abort, onRelay);
+
+            verify(redisMessageBroker, never()).publishToGwRelay(anyString(), anyString());
+            verifyNoInteractions(sysConfigRouteProvider, assistantInstanceInfoService,
+                    cloudProtocolClient, webHookExecutor, onRelay);
         }
 
         @Test

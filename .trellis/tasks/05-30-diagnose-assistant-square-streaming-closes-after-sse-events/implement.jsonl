@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/ai-gateway/backend/directory-structure.md", "reason": "ai-gateway cloud decoder files live under the existing service/cloud package structure"}
+{"file": ".trellis/spec/ai-gateway/backend/conventions.md", "reason": "cloudProfile, remote assistant, SSE lifecycle, and cloud stream cancellation contracts"}
+{"file": ".trellis/spec/ai-gateway/backend/logging-guidelines.md", "reason": "SSE raw boundary logging and decoded event logging constraints"}
+{"file": ".trellis/spec/ai-gateway/backend/type-safety.md", "reason": "GatewayMessage and JsonNode semi-structured protocol payload conventions"}

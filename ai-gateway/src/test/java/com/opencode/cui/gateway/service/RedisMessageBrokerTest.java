@@ -9,10 +9,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 
 import java.time.Duration;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -34,12 +36,15 @@ class RedisMessageBrokerTest {
     private RedisMessageListenerContainer listenerContainer;
     @Mock
     private ValueOperations<String, String> valueOperations;
+    @Mock
+    private SetOperations<String, String> setOperations;
 
     private RedisMessageBroker broker;
 
     @BeforeEach
     void setUp() {
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        lenient().when(redisTemplate.opsForSet()).thenReturn(setOperations);
         broker = new RedisMessageBroker(redisTemplate, listenerContainer, new ObjectMapper());
     }
 
@@ -133,6 +138,8 @@ class RedisMessageBrokerTest {
             broker.setCloudStreamRoute("tool-001", "gw-owner", Duration.ofSeconds(660));
 
             verify(valueOperations).set("gw:cloud-stream:tool-001", "gw-owner", Duration.ofSeconds(660));
+            verify(setOperations).add("gw:cloud-stream:tool-001:owners", "gw-owner");
+            verify(redisTemplate).expire("gw:cloud-stream:tool-001:owners", Duration.ofSeconds(660));
         }
 
         @Test
@@ -143,6 +150,15 @@ class RedisMessageBrokerTest {
             assertEquals("gw-owner", broker.getCloudStreamRoute("tool-001"));
         }
 
+        @Test
+        @DisplayName("getCloudStreamOwners returns all owner gateways")
+        void getCloudStreamOwnersReturnsAllOwners() {
+            when(setOperations.members("gw:cloud-stream:tool-001:owners"))
+                    .thenReturn(Set.of("gw-a", "gw-b"));
+
+            assertEquals(Set.of("gw-a", "gw-b"), broker.getCloudStreamOwners("tool-001"));
+        }
+
         @SuppressWarnings("unchecked")
         @Test
         @DisplayName("removeCloudStreamRoute uses conditional owner delete")
@@ -150,6 +166,7 @@ class RedisMessageBrokerTest {
             broker.removeCloudStreamRoute("tool-001", "gw-owner");
 
             verify(redisTemplate).execute(any(), anyList(), any(Object[].class));
+            verify(setOperations).remove("gw:cloud-stream:tool-001:owners", "gw-owner");
         }
 
         @SuppressWarnings("unchecked")
@@ -165,6 +182,8 @@ class RedisMessageBrokerTest {
 
             verify(valueOperations, never()).set(
                     eq("gw:cloud-stream:"), eq("gw-owner"), any(Duration.class));
+            verify(setOperations, never()).add(eq("gw:cloud-stream:tool-001:owners"), eq(""));
+            verify(setOperations, never()).remove(eq("gw:cloud-stream:tool-001:owners"), eq(""));
             verify(redisTemplate, never()).execute(any(), anyList(), any(Object[].class));
         }
     }

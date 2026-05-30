@@ -96,7 +96,8 @@ public void checkTimeouts() { ... }
 | `gw:source-conn:{sourceType}:{sourceInstanceId}` | Hash + TTL | Source 连接注册表 |
 | `gw:route:{toolSessionId}` | KV + TTL | `toolSessionId -> sourceType:sourceInstanceId` |
 | `gw:route:w:{welinkSessionId}` | KV + TTL | `welinkSessionId -> sourceType:sourceInstanceId` |
-| `gw:cloud-stream:{toolSessionId}` | KV + TTL | 云端 SSE/WebSocket 流 owner：`toolSessionId -> gatewayInstanceId` |
+| `gw:cloud-stream:{toolSessionId}` | KV + TTL | 云端 SSE/WebSocket 流最近 owner：`toolSessionId -> gatewayInstanceId`，保留兼容 fallback |
+| `gw:cloud-stream:{toolSessionId}:owners` | Set + TTL | 云端 SSE/WebSocket 流多 owner 集合，用于 abort fan-out 到所有 GW owners |
 | `gw:agent:user:{ak}` | KV | Agent AK → userId 绑定 |
 | `agent:{ak}` | pub/sub channel | Agent 本地投递通道 |
 | `gw:relay:{instanceId}` | pub/sub channel | GW→GW 新版中继 |
@@ -104,7 +105,7 @@ public void checkTimeouts() { ... }
 
 来源：`ai-gateway/src/main/java/com/opencode/cui/gateway/service/RedisMessageBroker.java:56-99,158-282,700-850`。
 
-`gw:cloud-stream:{toolSessionId}` 只用于云端流取消的 GW owner 查找；它不能替代 `gw:route:{toolSessionId}`，后者记录的是 source service 路由。删除云端流 owner 必须走条件删除，避免非 owner GW 清掉仍在使用的流 owner。
+`gw:cloud-stream:{toolSessionId}` / `gw:cloud-stream:{toolSessionId}:owners` 只用于云端流取消的 GW owner 查找；它们不能替代 `gw:route:{toolSessionId}`，后者记录的是 source service 路由。KV key 保留最近 owner 兼容，set key 才是 multi-stream abort fan-out 的全量 owner 集合。删除云端流 owner 必须走条件删除并从 set 中移除当前 GW，避免非 owner GW 清掉仍在使用的流 owner。
 
 ## Pending Queue 模式
 

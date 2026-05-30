@@ -21,9 +21,11 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -51,6 +53,7 @@ import java.util.function.Consumer;
 public class CloudAgentService {
 
     private static final String ACTION_ABORT_SESSION = "abort_session";
+    private static final String CLOUD_CONTROL_RELAYED_FLAG = "_cloudControlRelayed";
 
     /** action → callback scope 硬编码映射。 */
     private static final Map<String, String> ACTION_TO_SCOPE = Map.of(
@@ -71,7 +74,7 @@ public class CloudAgentService {
     private final RedisMessageBroker redisMessageBroker;
     private final ObjectMapper objectMapper;
     private final String gatewayInstanceId;
-    private final ConcurrentHashMap<String, ActiveCloudConnection> activeStreamingConnections =
+    private final ConcurrentHashMap<String, Set<ActiveCloudConnection>> activeStreamingConnections =
             new ConcurrentHashMap<>();
 
     @Autowired
@@ -450,7 +453,7 @@ public class CloudAgentService {
             );
         } finally {
             removeActiveConnection(activeConnection);
-            removeCloudStreamRoute(toolSessionId);
+            removeCloudStreamRouteIfNoLocalActive(toolSessionId);
             lifecycle.close();
         }
     }
@@ -486,27 +489,30 @@ public class CloudAgentService {
             return;
         }
 
-        ActiveCloudConnection activeConnection = null;
-        for (String key : keys) {
-            activeConnection = activeStreamingConnections.get(key);
-            if (activeConnection != null) {
-                break;
+        List<ActiveCloudConnection> activeConnections = activeConnections(keys);
+        int cancelled = 0;
+        for (ActiveCloudConnection activeConnection : activeConnections) {
+            removeActiveConnection(activeConnection);
+            if (activeConnection.handle().cancel()) {
+                cancelled++;
             }
         }
-        if (activeConnection == null) {
-            if (relayAbortToOwningGateway(invokeMessage, toolSessionId)) {
-                return;
-            }
+        if (!activeConnections.isEmpty()) {
+            removeCloudStreamRouteIfNoLocalActive(toolSessionId);
+        }
+
+        int relayed = isCloudControlRelayed(invokeMessage)
+                ? 0
+                : relayAbortToOwningGateways(invokeMessage, toolSessionId);
+        if (activeConnections.isEmpty() && relayed == 0) {
             log.info("[CLOUD_AGENT] abort_session ignored: reason=no_active_connection, toolSessionId={}, welinkSessionId={}, traceId={}",
                     toolSessionId, invokeMessage.getWelinkSessionId(), invokeMessage.getTraceId());
             return;
         }
 
-        removeActiveConnection(activeConnection);
-        removeCloudStreamRoute(toolSessionId);
-        boolean cancelled = activeConnection.handle().cancel();
-        log.info("[CLOUD_AGENT] abort_session cancelled active stream: cancelled={}, toolSessionId={}, welinkSessionId={}, traceId={}",
-                cancelled, toolSessionId, invokeMessage.getWelinkSessionId(), invokeMessage.getTraceId());
+        log.info("[CLOUD_AGENT] abort_session cancelled active streams: localMatched={}, localCancelled={}, remoteRelayed={}, toolSessionId={}, welinkSessionId={}, traceId={}",
+                activeConnections.size(), cancelled, relayed, toolSessionId,
+                invokeMessage.getWelinkSessionId(), invokeMessage.getTraceId());
     }
 
     private void registerCloudStreamRoute(String toolSessionId) {
@@ -516,8 +522,11 @@ public class CloudAgentService {
         redisMessageBroker.setCloudStreamRoute(toolSessionId, gatewayInstanceId, cloudStreamRouteTtl());
     }
 
-    private void removeCloudStreamRoute(String toolSessionId) {
+    private void removeCloudStreamRouteIfNoLocalActive(String toolSessionId) {
         if (!hasText(toolSessionId) || redisMessageBroker == null || !hasText(gatewayInstanceId)) {
+            return;
+        }
+        if (hasLocalActiveToolConnection(toolSessionId)) {
             return;
         }
         redisMessageBroker.removeCloudStreamRoute(toolSessionId, gatewayInstanceId);
@@ -528,29 +537,67 @@ public class CloudAgentService {
         return Duration.ofSeconds(Math.max(60, maxDurationSeconds + 60));
     }
 
-    private boolean relayAbortToOwningGateway(GatewayMessage invokeMessage, String toolSessionId) {
+    private int relayAbortToOwningGateways(GatewayMessage invokeMessage, String toolSessionId) {
         if (!hasText(toolSessionId)
                 || redisMessageBroker == null
                 || objectMapper == null
                 || !hasText(gatewayInstanceId)) {
-            return false;
+            return 0;
         }
-        String ownerGatewayId = redisMessageBroker.getCloudStreamRoute(toolSessionId);
-        if (!hasText(ownerGatewayId) || gatewayInstanceId.equals(ownerGatewayId)) {
-            return false;
+        Set<String> ownerGatewayIds = cloudStreamOwnerGateways(toolSessionId);
+        if (ownerGatewayIds.isEmpty()) {
+            return 0;
         }
+        GatewayMessage relayMessage = markCloudControlRelayed(invokeMessage);
+        int relayed = 0;
         try {
-            String originalJson = objectMapper.writeValueAsString(invokeMessage);
+            String originalJson = objectMapper.writeValueAsString(relayMessage);
             String relayJson = objectMapper.writeValueAsString(RelayMessage.toCloudControl(originalJson));
-            redisMessageBroker.publishToGwRelay(ownerGatewayId, relayJson);
-            log.info("[CLOUD_AGENT] abort_session relayed to active stream owner: ownerGw={}, toolSessionId={}, traceId={}",
-                    ownerGatewayId, toolSessionId, invokeMessage.getTraceId());
-            return true;
+            for (String ownerGatewayId : ownerGatewayIds) {
+                if (!hasText(ownerGatewayId) || gatewayInstanceId.equals(ownerGatewayId)) {
+                    continue;
+                }
+                redisMessageBroker.publishToGwRelay(ownerGatewayId, relayJson);
+                relayed++;
+            }
+            if (relayed > 0) {
+                log.info("[CLOUD_AGENT] abort_session relayed to active stream owners: ownerCount={}, toolSessionId={}, traceId={}",
+                        relayed, toolSessionId, invokeMessage.getTraceId());
+            }
+            return relayed;
         } catch (Exception e) {
-            log.warn("[CLOUD_AGENT] abort_session owner relay failed: ownerGw={}, toolSessionId={}, traceId={}, error={}",
-                    ownerGatewayId, toolSessionId, invokeMessage.getTraceId(), e.getMessage());
-            return false;
+            log.warn("[CLOUD_AGENT] abort_session owner relay failed: ownerCount={}, toolSessionId={}, traceId={}, error={}",
+                    ownerGatewayIds.size(), toolSessionId, invokeMessage.getTraceId(), e.getMessage());
+            return relayed;
         }
+    }
+
+    private Set<String> cloudStreamOwnerGateways(String toolSessionId) {
+        LinkedHashSet<String> owners = new LinkedHashSet<>();
+        Set<String> registeredOwners = redisMessageBroker.getCloudStreamOwners(toolSessionId);
+        if (registeredOwners != null) {
+            owners.addAll(registeredOwners);
+        }
+        String legacyOwner = redisMessageBroker.getCloudStreamRoute(toolSessionId);
+        if (hasText(legacyOwner)) {
+            owners.add(legacyOwner);
+        }
+        owners.removeIf(owner -> !hasText(owner));
+        return owners;
+    }
+
+    private GatewayMessage markCloudControlRelayed(GatewayMessage invokeMessage) {
+        JsonNode payload = invokeMessage.getPayload();
+        ObjectNode relayPayload = payload != null && payload.isObject()
+                ? ((ObjectNode) payload).deepCopy()
+                : objectMapper.createObjectNode();
+        relayPayload.put(CLOUD_CONTROL_RELAYED_FLAG, true);
+        return invokeMessage.toBuilder().payload(relayPayload).build();
+    }
+
+    private static boolean isCloudControlRelayed(GatewayMessage invokeMessage) {
+        JsonNode payload = invokeMessage.getPayload();
+        return payload != null && payload.path(CLOUD_CONTROL_RELAYED_FLAG).asBoolean(false);
     }
 
     private ActiveCloudConnection registerActiveConnection(String toolSessionId, String welinkSessionId,
@@ -561,11 +608,9 @@ public class CloudAgentService {
         }
         ActiveCloudConnection activeConnection = new ActiveCloudConnection(handle, keys);
         for (String key : keys) {
-            ActiveCloudConnection previous = activeStreamingConnections.put(key, activeConnection);
-            if (previous != null && previous != activeConnection) {
-                previous.handle().cancel();
-                removeActiveConnection(previous);
-            }
+            activeStreamingConnections
+                    .computeIfAbsent(key, ignored -> ConcurrentHashMap.newKeySet())
+                    .add(activeConnection);
         }
         return activeConnection;
     }
@@ -575,8 +620,37 @@ public class CloudAgentService {
             return;
         }
         for (String key : activeConnection.keys()) {
-            activeStreamingConnections.remove(key, activeConnection);
+            Set<ActiveCloudConnection> connections = activeStreamingConnections.get(key);
+            if (connections == null) {
+                continue;
+            }
+            connections.remove(activeConnection);
+            if (connections.isEmpty()) {
+                activeStreamingConnections.remove(key, connections);
+            }
         }
+    }
+
+    private List<ActiveCloudConnection> activeConnections(List<String> keys) {
+        if (keys == null || keys.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<ActiveCloudConnection> connections = new LinkedHashSet<>();
+        for (String key : keys) {
+            Set<ActiveCloudConnection> registered = activeStreamingConnections.get(key);
+            if (registered != null) {
+                connections.addAll(registered);
+            }
+        }
+        return List.copyOf(connections);
+    }
+
+    private boolean hasLocalActiveToolConnection(String toolSessionId) {
+        if (!hasText(toolSessionId)) {
+            return false;
+        }
+        Set<ActiveCloudConnection> connections = activeStreamingConnections.get("tool:" + toolSessionId);
+        return connections != null && !connections.isEmpty();
     }
 
     private static List<String> activeConnectionKeys(String toolSessionId, String welinkSessionId) {
