@@ -17,13 +17,14 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -188,12 +189,12 @@ class SkillRelayServiceV2Test {
     class UnknownRouteTests {
 
         @Test
-        @DisplayName("relayToSkill with unknown route should broadcast to all groups")
-        void relayToSkill_withUnknownRoute_shouldBroadcastToAllGroups() throws Exception {
+        @DisplayName("relayToSkill with unknown route defaults to one local skill-server")
+        void relayToSkill_withUnknownRoute_shouldDefaultToOneLocalSkillServer() throws Exception {
             registerSs1();
             registerBp();
 
-            // No routing table entry → broadcast to all groups
+            // No routing table entry defaults to skill-server only.
             GatewayMessage msg = GatewayMessage.builder()
                     .type(GatewayMessage.Type.TOOL_EVENT)
                     .toolSessionId("T-unknown")
@@ -203,9 +204,9 @@ class SkillRelayServiceV2Test {
 
             assertTrue(result);
             awaitSend();
-            // Both groups should receive the message (one session per group)
             verify(ss1Session).sendMessage(any(TextMessage.class));
-            verify(bpSession).sendMessage(any(TextMessage.class));
+            verify(bpSession, never()).sendMessage(any(TextMessage.class));
+            verify(redisMessageBroker, never()).discoverAllSourceGwInstances();
         }
 
         @Test
@@ -543,24 +544,19 @@ class SkillRelayServiceV2Test {
         }
     }
 
-    // ==================== L2 Redis routing with connection-level fields ====================
+    // ==================== L2 source stream routing ====================
 
     @Nested
-    @DisplayName("L2 Redis routing with connection-level fields")
+    @DisplayName("L2 source stream routing")
     class L2RoutingTests {
 
         @Test
-        @DisplayName("L2 should extract gwInstanceId from compound field and relay correctly")
-        void l2Routing_extractsGwIdFromCompoundField() throws Exception {
-            // No local connections — force L2 path
-            when(redisMessageBroker.getSessionRoute("T1")).thenReturn("skill-server:ss-pod-0");
-
-            Map<String, Long> gwMap = Map.of(
-                    "gw-remote#sess-a1", 100L,
-                    "gw-remote#sess-a2", 100L);
-            when(redisMessageBroker.getSourceConnections("skill-server", "ss-pod-0")).thenReturn(gwMap);
-            when(redisMessageBroker.extractUniqueGwInstances(gwMap)).thenReturn(Set.of("gw-remote"));
-
+        @DisplayName("no local skill-server enqueues one L2 stream work item")
+        void l2Routing_noLocalSkillServerEnqueuesStreamWorkItem() throws Exception {
+            when(redisMessageBroker.enqueueSourceL2Work(
+                    eq(SOURCE_TYPE_SKILL), anyString(), eq("T1"), anyString(),
+                    eq(GatewayMessage.Type.TOOL_EVENT), anyLong()))
+                    .thenReturn("1-0");
             GatewayMessage msg = GatewayMessage.builder()
                     .type(GatewayMessage.Type.TOOL_EVENT)
                     .toolSessionId("T1")
@@ -570,21 +566,22 @@ class SkillRelayServiceV2Test {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
-            verify(redisMessageBroker).publishToSourceRelay(
-                    eq("gw-remote"), eq("skill-server"), eq("ss-pod-0"), anyString());
+            verify(redisMessageBroker).enqueueSourceL2Work(
+                    eq(SOURCE_TYPE_SKILL), anyString(), eq("T1"), anyString(),
+                    eq(GatewayMessage.Type.TOOL_EVENT), anyLong());
+            verify(redisMessageBroker, never()).getSessionRoute(anyString());
+            verify(redisMessageBroker, never()).publishToSourceRelay(anyString(), anyString(), anyString(), anyString());
         }
 
         @Test
-        @DisplayName("L2 should use payload.toolSessionId when top-level toolSessionId is absent")
-        void l2Routing_payloadToolSessionIdRelaysToRouteOwner() throws Exception {
+        @DisplayName("L2 enqueue uses payload.toolSessionId when top-level toolSessionId is absent")
+        void l2Routing_payloadToolSessionIdEnqueuedAsRoutingKey() throws Exception {
             ObjectNode payload = objectMapper.createObjectNode();
             payload.put("toolSessionId", "T-payload-l2");
-            when(redisMessageBroker.getSessionRoute("T-payload-l2")).thenReturn("skill-server:ss-pod-9");
-
-            Map<String, Long> gwMap = Map.of("gw-remote#sess-a1", 100L);
-            when(redisMessageBroker.getSourceConnections("skill-server", "ss-pod-9")).thenReturn(gwMap);
-            when(redisMessageBroker.extractUniqueGwInstances(gwMap)).thenReturn(Set.of("gw-remote"));
-
+            when(redisMessageBroker.enqueueSourceL2Work(
+                    eq(SOURCE_TYPE_SKILL), anyString(), eq("T-payload-l2"), anyString(),
+                    eq(GatewayMessage.Type.TOOL_EVENT), anyLong()))
+                    .thenReturn("1-1");
             GatewayMessage msg = GatewayMessage.builder()
                     .type(GatewayMessage.Type.TOOL_EVENT)
                     .source(SOURCE_TYPE_SKILL)
@@ -594,10 +591,45 @@ class SkillRelayServiceV2Test {
             boolean result = service.relayToSkill(msg);
 
             assertTrue(result);
-            verify(redisMessageBroker).getSessionRoute("T-payload-l2");
-            verify(redisMessageBroker).publishToSourceRelay(
-                    eq("gw-remote"), eq("skill-server"), eq("ss-pod-9"), anyString());
+            verify(redisMessageBroker).enqueueSourceL2Work(
+                    eq(SOURCE_TYPE_SKILL), anyString(), eq("T-payload-l2"), anyString(),
+                    eq(GatewayMessage.Type.TOOL_EVENT), anyLong());
+            verify(redisMessageBroker, never()).getSessionRoute(anyString());
+            verify(redisMessageBroker, never()).publishToSourceRelay(anyString(), anyString(), anyString(), anyString());
             verify(redisMessageBroker, never()).discoverAllSourceGwInstances();
+        }
+
+        @Test
+        @DisplayName("consumer delivers one L2 work item to local skill-server and acks")
+        void l2Consumer_deliversToLocalSkillServerAndAcks() throws Exception {
+            registerSs1();
+            GatewayMessage msg = GatewayMessage.builder()
+                    .type(GatewayMessage.Type.TOOL_DONE)
+                    .toolSessionId("T1")
+                    .build();
+            RedisMessageBroker.SourceL2Work work = new RedisMessageBroker.SourceL2Work("1-0", Map.of(
+                    "payload", objectMapper.writeValueAsString(msg),
+                    "routingKey", "T1",
+                    "messageType", GatewayMessage.Type.TOOL_DONE,
+                    "attempt", "0"));
+            when(redisMessageBroker.readSourceL2Work(
+                    eq(SOURCE_TYPE_SKILL), eq(INSTANCE_ID), anyInt(), any(Duration.class)))
+                    .thenReturn(List.of(work));
+
+            service.consumeSkillServerL2Work();
+
+            awaitSend();
+            verify(ss1Session).sendMessage(any(TextMessage.class));
+            verify(redisMessageBroker).ackSourceL2Work(SOURCE_TYPE_SKILL, "1-0");
+        }
+
+        @Test
+        @DisplayName("consumer skips Redis read when no local skill-server is connected")
+        void l2Consumer_noLocalSkillServer_skipsRead() {
+            service.consumeSkillServerL2Work();
+
+            verify(redisMessageBroker, never()).readSourceL2Work(
+                    anyString(), anyString(), anyInt(), any(Duration.class));
         }
     }
 

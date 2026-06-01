@@ -13,9 +13,6 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import com.opencode.cui.gateway.ws.AsyncSessionSender;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
-
 import com.opencode.cui.gateway.service.cloud.InvokeRouteStrategy;
 
 import java.io.IOException;
@@ -25,7 +22,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -44,6 +40,8 @@ public class SkillRelayService {
     public static final String ERROR_SOURCE_NOT_ALLOWED = "source_not_allowed";
     public static final String ERROR_SOURCE_MISMATCH = "source_mismatch";
     private static final String ACTION_ABORT_SESSION = "abort_session";
+    private static final String SOURCE_TYPE_SKILL_SERVER = "skill-server";
+    private static final String LEGACY_SOURCE_TYPE_SKILL_SERVICE = "skill-service";
 
     private final RedisMessageBroker redisMessageBroker;
     private final ObjectMapper objectMapper;
@@ -66,8 +64,17 @@ public class SkillRelayService {
     /** Pending queue TTL for offline agent messages. */
     private static final Duration PENDING_TTL = Duration.ofMinutes(30);
 
-    @Value("${gateway.upstream-routing.broadcast-timeout-ms:200}")
-    private int broadcastTimeoutMs;
+    @Value("${gateway.l2-source-stream.max-len:10000}")
+    private long sourceL2StreamMaxLen;
+
+    @Value("${gateway.l2-source-stream.poll-batch-size:10}")
+    private int sourceL2PollBatchSize;
+
+    @Value("${gateway.l2-source-stream.poll-block-ms:100}")
+    private int sourceL2PollBlockMs;
+
+    @Value("${gateway.l2-source-stream.max-attempts:3}")
+    private int sourceL2MaxAttempts;
 
     private final ConcurrentHashMap<String, AsyncSessionSender> sessionSenders = new ConcurrentHashMap<>();
 
@@ -81,23 +88,8 @@ public class SkillRelayService {
     private final AtomicLong relayPendingCount = new AtomicLong();
     /** Count of upstream route lookups that hit a known entry in UpstreamRoutingTable. */
     private final AtomicLong routingHitCount = new AtomicLong();
-    /** Count of upstream route lookups that fell back to broadcast (no routing table entry). */
-    private final AtomicLong routingBroadcastCount = new AtomicLong();
     /** Count of upstream messages routed via Redis L2 (cross-GW relay). */
     private final AtomicLong routingRedisL2Count = new AtomicLong();
-    /** Count of upstream messages routed via Level 3 broadcast relay. */
-    private final AtomicLong routingL3BroadcastCount = new AtomicLong();
-
-    /**
-     * Per-source broadcast rate limiter: sourceType → last broadcast timestamps (epoch millis).
-     * Uses a Caffeine cache with sliding window to enforce max 10 broadcasts/source/second.
-     */
-    private final Cache<String, AtomicLong> broadcastRateLimiter = Caffeine.newBuilder()
-            .expireAfterAccess(Duration.ofMinutes(5))
-            .maximumSize(1000)
-            .build();
-    private static final int BROADCAST_RATE_LIMIT_PER_SECOND = 10;
-
     /** Lazy-initialized reference to EventRelayService (set via setter to break circular dependency). */
     private EventRelayService eventRelayService;
 
@@ -229,237 +221,142 @@ public class SkillRelayService {
     // ==================== 上行消息路由 ====================
 
     /**
-     * V2: Routes upstream messages to the correct source service using UpstreamRoutingTable + ConsistentHashRing.
+     * V2: Routes upstream messages to one Source connection locally or one L2 stream work item.
      *
      * <p>Routing strategy:</p>
      * <ol>
-     * <li>Query UpstreamRoutingTable to resolve sourceType</li>
-     * <li>If sourceType known → hash-select a connection from that sourceType's ring</li>
-     * <li>If sourceType unknown → broadcast to all sourceType groups (one connection per group via hash)</li>
+     * <li>Resolve sourceType from UpstreamRoutingTable, message.source, or default skill-server</li>
+     * <li>Hash-select exactly one local connection for that sourceType</li>
+     * <li>If local skill-server is absent, enqueue exactly one GW Redis Stream work item</li>
      * </ol>
      *
      * @return true if the message was delivered, false if delivery failed
      */
     public boolean relayToSkill(GatewayMessage message) {
-        return v2RelayToSkill(message);
+        return v2RelayToSkillWithoutBroadcast(message);
     }
 
     /**
-     * V2: Three-level upstream routing.
+     * V2: Two-level upstream routing.
      *
-     * <p>Level 1: Caffeine L1 (UpstreamRoutingTable) + local hashRing — 0-hop local delivery</p>
-     * <p>Level 2: Redis L2 — precise session route lookup, local delivery or cross-GW relay</p>
-     * <p>Level 3: Broadcast fallback — relay to all GWs holding Source connections</p>
+     * <p>Level 1: local GW to exactly one local Source connection.</p>
+     * <p>Level 2: one GW Redis Stream work item consumed by a GW with local skill-server.</p>
      */
-    private boolean v2RelayToSkill(GatewayMessage message) {
+    private boolean v2RelayToSkillWithoutBroadcast(GatewayMessage message) {
         GatewayMessage tracedMessage = message.ensureTraceId();
         String routingKey = resolveRoutingKey(tracedMessage);
+        String targetSourceType = resolveTargetSourceType(tracedMessage);
 
-        // ===== Level 1: Caffeine L1 — UpstreamRoutingTable + local hashRing =====
-        String sourceType = routingTable.resolveSourceType(tracedMessage);
-
-        if (sourceType != null) {
-            ConsistentHashRing<WebSocketSession> ring = hashRings.get(sourceType);
-            if (ring != null && !ring.isEmpty() && routingKey != null) {
-                WebSocketSession target = ring.getNode(routingKey);
-                if (target != null && target.isOpen()) {
-                    logRoutingInfo(tracedMessage,
-                            "[V2-L1] Hash-routed to source: sourceType={}, routingKey={}, linkId={}, type={}",
-                            sourceType, routingKey, target.getId(), tracedMessage.getType());
-                    if (sendToSession(target, tracedMessage)) {
-                        routingHitCount.incrementAndGet();
-                        return true;
-                    }
-                }
-            }
-            // L1 known sourceType but no local connection — try local broadcast to that type first
-            if (broadcastToSourceType(sourceType, tracedMessage)) {
-                routingHitCount.incrementAndGet();
-                return true;
-            }
-            // Fall through to L2
-        }
-
-        // Also try message.source field as sourceType hint for L1
-        String messageSource = tracedMessage.getSource();
-        if (messageSource != null && !messageSource.isBlank()) {
-            ConsistentHashRing<WebSocketSession> ring = hashRings.get(messageSource);
-            if (ring != null && !ring.isEmpty() && routingKey != null) {
-                WebSocketSession target = ring.getNode(routingKey);
-                if (target != null && target.isOpen()) {
-                    logRoutingInfo(tracedMessage,
-                            "[V2-L1] Hash-routed via message.source: sourceType={}, routingKey={}, linkId={}, type={}",
-                            messageSource, routingKey, target.getId(), tracedMessage.getType());
-                    if (sendToSession(target, tracedMessage)) {
-                        routingHitCount.incrementAndGet();
-                        return true;
-                    }
-                }
-            }
-            if (broadcastToSourceType(messageSource, tracedMessage)) {
-                routingHitCount.incrementAndGet();
-                return true;
-            }
-        }
-
-        // ===== Level 2: Redis L2 — precise session route from Redis =====
-        boolean l2Result = l2RedisRoute(tracedMessage, routingKey);
-        if (l2Result) {
-            routingRedisL2Count.incrementAndGet();
+        WebSocketSession delivered = deliverToOneLocalSource(targetSourceType, tracedMessage, routingKey, "[V2-L1]");
+        if (delivered != null) {
+            routingHitCount.incrementAndGet();
             return true;
         }
 
-        // ===== Level 3: Broadcast fallback — relay to all GWs with Source connections =====
-        routingBroadcastCount.incrementAndGet();
-        // Try local broadcast first
-        boolean localBroadcast = broadcastToAllGroups(tracedMessage, routingKey);
-        // Also relay to remote GWs
-        l3BroadcastRelay(tracedMessage);
-        routingL3BroadcastCount.incrementAndGet();
-        return localBroadcast;
-    }
-
-    /**
-     * Level 2: Redis-based precise session route lookup.
-     * Queries Redis for toolSessionId/welinkSessionId → sourceType:sourceInstanceId mapping,
-     * then either delivers locally or relays to the correct remote GW.
-     *
-     * @return true if message was delivered or relayed
-     */
-    private boolean l2RedisRoute(GatewayMessage message, String routingKey) {
-        String toolSessionId = message.getToolSessionId();
-        String payloadToolSessionId = extractToolSessionIdFromPayload(message);
-        String welinkSessionId = message.getWelinkSessionId();
-
-        // Query Redis route table
-        String routeValue = null;
-        if (toolSessionId != null && !toolSessionId.isBlank()) {
-            routeValue = redisMessageBroker.getSessionRoute(toolSessionId);
-        }
-        if (routeValue == null && payloadToolSessionId != null && !payloadToolSessionId.isBlank()
-                && !payloadToolSessionId.equals(toolSessionId)) {
-            routeValue = redisMessageBroker.getSessionRoute(payloadToolSessionId);
-        }
-        if (routeValue == null) {
-            routeValue = redisMessageBroker.getWelinkSessionRoute(welinkSessionId);
-        }
-
-        if (routeValue == null) {
-            log.debug("[V2-L2] No Redis route found: toolSessionId={}, payloadToolSessionId={}, welinkSessionId={}",
-                    toolSessionId, payloadToolSessionId, welinkSessionId);
+        if (!isSkillServerSource(targetSourceType)) {
+            log.debug("[V2-L1] No local source connection and L2 only supports skill-server: sourceType={}, type={}",
+                    targetSourceType, tracedMessage.getType());
             return false;
         }
 
-        // Parse "sourceType:sourceInstanceId"
-        String[] parts = routeValue.split(":", 2);
-        if (parts.length < 2) {
-            log.warn("[V2-L2] Invalid route format: routeValue={}", routeValue);
-            return false;
-        }
-        String targetSourceType = parts[0];
-        String targetSourceInstanceId = parts[1];
-
-        // Try local delivery first
-        WebSocketSession localSession = findLocalSourceConnection(targetSourceType, targetSourceInstanceId);
-        if (localSession != null) {
-            logRoutingInfo(message, "[V2-L2] Local delivery: sourceType={}, sourceInstanceId={}, linkId={}, type={}",
-                    targetSourceType, targetSourceInstanceId, localSession.getId(), message.getType());
-            if (sendToSession(localSession, message)) {
-                return true;
-            }
-        }
-
-        // Query Redis: which GWs hold this Source connection?
-        Map<String, Long> gwMap = redisMessageBroker.getSourceConnections(targetSourceType, targetSourceInstanceId);
-        Set<String> uniqueGwIds = redisMessageBroker.extractUniqueGwInstances(gwMap);
-        for (String targetGwId : uniqueGwIds) {
-            if (!gatewayInstanceId.equals(targetGwId)) {
-                try {
-                    String messageJson = objectMapper.writeValueAsString(message);
-                    redisMessageBroker.publishToSourceRelay(targetGwId, targetSourceType,
-                            targetSourceInstanceId, messageJson);
-                    logRoutingInfo(message, "[V2-L2] Cross-GW relay: targetGw={}, sourceType={}, sourceInstanceId={}, type={}",
-                            targetGwId, targetSourceType, targetSourceInstanceId, message.getType());
-                    return true;
-                } catch (Exception e) {
-                    log.error("[V2-L2] Failed to serialize message for cross-GW relay: type={}", message.getType(), e);
-                }
-            }
-        }
-
-        log.debug("[V2-L2] Route found but no reachable GW: sourceType={}, sourceInstanceId={}",
-                targetSourceType, targetSourceInstanceId);
-        return false;
-    }
-
-    /**
-     * Level 3: Broadcast relay to all remote GWs that hold any Source connection.
-     * Subject to per-source rate limiting (max {@link #BROADCAST_RATE_LIMIT_PER_SECOND} broadcasts/source/second).
-     *
-     * <p>Receiving GWs that have no matching local Source connection will silently discard the message.</p>
-     */
-    private void l3BroadcastRelay(GatewayMessage message) {
-        String sourceHint = message.getSource();
-        String rateLimitKey = sourceHint != null ? sourceHint : "__all__";
-
-        // Per-source rate limiting using sliding 1-second window
-        if (!acquireBroadcastPermit(rateLimitKey)) {
-            log.warn("[V2-L3] Broadcast rate limited: source={}", rateLimitKey);
-            return;
-        }
-
-        try {
-            String messageJson = objectMapper.writeValueAsString(message);
-            RelayMessage broadcastRelay = RelayMessage.toSourceBroadcast(messageJson);
-            String relayJson = objectMapper.writeValueAsString(broadcastRelay);
-
-            // Discover all GW instances that hold Source connections
-            java.util.Set<String> gwIds = redisMessageBroker.discoverAllSourceGwInstances();
-            int relayed = 0;
-            for (String targetGwId : gwIds) {
-                if (gatewayInstanceId.equals(targetGwId)) {
-                    continue; // skip self — local broadcast already handled
-                }
-                redisMessageBroker.publishToGwRelay(targetGwId, relayJson);
-                relayed++;
-            }
-            logRoutingInfo(message, "[V2-L3] Broadcast relay to {} remote GWs: type={}, source={}",
-                    relayed, message.getType(), sourceHint);
-        } catch (Exception e) {
-            log.error("[V2-L3] Failed to broadcast relay: type={}", message.getType(), e);
-        }
-    }
-
-    /**
-     * Attempts to acquire a broadcast permit for the given source key.
-     * Implements a simple sliding window rate limiter: max {@link #BROADCAST_RATE_LIMIT_PER_SECOND} per second.
-     *
-     * @return true if permit acquired, false if rate limited
-     */
-    private boolean acquireBroadcastPermit(String sourceKey) {
-        // Window timestamp tracker — uses CAS to safely rotate window
-        AtomicLong windowStart = broadcastRateLimiter.get(sourceKey + ":ts", k -> new AtomicLong(0));
-        AtomicLong counter = broadcastRateLimiter.get(sourceKey + ":cnt", k -> new AtomicLong(0));
-
-        long now = System.currentTimeMillis();
-        long ws = windowStart.get();
-
-        if (now - ws > 1000) {
-            // Attempt to rotate window via CAS; loser threads fall through to increment
-            if (windowStart.compareAndSet(ws, now)) {
-                counter.set(1);
-                return true;
-            }
-            // CAS failed — another thread already rotated, fall through to increment
-        }
-        long count = counter.incrementAndGet();
-        return count <= BROADCAST_RATE_LIMIT_PER_SECOND;
+        return enqueueSkillServerL2Work(tracedMessage, routingKey);
     }
 
     /**
      * Resolves the routing key for consistent hash selection.
-     * Priority: welinkSessionId > toolSessionId > payload.toolSessionId.
+     * Priority: welinkSessionId > toolSessionId > payload.toolSessionId > ak > traceId.
      */
+    private String resolveTargetSourceType(GatewayMessage message) {
+        String sourceType = canonicalSourceType(routingTable.resolveSourceType(message));
+        if (sourceType != null) {
+            return sourceType;
+        }
+        sourceType = canonicalSourceType(message.getSource());
+        if (sourceType != null) {
+            return sourceType;
+        }
+        return SOURCE_TYPE_SKILL_SERVER;
+    }
+
+    private String canonicalSourceType(String sourceType) {
+        if (sourceType == null || sourceType.isBlank()) {
+            return null;
+        }
+        String trimmed = sourceType.trim();
+        if (LEGACY_SOURCE_TYPE_SKILL_SERVICE.equalsIgnoreCase(trimmed)) {
+            return SOURCE_TYPE_SKILL_SERVER;
+        }
+        return trimmed;
+    }
+
+    private boolean isSkillServerSource(String sourceType) {
+        return SOURCE_TYPE_SKILL_SERVER.equals(canonicalSourceType(sourceType));
+    }
+
+    private WebSocketSession deliverToOneLocalSource(String sourceType, GatewayMessage message,
+                                                     String routingKey, String stage) {
+        WebSocketSession target = selectOneLocalSourceSession(sourceType, routingKey);
+        if (target == null) {
+            log.debug("{} No local source connection: sourceType={}, routingKey={}, type={}",
+                    stage, sourceType, routingKey, message.getType());
+            return null;
+        }
+        String sourceInstanceId = resolveSsInstanceId(target);
+        logRoutingInfo(message,
+                "{} Delivering to one local source: sourceType={}, sourceInstanceId={}, linkId={}, routingKey={}, type={}",
+                stage, sourceType, sourceInstanceId, target.getId(), routingKey, message.getType());
+        return sendToSession(target, message) ? target : null;
+    }
+
+    private WebSocketSession selectOneLocalSourceSession(String sourceType, String routingKey) {
+        if (sourceType == null || sourceType.isBlank()) {
+            return null;
+        }
+        ConsistentHashRing<WebSocketSession> ring = hashRings.get(sourceType);
+        if (ring != null && !ring.isEmpty() && routingKey != null && !routingKey.isBlank()) {
+            WebSocketSession target = ring.getNode(routingKey);
+            if (target != null && target.isOpen()) {
+                return target;
+            }
+        }
+        Map<String, Map<String, WebSocketSession>> instanceMap = sourceTypeSessions.get(sourceType);
+        if (instanceMap == null) {
+            return null;
+        }
+        return instanceMap.values().stream()
+                .flatMap(sessionMap -> sessionMap.values().stream())
+                .filter(WebSocketSession::isOpen)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private boolean enqueueSkillServerL2Work(GatewayMessage message, String routingKey) {
+        try {
+            String payload = objectMapper.writeValueAsString(message);
+            String streamId = redisMessageBroker.enqueueSourceL2Work(
+                    SOURCE_TYPE_SKILL_SERVER,
+                    payload,
+                    routingKey,
+                    message.getTraceId(),
+                    message.getType(),
+                    sourceL2StreamMaxLen);
+            if (streamId == null || streamId.isBlank()) {
+                log.warn("[V2-L2] Failed to enqueue skill-server L2 work item: routingKey={}, type={}",
+                        routingKey, message.getType());
+                return false;
+            }
+            routingRedisL2Count.incrementAndGet();
+            logRoutingInfo(message,
+                    "[V2-L2] Enqueued one skill-server L2 work item: streamId={}, routingKey={}, type={}",
+                    streamId, routingKey, message.getType());
+            return true;
+        } catch (Exception e) {
+            log.error("[V2-L2] Failed to serialize skill-server L2 work item: routingKey={}, type={}",
+                    routingKey, message.getType(), e);
+            return false;
+        }
+    }
+
     private String resolveRoutingKey(GatewayMessage message) {
         String welinkSessionId = message.getWelinkSessionId();
         if (welinkSessionId != null && !welinkSessionId.isBlank()) {
@@ -473,98 +370,15 @@ public class SkillRelayService {
         if (payloadToolSessionId != null && !payloadToolSessionId.isBlank()) {
             return payloadToolSessionId;
         }
+        String ak = message.getAk();
+        if (ak != null && !ak.isBlank()) {
+            return ak;
+        }
+        String traceId = message.getTraceId();
+        if (traceId != null && !traceId.isBlank()) {
+            return traceId;
+        }
         return null;
-    }
-
-    /**
-     * Broadcasts message to all sourceType groups.
-     * Each group selects one connection via hash ring (or first open connection as fallback).
-     */
-    private boolean broadcastToAllGroups(GatewayMessage message, String routingKey) {
-        if (hashRings.isEmpty() && sourceTypeSessions.isEmpty()) {
-            log.warn("[V2] No source connections available for broadcast: type={}", message.getType());
-            return false;
-        }
-
-        int groupsSent = 0;
-        for (Map.Entry<String, ConsistentHashRing<WebSocketSession>> entry : hashRings.entrySet()) {
-            String st = entry.getKey();
-            ConsistentHashRing<WebSocketSession> ring = entry.getValue();
-            if (ring.isEmpty()) {
-                continue;
-            }
-
-            WebSocketSession target = null;
-            if (routingKey != null) {
-                target = ring.getNode(routingKey);
-            }
-            // Fallback: find any open session in this sourceType pool
-            if (target == null || !target.isOpen()) {
-                Map<String, Map<String, WebSocketSession>> instanceMap = sourceTypeSessions.get(st);
-                if (instanceMap != null) {
-                    target = instanceMap.values().stream()
-                            .flatMap(m -> m.values().stream())
-                            .filter(WebSocketSession::isOpen)
-                            .findFirst()
-                            .orElse(null);
-                }
-            }
-
-            if (target != null && target.isOpen()) {
-                sendToSession(target, message);
-                groupsSent++;
-            }
-        }
-
-        logRoutingInfo(message, "[V2] Broadcast to all groups: groupsSent={}, totalGroups={}, type={}",
-                groupsSent, hashRings.size(), message.getType());
-        return groupsSent > 0;
-    }
-
-    /**
-     * Broadcasts to all SS connections of the specified source_type.
-     */
-    private boolean broadcastToSourceType(String sourceType, GatewayMessage message) {
-        Map<String, Map<String, WebSocketSession>> instanceMap = sourceTypeSessions.get(sourceType);
-        if (instanceMap == null || instanceMap.isEmpty()) {
-            log.warn("No source instances for type: {}, type={}", sourceType, message.getType());
-            return false;
-        }
-
-        int sent = 0;
-        for (Map<String, WebSocketSession> sessionMap : instanceMap.values()) {
-            for (WebSocketSession ss : sessionMap.values()) {
-                if (ss.isOpen()) {
-                    sendToSession(ss, message);
-                    sent++;
-                }
-            }
-        }
-
-        logRoutingInfo(message, "Broadcast to source_type={}: sent to {} connections, msgType={}",
-                sourceType, sent, message.getType());
-        return sent > 0;
-    }
-
-    /**
-     * Handles a to-source-broadcast relay from a remote GW (Level 3).
-     * Broadcasts the payload to all local Source connections.
-     * Called by EventRelayService when it receives a {@code to-source-broadcast} relay.
-     *
-     * @param payload the GatewayMessage JSON payload to broadcast
-     */
-    public void handleToSourceBroadcastRelay(String payload) {
-        try {
-            GatewayMessage message = objectMapper.readValue(payload, GatewayMessage.class);
-            GatewayMessage tracedMessage = message.ensureTraceId();
-            String routingKey = resolveRoutingKey(tracedMessage);
-            boolean delivered = broadcastToAllGroups(tracedMessage, routingKey);
-            if (!delivered) {
-                log.debug("[V2-L3-RX] No local source connections for broadcast relay: type={}", message.getType());
-            }
-        } catch (Exception e) {
-            log.error("[V2-L3-RX] Failed to handle to-source-broadcast relay", e);
-        }
     }
 
     /**
@@ -1023,12 +837,88 @@ public class SkillRelayService {
      * Periodically logs routing metrics for observability.
      * Outputs cumulative counters since service startup.
      */
+    @Scheduled(fixedDelayString = "${gateway.l2-source-stream.poll-delay-ms:200}")
+    public void consumeSkillServerL2Work() {
+        if (getActiveConnectionCount(SOURCE_TYPE_SKILL_SERVER) <= 0) {
+            return;
+        }
+        List<RedisMessageBroker.SourceL2Work> works = redisMessageBroker.readSourceL2Work(
+                SOURCE_TYPE_SKILL_SERVER,
+                gatewayInstanceId,
+                Math.max(1, sourceL2PollBatchSize),
+                Duration.ofMillis(Math.max(0, sourceL2PollBlockMs)));
+        if (works == null || works.isEmpty()) {
+            return;
+        }
+        for (RedisMessageBroker.SourceL2Work work : works) {
+            consumeOneSkillServerL2Work(work);
+        }
+    }
+
+    private void consumeOneSkillServerL2Work(RedisMessageBroker.SourceL2Work work) {
+        try {
+            if (work.payload() == null || work.payload().isBlank()) {
+                failSourceL2Work(work, "empty_payload");
+                return;
+            }
+            GatewayMessage message = objectMapper.readValue(work.payload(), GatewayMessage.class).ensureTraceId();
+            String routingKey = firstNonBlank(work.routingKey(), resolveRoutingKey(message));
+            logRoutingInfo(message,
+                    "[V2-L2-CONSUME] Claimed skill-server L2 work item: streamId={}, consumerGw={}, routingKey={}, type={}",
+                    work.id(), gatewayInstanceId, routingKey, message.getType());
+
+            WebSocketSession delivered = deliverToOneLocalSource(SOURCE_TYPE_SKILL_SERVER, message, routingKey,
+                    "[V2-L2-CONSUME]");
+            if (delivered == null) {
+                failSourceL2Work(work, "local_delivery_failed");
+                return;
+            }
+            redisMessageBroker.ackSourceL2Work(SOURCE_TYPE_SKILL_SERVER, work.id());
+            logRoutingInfo(message,
+                    "[V2-L2-CONSUME] Delivered to one local skill-server: streamId={}, sourceInstanceId={}, linkId={}, routingKey={}, type={}",
+                    work.id(), resolveSsInstanceId(delivered), delivered.getId(), routingKey, message.getType());
+        } catch (Exception e) {
+            log.error("[V2-L2-CONSUME] Failed to consume skill-server L2 work item: streamId={}",
+                    work == null ? null : work.id(), e);
+            if (work != null) {
+                failSourceL2Work(work, e.getClass().getSimpleName());
+            }
+        }
+    }
+
+    private void failSourceL2Work(RedisMessageBroker.SourceL2Work work, String reason) {
+        int nextAttempt = work.attempt() + 1;
+        if (nextAttempt >= Math.max(1, sourceL2MaxAttempts)) {
+            String deadLetterId = redisMessageBroker.deadLetterSourceL2Work(SOURCE_TYPE_SKILL_SERVER, work, reason);
+            if (deadLetterId != null && !deadLetterId.isBlank()) {
+                redisMessageBroker.ackSourceL2Work(SOURCE_TYPE_SKILL_SERVER, work.id());
+                log.warn("[V2-L2-CONSUME] Dead-lettered skill-server L2 work item: streamId={}, deadLetterId={}, attempts={}, reason={}",
+                        work.id(), deadLetterId, nextAttempt, reason);
+            }
+            return;
+        }
+
+        String requeuedId = redisMessageBroker.requeueSourceL2Work(
+                SOURCE_TYPE_SKILL_SERVER, work, nextAttempt, sourceL2StreamMaxLen);
+        if (requeuedId != null && !requeuedId.isBlank()) {
+            redisMessageBroker.ackSourceL2Work(SOURCE_TYPE_SKILL_SERVER, work.id());
+            log.warn("[V2-L2-CONSUME] Requeued skill-server L2 work item: streamId={}, requeuedId={}, nextAttempt={}, reason={}",
+                    work.id(), requeuedId, nextAttempt, reason);
+        }
+    }
+
+    private static String firstNonBlank(String first, String second) {
+        if (first != null && !first.isBlank()) {
+            return first;
+        }
+        return second;
+    }
+
     @Scheduled(fixedDelay = 60_000)
     void logMetrics() {
-        log.info("[METRICS] relay: local={}, pubsub={}, pending={} | routing: L1hit={}, L2redis={}, L3broadcast={}, broadcastFallback={}",
+        log.info("[METRICS] relay: local={}, pubsub={}, pending={} | routing: L1hit={}, L2stream={}",
                 relayLocalCount.get(), relayPubsubCount.get(), relayPendingCount.get(),
-                routingHitCount.get(), routingRedisL2Count.get(), routingL3BroadcastCount.get(),
-                routingBroadcastCount.get());
+                routingHitCount.get(), routingRedisL2Count.get());
     }
 
     /**

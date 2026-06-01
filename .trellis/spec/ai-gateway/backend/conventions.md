@@ -343,22 +343,97 @@ new active handle.
 
 ---
 
-## Agent-to-SS 回源路由键
+## Agent-to-SS 回源 L1/L2 路由
 
 Agent/cloud 事件回 SS 时，`toolSessionId` 可能在 `GatewayMessage.toolSessionId`
 顶层字段，也可能只存在于 `payload.toolSessionId`。GW 的回源路由必须把这两种形态视为同一类
-SS-owned session key。
+SS-owned session key，但回源链路只允许两层：
 
-规则：
+- L1：当前 GW 直接选择一个本机 `skill-server` Source WebSocket 并发送。
+- L2：当前 GW 写入一个 `gw:l2:source:skill-server` Redis Stream 工作项，由任意有本机
+  `skill-server` 连接的 GW 消费后再走 L1。
 
-- `EventRelayService.relayToSkillServer(...)` 在消息含 `welinkSessionId`、顶层
-  `toolSessionId` 或 `payload.toolSessionId` 时，必须为转发消息补
-  `source=skill-server`，表示这是回 SS 的源服务消息，不是 Agent-origin L3 广播。
-- `UpstreamRoutingTable.resolveSourceType(...)`、`SkillRelayService.resolveRoutingKey(...)`
-  和 `SkillRelayService.l2RedisRoute(...)` 都必须支持 `payload.toolSessionId`。
-  优先级是顶层 `toolSessionId` / `payload.toolSessionId` / `welinkSessionId`，不要让
-  payload-only 事件落到 L3 broadcast。
-- L2 查 Redis route 时不能调用 `getSessionRoute(null)`；缺少顶层 `toolSessionId` 时应直接使用
-  `payload.toolSessionId` 查询 `gw:route:{toolSessionId}`。
-- 回归测试必须覆盖：payload-only `toolSessionId` 能命中 `UpstreamRoutingTable`、
-  L2 能发到 route owner、且不会触发 L3 broadcast。
+### 1. Scope / Trigger
+
+- Trigger: `EventRelayService.relayToSkillServer(...)` 收到 Agent/cloud 回源事件。
+- Trigger: `SkillRelayService.relayToSkill(GatewayMessage)` 处理 `session_created`、`agent_online`、
+  `agent_offline`、`im_push`、`tool_done`、`tool_error`、`tool_event` 等需要给 SS 的消息。
+- Trigger: 当前 GW 没有本机 `skill-server` WebSocket，但集群内其他 GW 可能有。
+
+### 2. Signatures
+
+```java
+public boolean relayToSkill(GatewayMessage message)
+private boolean v2RelayToSkillWithoutBroadcast(GatewayMessage message)
+private WebSocketSession deliverToOneLocalSource(String sourceType, GatewayMessage message,
+                                                 String routingKey, String stage)
+private boolean enqueueSkillServerL2Work(GatewayMessage message, String routingKey)
+public void consumeSkillServerL2Work()
+```
+
+### 3. Contracts
+
+- `EventRelayService.relayToSkillServer(...)` 在回源消息缺少 `source` 时补 `source=skill-server`。
+- `SkillRelayService.resolveTargetSourceType(...)` 优先使用 `UpstreamRoutingTable.resolveSourceType(...)`，
+  再用 `GatewayMessage.source`，最后默认 `skill-server`；历史值 `skill-service` 必须规范化为
+  `skill-server`。
+- `SkillRelayService.resolveRoutingKey(...)` 的优先级是 `welinkSessionId`、顶层
+  `toolSessionId`、`payload.toolSessionId`、`ak`、`traceId`。
+- L1 对目标 sourceType 的本机连接只选择一个：优先用 consistent hash ring，缺少 routing key
+  或 ring 不可用时取一个 open session。
+- L2 只支持 `skill-server`，不尝试读取 SS Redis，也不维护“哪个 GW 有 SS”的精准全局索引。
+- L2 写入 Redis Stream 后即认为 GW 已接管投递；消费端只有在本机存在 `skill-server` 连接时才
+  `XREADGROUP`，成功发送后 `XACK`。
+- 禁止恢复 L3：不得调用 `discoverAllSourceGwInstances()`、`publishToSourceRelay(...)` fan-out、
+  `RelayMessage.to-source-broadcast` 或任何 “broadcast to all source GW” 兜底。
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+| --- | --- |
+| 当前 GW 有本机 `skill-server` | L1 发送给一个本机 SS WebSocket，返回 `true`，不写 Redis Stream。 |
+| 当前 GW 无本机 `skill-server` | L2 写入一条 `gw:l2:source:skill-server` 工作项，返回入队结果。 |
+| 目标 sourceType 不是 `skill-server` 且无本机连接 | 返回 `false`，不写 L2，因为 L2 只承诺 SS 回源。 |
+| L2 消费端无本机 `skill-server` | 不读取 Stream，避免 claim 后无法投递。 |
+| L2 消费端发送失败 | 按 `attempt` 重入队；达到 `gateway.l2-source-stream.max-attempts` 后写 `:dead` 死信并 ACK 原消息。 |
+| `payload.toolSessionId` 是唯一 session key | 作为 routing key 参与 L1 hash 与 L2 工作项字段，不退化为广播。 |
+
+### 5. Good / Base / Bad Cases
+
+Good: `tool_done` 只有 `payload.toolSessionId=T1`，当前 GW 无本机 SS；GW 写入一条
+`gw:l2:source:skill-server`，另一个有本机 SS 的 GW 消费并发送给一个 SS 连接。
+
+Base: `agent_online` 无 session key 但有 `ak`；GW 使用 `ak` 做 routing key，L1/L2 仍只选一个
+SS 连接。
+
+Bad: 当前 GW 无本机 SS 时，对所有 `gw:source-conn:skill-server:*` 查出的 GW 发
+`to-source-broadcast`，导致 16 个 GW 中多个实例重复尝试、SS 收到重复回源事件。
+
+### 6. Tests Required
+
+- `SkillRelayServiceV2Test`: 无本机 `skill-server` 时 `relayToSkill(...)` 只调用
+  `RedisMessageBroker.enqueueSourceL2Work(...)`，不调用 `publishToSourceRelay(...)`。
+- `SkillRelayServiceV2Test`: `payload.toolSessionId` 能作为 L2 `routingKey` 入队，且不调用
+  `discoverAllSourceGwInstances()`。
+- `SkillRelayServiceV2Test`: `consumeSkillServerL2Work()` 在本机无 SS 时不读 Stream；有 SS 时发送
+  一个连接并 `ackSourceL2Work(...)`。
+- `EventRelayServiceTest`: Redis relay 只处理 `to-source` 和 `to-cloud-control`，不存在
+  `to-source-broadcast` 分支。
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```java
+List<String> gwIds = redisMessageBroker.discoverAllSourceGwInstances();
+gwIds.forEach(gw -> redisMessageBroker.publishToSourceRelay(gw, "skill-server", "*", payload));
+```
+
+Correct:
+
+```java
+WebSocketSession delivered = deliverToOneLocalSource("skill-server", message, routingKey, "[V2-L1]");
+if (delivered == null) {
+    redisMessageBroker.enqueueSourceL2Work("skill-server", payload, routingKey, traceId, type, maxLen);
+}
+```
