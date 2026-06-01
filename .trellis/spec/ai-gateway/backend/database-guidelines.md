@@ -94,6 +94,8 @@ public void checkTimeouts() { ... }
 | `gw:internal:agent:{ak}` | KV + TTL | Gateway 内部路由表；与 `conn:ak` 双写 |
 | `gw:pending:{ak}` | List + TTL | Agent 离线时缓存下行消息 |
 | `gw:source-conn:{sourceType}:{sourceInstanceId}` | Hash + TTL | Source 连接注册表 |
+| `gw:l2:source:{sourceType}` | Redis Stream | GW→Source L2 工作队列；当前只允许 `sourceType=skill-server` |
+| `gw:l2:source:{sourceType}:dead` | Redis Stream | GW→Source L2 死信队列 |
 | `gw:route:{toolSessionId}` | KV + TTL | `toolSessionId -> sourceType:sourceInstanceId` |
 | `gw:route:w:{welinkSessionId}` | KV + TTL | `welinkSessionId -> sourceType:sourceInstanceId` |
 | `gw:cloud-stream:{toolSessionId}` | KV + TTL | 云端 SSE/WebSocket 流最近 owner：`toolSessionId -> gatewayInstanceId`，保留兼容 fallback |
@@ -106,6 +108,59 @@ public void checkTimeouts() { ... }
 来源：`ai-gateway/src/main/java/com/opencode/cui/gateway/service/RedisMessageBroker.java:56-99,158-282,700-850`。
 
 `gw:cloud-stream:{toolSessionId}` / `gw:cloud-stream:{toolSessionId}:owners` 只用于云端流取消的 GW owner 查找；它们不能替代 `gw:route:{toolSessionId}`，后者记录的是 source service 路由。KV key 保留最近 owner 兼容，set key 才是 multi-stream abort fan-out 的全量 owner 集合。删除云端流 owner 必须走条件删除并从 set 中移除当前 GW，避免非 owner GW 清掉仍在使用的流 owner。
+
+## Source L2 Stream 模式
+
+`gw:l2:source:skill-server` 是 GW Redis 内的工作队列，不依赖 skill-server Redis。它只解决
+“当前 GW 没有本机 SS 连接，但集群里其他 GW 可能有 SS 连接”的单点转交问题，不做 source pod
+精准路由，也不广播。
+
+签名：
+
+```java
+// Source: ai-gateway/src/main/java/com/opencode/cui/gateway/service/RedisMessageBroker.java
+public String enqueueSourceL2Work(String sourceType, String payload, String routingKey,
+                                  String traceId, String messageType, long maxLen)
+public List<SourceL2Work> readSourceL2Work(String sourceType, String consumerName,
+                                           int count, Duration blockTimeout)
+public void ackSourceL2Work(String sourceType, String streamId)
+public String requeueSourceL2Work(String sourceType, SourceL2Work work, int nextAttempt, long maxLen)
+public String deadLetterSourceL2Work(String sourceType, SourceL2Work work, String failureReason)
+```
+
+Stream 字段：
+
+| 字段 | 说明 |
+|------|------|
+| `payload` | 序列化后的 `GatewayMessage`，必填 |
+| `routingKey` | L1 consistent hash 选择本机 SS 连接的 key |
+| `traceId` | 观测链路 ID |
+| `messageType` | `GatewayMessage.Type` |
+| `enqueuedAt` | 入队毫秒时间戳 |
+| `attempt` | 重试次数，初始为 `0` |
+| `requeuedAt` | 重入队毫秒时间戳 |
+| `failedStreamId` / `failureReason` / `deadLetteredAt` | 死信诊断字段 |
+
+配置项：
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `gateway.l2-source-stream.max-len` | `10000` | Stream 近似裁剪上限 |
+| `gateway.l2-source-stream.poll-delay-ms` | `200` | 消费定时任务间隔 |
+| `gateway.l2-source-stream.poll-block-ms` | `100` | `XREADGROUP` block 时间 |
+| `gateway.l2-source-stream.poll-batch-size` | `10` | 单次最多读取工作项 |
+| `gateway.l2-source-stream.max-attempts` | `3` | 失败进入死信前的最大尝试次数 |
+
+行为矩阵：
+
+| Case | Required behavior |
+| --- | --- |
+| `sourceType` 或 `payload` 为空 | 不入队，返回 `null`。 |
+| 入队成功 | `XADD gw:l2:source:skill-server`，确保 group `gw-l2-skill-server`，再按 `max-len` 裁剪。 |
+| 消费前本机无 `skill-server` | `SkillRelayService.consumeSkillServerL2Work()` 不调用 `readSourceL2Work(...)`。 |
+| 消费发送成功 | `ackSourceL2Work("skill-server", streamId)`。 |
+| 消费发送失败且未达最大次数 | `requeueSourceL2Work(...)` 写入新消息，再 ACK 原消息。 |
+| 消费发送失败且达到最大次数 | `deadLetterSourceL2Work(...)` 写入 `gw:l2:source:skill-server:dead`，再 ACK 原消息。 |
 
 ## Pending Queue 模式
 

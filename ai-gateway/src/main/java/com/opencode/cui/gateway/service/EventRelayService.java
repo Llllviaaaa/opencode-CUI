@@ -111,12 +111,6 @@ public class EventRelayService {
                     return;
                 }
 
-                // Handle to-source-broadcast relay: broadcast to all local Source connections (L3 fallback)
-                if (RelayMessage.RELAY_TO_SOURCE_BROADCAST.equals(relayMessage.relayType())) {
-                    skillRelayService.handleToSourceBroadcastRelay(relayMessage.originalMessage());
-                    return;
-                }
-
                 // Handle cloud-control relay: process a control frame on the GW instance that owns
                 // the local cloud SSE/WebSocket stream.
                 if (RelayMessage.RELAY_TO_CLOUD_CONTROL.equals(relayMessage.relayType())) {

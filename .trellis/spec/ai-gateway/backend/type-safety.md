@@ -46,7 +46,7 @@ public class GatewayMessage {
 GW→GW Redis 中继使用 `RelayMessage` record，而不是裸 `GatewayMessage`。它用 `type="relay"` 做格式判别，并额外挂载 `sourceType`、`routingKeys`、`relayType` 等元数据。
 
 ```java
-// Source: ai-gateway/src/main/java/com/opencode/cui/gateway/model/RelayMessage.java:27-132
+// Source: ai-gateway/src/main/java/com/opencode/cui/gateway/model/RelayMessage.java
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record RelayMessage(
         String type,
@@ -64,7 +64,7 @@ public record RelayMessage(
 }
 ```
 
-`relayType` 的现有取值包括 `to-agent`（默认/空）、`to-source`、`to-source-broadcast`、`to-cloud-control`。`to-cloud-control` 只用于 GW 内部云端控制帧（例如跨 GW 的 `abort_session`），接收端必须交给本机 cloud/business 路由处理，不要按 Agent 下行消息解析。
+`relayType` 的现有取值包括 `to-agent`（默认/空）、`to-source`、`to-cloud-control`。`to-source` 只表示精准投递到本机某个 Source WebSocket；GW→SS 缺少本机连接时不再使用 `RelayMessage` 做 `to-source-broadcast` 广播兜底，而是由 `SkillRelayService` 写入 `gw:l2:source:skill-server` Redis Stream。`to-cloud-control` 只用于 GW 内部云端控制帧（例如跨 GW 的 `abort_session`），接收端必须交给本机 cloud/business 路由处理，不要按 Agent 下行消息解析。
 
 回源路由键不只存在于扁平字段。`GatewayMessage.toolSessionId` 和
 `GatewayMessage.payload.toolSessionId` 都是合法的 SS session route key；解析路由键时用

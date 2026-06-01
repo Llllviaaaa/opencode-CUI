@@ -8,12 +8,16 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.connection.stream.ReadOffset;
+import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.SetOperations;
+import org.springframework.data.redis.core.StreamOperations;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -38,6 +42,8 @@ class RedisMessageBrokerTest {
     private ValueOperations<String, String> valueOperations;
     @Mock
     private SetOperations<String, String> setOperations;
+    @Mock
+    private StreamOperations<String, Object, Object> streamOperations;
 
     private RedisMessageBroker broker;
 
@@ -45,6 +51,7 @@ class RedisMessageBrokerTest {
     void setUp() {
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         lenient().when(redisTemplate.opsForSet()).thenReturn(setOperations);
+        lenient().when(redisTemplate.opsForStream()).thenReturn(streamOperations);
         broker = new RedisMessageBroker(redisTemplate, listenerContainer, new ObjectMapper());
     }
 
@@ -225,6 +232,36 @@ class RedisMessageBrokerTest {
             broker.bindAgentUser("ak-1", null);
             assertNull(broker.getAgentUser(null));
             assertNull(broker.getAgentUser(""));
+        }
+    }
+
+    @Nested
+    @DisplayName("source L2 stream")
+    class SourceL2StreamTests {
+
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        @Test
+        @DisplayName("enqueueSourceL2Work writes one stream record and ensures group")
+        void enqueueSourceL2WorkWritesStreamRecord() {
+            when(streamOperations.add(eq("gw:l2:source:skill-server"), any(Map.class)))
+                    .thenReturn(RecordId.of("1-0"));
+
+            String streamId = broker.enqueueSourceL2Work(
+                    "skill-server", "{\"type\":\"tool_done\"}", "T1", "trace-1", "tool_done", 10000);
+
+            assertEquals("1-0", streamId);
+            verify(streamOperations).add(eq("gw:l2:source:skill-server"), any(Map.class));
+            verify(streamOperations).createGroup(
+                    eq("gw:l2:source:skill-server"), any(ReadOffset.class), eq("gw-l2-skill-server"));
+            verify(streamOperations).trim("gw:l2:source:skill-server", 10000, true);
+        }
+
+        @Test
+        @DisplayName("ackSourceL2Work acknowledges the stream group")
+        void ackSourceL2WorkAcknowledgesGroup() {
+            broker.ackSourceL2Work("skill-server", "1-0");
+
+            verify(streamOperations).acknowledge("gw:l2:source:skill-server", "gw-l2-skill-server", "1-0");
         }
     }
 

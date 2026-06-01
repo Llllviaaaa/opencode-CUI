@@ -69,9 +69,6 @@ public record RelayMessage(
     /** Relay type: deliver to Source WebSocket connection. */
     public static final String RELAY_TO_SOURCE = "to-source";
 
-    /** Relay type: broadcast to all local Source connections (L3 fallback). */
-    public static final String RELAY_TO_SOURCE_BROADCAST = "to-source-broadcast";
-
     /** Relay type: deliver a cloud control frame to the local GW cloud routing logic. */
     public static final String RELAY_TO_CLOUD_CONTROL = "to-cloud-control";
 
@@ -107,17 +104,6 @@ public record RelayMessage(
      */
     public static RelayMessage toSource(String targetSourceType, String targetSourceInstanceId, String payload) {
         return new RelayMessage(TYPE, null, null, payload, RELAY_TO_SOURCE, targetSourceType, targetSourceInstanceId);
-    }
-
-    /**
-     * Factory: creates a to-source-broadcast relay message (L3 fallback).
-     * The receiving GW should broadcast the payload to all its local Source connections.
-     *
-     * @param payload the message payload to broadcast
-     * @return a new RelayMessage with {@code relayType="to-source-broadcast"}
-     */
-    public static RelayMessage toSourceBroadcast(String payload) {
-        return new RelayMessage(TYPE, null, null, payload, RELAY_TO_SOURCE_BROADCAST, null, null);
     }
 
     /**

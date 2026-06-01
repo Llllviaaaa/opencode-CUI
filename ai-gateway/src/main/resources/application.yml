@@ -58,6 +58,13 @@ gateway:
   skill-relay:
     session-route-ttl-seconds: 1800
 
+  l2-source-stream:
+    max-len: ${GATEWAY_L2_SOURCE_STREAM_MAX_LEN:10000}
+    poll-delay-ms: ${GATEWAY_L2_SOURCE_STREAM_POLL_DELAY_MS:200}
+    poll-block-ms: ${GATEWAY_L2_SOURCE_STREAM_POLL_BLOCK_MS:100}
+    poll-batch-size: ${GATEWAY_L2_SOURCE_STREAM_POLL_BATCH_SIZE:10}
+    max-attempts: ${GATEWAY_L2_SOURCE_STREAM_MAX_ATTEMPTS:3}
+
   # Agent heartbeat timeout
   agent:
     heartbeat-timeout-seconds: 90

@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/ai-gateway/backend/index.md", "reason": "ai-gateway backend package scope and source routing ownership"}
+{"file": ".trellis/spec/ai-gateway/backend/conventions.md", "reason": "GW Source WebSocket and Agent-to-SS relay conventions"}
+{"file": ".trellis/spec/ai-gateway/backend/database-guidelines.md", "reason": "Redis key/channel/stream ownership and TTL rules"}
+{"file": ".trellis/spec/ai-gateway/backend/type-safety.md", "reason": "RelayMessage and GatewayMessage field contracts"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "cross-service GW/SS routing boundary analysis"}
